@@ -76,6 +76,8 @@ class LoginScreen(MDScreen):
         if app:
             app.current_user = username
             app.current_role = role
+            app._ai_notifications_seen_key = None
+            app._ai_banners_shown = False
 
     def forgot_password(self):
         print("Recuperar senha - a implementar")

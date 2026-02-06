@@ -84,6 +84,8 @@ class MainApp(MDApp):
         self.current_user = None
         self.current_role = None
         self.db = db
+        self._ai_notifications_seen_key = None
+        self._ai_banners_shown = False
         
         # ============================================
         # CONFIGURAÇÃO DO TEMA KIVYMD
