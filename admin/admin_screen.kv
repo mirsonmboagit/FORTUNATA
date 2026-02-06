@@ -1,0 +1,256 @@
+<BadgeButton@MDCard+ButtonBehavior>:
+    ripple_behavior: True
+
+<AdminScreen>:
+    product_table: product_table
+    search_input: search_input
+    category_spinner: category_spinner
+
+    FloatLayout:
+        MDBoxLayout:
+            orientation: 'vertical'
+            md_bg_color: 0.96, 0.96, 0.98, 1
+            padding: 0
+            spacing: 0
+
+            # =====================================================
+            # HEADER - Navegação Principal
+            # =====================================================
+            MDTopAppBar:
+                id: header_bar
+                title: "Painel do Administrador"
+                md_bg_color: 0.15, 0.25, 0.45, 1
+                specific_text_color: 1, 1, 1, 1
+                elevation: 4
+                size_hint_y: None
+                height: max(dp(56), root.height * 0.07)
+                right_action_items: [["chart-bar", lambda x: root.generate_report()], ["cog", lambda x: root.go_to_definitions()], ["logout", lambda x: root.logout()]]
+
+            # =====================================================
+            # BARRA DE FERRAMENTAS COMPACTA
+            # =====================================================
+            MDCard:
+                size_hint_y: None
+                height: max(dp(70), root.height * 0.08)
+                padding: [dp(16), dp(10)]
+                spacing: dp(8)
+                elevation: 2
+                md_bg_color: 1, 1, 1, 1
+                radius: [0, 0, 0, 0]
+
+                MDBoxLayout:
+                    spacing: dp(10)
+
+                    # Campo de Pesquisa Compacto
+                    MDTextField:
+                        id: search_input
+                        hint_text: "Pesquisar produto..."
+                        mode: "rectangle"
+                        size_hint_x: 0.33
+                        icon_left: "magnify"
+                        on_text: root.filter_products(self.text)
+                        font_size: sp(14)
+
+                    # Filtro de Categorias
+                    MDRaisedButton:
+                        id: category_spinner
+                        text: "Todas as Categorias"
+                        size_hint_x: 0.20
+                        md_bg_color: 0.95, 0.95, 0.97, 1
+                        theme_text_color: "Custom"
+                        text_color: 0.25, 0.25, 0.25, 1
+                        elevation: 1
+                        on_release: root.show_category_menu(self)
+                        font_size: sp(13)
+
+                    # Botão Filtrar Tipo
+                    MDRaisedButton:
+                        text: "Filtrar Tipo"
+                        icon: "filter-variant"
+                        md_bg_color: 0.85, 0.55, 0.15, 1
+                        theme_text_color: "Custom"
+                        text_color: 1, 1, 1, 1
+                        size_hint_x: 0.14
+                        on_release: root.toggle_kg_products()
+                        font_size: sp(13)
+
+                    # Botão Adicionar
+                    MDRaisedButton:
+                        text: "Adicionar"
+                        icon: "plus-circle"
+                        md_bg_color: 0.2, 0.65, 0.3, 1
+                        theme_text_color: "Custom"
+                        text_color: 1, 1, 1, 1
+                        size_hint_x: 0.14
+                        on_release: root.add_product()
+                        font_size: sp(13)
+
+                    
+
+            # =====================================================
+            # TABELA DE PRODUTOS MELHORADA
+            # =====================================================
+            MDBoxLayout:
+                size_hint_y: 1
+                padding: [dp(12), dp(8), dp(12), dp(12)]
+
+                MDCard:
+                    orientation: 'vertical'
+                    spacing: 0
+                    elevation: 3
+                    md_bg_color: 1, 1, 1, 1
+                    radius: [dp(6), dp(6), dp(6), dp(6)]
+
+                    # Header da Tabela
+                    MDBoxLayout:
+                        id: table_header
+                        size_hint_y: None
+                        height: max(dp(44), root.height * 0.052)
+                        md_bg_color: 0.18, 0.28, 0.48, 1
+                        padding: [dp(6), 0]
+                        canvas.after:
+                            Color:
+                                rgba: 0.12, 0.22, 0.38, 1
+                            Line:
+                                width: 1
+                                rectangle: self.x, self.y, self.width, self.height
+
+                        MDLabel:
+                            text: "ID"
+                            bold: True
+                            size_hint_x: 0.06
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Nome do Produto"
+                            bold: True
+                            size_hint_x: 0.20
+                            halign: "left"
+                            padding: [dp(10), 0]
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Estoque"
+                            bold: True
+                            size_hint_x: 0.09
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Vendido"
+                            bold: True
+                            size_hint_x: 0.09
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Tipo"
+                            bold: True
+                            size_hint_x: 0.07
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Preço"
+                            bold: True
+                            size_hint_x: 0.11
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Lucro"
+                            bold: True
+                            size_hint_x: 0.11
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Data"
+                            bold: True
+                            size_hint_x: 0.13
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                        MDLabel:
+                            text: "Ações"
+                            bold: True
+                            size_hint_x: 0.14
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: 1, 1, 1, 1
+                            font_style: "Subtitle2"
+
+                    # Linha separadora do Header
+                    MDSeparator:
+                        height: dp(2)
+                        color: 0.12, 0.22, 0.38, 1
+
+                    # ScrollView com Dados dos Produtos
+                    ScrollView:
+                        size_hint_y: 1
+                        do_scroll_x: False
+                        do_scroll_y: True
+                        bar_width: dp(8)
+                        bar_color: 0.18, 0.28, 0.48, 0.7
+                        bar_inactive_color: 0.18, 0.28, 0.48, 0.3
+                        effect_cls: "ScrollEffect"
+
+                        MDGridLayout:
+                            id: product_table
+                            cols: 9
+                            size_hint_y: None
+                            height: self.minimum_height
+                            row_default_height: max(dp(46), root.height * 0.054)
+                            spacing: 0
+                            padding: 0
+        
+        FloatLayout:
+            id: ai_banner_container
+            size_hint: 1, 1
+            pos: 0, 0
+        
+        # Botão da Lâmpada (AI) com animação
+        MDFloatingActionButton:
+            id: ai_button
+            icon: "icon/idea.ico"
+            elevation: 6
+            pos_hint: {"right": 0.965, "y": 0.04}
+            on_release: root.open_ai_menu(self)
+
+        # Badge com número de notificações (só aparece quando > 0)
+        MDCard:
+            id: ai_badge
+            size_hint: None, None
+            size: dp(24), dp(24)
+            md_bg_color: 0.95, 0.26, 0.21, 1  # Vermelho vibrante
+            radius: [dp(12)]
+            elevation: 8
+            pos_hint: {"right": 0.978, "y": 0.098}
+            opacity: 0  # Começa invisível
+
+            MDLabel:
+                id: ai_badge_label
+                text: "0"
+                halign: "center"
+                valign: "middle"
+                theme_text_color: "Custom"
+                text_color: 1, 1, 1, 1
+                font_size: dp(12)
+                bold: True

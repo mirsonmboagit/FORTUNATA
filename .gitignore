@@ -1,0 +1,24 @@
+# Ambiente virtual
+loja/
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+
+# Banco de dados
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db

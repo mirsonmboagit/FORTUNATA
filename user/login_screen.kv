@@ -1,0 +1,165 @@
+<LoginScreen>:
+    username: username
+    password: password
+
+    md_bg_color: 0.97, 0.97, 0.97, 1
+
+    MDBoxLayout:
+        orientation: "horizontal"
+
+        MDBoxLayout:
+            size_hint_x: 0.55
+            padding: dp(30)
+
+            Carousel:
+                id: carousel
+                loop: True
+                direction: "right"
+                anim_move_duration: 0.8
+
+                MDFloatLayout:
+                    Image:
+                        source: "image/slide1.png"
+                        allow_stretch: True
+                        keep_ratio: True
+                        size_hint: 0.9, 0.9
+                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+                MDFloatLayout:
+                    Image:
+                        source: "image/slide2.png"
+                        allow_stretch: True
+                        keep_ratio: True
+                        size_hint: 0.9, 0.9
+                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+                MDFloatLayout:
+                    Image:
+                        source: "image/slide3.png"
+                        allow_stretch: True
+                        keep_ratio: True
+                        size_hint: 0.9, 0.9
+                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+        MDSeparator:
+            orientation: "vertical"
+
+        MDBoxLayout:
+            orientation: "vertical"
+            size_hint_x: 0.45
+            padding: dp(60)
+            spacing: dp(22)
+
+            MDLabel:
+                text: "MERCEARIA"
+                font_name: "MainFont"
+                font_size: sp(40)
+                bold: True
+                halign: "center"
+                theme_text_color: "Custom"
+                text_color: 1, 0.45, 0, 1
+
+            MDLabel:
+                text: "Sistema de Gestão Comercial"
+                font_name: "LogoFont"
+                font_size: sp(20)
+                halign: "center"
+                theme_text_color: "Hint"
+
+            Widget:
+                size_hint_y: None
+                height: dp(30)
+
+            MDLabel:
+                text: "LOGIN"
+                font_name: "MainFont"
+                font_size: sp(28)
+                bold: True
+                halign: "center"
+                theme_text_color: "Primary"
+
+            Widget:
+                size_hint_y: None
+                height: dp(20)
+
+            MDLabel:
+                text: "Utilizador:"
+                font_name: "LogoFont"
+                font_size: sp(20)
+                bold: True
+                theme_text_color: "Secondary"
+
+            MDTextField:
+                id: username
+                hint_text: "Digite seu utilizador"
+                mode: "rectangle"
+                font_name: "LogoFont"
+                font_size: sp(20)
+                error: True if root.username_error else False
+                helper_text: root.username_error
+                helper_text_mode: "on_error"
+
+            MDLabel:
+                text: "Palavra-passe:"
+                font_name: "LogoFont"
+                font_size: sp(20)
+                bold: True
+                theme_text_color: "Secondary"
+
+            MDTextField:
+                id: password
+                hint_text: "Digite sua palavra-passe"
+                mode: "rectangle"
+                font_name: "LogoFont"
+                font_size: sp(20)
+                password: True
+                error: True if root.username_error else False
+                helper_text: root.password_error
+                helper_text_mode: "on_error"
+                on_text_validate: root.login()
+
+            Widget:
+                size_hint_y: None
+                height: dp(20)
+
+            MDRaisedButton:
+                text: "INICIAR SESSÃO"
+                font_name: "LogoFont"
+                font_size: sp(20)
+                size_hint_x: 1
+                height: dp(46)
+                md_bg_color: 0.35, 0.18, 0.05, 1
+                theme_text_color: "Custom"
+                text_color: 1, 1, 1, 1
+                on_release: root.login()
+
+            Widget:
+                size_hint_y: None
+                height: dp(12)
+
+            MDBoxLayout:
+                adaptive_height: True
+                spacing: dp(10)
+
+                MDTextButton:
+                    text: "Esqueci a senha"
+                    font_name: "LogoFont"
+                    font_size: sp(20)
+                    theme_text_color: "Custom"
+                    text_color: 1, 0.45, 0, 1
+                    on_release: root.forgot_password()
+
+                MDLabel:
+                    text: "|"
+                    size_hint_x: None
+                    width: dp(10)
+                    halign: "center"
+                    theme_text_color: "Hint"
+
+                MDTextButton:
+                    text: "Criar nova conta"
+                    font_name: "LogoFont"
+                    font_size: sp(20)
+                    theme_text_color: "Custom"
+                    text_color: 1, 0.45, 0, 1
+                    on_release: root.register()
