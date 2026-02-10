@@ -1,4 +1,4 @@
-from kivy.properties import ObjectProperty, StringProperty
+from kivy.properties import ObjectProperty, StringProperty, ListProperty, BooleanProperty
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.app import App
@@ -15,8 +15,8 @@ from kivymd.uix.textfield import MDTextField
 from kivymd.uix.button import MDFlatButton
 from kivymd.uix.scrollview import MDScrollView
 
-from database.database import Database
-from utils.security_questions import QUESTIONS, check_answer
+from database.provider import get_db
+from utils.security_questions import QUESTIONS
 
 Builder.load_file('user/login_screen.kv')
 
@@ -27,12 +27,15 @@ class LoginScreen(MDScreen):
 
     username_error = StringProperty("")
     password_error = StringProperty("")
+    allowed_roles = ListProperty([])
+    allow_admin_setup = BooleanProperty(True)
+    success_screen = StringProperty("")
 
     DEFAULT_PASSWORDS = ["123", "123456"]
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.db = Database()
+        self.db = get_db()
         self.carousel_event = None
         self._setup_dialog = None
         self._setup_label = None
@@ -124,6 +127,10 @@ class LoginScreen(MDScreen):
         return None
 
     def _ensure_admin_setup(self):
+        if not self.allow_admin_setup:
+            self._set_login_enabled(True)
+            return
+
         if not self.db.has_admin():
             self._set_login_enabled(False)
             self._open_setup_admin_dialog(mode='create')
@@ -219,11 +226,7 @@ class LoginScreen(MDScreen):
 
         if self._setup_mode == 'update_default':
             original = self._setup_original_username or username
-            self.db.cursor.execute(
-                "SELECT COUNT(*) FROM users WHERE username = ? AND username != ?",
-                (username, original),
-            )
-            if self.db.cursor.fetchone()[0] > 0:
+            if self.db.user_exists(username, exclude_username=original):
                 self._show_message('Erro', 'Nome de usuario ja existe')
                 return
 
@@ -233,8 +236,7 @@ class LoginScreen(MDScreen):
 
             self.db.log_action(username, 'admin', 'UPDATE_ADMIN', f"Admin atualizado: {original} -> {username}")
         else:
-            self.db.cursor.execute("SELECT COUNT(*) FROM users WHERE username = ?", (username,))
-            if self.db.cursor.fetchone()[0] > 0:
+            if self.db.user_exists(username):
                 self._show_message('Erro', 'Nome de usuario ja existe')
                 return
 
@@ -355,6 +357,10 @@ class LoginScreen(MDScreen):
         role = self.db.validate_user(user, pwd)
 
         if role in ("admin", "manager"):
+            if self.allowed_roles and role not in self.allowed_roles:
+                self.username_error = "Acesso nao autorizado!"
+                self.password_error = "Acesso nao autorizado!"
+                return
             if role == 'admin' and self.db.is_user_password_default(user, self.DEFAULT_PASSWORDS):
                 self._open_force_password_dialog(user, role)
                 return
@@ -367,7 +373,8 @@ class LoginScreen(MDScreen):
         self._set_current_user(user, role)
         self.db.log_action(user, role, 'LOGIN', 'Login realizado')
         self.reset_fields()
-        self.manager.current = role
+        target = self.success_screen or role
+        self.manager.current = target
 
     def reset_fields(self):
         self.username.text = ""
@@ -523,93 +530,43 @@ class LoginScreen(MDScreen):
             self._show_message('Erro', 'As senhas nao coincidem')
             return
 
-        self.db.cursor.execute('SELECT role FROM users WHERE username = ?', (username,))
-        row = self.db.cursor.fetchone()
-        if not row:
+        role = self.db.get_user_role(username)
+        if not role:
             self._show_message('Erro', 'Usuario nao encontrado')
             return
-        role = row[0]
 
-        record = self._get_security_record(username)
-        if not record:
-            self._show_message('Erro', 'Perguntas nao configuradas. Fale com o admin')
-            return
-
-        now = datetime.now()
-        lock_until = record.get('lock_until')
-        if lock_until and now < lock_until:
-            remaining = int((lock_until - now).total_seconds() / 60) + 1
-            self._show_message('Erro', f'Tentativas excedidas. Aguarde {remaining} min')
-            return
-        if lock_until and now >= lock_until:
-            self._update_security_state(username, 0, None)
-            record['attempts'] = 0
-            record['lock_until'] = None
-
-        hashes = record.get('hashes', [])
-        if len(hashes) < len(answers):
-            self._show_message('Erro', 'Perguntas nao configuradas. Fale com o admin')
-            return
-
-        hashes = hashes[:len(answers)]
-        all_ok = True
-        for ans, hashed in zip(answers, hashes):
-            if not check_answer(ans, hashed):
-                all_ok = False
-                break
-
-        if not all_ok:
-            attempts = (record.get('attempts') or 0) + 1
-            if attempts >= 5:
-                lock_until = now + timedelta(minutes=15)
-                self._update_security_state(username, attempts, lock_until)
-                self._show_message('Erro', 'Muitas tentativas. Aguarde 15 minutos')
-                return
-            self._update_security_state(username, attempts, None)
-            remaining = 5 - attempts
-            self._show_message('Erro', f'Respostas incorretas. Tentativas restantes: {remaining}')
+        result = self.db.verify_security_answers(username, answers)
+        if not result or not result.get("ok"):
+            reason = (result or {}).get("reason")
+            if reason == "not_configured":
+                self._show_message('Erro', 'Perguntas nao configuradas. Fale com o admin')
+            elif reason == "locked":
+                remaining = (result or {}).get("remaining_minutes") or 15
+                self._show_message('Erro', f'Tentativas excedidas. Aguarde {remaining} min')
+            elif reason == "invalid":
+                remaining = (result or {}).get("remaining")
+                if remaining is not None:
+                    self._show_message('Erro', f'Respostas incorretas. Tentativas restantes: {remaining}')
+                else:
+                    self._show_message('Erro', 'Respostas incorretas')
+            else:
+                self._show_message('Erro', 'Nao foi possivel validar as respostas')
             return
 
         if not self.db.update_user_password(username, new_password, role=role):
             self._show_message('Erro', 'Nao foi possivel atualizar a senha')
             return
 
-        self._update_security_state(username, 0, None)
+        self.db.update_security_state(username, 0, None)
         self.db.log_action(username, role or 'manager', 'RESET_PASSWORD_QA', 'Senha redefinida via perguntas')
         self._show_message('Sucesso', 'Senha atualizada com sucesso!')
         self._dismiss_forgot_dialog()
 
-    def _get_security_record(self, username):
-        self.db.cursor.execute(
-            'SELECT q1_hash, q2_hash, q3_hash, q4_hash, attempts, lock_until '
-            'FROM user_security_questions WHERE username = ?',
-            (username,)
-        )
-        row = self.db.cursor.fetchone()
-        if not row:
-            return None
-        q1, q2, q3, _q4, attempts, lock_until = row
-        lock_dt = None
-        if lock_until:
-            try:
-                lock_dt = datetime.fromisoformat(lock_until)
-            except Exception:
-                lock_dt = None
-        return {
-            'hashes': [q1, q2, q3],
-            'attempts': attempts or 0,
-            'lock_until': lock_dt,
-        }
-
-    def _update_security_state(self, username, attempts, lock_until):
-        lock_value = lock_until.isoformat() if lock_until else None
-        self.db.cursor.execute(
-            'UPDATE user_security_questions SET attempts = ?, lock_until = ? WHERE username = ?',
-            (attempts, lock_value, username)
-        )
-        self.db.conn.commit()
-
     def register(self):
+        if not self.allow_admin_setup:
+            self._show_message('Info', 'Contacte o admin para criar contas')
+            return
+
         if not self.db.has_admin():
             self._open_setup_admin_dialog(mode='create')
             return

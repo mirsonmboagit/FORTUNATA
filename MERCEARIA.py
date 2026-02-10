@@ -11,7 +11,7 @@ from kivy.metrics import dp
 from kivy.properties import DictProperty
 
 from kivy.core.text import LabelBase
-from database.database import Database
+from database.provider import get_db
 from admin.admin_screen import AdminScreen
 from manager.manager_screen import SalesScreen
 from user.login import LoginScreen
@@ -87,11 +87,11 @@ Window.size = (
     max(dp(680),  min(ideal_height, dp(920)))
 )
 
-# Window.minimum_width  = dp(1000)
-# Window.minimum_height = dp(580)
+Window.minimum_width  = dp(1000)
+Window.minimum_height = dp(580)
 
 
-db = Database()
+db = get_db()
 db.setup()
 
 

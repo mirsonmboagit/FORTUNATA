@@ -1,0 +1,6 @@
+{
+  "db_mode": "remote",
+  "api_base_url": "http://127.0.0.1:8080",
+  "api_key": "joe123",
+  "timeout": 10
+}

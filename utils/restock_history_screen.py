@@ -9,7 +9,7 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
 
-from database.database import Database
+from database.provider import get_db
 
 
 Builder.load_file("utils/restock_history_screen.kv")
@@ -24,7 +24,7 @@ def _theme_color(name, fallback):
 class RestockHistoryScreen(MDScreen):
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
-        self.db = db or Database()
+        self.db = db or get_db()
         self._render_ev = None
         self._pending_rows = []
         self._render_index = 0

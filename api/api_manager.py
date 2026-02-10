@@ -405,27 +405,34 @@ class APIManager:
             barcode = self._normalize_barcode(barcode)
             if not barcode:
                 return None
-            self.db.cursor.execute("""
-                SELECT id, description, existing_stock, sale_price,
-                       unit_purchase_price, barcode, is_sold_by_weight,
-                       expiry_date, status
-                FROM products
-                WHERE barcode = ?
-            """, (barcode,))
-            
-            result = self.db.cursor.fetchone()
-            
+            result = self.db.get_product_by_barcode(barcode)
             if result:
-                pid, name, stock, price, cost, barcode, is_weight, exp, status = result
+                pid = result[0]
+                full = self.db.get_product(pid)
+                if full:
+                    return {
+                        'name': full[1],
+                        'barcode': full[12],
+                        'price': full[4],
+                        'cost': full[6],
+                        'stock': full[2],
+                        'is_weight': full[15],
+                        'sold_by_weight': bool(full[15]),
+                        'expiry_date': full[13],
+                        'status': full[16],
+                        'category': full[11],
+                        'quantity': full[21],
+                        'product_id': full[0],
+                        'source': 'local'
+                    }
+                pid, name, stock, price, barcode_val, is_weight = result
                 return {
                     'name': name,
-                    'barcode': barcode,
+                    'barcode': barcode_val,
                     'price': price,
-                    'cost': cost,
                     'stock': stock,
                     'is_weight': is_weight,
-                    'expiry_date': exp,
-                    'status': status,
+                    'sold_by_weight': bool(is_weight),
                     'product_id': pid,
                     'source': 'local'
                 }

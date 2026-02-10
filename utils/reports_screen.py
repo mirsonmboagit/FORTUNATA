@@ -26,7 +26,6 @@ from utils.ai_popups import (
 )
 
 from datetime import datetime, timedelta
-import sqlite3
 from kivy.metrics import dp, sp
 import pandas as pd
 from kivy.uix.scrollview import ScrollView
@@ -37,7 +36,7 @@ from kivy.animation import Animation
 from kivy.lang import Builder
 from kivy.properties import ObjectProperty
 
-from database.database import Database
+from database.provider import get_db
 from pdfs.sales_report import SalesReport
 from pdfs.stock_report import StockReport
 from pdfs.profit_report import ProfitReport
@@ -252,13 +251,12 @@ class ReportsScreen(MDScreen):
     
     def __init__(self, **kwargs):
         super(ReportsScreen, self).__init__(**kwargs)
-        self.db = Database()
+        self.db = get_db()
         self.notification_count = 0
         self.start_date = None
         self.end_date = None
         self.selected_product = None
         self.selected_category = None
-        self.db_path = 'database/inventory.db'
         self._ai_poll_ev = None
         
         # Menus dropdown do KivyMD
@@ -396,25 +394,13 @@ class ReportsScreen(MDScreen):
             anim.start(self.ids.ai_button)
     
     def load_filters(self):
-        """Carrega opções de filtros do banco de dados."""
+        """Carrega op??es de filtros do banco de dados."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Carregar produtos
-            cursor.execute("SELECT id, description FROM products ORDER BY description")
-            products = cursor.fetchall()
+            products = self.db.get_products_for_filter()
             self.products_list = ['Todos os Produtos'] + [f"{prod[0]} - {prod[1]}" for prod in products]
-            
-            # Carregar categorias
-            cursor.execute(
-                "SELECT DISTINCT category FROM products " 
-                "WHERE category IS NOT NULL ORDER BY category"
-            )
-            categories = cursor.fetchall()
-            self.categories_list = ['Todas as Categorias'] + [cat[0] for cat in categories]
-            
-            conn.close()
+
+            categories = self.db.get_categories()
+            self.categories_list = ['Todas as Categorias'] + categories
         except Exception as e:
             print(f"Erro ao carregar filtros: {e}")
     
@@ -539,56 +525,26 @@ class ReportsScreen(MDScreen):
         return True
     
     def get_filtered_data(self):
-        """Obtém dados filtrados do banco de dados."""
-        query = """
-        SELECT 
-            p.id,
-            p.description,
-            p.existing_stock,
-            p.sale_price,
-            p.total_purchase_price,
-            p.unit_purchase_price,
-            p.category,
-            COALESCE(SUM(s.quantity), 0) as sold_in_period,
-            COALESCE(SUM(s.total_price), 0) as total_sales
-        FROM products p
-        LEFT JOIN sales s
-            ON s.product_id = p.id
-           AND s.sale_date BETWEEN ? AND ?
-        WHERE 1=1
-        """
-        params = [
-            self.start_date.strftime("%Y-%m-%d %H:%M:%S"),
-            self.end_date.strftime("%Y-%m-%d %H:%M:%S"),
-        ]
-        
-        # Filtro de produto
-        if self.selected_product:
-            query += " AND p.id = ?"
-            params.append(self.selected_product)
-        
-        # Filtro de categoria
-        if self.selected_category:
-            query += " AND p.category = ?"
-            params.append(self.selected_category)
-
-        query += """
-        GROUP BY 
-            p.id, p.description, p.existing_stock, p.sale_price,
-            p.total_purchase_price, p.unit_purchase_price, p.category
-        """
-        
+        """Obt?m dados filtrados do banco de dados."""
+        start_dt = self.start_date.strftime("%Y-%m-%d %H:%M:%S")
+        end_dt = self.end_date.strftime("%Y-%m-%d %H:%M:%S")
         try:
-            conn = sqlite3.connect(self.db_path)
-            df = pd.read_sql_query(query, conn, params=params)
-            conn.close()
-            
+            rows = self.db.get_report_data(
+                start_dt,
+                end_dt,
+                product_id=self.selected_product,
+                category=self.selected_category,
+            )
+            if not rows:
+                return None
+
+            df = pd.DataFrame(rows)
             if df.empty:
                 return None
 
             df['sold_stock'] = df['sold_in_period']
 
-            # Calcular métricas usando vendas do período
+            # Calcular m?tricas usando vendas do per?odo
             df['entrada'] = df['existing_stock'] + df['sold_stock']
             df['saida'] = df['sold_stock']
             df['remanescente'] = df['existing_stock']
@@ -599,15 +555,15 @@ class ReportsScreen(MDScreen):
             ).fillna(0)
             df['valor_total_vendas'] = df['total_sales']
 
-            # Se não há vendas no período, retorna vazio
+            # Se n?o h? vendas no per?odo, retorna vazio
             if df['sold_stock'].sum() == 0:
                 return None
-            
+
             return df
         except Exception as e:
             print(f"Erro ao obter dados filtrados: {e}")
             return None
-    
+
     def _get_filters_dict(self):
         """Retorna dicionário com os filtros atuais."""
         product_text = "Todos os Produtos"

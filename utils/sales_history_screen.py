@@ -13,7 +13,7 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.textfield import MDTextField
 
-from database.database import Database
+from database.provider import get_db
 
 
 Builder.load_string("""
@@ -493,7 +493,7 @@ class SalesHistoryScreen(MDScreen):
         self._page_size = 60
         self._current_page = 1
         super().__init__(**kwargs)
-        self.db = db or Database()
+        self.db = db or get_db()
         self.current_filter = None
         Clock.schedule_once(lambda dt: self.load_all_sales(), 0.1)
 

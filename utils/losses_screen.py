@@ -11,7 +11,7 @@ from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.menu import MDDropdownMenu
 from kivy.properties import ObjectProperty
-from database.database import Database
+from database.provider import get_db
 from datetime import date, datetime
 import time
 import cv2
@@ -39,7 +39,9 @@ class LossesScreen(MDScreen):
     db = ObjectProperty(None)
     
     def __init__(self, **kwargs):
+        db = kwargs.pop("db", None)
         super().__init__(**kwargs)
+        self.db = db or get_db()
         self.products = []
         self.selected_product = None
         self.selected_loss_type = None
@@ -312,14 +314,7 @@ class LossesScreen(MDScreen):
     def load_products(self):
         """Carrega produtos do banco"""
         try:
-            self.db.cursor.execute("""
-                SELECT id, description, existing_stock, sale_price,
-                       unit_purchase_price, barcode, is_sold_by_weight,
-                       expiry_date, status
-                FROM products
-                WHERE existing_stock > 0
-            """)
-            self.products = self.db.cursor.fetchall() or []
+            self.products = self.db.get_products_for_losses() or []
             self.show_products(self.products)
         except Exception as e:
             print(f"Erro ao carregar produtos: {e}")

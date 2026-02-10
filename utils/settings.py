@@ -1,5 +1,4 @@
 import sqlite3
-import bcrypt
 import os
 import json
 from datetime import datetime
@@ -18,7 +17,7 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.app import App
 from kivy.animation import Animation
-from database.database import Database
+from database.provider import get_db
 from pdfs.logs_report import LogsReport
 from kivy.lang import Builder
 from utils.ai_insights import build_admin_insights, build_admin_insights_ai
@@ -27,7 +26,7 @@ from utils.ai_popups import (
     build_banner_details_sections,
     render_auto_banners,
 )
-from utils.security_questions import QUESTIONS, hash_answer
+from utils.security_questions import QUESTIONS
 
 
 Builder.load_string('''
@@ -538,59 +537,40 @@ class ChangeAdminDataDialog:
             return
         
         try:
-            with Database() as db:
-                db.cursor.execute(
-                    "SELECT * FROM users WHERE username = ? AND role = 'admin'", 
-                    (current_username,)
-                )
-                admin_data = db.cursor.fetchone()
-                
-                if not admin_data:
-                    self.show_message('Erro', 'Usuário não encontrado ou não é administrador')
+            with get_db() as db:
+                admin_data = db.get_user(current_username)
+                if not admin_data or admin_data[3] != 'admin':
+                    self.show_message('Erro', 'Usu?rio n?o encontrado ou n?o ? administrador')
                     return
-                
+
                 role = db.validate_user(current_username, current_password)
                 if role != 'admin':
                     self.show_message('Erro', 'Senha atual incorreta')
                     return
-                
+
                 if not new_username and not new_password:
-                    self.show_message('Erro', 'Nenhuma alteração solicitada')
+                    self.show_message('Erro', 'Nenhuma altera??o solicitada')
                     return
-                
-                update_parts = []
-                update_params = []
-                
-                if new_username:
-                    db.cursor.execute(
-                        "SELECT * FROM users WHERE username = ? AND username != ?", 
-                        (new_username, current_username)
-                    )
-                    if db.cursor.fetchone():
-                        self.show_message('Erro', 'Este nome de usuário já está em uso')
-                        return
-                    
-                    update_parts.append("username = ?")
-                    update_params.append(new_username)
-                
-                if new_password:
-                    update_parts.append("password = ?")
-                    hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
-                    update_params.append(hashed_password)
-                
-                update_query = f"UPDATE users SET {', '.join(update_parts)} WHERE username = ? AND role = 'admin'"
-                update_params.append(current_username)
-                
-                db.cursor.execute(update_query, update_params)
-                db.conn.commit()
-                
+
+                if new_username and db.user_exists(new_username, exclude_username=current_username):
+                    self.show_message('Erro', 'Este nome de usu?rio j? est? em uso')
+                    return
+
+                if not db.update_admin_profile(
+                    current_username,
+                    new_username=new_username or None,
+                    new_password=new_password or None,
+                ):
+                    self.show_message('Erro', 'N?o foi poss?vel atualizar os dados')
+                    return
+
                 db.log_action(
                     new_username if new_username else current_username,
                     'admin',
                     'UPDATE_ADMIN',
                     f'Dados do admin atualizados'
                 )
-                
+
                 self.show_message('Sucesso', 'Dados atualizados com sucesso!')
                 self.dialog.dismiss()
                 
@@ -610,7 +590,7 @@ class ChangeAdminDataDialog:
 class AddUserDialog:
     def __init__(self):
         self.dialog = None
-        self.db = Database()
+        self.db = get_db()
         
     def show(self):
         if not self.dialog:
@@ -725,29 +705,25 @@ class AddUserDialog:
             self.show_message('Erro', 'Todos os campos são obrigatórios')
             return
         
-        self.db.cursor.execute("SELECT COUNT(*) FROM users WHERE username = ?", (username,))
-        if self.db.cursor.fetchone()[0] > 0:
-            self.show_message('Erro', 'Nome de usuário já existe')
+        if self.db.user_exists(username):
+            self.show_message('Erro', 'Nome de usu?rio j? existe')
             return
-        
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
         email_value = email if email else None
 
         try:
-            self.db.cursor.execute(
-                "INSERT INTO users (username, password, role, email) VALUES (?, ?, ?, ?)", 
-                (username, hashed_password, self.selected_role, email_value)
-            )
-            self.db.conn.commit()
-            
+            if not self.db.create_user(username, password, self.selected_role, email=email_value):
+                self.show_message('Erro', 'N?o foi poss?vel criar o usu?rio')
+                return
+
             self.db.log_action(
                 username,
                 self.selected_role,
                 'CREATE_USER',
-                f'Novo usuário criado: {username} ({self.selected_role})'
+                f'Novo usu?rio criado: {username} ({self.selected_role})'
             )
-            
-            self.show_message('Sucesso', f'Usuário "{username}" criado com sucesso!')
+
+            self.show_message('Sucesso', f'Usu?rio "{username}" criado com sucesso!')
             self.dialog.dismiss()
 
         except Exception as e:
@@ -764,7 +740,7 @@ class AddUserDialog:
 class SecurityQuestionsDialog:
     def __init__(self):
         self.dialog = None
-        self.db = Database()
+        self.db = get_db()
 
     def show(self):
         if not self.dialog:
@@ -840,21 +816,13 @@ class SecurityQuestionsDialog:
             return
 
         try:
-            self.db.cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', (username,))
-            if self.db.cursor.fetchone()[0] == 0:
+            if not self.db.user_exists(username):
                 self.show_message('Erro', 'Usuario nao encontrado')
                 return
 
-            hashes = [hash_answer(ans) for ans in answers]
-            placeholder = hash_answer("__unused__")
-            now = datetime.now().isoformat()
-            self.db.cursor.execute(
-                'INSERT OR REPLACE INTO user_security_questions '
-                '(username, q1_hash, q2_hash, q3_hash, q4_hash, attempts, lock_until, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, 0, NULL, ?)',
-                (username, hashes[0], hashes[1], hashes[2], placeholder, now)
-            )
-            self.db.conn.commit()
+            if not self.db.set_security_questions(username, answers):
+                self.show_message('Erro', 'Erro ao salvar perguntas')
+                return
 
             app = App.get_running_app()
             actor = getattr(app, 'current_user', None) or username
@@ -882,7 +850,7 @@ class DeleteManagerDialog:
         self.dialog = None
         
     def show(self):
-        with Database() as db:
+        with get_db() as db:
             self.managers = db.get_all_managers()
         
         if not self.dialog:
@@ -973,21 +941,20 @@ class DeleteManagerDialog:
             return
         
         try:
-            with Database() as db:
-                db.cursor.execute(
-                    "DELETE FROM users WHERE username = ? AND role = 'manager'", 
-                    (self.selected_manager,)
-                )
-                db.conn.commit()
-                
+            with get_db() as db:
+                success, msg = db.delete_manager(self.selected_manager)
+                if not success:
+                    self.show_message('Erro', msg)
+                    return
+
                 db.log_action(
                     'admin',
                     'admin',
                     'DELETE_USER',
-                    f'Gerente excluído: {self.selected_manager}'
+                    f'Gerente exclu?do: {self.selected_manager}'
                 )
-                
-                self.show_message('Sucesso', f'Gerente "{self.selected_manager}" excluído!')
+
+                self.show_message('Sucesso', f'Gerente "{self.selected_manager}" exclu?do!')
                 self.dialog.dismiss()
         
         except Exception as e:
@@ -1131,29 +1098,8 @@ class SystemLogsDialog:
         action_filter = self.action_filter.text.strip() if hasattr(self, 'action_filter') else ''
         role_filter = 'manager' if getattr(self, 'manager_only', None) and self.manager_only.active else ''
 
-        query = "SELECT * FROM user_logs WHERE 1=1"
-        params = []
-
-        if user_filter:
-            query += " AND username LIKE ?"
-            params.append(f'%{user_filter}%')
-
-        if action_filter:
-            query += " AND action LIKE ?"
-            params.append(f'%{action_filter}%')
-
-        if role_filter:
-            query += " AND role = ?"
-            params.append(role_filter)
-
-        query += " ORDER BY timestamp DESC"
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
-
-        with Database() as db:
-            db.cursor.execute(query, params)
-            return db.cursor.fetchall()
+        with get_db() as db:
+            return db.get_user_logs(user_filter, action_filter, role_filter, limit=limit)
 
     def load_logs(self):
         self.logs_list.clear_widgets()
@@ -1273,9 +1219,9 @@ class SystemLogsDialog:
 
     def _clear_logs(self, dialog):
         try:
-            with Database() as db:
-                db.cursor.execute("DELETE FROM user_logs")
-                db.conn.commit()
+            with get_db() as db:
+                if not db.clear_user_logs():
+                    raise RuntimeError('Falha ao apagar logs')
             dialog.dismiss()
             self.load_logs()
             self._show_simple_dialog('Sucesso', 'Logs apagados com sucesso.')

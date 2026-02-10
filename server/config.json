@@ -1,0 +1,6 @@
+{
+  "db_path": "C:\\Users\\Joe\\OneDrive\\Ambiente de Trabalho\\loja\\database\\inventory.db",
+  "api_key": "joe123",
+  "host": "0.0.0.0",
+  "port": 8080
+}

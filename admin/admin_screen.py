@@ -16,7 +16,7 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import MDSnackbar
 
-from database.database import Database
+from database.provider import get_db
 from utils.ai_insights import build_admin_insights, build_admin_insights_ai
 from utils.ai_popups import (
     build_auto_banner_data,
@@ -46,7 +46,7 @@ class AdminScreen(Screen):
 
     def __init__(self, **kwargs):
         super(AdminScreen, self).__init__(**kwargs)
-        self.db = Database()
+        self.db = get_db()
         self.category_menu = None
         self._manual_categories = set()
         self._filter_ev = None
@@ -270,7 +270,7 @@ class AdminScreen(Screen):
     def logout(self):
         app = App.get_running_app()
         if app and app.current_user:
-            Database().log_action(app.current_user, app.current_role or "admin", "LOGOUT", "Logout admin")
+            get_db().log_action(app.current_user, app.current_role or "admin", "LOGOUT", "Logout admin")
             app.current_user = None
             app.current_role = None
         if app:

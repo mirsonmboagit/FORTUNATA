@@ -17,7 +17,7 @@ from kivy.app import App
 from kivy.metrics import dp
 from kivy.lang import Builder
 from kivy.properties import StringProperty
-from database.database import Database
+from database.provider import get_db
 from datetime import datetime
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import MDSnackbar
@@ -107,7 +107,7 @@ class SalesScreen(MDScreen):
 
   def __init__(self, **kwargs):
     super().__init__(**kwargs)
-    self.db = Database()
+    self.db = get_db()
     self.cart_items = []
     self.total_amount = 0.0
     self.products_dict = {}
@@ -180,14 +180,7 @@ class SalesScreen(MDScreen):
       print("📊 TESTE - Produtos com Código de Barras")
       print("="*70)
       
-      self.db.cursor.execute("""
-        SELECT id, description, barcode, existing_stock, is_sold_by_weight
-        FROM products
-        WHERE barcode IS NOT NULL AND barcode != ''
-        ORDER BY id
-      """)
-      
-      produtos = self.db.cursor.fetchall()
+      produtos = self.db.get_products_with_barcodes()
       
       if produtos:
         print(f"✓ {len(produtos)} produto(s) com código de barras:\n")

@@ -11,7 +11,7 @@ from kivymd.uix.screen import MDScreen
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
 
-from database.database import Database
+from database.provider import get_db
 from pdfs.loss_report import LossReport
 from pdfs.pdf_viewer import PDFViewer
 from utils.reports_screen import DateRangeDialog
@@ -37,7 +37,7 @@ LOSS_LABELS = {
 class LossesHistoryScreen(MDScreen):
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
-        self.db = db or Database()
+        self.db = db or get_db()
         self.loss_report = LossReport()
         self.pdf_viewer = PDFViewer(error_callback=lambda msg: self._show_simple_dialog("Erro", msg))
         self._render_ev = None

@@ -1349,8 +1349,8 @@ class ProductForm(Popup):
             return False
 
     def _save_to_database(self, barcode, expiry, is_sold_by_weight):
-        from database.database import Database
-        db = Database()
+        from database.provider import get_db
+        db = get_db()
 
         package_quantity = self.package_quantity.text.strip() or None
 

@@ -16,5 +16,21 @@
       ]
     },
     "timestamp": "2026-02-09T02:01:39.241959"
+  },
+  "6001299026973": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "6001299026973",
+      "name": "Full Cream Milk",
+      "brand": "Clover ULTRA",
+      "category": "Dairy Milk",
+      "sold_by_weight": false,
+      "quantity": "1000ml",
+      "image": "https://images.openfoodfacts.org/images/products/600/129/902/6973/front_en.7.400.jpg",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-02-10T22:05:03.099854"
   }
 }

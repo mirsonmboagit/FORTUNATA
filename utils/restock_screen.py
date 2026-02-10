@@ -16,7 +16,7 @@ from kivymd.uix.list import TwoLineListItem
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton
 
-from database.database import Database
+from database.provider import get_db
 
 
 Builder.load_file("utils/restock_screen.kv")
@@ -25,7 +25,7 @@ Builder.load_file("utils/restock_screen.kv")
 class RestockScreen(MDScreen):
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
-        self.db = db or Database()
+        self.db = db or get_db()
         self.products = []
         self.selected_product = None
         self.current_step = 1
@@ -234,15 +234,7 @@ class RestockScreen(MDScreen):
     # ---------- Produtos ----------
     def load_products(self):
         try:
-            self.db.cursor.execute(
-                """
-                SELECT id, description, existing_stock, sale_price,
-                       unit_purchase_price, barcode, is_sold_by_weight,
-                       expiry_date, status
-                FROM products
-                """
-            )
-            self.products = self.db.cursor.fetchall() or []
+            self.products = self.db.get_products_for_restock() or []
             self.show_products(self.products)
         except Exception as e:
             print(f"Erro ao carregar produtos: {e}")

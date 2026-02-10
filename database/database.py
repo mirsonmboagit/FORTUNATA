@@ -10,22 +10,135 @@ LOSS_QTY_LIMIT_KG = 5.0
 LOSS_VALUE_LIMIT_MZN = 5000
 LOSS_TYPES = {"DAMAGE", "EXPIRED", "THEFT", "ADJUSTMENT"}
 
-class Database:
-    def __init__(self, db_name="inventory.db"):
-        # Guardamos o nome simples
-        self.db_name = db_name 
-        
-        # Definimos a pasta
-        self.db_folder = "database"
-        
-        # Criamos a pasta se não existir
-        if not os.path.exists(self.db_folder):
-            os.makedirs(self.db_folder)
-            print(f"📁 Pasta '{self.db_folder}' criada!")
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
 
-        # Construímos o caminho completo
-        self.db_path = os.path.join(self.db_folder, self.db_name)
-        
+
+def _parse_date(value):
+    if not value:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _fetch_sales_velocity(db, days=14):
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    db.cursor.execute(
+        "SELECT product_id, COALESCE(SUM(quantity), 0) "
+        "FROM sales WHERE DATE(sale_date) >= ? "
+        "GROUP BY product_id",
+        (start_date,),
+    )
+    totals = {row[0]: _safe_float(row[1], 0.0) for row in db.cursor.fetchall()}
+    velocity = {}
+    for product_id, total_qty in totals.items():
+        velocity[product_id] = total_qty / max(days, 1)
+    return velocity
+
+
+def _get_product_daily_sales(db, product_id, days=14):
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    db.cursor.execute(
+        "SELECT COALESCE(SUM(quantity), 0) FROM sales "
+        "WHERE product_id = ? AND DATE(sale_date) >= ?",
+        (product_id, start_date),
+    )
+    total = _safe_float(db.cursor.fetchone()[0], 0.0)
+    return total / max(days, 1)
+
+
+def _build_forecasts(db, days=14, limit=10):
+    velocity = _fetch_sales_velocity(db, days=days)
+    db.cursor.execute(
+        "SELECT id, description, existing_stock, is_sold_by_weight, expiry_date, "
+        "sale_price, unit_purchase_price "
+        "FROM products"
+    )
+    forecasts = []
+    expiry_risk = []
+    today_date = datetime.now().date()
+
+    for prod_id, name, stock, by_weight, expiry_date, sale_price, unit_purchase_price in db.cursor.fetchall():
+        avg_daily = _safe_float(velocity.get(prod_id, 0.0), 0.0)
+        stock_value = _safe_float(stock, 0.0)
+        days_left = None
+        recommended_qty = 0.0
+
+        if avg_daily > 0:
+            days_left = stock_value / avg_daily
+            recommended_qty = max(0.0, (avg_daily * days) - stock_value)
+
+        unit = "kg" if by_weight else "un"
+        forecasts.append({
+            "product_id": prod_id,
+            "name": name,
+            "stock": stock_value,
+            "unit": unit,
+            "avg_daily": avg_daily,
+            "days_left": days_left,
+            "recommended_qty": recommended_qty,
+        })
+
+        exp_date = _parse_date(expiry_date)
+        if exp_date and avg_daily > 0:
+            days_to_expiry = (exp_date - today_date).days
+            if days_to_expiry >= 0:
+                days_to_sell = stock_value / avg_daily
+                if days_to_sell > days_to_expiry:
+                    unsold_qty = max(0.0, stock_value - (avg_daily * days_to_expiry))
+                    loss_revenue = unsold_qty * _safe_float(sale_price, 0.0)
+                    loss_profit = unsold_qty * (
+                        _safe_float(sale_price, 0.0)
+                        - _safe_float(unit_purchase_price, 0.0)
+                    )
+                    expiry_risk.append({
+                        "name": name,
+                        "days_to_expiry": days_to_expiry,
+                        "days_to_sell": days_to_sell,
+                        "stock": stock_value,
+                        "unit": unit,
+                        "unsold_qty": unsold_qty,
+                        "loss_revenue": loss_revenue,
+                        "loss_profit": loss_profit,
+                    })
+
+    forecasts.sort(key=lambda x: (x["days_left"] is None, x["days_left"] or 9999))
+    expiry_risk.sort(key=lambda x: x["days_to_expiry"])
+    return forecasts[:limit], expiry_risk[:limit]
+
+class Database:
+    def __init__(self, db_name="inventory.db", db_path=None, db_folder="database"):
+        # Guardamos o nome simples
+        self.db_name = db_name
+
+        # Definimos a pasta/base do banco
+        if db_path:
+            self.db_path = os.path.abspath(db_path)
+            self.db_folder = os.path.dirname(self.db_path) or "."
+            self.db_name = os.path.basename(self.db_path)
+        else:
+            self.db_folder = db_folder
+            self.db_path = os.path.join(self.db_folder, self.db_name)
+
+        # Criamos a pasta se n??o existir
+        if self.db_folder and not os.path.exists(self.db_folder):
+            os.makedirs(self.db_folder)
+            print(f"???? Pasta '{self.db_folder}' criada!")
+
         self.conn = None
         self.cursor = None
         self.connect()
@@ -35,7 +148,7 @@ class Database:
         """Conectar ao banco de dados"""
         try:
             # IMPORTANTE: Usamos o self.db_path aqui
-            self.conn = sqlite3.connect(self.db_path)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.cursor = self.conn.cursor()
             print(f"✅ Conectado com sucesso em: {self.db_path}")
         except sqlite3.Error as e:
@@ -500,6 +613,221 @@ class Database:
             print(f"Erro ao atualizar admin: {e}")
             self.conn.rollback()
             return False
+
+    def user_exists(self, username, exclude_username=None):
+        """Verificar se um usuario existe"""
+        try:
+            if exclude_username:
+                self.cursor.execute(
+                    "SELECT COUNT(*) FROM users WHERE username = ? AND username != ?",
+                    (username, exclude_username),
+                )
+            else:
+                self.cursor.execute(
+                    "SELECT COUNT(*) FROM users WHERE username = ?",
+                    (username,),
+                )
+            return self.cursor.fetchone()[0] > 0
+        except sqlite3.Error as e:
+            print(f"Erro ao verificar usuario: {e}")
+            return False
+
+    def get_user_role(self, username):
+        """Obter role de um usuario"""
+        try:
+            self.cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
+            row = self.cursor.fetchone()
+            return row[0] if row else None
+        except sqlite3.Error as e:
+            print(f"Erro ao obter role: {e}")
+            return None
+
+    def get_user(self, username):
+        """Obter dados completos de um usuario"""
+        try:
+            self.cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            return self.cursor.fetchone()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter usuario: {e}")
+            return None
+
+    def create_user(self, username, password, role, email=None, phone=None):
+        """Criar usuario (admin ou manager)"""
+        try:
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+            self.cursor.execute(
+                "INSERT INTO users (username, password, role, email, phone) VALUES (?, ?, ?, ?, ?)",
+                (username, hashed_password, role, email, phone),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            self.conn.rollback()
+            return False
+        except sqlite3.Error as e:
+            print(f"Erro ao criar usuario: {e}")
+            self.conn.rollback()
+            return False
+
+    def update_admin_profile(self, current_username, new_username=None, new_password=None):
+        """Atualizar username e/ou senha do admin"""
+        if not new_username and not new_password:
+            return False
+        try:
+            if new_username and self.user_exists(new_username, exclude_username=current_username):
+                return False
+            update_parts = []
+            params = []
+            if new_username:
+                update_parts.append("username = ?")
+                params.append(new_username)
+            if new_password:
+                hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+                update_parts.append("password = ?")
+                params.append(hashed_password)
+            params.append(current_username)
+            self.cursor.execute(
+                f"UPDATE users SET {', '.join(update_parts)} WHERE username = ? AND role = 'admin'",
+                params,
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return False
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao atualizar admin: {e}")
+            self.conn.rollback()
+            return False
+
+    def set_security_questions(self, username, answers):
+        """Configurar perguntas de seguranca para um usuario"""
+        try:
+            from utils.security_questions import hash_answer
+            hashes = [hash_answer(ans) for ans in answers]
+            placeholder = hash_answer("__unused__")
+            now = datetime.now().isoformat()
+            self.cursor.execute(
+                'INSERT OR REPLACE INTO user_security_questions '
+                '(username, q1_hash, q2_hash, q3_hash, q4_hash, attempts, lock_until, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, 0, NULL, ?)',
+                (username, hashes[0], hashes[1], hashes[2], placeholder, now),
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Erro ao salvar perguntas: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_security_record(self, username):
+        """Obter registro de perguntas de seguranca"""
+        try:
+            self.cursor.execute(
+                'SELECT q1_hash, q2_hash, q3_hash, q4_hash, attempts, lock_until '
+                'FROM user_security_questions WHERE username = ?',
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+            q1, q2, q3, _q4, attempts, lock_until = row
+            lock_value = None
+            if lock_until:
+                try:
+                    lock_value = datetime.fromisoformat(lock_until).isoformat()
+                except Exception:
+                    lock_value = lock_until
+            return {
+                "hashes": [q1, q2, q3],
+                "attempts": attempts or 0,
+                "lock_until": lock_value,
+            }
+        except sqlite3.Error as e:
+            print(f"Erro ao obter registro de seguranca: {e}")
+            return None
+
+    def update_security_state(self, username, attempts, lock_until):
+        """Atualizar estado de seguranca (tentativas e bloqueio)"""
+        try:
+            if isinstance(lock_until, str):
+                lock_value = lock_until
+            else:
+                lock_value = lock_until.isoformat() if lock_until else None
+            self.cursor.execute(
+                'UPDATE user_security_questions SET attempts = ?, lock_until = ? WHERE username = ?',
+                (attempts, lock_value, username),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao atualizar seguranca: {e}")
+            self.conn.rollback()
+            return False
+
+    def verify_security_answers(self, username, answers, max_attempts=5, lock_minutes=15):
+        """Verifica respostas de seguranca e gerencia tentativas/lock"""
+        try:
+            from utils.security_questions import check_answer
+            record = self.get_security_record(username)
+            if not record:
+                return {"ok": False, "reason": "not_configured"}
+
+            now = datetime.now()
+            lock_until_raw = record.get("lock_until")
+            lock_until = None
+            if lock_until_raw:
+                try:
+                    lock_until = datetime.fromisoformat(lock_until_raw)
+                except Exception:
+                    lock_until = None
+            if lock_until and now < lock_until:
+                remaining = int((lock_until - now).total_seconds() / 60) + 1
+                return {
+                    "ok": False,
+                    "reason": "locked",
+                    "lock_until": lock_until.isoformat(),
+                    "remaining_minutes": remaining,
+                }
+            if lock_until and now >= lock_until:
+                self.update_security_state(username, 0, None)
+                record["attempts"] = 0
+                record["lock_until"] = None
+
+            hashes = record.get("hashes", [])[: len(answers)]
+            if len(hashes) < len(answers):
+                return {"ok": False, "reason": "not_configured"}
+
+            all_ok = True
+            for ans, hashed in zip(answers, hashes):
+                if not check_answer(ans, hashed):
+                    all_ok = False
+                    break
+
+            if not all_ok:
+                attempts = (record.get("attempts") or 0) + 1
+                if attempts >= max_attempts:
+                    lock_until = now + timedelta(minutes=lock_minutes)
+                    self.update_security_state(username, attempts, lock_until)
+                    return {
+                        "ok": False,
+                        "reason": "locked",
+                        "lock_until": lock_until.isoformat(),
+                        "remaining_minutes": lock_minutes,
+                    }
+                self.update_security_state(username, attempts, None)
+                return {
+                    "ok": False,
+                    "reason": "invalid",
+                    "remaining": max_attempts - attempts,
+                    "attempts": attempts,
+                }
+
+            self.update_security_state(username, 0, None)
+            return {"ok": True}
+        except Exception as e:
+            print(f"Erro ao verificar respostas: {e}")
+            return {"ok": False, "reason": "error"}
 
     def log_action(self, username, role, action, details=""):
         """Registrar ação do usuário no log do sistema"""
@@ -2217,6 +2545,322 @@ class Database:
             print(f"❌ Erro inesperado: {e}")
             return False, f"Erro inesperado: {str(e)}"
     
+    def get_products_with_barcodes(self):
+        """Obter produtos que possuem codigo de barras"""
+        try:
+            self.cursor.execute(
+                """
+                SELECT id, description, barcode, existing_stock, is_sold_by_weight
+                FROM products
+                WHERE barcode IS NOT NULL AND barcode != ''
+                ORDER BY id
+                """
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter produtos com barcode: {e}")
+            return []
+
+    def get_products_for_losses(self):
+        """Obter produtos para tela de perdas"""
+        try:
+            self.cursor.execute(
+                """
+                SELECT id, description, existing_stock, sale_price,
+                       unit_purchase_price, barcode, is_sold_by_weight,
+                       expiry_date, status
+                FROM products
+                WHERE existing_stock > 0
+                """
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter produtos para perdas: {e}")
+            return []
+
+    def get_products_for_restock(self):
+        """Obter produtos para tela de reposicao"""
+        try:
+            self.cursor.execute(
+                """
+                SELECT id, description, existing_stock, sale_price,
+                       unit_purchase_price, barcode, is_sold_by_weight,
+                       expiry_date, status
+                FROM products
+                """
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter produtos para reposicao: {e}")
+            return []
+
+    def get_products_for_filter(self):
+        """Obter lista simples de produtos para filtros"""
+        try:
+            self.cursor.execute("SELECT id, description FROM products ORDER BY description")
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter produtos para filtro: {e}")
+            return []
+
+    def get_categories(self):
+        """Obter lista de categorias distintas"""
+        try:
+            self.cursor.execute(
+                "SELECT DISTINCT category FROM products "
+                "WHERE category IS NOT NULL AND category != '' ORDER BY category"
+            )
+            return [row[0] for row in self.cursor.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erro ao obter categorias: {e}")
+            return []
+
+    def get_report_data(self, start_date, end_date, product_id=None, category=None):
+        """Obter dados agregados para relatorios"""
+        query = """
+        SELECT 
+            p.id,
+            p.description,
+            p.category,
+            p.existing_stock,
+            p.sale_price,
+            p.total_purchase_price,
+            p.unit_purchase_price,
+            COALESCE(SUM(s.quantity), 0) as sold_in_period,
+            COALESCE(SUM(s.total_price), 0) as total_sales
+        FROM products p
+        LEFT JOIN sales s
+            ON p.id = s.product_id
+           AND s.sale_date BETWEEN ? AND ?
+        WHERE 1=1
+        """
+        params = [
+            start_date,
+            end_date,
+        ]
+
+        if product_id:
+            query += " AND p.id = ?"
+            params.append(product_id)
+
+        if category:
+            query += " AND p.category = ?"
+            params.append(category)
+
+        query += """
+        GROUP BY 
+            p.id, p.description, p.existing_stock, p.sale_price,
+            p.total_purchase_price, p.unit_purchase_price, p.category
+        """
+
+        try:
+            self.cursor.execute(query, params)
+            columns = [desc[0] for desc in self.cursor.description]
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Erro ao obter dados filtrados: {e}")
+            return []
+
+    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100):
+        """Obter logs do sistema com filtros"""
+        query = "SELECT * FROM user_logs WHERE 1=1"
+        params = []
+
+        if user_filter:
+            query += " AND username LIKE ?"
+            params.append(f"%{user_filter}%")
+
+        if action_filter:
+            query += " AND action LIKE ?"
+            params.append(f"%{action_filter}%")
+
+        if role_filter:
+            query += " AND role = ?"
+            params.append(role_filter)
+
+        query += " ORDER BY timestamp DESC"
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        try:
+            self.cursor.execute(query, params)
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter logs: {e}")
+            return []
+
+    def clear_user_logs(self):
+        """Apagar todos os logs"""
+        try:
+            self.cursor.execute("DELETE FROM user_logs")
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao apagar logs: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_admin_insights(self):
+        """Retorna insights completos para o admin"""
+        today_date = datetime.now().date()
+        today = today_date.strftime("%Y-%m-%d")
+
+        self.cursor.execute(
+            "SELECT COALESCE(SUM(total_price), 0), COUNT(*) "
+            "FROM sales WHERE DATE(sale_date) = ?",
+            (today,),
+        )
+        total_sales, total_count = self.cursor.fetchone()
+        total_sales = _safe_float(total_sales, 0.0)
+        total_count = int(total_count or 0)
+
+        self.cursor.execute(
+            "SELECT COALESCE(p.description, pa.description), COALESCE(SUM(s.total_price), 0) AS total_val "
+            "FROM sales s "
+            "LEFT JOIN products p ON s.product_id = p.id "
+            "LEFT JOIN products_archive pa ON s.product_id = pa.id "
+            "WHERE DATE(s.sale_date) = ? "
+            "GROUP BY s.product_id ORDER BY total_val DESC LIMIT 1",
+            (today,),
+        )
+        row = self.cursor.fetchone()
+        top_product = row[0] if row else "n/d"
+
+        self.cursor.execute(
+            "SELECT strftime('%H', sale_date) AS h, COALESCE(SUM(total_price), 0) AS total_val "
+            "FROM sales WHERE DATE(sale_date) = ? "
+            "GROUP BY h ORDER BY total_val DESC LIMIT 1",
+            (today,),
+        )
+        row = self.cursor.fetchone()
+        peak_hour = f"{row[0]}:00-{row[0]}:59" if row else "n/d"
+
+        low_threshold = 5
+        self.cursor.execute(
+            "SELECT id, description, existing_stock, is_sold_by_weight FROM products "
+            "WHERE existing_stock <= ? ORDER BY existing_stock ASC",
+            (low_threshold,),
+        )
+        low_stock_raw = self.cursor.fetchall()
+
+        low_stock = []
+        for prod_id, name, stock, is_weight in low_stock_raw:
+            daily_sales = _get_product_daily_sales(self, prod_id)
+            days_left = _safe_float(stock) / max(daily_sales, 0.1) if daily_sales > 0 else 999
+            low_stock.append((name, stock, is_weight, days_left, prod_id))
+
+        self.cursor.execute(
+            "SELECT description, profit_per_unit FROM products "
+            "WHERE profit_per_unit < 0 ORDER BY profit_per_unit ASC"
+        )
+        negative_profit = self.cursor.fetchall()
+
+        self.cursor.execute(
+            "SELECT description, expiry_date, existing_stock, is_sold_by_weight "
+            "FROM products "
+            "WHERE expiry_date IS NOT NULL AND expiry_date != ''"
+        )
+        expiring_15 = []
+        expiring_7 = []
+        for name, expiry_date, stock, is_by_weight in self.cursor.fetchall():
+            exp_date = _parse_date(expiry_date)
+            if not exp_date:
+                continue
+            days_left = (exp_date - today_date).days
+            if days_left < 0:
+                continue
+            unit = "kg" if is_by_weight else "un"
+            if days_left <= 7:
+                expiring_7.append(
+                    (name, days_left, exp_date.strftime("%d/%m/%Y"), _safe_float(stock), unit)
+                )
+            elif days_left <= 15:
+                expiring_15.append(
+                    (name, days_left, exp_date.strftime("%d/%m/%Y"), _safe_float(stock), unit)
+                )
+
+        expiring_7.sort(key=lambda x: x[1])
+        expiring_15.sort(key=lambda x: x[1])
+
+        forecasts, expiry_risk = _build_forecasts(self, days=14, limit=20)
+
+        summary = [
+            f"Total vendido hoje: {total_sales:.2f} MZN",
+            f"Total de vendas hoje: {total_count}",
+            f"Produto lider: {top_product}",
+            f"Horario mais forte: {peak_hour}",
+        ]
+
+        alerts = []
+        if total_count == 0:
+            alerts.append("Sem vendas registadas hoje.")
+        if low_stock:
+            alerts.append(f"{len(low_stock)} produtos com stock baixo (<= {low_threshold}).")
+        if expiring_15:
+            alerts.append(f"{len(expiring_15)} produtos a vencer em ate 15 dias.")
+        if expiring_7:
+            alerts.append(f"{len(expiring_7)} produtos a vencer em ate 7 dias.")
+        if negative_profit:
+            alerts.append(f"{len(negative_profit)} produtos com lucro negativo.")
+
+        recommendations = []
+        recommendations_stock = []
+        recommendations_expiry = []
+
+        if low_stock:
+            for name, stock, is_weight, days_left, _pid in low_stock[:3]:
+                unit = "kg" if is_weight else "un"
+                rec = f"{name}: stock baixo ({stock:.1f} {unit}) - repor"
+                recommendations.append(rec)
+                recommendations_stock.append(rec)
+
+        if expiring_7:
+            for name, days, _date_str, _stock, _unit in expiring_7[:3]:
+                rec = f"{name} vence em {days} dias - priorizar venda"
+                recommendations.append(rec)
+                recommendations_expiry.append(rec)
+
+        if negative_profit:
+            names = ", ".join([p[0] for p in negative_profit[:3]])
+            recommendations.append(f"Rever preco de: {names}.")
+
+        if not recommendations:
+            recommendations.append("Sem recomendacoes criticas no momento.")
+
+        alert_count = (
+            (1 if total_count == 0 else 0)
+            + len(low_stock)
+            + len(expiring_15)
+            + len(expiring_7)
+            + len(negative_profit)
+        )
+
+        return {
+            "summary": summary,
+            "alerts": alerts,
+            "recommendations": recommendations,
+            "recommendations_stock": recommendations_stock,
+            "recommendations_expiry": recommendations_expiry,
+            "low_stock": low_stock,
+            "expiring_15": expiring_15,
+            "expiring_7": expiring_7,
+            "stock_forecast": forecasts,
+            "expiry_risk": expiry_risk,
+            "negative_profit": negative_profit,
+            "alert_count": alert_count,
+            "badge_counts": {
+                "stock": len(low_stock),
+                "expiry_7": len(expiring_7),
+                "expiry_15": len(expiring_15),
+                "total": len(low_stock) + len(expiring_7) + len(expiring_15),
+            },
+        }
+
+    def get_admin_insights_ai(self):
+        """Placeholder para compatibilidade: retorna insights base"""
+        return self.get_admin_insights()
+
     # ==================== CONTEXT MANAGER ====================
     
     def __enter__(self):

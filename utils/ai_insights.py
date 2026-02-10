@@ -6,8 +6,7 @@ import time
 import random
 from dotenv import load_dotenv
 from kivy.app import App
-
-from database.database import Database
+from database.provider import get_db
 
 load_dotenv()
 
@@ -307,173 +306,10 @@ def get_badge_counts(insights):
 def build_admin_insights(db=None):
     """
     Retorna insights completos para o admin.
-    Estrutura otimizada com dados enriquecidos.
+    Usa o provedor de banco para suportar modo remoto.
     """
-    db = db or Database()
-    today_date = datetime.now().date()
-    today = today_date.strftime("%Y-%m-%d")
-
-    # Total e quantidade de vendas hoje
-    db.cursor.execute(
-        "SELECT COALESCE(SUM(total_price), 0), COUNT(*) "
-        "FROM sales WHERE DATE(sale_date) = ?",
-        (today,),
-    )
-    total_sales, total_count = db.cursor.fetchone()
-    total_sales = _safe_float(total_sales, 0.0)
-    total_count = int(total_count or 0)
-
-    # Produto líder (por total vendido em valor) hoje
-    db.cursor.execute(
-        "SELECT COALESCE(p.description, pa.description), COALESCE(SUM(s.total_price), 0) AS total_val "
-        "FROM sales s "
-        "LEFT JOIN products p ON s.product_id = p.id "
-        "LEFT JOIN products_archive pa ON s.product_id = pa.id "
-        "WHERE DATE(s.sale_date) = ? "
-        "GROUP BY s.product_id ORDER BY total_val DESC LIMIT 1",
-        (today,),
-    )
-    row = db.cursor.fetchone()
-    top_product = row[0] if row else "n/d"
-
-    # Horário mais forte hoje
-    db.cursor.execute(
-        "SELECT strftime('%H', sale_date) AS h, COALESCE(SUM(total_price), 0) AS total_val "
-        "FROM sales WHERE DATE(sale_date) = ? "
-        "GROUP BY h ORDER BY total_val DESC LIMIT 1",
-        (today,),
-    )
-    row = db.cursor.fetchone()
-    peak_hour = f"{row[0]}:00-{row[0]}:59" if row else "n/d"
-
-    # Produtos com stock baixo - COM DADOS DE VELOCIDADE
-    low_threshold = 5
-    db.cursor.execute(
-        "SELECT id, description, existing_stock, is_sold_by_weight FROM products "
-        "WHERE existing_stock <= ? ORDER BY existing_stock ASC",
-        (low_threshold,),
-    )
-    low_stock_raw = db.cursor.fetchall()
-    
-    low_stock = []
-    for prod_id, name, stock, is_weight in low_stock_raw:
-        daily_sales = _get_product_daily_sales(db, prod_id)
-        days_left = _safe_float(stock) / max(daily_sales, 0.1) if daily_sales > 0 else 999
-        low_stock.append((name, stock, is_weight, days_left, prod_id))
-
-    # Produtos com lucro negativo
-    db.cursor.execute(
-        "SELECT description, profit_per_unit FROM products "
-        "WHERE profit_per_unit < 0 ORDER BY profit_per_unit ASC"
-    )
-    negative_profit = db.cursor.fetchall()
-
-    # Produtos prestes a vencer
-    db.cursor.execute(
-        "SELECT description, expiry_date, existing_stock, is_sold_by_weight "
-        "FROM products "
-        "WHERE expiry_date IS NOT NULL AND expiry_date != ''"
-    )
-    expiring_15 = []
-    expiring_7 = []
-    for name, expiry_date, stock, is_by_weight in db.cursor.fetchall():
-        exp_date = _parse_date(expiry_date)
-        if not exp_date:
-            continue
-        days_left = (exp_date - today_date).days
-        if days_left < 0:
-            continue
-        unit = "kg" if is_by_weight else "un"
-        if days_left <= 7:
-            expiring_7.append(
-                (name, days_left, exp_date.strftime("%d/%m/%Y"), _safe_float(stock), unit)
-            )
-        elif days_left <= 15:
-            expiring_15.append(
-                (name, days_left, exp_date.strftime("%d/%m/%Y"), _safe_float(stock), unit)
-            )
-
-    expiring_7.sort(key=lambda x: x[1])
-    expiring_15.sort(key=lambda x: x[1])
-
-    forecasts, expiry_risk = _build_forecasts(db, days=14, limit=20)
-
-    summary = [
-        f"Total vendido hoje: {total_sales:.2f} MZN",
-        f"Total de vendas hoje: {total_count}",
-        f"Produto líder: {top_product}",
-        f"Horário mais forte: {peak_hour}",
-    ]
-
-    alerts = []
-    if total_count == 0:
-        alerts.append("Sem vendas registadas hoje.")
-    if low_stock:
-        alerts.append(f"{len(low_stock)} produtos com stock baixo (<= {low_threshold}).")
-    if expiring_15:
-        alerts.append(f"{len(expiring_15)} produtos a vencer em até 15 dias.")
-    if expiring_7:
-        alerts.append(f"{len(expiring_7)} produtos a vencer em até 7 dias.")
-    if negative_profit:
-        alerts.append(f"{len(negative_profit)} produtos com lucro negativo.")
-
-    recommendations = []
-    recommendations_stock = []
-    recommendations_expiry = []
-    
-    if low_stock:
-        for item in low_stock[:5]:
-            name = item[0]
-            days = item[3]
-            if days < 1:
-                rec = f"{name} acaba hoje - repor urgente"
-            elif days < 2:
-                rec = f"{name} acaba amanhã"
-            else:
-                rec = f"{name} - {days:.0f} dias restantes"
-            recommendations.append(rec)
-            recommendations_stock.append(rec)
-    
-    if expiring_7:
-        for item in expiring_7[:5]:
-            name = item[0]
-            days = item[1]
-            rec = f"{name} vence em {days} dias - priorizar venda"
-            recommendations.append(rec)
-            recommendations_expiry.append(rec)
-    
-    if negative_profit:
-        names = ", ".join([p[0] for p in negative_profit[:3]])
-        recommendations.append(f"Rever preço de: {names}.")
-    
-    if not recommendations:
-        recommendations.append("Sem recomendações críticas no momento.")
-
-    alert_count = (
-        (1 if total_count == 0 else 0)
-        + len(low_stock)
-        + len(expiring_15)
-        + len(expiring_7)
-        + len(negative_profit)
-    )
-
-    result = {
-        "summary": summary,
-        "alerts": alerts,
-        "recommendations": recommendations,
-        "recommendations_stock": recommendations_stock,
-        "recommendations_expiry": recommendations_expiry,
-        "low_stock": low_stock,
-        "expiring_15": expiring_15,
-        "expiring_7": expiring_7,
-        "stock_forecast": forecasts,
-        "expiry_risk": expiry_risk,
-        "negative_profit": negative_profit,
-        "alert_count": alert_count,
-        "badge_counts": get_badge_counts({"low_stock": low_stock, "expiring_7": expiring_7, "expiring_15": expiring_15}),
-    }
-    
-    return result
+    db = db or get_db()
+    return db.get_admin_insights() or {}
 
 
 def build_admin_insights_ai(db=None, cache_minutes=5):
