@@ -8,16 +8,11 @@ from kivy.uix.widget import Widget
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
 
 from database.database import Database
-from pdfs.loss_report import LossReport
-from pdfs.pdf_viewer import PDFViewer
-from utils.reports_screen import DateRangeDialog
 
 
-Builder.load_file("utils/losses_history_screen.kv")
+Builder.load_file("utils/restock_history_screen.kv")
 
 
 def _theme_color(name, fallback):
@@ -26,71 +21,60 @@ def _theme_color(name, fallback):
     return tokens.get(name, fallback)
 
 
-LOSS_LABELS = {
-    "DAMAGE": "Danificado",
-    "EXPIRED": "Expirado",
-    "THEFT": "Roubo",
-    "ADJUSTMENT": "Ajuste",
-}
-
-
-class LossesHistoryScreen(MDScreen):
+class RestockHistoryScreen(MDScreen):
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
         self.db = db or Database()
-        self.loss_report = LossReport()
-        self.pdf_viewer = PDFViewer(error_callback=lambda msg: self._show_simple_dialog("Erro", msg))
-        Clock.schedule_once(lambda dt: self.load_losses_table(), 0.1)
+        Clock.schedule_once(lambda dt: self.load_restock_table(), 0.1)
 
     def on_enter(self):
-        Clock.schedule_once(lambda dt: self.load_losses_table(), 0.05)
+        Clock.schedule_once(lambda dt: self.load_restock_table(), 0.05)
 
     def go_back(self):
         if self.manager:
-            self.manager.current = "losses"
+            self.manager.current = "restock"
 
-    def load_losses_table(self, *args):
-        if not hasattr(self, "ids") or "losses_list" not in self.ids:
+    def load_restock_table(self, *args):
+        if not hasattr(self, "ids") or "restock_list" not in self.ids:
             return
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
-        rows = self.db.get_loss_records(start_dt, end_dt, limit=300)
-        self._populate_losses_list(rows)
+        rows = self.db.get_restock_records(start_dt, end_dt, limit=300)
+        self._populate_restock_list(rows)
 
-    def _populate_losses_list(self, rows):
-        self.ids.losses_list.clear_widgets()
+    def _populate_restock_list(self, rows):
+        self.ids.restock_list.clear_widgets()
         rows = rows or []
-        rows = self._aggregate_loss_rows(rows)
+        rows = self._aggregate_restock_rows(rows)
 
         if not rows:
-            self.ids.losses_empty.opacity = 1
-            self.ids.losses_empty.height = dp(80)
-            self.ids.losses_empty.disabled = False
+            self.ids.restock_empty.opacity = 1
+            self.ids.restock_empty.height = dp(80)
+            self.ids.restock_empty.disabled = False
             return
 
-        self.ids.losses_empty.opacity = 0
-        self.ids.losses_empty.height = 0
-        self.ids.losses_empty.disabled = True
+        self.ids.restock_empty.opacity = 0
+        self.ids.restock_empty.height = 0
+        self.ids.restock_empty.disabled = True
 
         for i, row in enumerate(rows):
-            self.ids.losses_list.add_widget(self._create_loss_row(row, i))
+            self.ids.restock_list.add_widget(self._create_restock_row(row, i))
 
-    def _aggregate_loss_rows(self, rows):
+    def _aggregate_restock_rows(self, rows):
         grouped = {}
         for row in rows:
-            created_at, product, movement_type, qty, unit, total_cost, total_price, reason, created_by = row
+            created_at, product, qty, unit, unit_cost, total_cost, created_by, note = row
             product_name = (product or "Produto").strip()
             key = product_name.lower()
             qty_val = float(qty or 0)
-            cost_val = float(total_cost or 0)
+            total_val = float(total_cost or 0)
 
             if key not in grouped:
                 grouped[key] = {
                     "product": product_name,
                     "qty": 0.0,
-                    "total_cost": 0.0,
+                    "total": 0.0,
                     "unit": unit,
-                    "types": set(),
                     "users": set(),
                     "latest_date": created_at,
                     "latest_dt": self._safe_parse_date(created_at),
@@ -98,10 +82,9 @@ class LossesHistoryScreen(MDScreen):
 
             g = grouped[key]
             g["qty"] += qty_val
-            g["total_cost"] += cost_val
+            g["total"] += total_val
             if unit and not g["unit"]:
                 g["unit"] = unit
-            g["types"].add(movement_type)
             g["users"].add(created_by or "N/A")
 
             dt = self._safe_parse_date(created_at)
@@ -111,20 +94,20 @@ class LossesHistoryScreen(MDScreen):
 
         aggregated = []
         for g in grouped.values():
-            types = list(g["types"])
-            type_label = types[0] if len(types) == 1 else "Varios"
+            qty = g["qty"]
+            total = g["total"]
+            unit_cost = (total / qty) if qty else 0
             users = list(g["users"])
             user_label = users[0] if len(users) == 1 else "Varios"
             aggregated.append((
                 g["latest_date"],
                 g["product"],
-                type_label,
-                g["qty"],
+                qty,
                 g["unit"] or "UN",
-                g["total_cost"],
-                0,
-                "",
+                unit_cost,
+                total,
                 user_label,
+                "",
             ))
 
         aggregated.sort(key=lambda r: self._safe_parse_date(r[0]) or datetime.min, reverse=True)
@@ -136,8 +119,8 @@ class LossesHistoryScreen(MDScreen):
         except Exception:
             return None
 
-    def _create_loss_row(self, row, index):
-        created_at, product, movement_type, qty, unit, total_cost, total_price, reason, created_by = row
+    def _create_restock_row(self, row, index):
+        created_at, product, qty, unit, unit_cost, total_cost, created_by, note = row
         bg_even = _theme_color("surface_alt", [0.98, 0.99, 1, 1])
         bg_odd = _theme_color("card", [1, 1, 1, 1])
         text_primary = _theme_color("text_primary", [0.2, 0.2, 0.2, 1])
@@ -150,7 +133,6 @@ class LossesHistoryScreen(MDScreen):
         except Exception:
             date_str = str(created_at)[:16]
 
-        label = LOSS_LABELS.get(movement_type, movement_type)
         try:
             qty_val = float(qty)
             if unit == "UN" and qty_val.is_integer():
@@ -159,7 +141,9 @@ class LossesHistoryScreen(MDScreen):
                 qty_str = f"{qty_val:.2f} {unit}"
         except Exception:
             qty_str = f"{qty} {unit}"
-        cost_str = f"{float(total_cost or 0):.2f} MZN"
+
+        unit_cost_str = f"{float(unit_cost or 0):.2f} MZN"
+        total_cost_str = f"{float(total_cost or 0):.2f} MZN"
 
         line = MDBoxLayout(
             size_hint_y=None,
@@ -179,21 +163,13 @@ class LossesHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=str(product),
-            size_hint_x=0.36,
+            size_hint_x=0.34,
             halign="left",
             font_size=dp(11),
             theme_text_color="Custom",
             text_color=text_primary,
             shorten=True,
             shorten_from="right",
-        ))
-        line.add_widget(MDLabel(
-            text=label,
-            size_hint_x=0.14,
-            halign="center",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=text_secondary,
         ))
         line.add_widget(MDLabel(
             text=qty_str,
@@ -204,12 +180,20 @@ class LossesHistoryScreen(MDScreen):
             text_color=text_secondary,
         ))
         line.add_widget(MDLabel(
-            text=cost_str,
-            size_hint_x=0.12,
+            text=unit_cost_str,
+            size_hint_x=0.14,
             halign="right",
             font_size=dp(11),
             theme_text_color="Custom",
-            text_color=_theme_color("danger", [0.85, 0.3, 0.3, 1]),
+            text_color=text_secondary,
+        ))
+        line.add_widget(MDLabel(
+            text=total_cost_str,
+            size_hint_x=0.14,
+            halign="right",
+            font_size=dp(11),
+            theme_text_color="Custom",
+            text_color=_theme_color("success", [0.2, 0.7, 0.3, 1]),
         ))
         line.add_widget(MDLabel(
             text=created_by or "N/A",
@@ -231,50 +215,3 @@ class LossesHistoryScreen(MDScreen):
         container.add_widget(line)
         container.add_widget(Widget(size_hint_y=None, height=dp(1)))
         return container
-
-    def export_losses_pdf(self, *args):
-        dialog = DateRangeDialog(database=self.db, callback=self._generate_losses_pdf)
-        dialog.open()
-
-    def _generate_losses_pdf(self, start_dt, end_dt):
-        try:
-            metrics = self.db.calculate_loss_metrics(start_dt, end_dt) or {}
-            records = self.db.get_loss_records(start_dt, end_dt, limit=300)
-            data = {"metrics": metrics, "records": records}
-            filters = {
-                "start_date": start_dt,
-                "end_date": end_dt,
-                "product": "Todos os Produtos",
-                "category": "Todas as Categorias",
-            }
-            pdf_path = self.loss_report.generate(data, filters)
-            self._show_pdf_success(pdf_path)
-        except Exception as e:
-            self._show_simple_dialog("Erro", f"Falha ao gerar PDF de perdas: {e}")
-
-    def _show_pdf_success(self, pdf_path):
-        dialog = MDDialog(
-            title="PDF Gerado",
-            text=f"Arquivo criado em:\n{pdf_path}",
-            buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(
-                    text="ABRIR",
-                    md_bg_color=_theme_color("info", (0.15, 0.45, 0.75, 1)),
-                    on_release=lambda x: self._open_pdf(dialog, pdf_path),
-                ),
-            ],
-        )
-        dialog.open()
-
-    def _open_pdf(self, dialog, pdf_path):
-        dialog.dismiss()
-        self.pdf_viewer.view_pdf(pdf_path)
-
-    def _show_simple_dialog(self, title, message):
-        dialog = MDDialog(
-            title=title,
-            text=message,
-            buttons=[MDFlatButton(text="OK", on_release=lambda x: dialog.dismiss())],
-        )
-        dialog.open()

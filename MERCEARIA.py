@@ -19,6 +19,8 @@ from utils.reports_screen import ReportsScreen
 from utils.sales_history_screen import SalesHistoryScreen
 from utils.losses_screen import LossesScreen
 from utils.losses_history_screen import LossesHistoryScreen
+from utils.restock_screen import RestockScreen
+from utils.restock_history_screen import RestockHistoryScreen
 from utils.settings import AdminSettingsScreen
 from kivy.config import Config
 from utils.theme import get_theme_tokens
@@ -181,7 +183,9 @@ class MainApp(MDApp):
         sm.add_widget(ReportsScreen(name='reports'))
         sm.add_widget(SalesHistoryScreen(db=self.db, name='sales_history'))
         sm.add_widget(LossesScreen(db=self.db, name='losses'))
+        sm.add_widget(RestockScreen(db=self.db, name='restock'))
         sm.add_widget(LossesHistoryScreen(db=self.db, name='losses_history'))
+        sm.add_widget(RestockHistoryScreen(db=self.db, name='restock_history'))
        
 
         return sm

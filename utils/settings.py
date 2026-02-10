@@ -1087,8 +1087,15 @@ class SystemLogsDialog:
             height=dp(40),
             on_release=lambda x: self.export_logs_pdf()
         )
+        clear_btn = MDRectangleFlatButton(
+            text='LIMPAR LOGS',
+            size_hint_y=None,
+            height=dp(40),
+            on_release=lambda x: self._confirm_clear_logs()
+        )
         btn_row.add_widget(search_btn)
         btn_row.add_widget(export_btn)
+        btn_row.add_widget(clear_btn)
         content.add_widget(btn_row)
         
         from kivymd.uix.scrollview import MDScrollView
@@ -1252,6 +1259,36 @@ class SystemLogsDialog:
                 size_hint_y=None,
                 height=dp(50)
             ))
+
+    def _confirm_clear_logs(self):
+        dialog = MDDialog(
+            title='Limpar Logs',
+            text='Tem certeza que deseja apagar todos os logs do sistema?',
+            buttons=[
+                MDFlatButton(text='CANCELAR', on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text='LIMPAR', on_release=lambda x: self._clear_logs(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _clear_logs(self, dialog):
+        try:
+            with Database() as db:
+                db.cursor.execute("DELETE FROM user_logs")
+                db.conn.commit()
+            dialog.dismiss()
+            self.load_logs()
+            self._show_simple_dialog('Sucesso', 'Logs apagados com sucesso.')
+        except Exception as e:
+            self._show_simple_dialog('Erro', f'Falha ao apagar logs: {e}')
+
+    def _show_simple_dialog(self, title, message):
+        dialog = MDDialog(
+            title=title,
+            text=message,
+            buttons=[MDFlatButton(text='OK', on_release=lambda x: dialog.dismiss())],
+        )
+        dialog.open()
 
     def _action_to_label(self, action):
         if not action:

@@ -1061,6 +1061,90 @@ class Database:
             print(f"Erro ao obter perdas por utilizador: {e}")
             return []
 
+    def restock_product(
+        self,
+        product_id,
+        qty,
+        unit_cost,
+        reason="Reposição de stock",
+        note="",
+        evidence_path=None,
+        created_by=None,
+        created_role=None,
+        terminal_id=None,
+    ):
+        """Registra reposição de stock e atualiza custo médio."""
+        try:
+            qty = float(qty)
+            unit_cost = float(unit_cost)
+            if qty <= 0 or unit_cost <= 0:
+                return None
+
+            self.cursor.execute(
+                """
+                SELECT existing_stock, unit_purchase_price, sale_price
+                FROM products WHERE id = ?
+                """,
+                (product_id,),
+            )
+            product = self.cursor.fetchone()
+            if not product:
+                return None
+
+            stock_before = float(product[0])
+            old_cost = float(product[1] or 0)
+            sale_price = float(product[2] or 0)
+
+            movement_id = self._record_stock_movement_tx(
+                self.cursor,
+                product_id,
+                "RESTOCK",
+                qty,
+                "IN",
+                reason=reason,
+                note=note,
+                evidence_path=evidence_path,
+                created_by=created_by,
+                created_role=created_role,
+                terminal_id=terminal_id,
+                unit_cost=unit_cost,
+                unit_price=sale_price,
+                approval_status="APPROVED",
+                approved_by=created_by,
+                approved_at=self._now_str(),
+                apply_stock=True,
+            )
+            if not movement_id:
+                self.conn.rollback()
+                return None
+
+            total_qty = stock_before + qty
+            if total_qty <= 0:
+                new_unit_cost = unit_cost
+            else:
+                new_unit_cost = ((stock_before * old_cost) + (qty * unit_cost)) / total_qty
+
+            new_total_purchase = new_unit_cost * total_qty
+            profit_per_unit = sale_price - new_unit_cost
+
+            self.cursor.execute(
+                """
+                UPDATE products
+                SET unit_purchase_price = ?,
+                    total_purchase_price = ?,
+                    profit_per_unit = ?
+                WHERE id = ?
+                """,
+                (new_unit_cost, new_total_purchase, profit_per_unit, product_id),
+            )
+
+            self.conn.commit()
+            return movement_id
+        except sqlite3.Error as e:
+            print(f"Erro ao repor stock: {e}")
+            self.conn.rollback()
+            return None
+
     def get_loss_records(self, start_dt, end_dt, limit=200):
         """Lista detalhada de perdas no período."""
         start = self._to_dt_str(start_dt, end=False)
@@ -1102,6 +1186,42 @@ class Database:
 
     # ==================== NOVO: MÉTODOS DE CÁLCULO DE PERDAS ====================
     
+    def get_restock_records(self, start_dt, end_dt, limit=300):
+        """Lista detalhada de reposiÃ§Ãµes no perÃ­odo."""
+        start = self._to_dt_str(start_dt, end=False)
+        end = self._to_dt_str(end_dt, end=True)
+        try:
+            limit_clause = "LIMIT ?" if limit else ""
+            params = [start, end]
+            if limit:
+                params.append(int(limit))
+            self.cursor.execute(
+                f"""
+                SELECT sm.created_at,
+                       COALESCE(p.description, pa.description) as product_name,
+                       sm.qty,
+                       sm.unit,
+                       sm.unit_cost,
+                       sm.total_cost,
+                       sm.created_by,
+                       sm.note
+                FROM stock_movements sm
+                LEFT JOIN products p ON sm.product_id = p.id
+                LEFT JOIN products_archive pa ON sm.product_id = pa.id
+                WHERE sm.applied = 1
+                  AND sm.direction = 'IN'
+                  AND sm.movement_type = 'RESTOCK'
+                  AND sm.created_at BETWEEN ? AND ?
+                ORDER BY sm.created_at DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter reposiÃ§Ãµes: {e}")
+            return []
+
     def calculate_loss_metrics(self, start_dt, end_dt):
         """
         Calcula todas as métricas de perdas para um período

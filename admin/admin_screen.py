@@ -858,6 +858,14 @@ class AdminScreen(Screen):
                 screen = self.manager.get_screen('losses')
                 Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
 
+    def open_restock_screen(self, *args):
+        """Abrir tela de reposição de stock"""
+        if self.manager:
+            self.manager.current = 'restock'
+            if 'restock' in self.manager.screen_names:
+                screen = self.manager.get_screen('restock')
+                Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
+
     def show_loss_metrics(self, *args):
         """Mostrar métricas de perdas do último mês"""
         try:

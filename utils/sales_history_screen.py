@@ -766,10 +766,54 @@ class SalesHistoryScreen(MDScreen):
         self._calculate_summary(rows)
 
         # Adicionar linhas com separadores
-        for i, row in enumerate(rows):
+        display_rows = self._aggregate_sales_rows(rows)
+        for i, row in enumerate(display_rows):
             sale_id, product, qty, price, total, sale_date = row
             row_widget = self._create_table_row(sale_id, product, qty, price, total, sale_date, i)
             self.ids.sales_list.add_widget(row_widget)
+
+    def _aggregate_sales_rows(self, rows):
+        grouped = {}
+        for row in rows:
+            sale_id, product, qty, price, total, sale_date = row
+            product_name = (product or "Produto").strip()
+            key = product_name.lower()
+            qty_val = float(qty or 0)
+            total_val = float(total or 0)
+
+            if key not in grouped:
+                grouped[key] = {
+                    "product": product_name,
+                    "qty": 0.0,
+                    "total": 0.0,
+                    "latest_date": sale_date,
+                    "latest_dt": self._safe_parse_date(sale_date),
+                }
+
+            g = grouped[key]
+            g["qty"] += qty_val
+            g["total"] += total_val
+
+            dt = self._safe_parse_date(sale_date)
+            if dt and (g["latest_dt"] is None or dt > g["latest_dt"]):
+                g["latest_dt"] = dt
+                g["latest_date"] = sale_date
+
+        aggregated = []
+        for g in grouped.values():
+            qty = g["qty"]
+            total = g["total"]
+            price = (total / qty) if qty else 0
+            aggregated.append((None, g["product"], qty, price, total, g["latest_date"]))
+
+        aggregated.sort(key=lambda r: self._safe_parse_date(r[5]) or datetime.min, reverse=True)
+        return aggregated
+
+    def _safe_parse_date(self, value):
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return None
 
     def load_all_sales(self):
         """Carrega todas as vendas"""
