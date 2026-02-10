@@ -49,6 +49,9 @@ class AdminScreen(Screen):
         self.db = Database()
         self.category_menu = None
         self._manual_categories = set()
+        self._filter_ev = None
+        self._pending_search = ""
+        self._compact_layout = None
         
         # Variáveis para controle de notificações e animação
         self.swing_event = None
@@ -56,6 +59,9 @@ class AdminScreen(Screen):
         self._ai_poll_ev = None
         
         Window.bind(on_resize=self._on_window_resize)
+
+    def on_kv_post(self, base_widget):
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
 
     def toggle_quick_actions(self, *args):
         self.quick_actions_open = not self.quick_actions_open
@@ -71,6 +77,7 @@ class AdminScreen(Screen):
 
     def _on_window_resize(self, instance, width, height):
         """Rebuild table rows so every cell re-measures at the new size."""
+        self._update_responsive_layout(width)
         Clock.unschedule(self._deferred_rebuild)
         Clock.schedule_once(self._deferred_rebuild, 0.15)
 
@@ -79,6 +86,57 @@ class AdminScreen(Screen):
             self.update_product_table(self._current_display)
         else:
             self.update_product_table(self.products)
+
+    def _update_responsive_layout(self, width=None):
+        if not self.ids:
+            return
+        width = width or Window.width
+        compact = width < dp(900)
+        if compact == self._compact_layout:
+            return
+        self._compact_layout = compact
+
+        toolbar_card = self.ids.get("toolbar_card")
+        toolbar_row = self.ids.get("toolbar_row")
+        search_input = self.ids.get("search_input")
+        category_spinner = self.ids.get("category_spinner")
+        filter_btn = self.ids.get("filter_btn")
+        add_btn = self.ids.get("add_btn")
+
+        if not toolbar_card or not toolbar_row:
+            return
+
+        if compact:
+            toolbar_row.orientation = "vertical"
+            toolbar_row.spacing = dp(8)
+            toolbar_card.padding = [dp(12), dp(10)]
+
+            if search_input:
+                search_input.size_hint_x = 1
+            if category_spinner:
+                category_spinner.size_hint_x = 1
+            if filter_btn:
+                filter_btn.size_hint_x = 1
+            if add_btn:
+                add_btn.size_hint_x = 1
+
+            toolbar_card.height = toolbar_row.minimum_height + dp(16)
+        else:
+            toolbar_row.orientation = "horizontal"
+            toolbar_row.spacing = dp(10)
+            toolbar_card.padding = [dp(16), dp(10)]
+
+            if search_input:
+                search_input.size_hint_x = 0.33
+            if category_spinner:
+                category_spinner.size_hint_x = 0.20
+            if filter_btn:
+                filter_btn.size_hint_x = None
+                filter_btn.width = dp(48)
+            if add_btn:
+                add_btn.size_hint_x = 0.14
+
+            toolbar_card.height = max(dp(70), self.height * 0.08)
 
     # ------------------------------------------------------------------
     # Sistema de Notificações e Animação de Abanar
@@ -270,6 +328,16 @@ class AdminScreen(Screen):
         if self.category_menu:
             self.category_menu.dismiss()
         self.filter_products(self.search_input.text if self.search_input else "")
+
+    def queue_filter(self, search_text):
+        self._pending_search = search_text or ""
+        if self._filter_ev:
+            Clock.unschedule(self._filter_ev)
+        self._filter_ev = Clock.schedule_once(self._apply_queued_filter, 0.2)
+
+    def _apply_queued_filter(self, dt):
+        self._filter_ev = None
+        self.filter_products(self._pending_search)
 
     # ------------------------------------------------------------------
     # Search / filter

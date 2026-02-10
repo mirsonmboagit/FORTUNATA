@@ -13,260 +13,265 @@
             left_action_items: [["arrow-left", lambda x: root.go_back()]]
             right_action_items: [["format-list-bulleted", lambda x: root.open_restock_history()]]
 
-        MDBoxLayout:
-            orientation: "vertical"
-            padding: dp(16)
-            spacing: dp(12)
+        ScrollView:
+            do_scroll_x: False
+            do_scroll_y: True
 
-            MDCard:
-                orientation: "horizontal"
-                padding: dp(12), dp(8)
-                spacing: dp(8)
-                elevation: 1
-                radius: [dp(8)]
-                size_hint_y: None
-                height: dp(40)
-                md_bg_color: app.theme_tokens['card']
-
-                MDIconButton:
-                    id: step1_icon
-                    icon: "numeric-1-circle"
-                    theme_text_color: "Custom"
-                    text_color: app.theme_tokens['info']
-                    size_hint: None, None
-                    size: dp(24), dp(24)
-
-                MDLabel:
-                    id: step1_label
-                    text: "Selecionar Produto"
-                    font_size: dp(12)
-                    bold: True
-                    theme_text_color: "Primary"
-
-                MDIconButton:
-                    id: step2_icon
-                    icon: "numeric-2-circle-outline"
-                    theme_text_color: "Custom"
-                    text_color: app.theme_tokens['text_secondary']
-                    size_hint: None, None
-                    size: dp(24), dp(24)
-
-                MDLabel:
-                    id: step2_label
-                    text: "Detalhes da Reposicao"
-                    font_size: dp(12)
-                    theme_text_color: "Hint"
-
-            MDCard:
-                id: selected_product_card
+            MDBoxLayout:
                 orientation: "vertical"
-                padding: dp(12)
-                spacing: dp(6)
-                elevation: 3
-                radius: [dp(10)]
-                md_bg_color: app.theme_tokens['card_alt']
-                size_hint_y: None
-                height: 0
-                opacity: 0
+                adaptive_height: True
+                padding: dp(16)
+                spacing: dp(12)
 
-                MDBoxLayout:
-                    size_hint_y: None
-                    height: dp(32)
+                MDCard:
+                    orientation: "horizontal"
+                    padding: dp(12), dp(8)
                     spacing: dp(8)
+                    elevation: 1
+                    radius: [dp(8)]
+                    size_hint_y: None
+                    height: dp(40)
+                    md_bg_color: app.theme_tokens['card']
 
-                    MDIcon:
-                        icon: "package-variant"
+                    MDIconButton:
+                        id: step1_icon
+                        icon: "numeric-1-circle"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['info']
                         size_hint: None, None
                         size: dp(24), dp(24)
-                        pos_hint: {"center_y": 0.5}
 
                     MDLabel:
-                        id: selected_name
-                        text: "Produto Selecionado"
-                        font_style: "Subtitle1"
+                        id: step1_label
+                        text: "Selecionar Produto"
+                        font_size: dp(12)
                         bold: True
                         theme_text_color: "Primary"
 
                     MDIconButton:
-                        icon: "close-circle"
+                        id: step2_icon
+                        icon: "numeric-2-circle-outline"
                         theme_text_color: "Custom"
-                        text_color: app.theme_tokens['danger']
+                        text_color: app.theme_tokens['text_secondary']
                         size_hint: None, None
                         size: dp(24), dp(24)
-                        on_release: root.clear_selection()
-
-                MDBoxLayout:
-                    size_hint_y: None
-                    height: dp(20)
-                    spacing: dp(16)
 
                     MDLabel:
-                        id: selected_stock
-                        text: "Stock: --"
-                        font_size: dp(11)
-                        theme_text_color: "Secondary"
-
-                    MDLabel:
-                        id: selected_cost
-                        text: "Custo atual: --"
-                        font_size: dp(11)
-                        theme_text_color: "Secondary"
-
-                    MDLabel:
-                        id: selected_price
-                        text: "Preco venda: --"
-                        font_size: dp(11)
-                        theme_text_color: "Secondary"
-
-            MDCard:
-                id: search_card
-                orientation: "vertical"
-                padding: dp(12)
-                spacing: dp(8)
-                elevation: 2
-                radius: [dp(10)]
-                md_bg_color: app.theme_tokens['card']
-                size_hint_y: None
-                height: dp(360)
-
-                MDLabel:
-                    text: "Encontre o Produto"
-                    font_style: "Subtitle1"
-                    bold: True
-                    size_hint_y: None
-                    height: dp(28)
-
-                MDTextField:
-                    id: search_input
-                    hint_text: "Nome, ID ou Codigo de Barras"
-                    mode: "rectangle"
-                    size_hint_y: None
-                    height: dp(44)
-                    on_text: root.on_search(self.text)
-                    on_text_validate: root.on_search_enter()
-
-                MDSeparator:
-                    height: dp(1)
-
-                MDLabel:
-                    text: "ou use o scanner:"
-                    theme_text_color: "Hint"
-                    font_size: dp(10)
-                    size_hint_y: None
-                    height: dp(16)
+                        id: step2_label
+                        text: "Detalhes da Reposicao"
+                        font_size: dp(12)
+                        theme_text_color: "Hint"
 
                 MDCard:
+                    id: selected_product_card
                     orientation: "vertical"
-                    size_hint_y: None
-                    height: dp(120)
-                    size_hint_x: 0.7
-                    pos_hint: {"center_x": 0.5}
+                    padding: dp(12)
+                    spacing: dp(6)
+                    elevation: 3
+                    radius: [dp(10)]
                     md_bg_color: app.theme_tokens['card_alt']
-                    radius: [dp(8)]
-                    elevation: 1
-                    padding: dp(4)
-
-                    Image:
-                        id: camera_image
-                        allow_stretch: True
-                        keep_ratio: True
-
-                MDLabel:
-                    id: scanner_status
-                    text: "Scanner parado"
-                    halign: "center"
-                    theme_text_color: "Secondary"
-                    font_size: dp(10)
                     size_hint_y: None
-                    height: dp(16)
+                    height: 0
+                    opacity: 0
 
-                MDBoxLayout:
-                    size_hint_y: None
-                    height: dp(40)
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(32)
+                        spacing: dp(8)
+
+                        MDIcon:
+                            icon: "package-variant"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['info']
+                            size_hint: None, None
+                            size: dp(24), dp(24)
+                            pos_hint: {"center_y": 0.5}
+
+                        MDLabel:
+                            id: selected_name
+                            text: "Produto Selecionado"
+                            font_style: "Subtitle1"
+                            bold: True
+                            theme_text_color: "Primary"
+
+                        MDIconButton:
+                            icon: "close-circle"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['danger']
+                            size_hint: None, None
+                            size: dp(24), dp(24)
+                            on_release: root.clear_selection()
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(20)
+                        spacing: dp(16)
+
+                        MDLabel:
+                            id: selected_stock
+                            text: "Stock: --"
+                            font_size: dp(11)
+                            theme_text_color: "Secondary"
+
+                        MDLabel:
+                            id: selected_cost
+                            text: "Custo atual: --"
+                            font_size: dp(11)
+                            theme_text_color: "Secondary"
+
+                        MDLabel:
+                            id: selected_price
+                            text: "Preco venda: --"
+                            font_size: dp(11)
+                            theme_text_color: "Secondary"
+
+                MDCard:
+                    id: search_card
+                    orientation: "vertical"
+                    padding: dp(12)
                     spacing: dp(8)
-                    size_hint_x: None
-                    width: dp(90)
-                    pos_hint: {"center_x": 0.5}
+                    elevation: 2
+                    radius: [dp(10)]
+                    md_bg_color: app.theme_tokens['card']
+                    size_hint_y: None
+                    height: dp(360)
 
-                    MDIconButton:
-                        id: scan_btn
-                        icon: "barcode-scan"
+                    MDLabel:
+                        text: "Encontre o Produto"
+                        font_style: "Subtitle1"
+                        bold: True
+                        size_hint_y: None
+                        height: dp(28)
+
+                    MDTextField:
+                        id: search_input
+                        hint_text: "Nome, ID ou Codigo de Barras"
+                        mode: "rectangle"
+                        size_hint_y: None
+                        height: dp(44)
+                        on_text: root.on_search(self.text)
+                        on_text_validate: root.on_search_enter()
+
+                    MDSeparator:
+                        height: dp(1)
+
+                    MDLabel:
+                        text: "ou use o scanner:"
+                        theme_text_color: "Hint"
+                        font_size: dp(10)
+                        size_hint_y: None
+                        height: dp(16)
+
+                    MDCard:
+                        orientation: "vertical"
+                        size_hint_y: None
+                        height: dp(120)
+                        size_hint_x: 0.7
+                        pos_hint: {"center_x": 0.5}
+                        md_bg_color: app.theme_tokens['card_alt']
+                        radius: [dp(8)]
+                        elevation: 1
+                        padding: dp(4)
+
+                        Image:
+                            id: camera_image
+                            allow_stretch: True
+                            keep_ratio: True
+
+                    MDLabel:
+                        id: scanner_status
+                        text: "Scanner parado"
+                        halign: "center"
+                        theme_text_color: "Secondary"
+                        font_size: dp(10)
+                        size_hint_y: None
+                        height: dp(16)
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(8)
+                        size_hint_x: None
+                        width: dp(90)
+                        pos_hint: {"center_x": 0.5}
+
+                        MDIconButton:
+                            id: scan_btn
+                            icon: "barcode-scan"
+                            md_bg_color: app.theme_tokens['success']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            size_hint: None, None
+                            size: dp(34), dp(34)
+                            on_release: root.toggle_scanner()
+
+                        MDIconButton:
+                            icon: "camera-switch"
+                            md_bg_color: app.theme_tokens['info']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            size_hint: None, None
+                            size: dp(34), dp(34)
+                            on_release: root.switch_camera()
+
+                    ScrollView:
+                        do_scroll_x: False
+
+                        MDList:
+                            id: products_list
+                            padding: 0
+                            spacing: dp(2)
+
+                MDCard:
+                    id: restock_form_card
+                    orientation: "vertical"
+                    padding: dp(12)
+                    spacing: dp(8)
+                    elevation: 2
+                    radius: [dp(10)]
+                    md_bg_color: app.theme_tokens['card']
+                    size_hint_y: None
+                    height: 0
+                    opacity: 0
+
+                    MDLabel:
+                        text: "Detalhes da Reposicao"
+                        font_style: "Subtitle1"
+                        bold: True
+                        size_hint_y: None
+                        height: dp(24)
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(52)
+                        spacing: dp(10)
+
+                        MDTextField:
+                            id: qty_input
+                            hint_text: "Quantidade"
+                            input_filter: "float"
+                            mode: "rectangle"
+                            size_hint_x: 0.5
+
+                        MDTextField:
+                            id: cost_input
+                            hint_text: "Custo Unitario"
+                            input_filter: "float"
+                            mode: "rectangle"
+                            size_hint_x: 0.5
+
+                    MDTextField:
+                        id: note_input
+                        hint_text: "Observacao (opcional)"
+                        mode: "rectangle"
+                        size_hint_y: None
+                        height: dp(48)
+
+                    MDRaisedButton:
+                        text: "REGISTAR REPOSICAO"
                         md_bg_color: app.theme_tokens['success']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
-                        size_hint: None, None
-                        size: dp(34), dp(34)
-                        on_release: root.toggle_scanner()
-
-                    MDIconButton:
-                        icon: "camera-switch"
-                        md_bg_color: app.theme_tokens['info']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        size_hint: None, None
-                        size: dp(34), dp(34)
-                        on_release: root.switch_camera()
-
-                ScrollView:
-                    do_scroll_x: False
-
-                    MDList:
-                        id: products_list
-                        padding: 0
-                        spacing: dp(2)
-
-            MDCard:
-                id: restock_form_card
-                orientation: "vertical"
-                padding: dp(12)
-                spacing: dp(8)
-                elevation: 2
-                radius: [dp(10)]
-                md_bg_color: app.theme_tokens['card']
-                size_hint_y: None
-                height: 0
-                opacity: 0
-
-                MDLabel:
-                    text: "Detalhes da Reposicao"
-                    font_style: "Subtitle1"
-                    bold: True
-                    size_hint_y: None
-                    height: dp(24)
-
-                MDBoxLayout:
-                    size_hint_y: None
-                    height: dp(52)
-                    spacing: dp(10)
-
-                    MDTextField:
-                        id: qty_input
-                        hint_text: "Quantidade"
-                        input_filter: "float"
-                        mode: "rectangle"
-                        size_hint_x: 0.5
-
-                    MDTextField:
-                        id: cost_input
-                        hint_text: "Custo Unitario"
-                        input_filter: "float"
-                        mode: "rectangle"
-                        size_hint_x: 0.5
-
-                MDTextField:
-                    id: note_input
-                    hint_text: "Observacao (opcional)"
-                    mode: "rectangle"
-                    size_hint_y: None
-                    height: dp(48)
-
-                MDRaisedButton:
-                    text: "REGISTAR REPOSICAO"
-                    md_bg_color: app.theme_tokens['success']
-                    theme_text_color: "Custom"
-                    text_color: app.theme_tokens['on_primary']
-                    on_release: root.register_restock()
-                    size_hint_y: None
-                    height: dp(48)
+                        on_release: root.register_restock()
+                        size_hint_y: None
+                        height: dp(48)

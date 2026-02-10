@@ -118,3 +118,13 @@
                         halign: "center"
                         theme_text_color: "Hint"
                         font_style: "Subtitle1"
+
+                MDRaisedButton:
+                    id: load_more_btn
+                    text: "CARREGAR MAIS"
+                    size_hint_y: None
+                    height: dp(44)
+                    md_bg_color: app.theme_tokens['primary']
+                    on_release: root.load_more_rows()
+                    opacity: 0
+                    disabled: True

@@ -55,6 +55,8 @@ class LossesScreen(MDScreen):
         
         # UI State
         self.current_step = 1  # 1 = selecionar produto, 2 = preencher perda
+        self._search_ev = None
+        self._pending_search = ""
         
         Clock.schedule_once(self.init_screen, 0.1)
 
@@ -362,9 +364,12 @@ class LossesScreen(MDScreen):
             self.ids.products_list.add_widget(item)
 
     def on_search(self, text):
-        """Filtra produtos pela pesquisa"""
-        if not text:
-            text = ""
+        """Filtra produtos pela pesquisa (debounce)."""
+        self._pending_search = text or ""
+        if self._search_ev:
+            Clock.unschedule(self._search_ev)
+        self._search_ev = Clock.schedule_once(self._apply_search, 0.2)
+        return
         
         query = text.strip().lower()
         
@@ -392,11 +397,47 @@ class LossesScreen(MDScreen):
         
         self.show_products(filtered)
 
+    def _apply_search(self, dt):
+        self._search_ev = None
+        query = (self._pending_search or "").strip().lower()
+        if not query:
+            self.show_products(self.products)
+            return
+        filtered = self._filter_products(query)
+        self.show_products(filtered)
+
+    def _filter_products(self, query):
+        filtered = []
+        for p in self.products:
+            if len(p) < 9:
+                continue
+            pid, name, stock, price, cost, barcode, is_weight, exp, status = p
+            search_in_id = str(pid).lower()
+            search_in_name = (name or "").lower()
+            search_in_barcode = str(barcode).lower() if barcode else ""
+            if (query in search_in_id or query in search_in_name or query in search_in_barcode):
+                filtered.append(p)
+        return filtered
+
     def on_search_enter(self):
         """Quando usuário pressiona Enter na busca"""
         query = self.ids.search_input.text.strip().lower()
         if not query:
             return
+
+        if self._search_ev:
+            Clock.unschedule(self._search_ev)
+            self._search_ev = None
+
+        filtered = self._filter_products(query)
+        self.show_products(filtered)
+        if len(filtered) == 1:
+            self.select_product(filtered[0])
+        elif len(filtered) > 1:
+            self.show_dialog("ðŸ” Busca", f"Encontrados {len(filtered)} produtos. Clique em um ou refine a busca.")
+        else:
+            self.show_dialog("ðŸ” Busca", "Nenhum produto encontrado.")
+        return
         
         # Buscar produtos filtrados
         filtered = []

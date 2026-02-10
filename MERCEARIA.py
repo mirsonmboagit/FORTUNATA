@@ -87,8 +87,8 @@ Window.size = (
     max(dp(680),  min(ideal_height, dp(920)))
 )
 
-Window.minimum_width  = dp(1000)
-Window.minimum_height = dp(580)
+# Window.minimum_width  = dp(1000)
+# Window.minimum_height = dp(580)
 
 
 db = Database()

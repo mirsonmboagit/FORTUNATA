@@ -40,6 +40,12 @@ class LossesHistoryScreen(MDScreen):
         self.db = db or Database()
         self.loss_report = LossReport()
         self.pdf_viewer = PDFViewer(error_callback=lambda msg: self._show_simple_dialog("Erro", msg))
+        self._render_ev = None
+        self._pending_rows = []
+        self._render_index = 0
+        self._display_rows = []
+        self._page_size = 60
+        self._current_page = 1
         Clock.schedule_once(lambda dt: self.load_losses_table(), 0.1)
 
     def on_enter(self):
@@ -66,14 +72,70 @@ class LossesHistoryScreen(MDScreen):
             self.ids.losses_empty.opacity = 1
             self.ids.losses_empty.height = dp(80)
             self.ids.losses_empty.disabled = False
+            if self._render_ev:
+                Clock.unschedule(self._render_ev)
+                self._render_ev = None
+            self._pending_rows = []
+            if "load_more_btn" in self.ids:
+                self.ids.load_more_btn.opacity = 0
+                self.ids.load_more_btn.disabled = True
             return
 
         self.ids.losses_empty.opacity = 0
         self.ids.losses_empty.height = 0
         self.ids.losses_empty.disabled = True
 
-        for i, row in enumerate(rows):
-            self.ids.losses_list.add_widget(self._create_loss_row(row, i))
+        self._display_rows = rows
+        self._current_page = 1
+        self._render_page(reset=True)
+
+    def _render_page(self, reset=False):
+        if not self._display_rows:
+            return
+        if reset:
+            start = 0
+            self._current_page = 1
+        else:
+            start = (self._current_page - 1) * self._page_size
+        end = self._current_page * self._page_size
+        rows_to_render = self._display_rows[start:end]
+        self._start_batch_render(rows_to_render, reset=reset)
+        has_more = end < len(self._display_rows)
+        if "load_more_btn" in self.ids:
+            self.ids.load_more_btn.opacity = 1 if has_more else 0
+            self.ids.load_more_btn.disabled = not has_more
+
+    def load_more_rows(self):
+        if not self._display_rows:
+            return
+        end = self._current_page * self._page_size
+        if end >= len(self._display_rows):
+            return
+        self._current_page += 1
+        self._render_page(reset=False)
+
+    def _start_batch_render(self, rows, reset=False):
+        if self._render_ev:
+            Clock.unschedule(self._render_ev)
+            self._render_ev = None
+        self._pending_rows = list(rows)
+        if reset:
+            self.ids.losses_list.clear_widgets()
+            self._render_index = 0
+        if not self._pending_rows:
+            return
+        self._render_ev = Clock.schedule_interval(self._render_next_batch, 0)
+
+    def _render_next_batch(self, dt):
+        batch_size = 30
+        for _ in range(min(batch_size, len(self._pending_rows))):
+            row = self._pending_rows.pop(0)
+            self.ids.losses_list.add_widget(self._create_loss_row(row, self._render_index))
+            self._render_index += 1
+        if not self._pending_rows:
+            self._render_ev = None
+            return False
+        return True
 
     def _aggregate_loss_rows(self, rows):
         grouped = {}

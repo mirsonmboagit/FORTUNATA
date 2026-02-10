@@ -48,6 +48,57 @@ class LoginScreen(MDScreen):
         self._forgot_confirm_password = None
         self._forgot_content_container = None
 
+    def on_kv_post(self, base_widget):
+        self._update_responsive_layout()
+
+    def on_size(self, *args):
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+
+    def _update_responsive_layout(self):
+        if not hasattr(self, "ids") or "root_layout" not in self.ids:
+            return
+        compact = self.width < dp(900)
+
+        root_layout = self.ids.root_layout
+        carousel_panel = self.ids.carousel_panel
+        divider = self.ids.divider
+        form_scroll = self.ids.form_scroll
+        form_panel = self.ids.form_panel
+
+        root_layout.orientation = "vertical" if compact else "horizontal"
+
+        if compact:
+            carousel_panel.opacity = 0
+            carousel_panel.disabled = True
+            carousel_panel.size_hint_y = None
+            carousel_panel.height = 0
+            carousel_panel.size_hint_x = 1
+
+            divider.opacity = 0
+            divider.size_hint_x = None
+            divider.width = 0
+
+            form_scroll.do_scroll_y = True
+            form_scroll.size_hint_x = 1
+            form_panel.padding = dp(24)
+            form_panel.size_hint_y = None
+            form_panel.height = form_panel.minimum_height
+        else:
+            carousel_panel.opacity = 1
+            carousel_panel.disabled = False
+            carousel_panel.size_hint_x = 0.55
+            carousel_panel.size_hint_y = 1
+
+            divider.opacity = 1
+            divider.size_hint_x = None
+            divider.width = dp(1)
+
+            form_scroll.do_scroll_y = False
+            form_scroll.size_hint_x = 0.45
+            form_panel.padding = dp(60)
+            form_panel.size_hint_y = None
+            form_panel.height = form_scroll.height
+
     def on_enter(self):
         self.carousel_event = Clock.schedule_interval(self.next_slide, 4)
         Clock.schedule_once(lambda dt: self._ensure_admin_setup(), 0.05)

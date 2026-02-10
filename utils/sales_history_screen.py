@@ -468,6 +468,16 @@ Builder.load_string("""
                         halign: "center"
                         theme_text_color: "Hint"
                         font_style: "Body1"
+
+                MDRaisedButton:
+                    id: load_more_btn
+                    text: "CARREGAR MAIS"
+                    size_hint_y: None
+                    height: dp(44)
+                    md_bg_color: app.theme_tokens['primary']
+                    on_release: root.load_more_rows()
+                    opacity: 0
+                    disabled: True
 """)
 
 
@@ -476,6 +486,12 @@ class SalesHistoryScreen(MDScreen):
 
     def __init__(self, db=None, **kwargs):
         self._last_rows = []
+        self._render_ev = None
+        self._pending_rows = []
+        self._render_index = 0
+        self._display_rows = []
+        self._page_size = 60
+        self._current_page = 1
         super().__init__(**kwargs)
         self.db = db or Database()
         self.current_filter = None
@@ -756,6 +772,14 @@ class SalesHistoryScreen(MDScreen):
             self.ids.empty_state.height = dp(240)
             self.ids.empty_state.disabled = False
             self.ids.sales_list.opacity = 0
+            if "load_more_btn" in self.ids:
+                self.ids.load_more_btn.opacity = 0
+                self.ids.load_more_btn.disabled = True
+            if self._render_ev:
+                Clock.unschedule(self._render_ev)
+                self._render_ev = None
+            self._pending_rows = []
+            return
         else:
             self.ids.empty_state.opacity = 0
             self.ids.empty_state.height = 0
@@ -765,12 +789,62 @@ class SalesHistoryScreen(MDScreen):
         # Calcular estatísticas
         self._calculate_summary(rows)
 
-        # Adicionar linhas com separadores
-        display_rows = self._aggregate_sales_rows(rows)
-        for i, row in enumerate(display_rows):
+        # Adicionar linhas com separadores (em lotes)
+        self._display_rows = self._aggregate_sales_rows(rows)
+        self._current_page = 1
+        self._render_page(reset=True)
+
+    def _render_page(self, reset=False):
+        if not self._display_rows:
+            return
+        if reset:
+            start = 0
+            self._current_page = 1
+        else:
+            start = (self._current_page - 1) * self._page_size
+        end = self._current_page * self._page_size
+        rows_to_render = self._display_rows[start:end]
+        self._start_batch_render(rows_to_render, reset=reset)
+        has_more = end < len(self._display_rows)
+        if "load_more_btn" in self.ids:
+            self.ids.load_more_btn.opacity = 1 if has_more else 0
+            self.ids.load_more_btn.disabled = not has_more
+
+    def load_more_rows(self):
+        if not self._display_rows:
+            return
+        end = self._current_page * self._page_size
+        if end >= len(self._display_rows):
+            return
+        self._current_page += 1
+        self._render_page(reset=False)
+
+    def _start_batch_render(self, rows, reset=False):
+        if self._render_ev:
+            Clock.unschedule(self._render_ev)
+            self._render_ev = None
+        self._pending_rows = list(rows)
+        if reset:
+            self.ids.sales_list.clear_widgets()
+            self._render_index = 0
+        if not self._pending_rows:
+            return
+        self._render_ev = Clock.schedule_interval(self._render_next_batch, 0)
+
+    def _render_next_batch(self, dt):
+        batch_size = 30
+        for _ in range(min(batch_size, len(self._pending_rows))):
+            row = self._pending_rows.pop(0)
             sale_id, product, qty, price, total, sale_date = row
-            row_widget = self._create_table_row(sale_id, product, qty, price, total, sale_date, i)
+            row_widget = self._create_table_row(
+                sale_id, product, qty, price, total, sale_date, self._render_index
+            )
             self.ids.sales_list.add_widget(row_widget)
+            self._render_index += 1
+        if not self._pending_rows:
+            self._render_ev = None
+            return False
+        return True
 
     def _aggregate_sales_rows(self, rows):
         grouped = {}

@@ -93,6 +93,18 @@ class ProductForm(Popup):
         self._calculating = False
         # Auto cálculo deve ocorrer apenas uma vez por sessão de formulário
         self._auto_calc_done = False
+        self._compact_layout = None
+        self._fields_grid = None
+        self._field_defs = []
+        self._action_buttons_layout = None
+        self._action_spacer = None
+        self._cancel_btn = None
+        self._save_btn = None
+        self._content_layout = None
+        self._camera_section = None
+        self._form_section = None
+        self._form_scroll = None
+        self._header_card = None
 
         self._setup_popup()
         self._build_ui()
@@ -155,7 +167,11 @@ class ProductForm(Popup):
 
     def _apply_popup_size(self):
         w, h = Window.size
-        self.size = (min(dp(950), w * 0.85), min(dp(720), h * 0.88))
+        if w < dp(720):
+            self.size = (w * 0.98, h * 0.95)
+        else:
+            self.size = (min(dp(950), w * 0.85), min(dp(720), h * 0.88))
+        self._update_responsive_layout()
 
     def _build_ui(self):
         # Container principal com card
@@ -169,16 +185,19 @@ class ProductForm(Popup):
         )
 
         # Header
-        header = self._build_header()
-        main_card.add_widget(header)
+        self._header_card = self._build_header()
+        main_card.add_widget(self._header_card)
 
         # Content
-        content = BoxLayout(orientation='horizontal', spacing=dp(20), padding=[dp(20), dp(16), dp(20), dp(20)])
-        content.add_widget(self._build_camera_section())
-        content.add_widget(self._build_form_section())
-        main_card.add_widget(content)
+        self._content_layout = BoxLayout(orientation='horizontal', spacing=dp(20), padding=[dp(20), dp(16), dp(20), dp(20)])
+        self._camera_section = self._build_camera_section()
+        self._form_section = self._build_form_section()
+        self._content_layout.add_widget(self._camera_section)
+        self._content_layout.add_widget(self._form_section)
+        main_card.add_widget(self._content_layout)
 
         self.content = main_card
+        self._update_responsive_layout()
 
     def _build_header(self):
         header = MDCard(
@@ -303,20 +322,21 @@ class ProductForm(Popup):
     def _build_form_section(self):
         section = BoxLayout(orientation='vertical', size_hint_x=0.64, spacing=dp(8))
 
-        section.add_widget(self._create_section_title('Informações do Produto'))
+        section.add_widget(self._create_section_title('Informacoes do Produto'))
 
         self._create_form_fields()
 
-        scroll = MDScrollView(
+        self._form_scroll = MDScrollView(
             size_hint_y=0.8,
             do_scroll_x=False,
             bar_width=dp(6),
             bar_color=(self.COLOR_PRIMARY[0], self.COLOR_PRIMARY[1], self.COLOR_PRIMARY[2], 0.8)
         )
-        scroll.add_widget(self._build_fields_grid())
-        section.add_widget(scroll)
+        self._form_scroll.add_widget(self._build_fields_grid())
+        section.add_widget(self._form_scroll)
 
-        section.add_widget(self._build_action_buttons())
+        self._action_buttons_layout = self._build_action_buttons()
+        section.add_widget(self._action_buttons_layout)
         return section
 
     def _create_form_fields(self):
@@ -672,12 +692,8 @@ class ProductForm(Popup):
         )
         grid.bind(minimum_height=grid.setter('height'))
 
-        label_h = dp(40)
-        label_fs = sp(14)
-        
-
-        fields = [
-            ("Código de Barras:", self.barcode_input),
+        self._field_defs = [
+            ("Codigo de Barras:", self.barcode_input),
             ("Data de Validade:", self.expiry_date_layout),
             ("Nome do Produto:", self.description),
             ("Categoria:", self.category_layout),
@@ -685,27 +701,51 @@ class ProductForm(Popup):
             ("Estoque Existente:", self.existing_stock),
             ("Estoque Vendido:", self.sold_stock),
             ("Vendido por Peso (KG)", self.weight_switch_layout),
-            ("Preço Compra Unit.:", self.unit_purchase_price),
-            ("Preço de Venda:", self.sale_price),
-            ("Preço Compra Total:", self.total_purchase_price),
+            ("Preco Compra Unit.:", self.unit_purchase_price),
+            ("Preco de Venda:", self.sale_price),
+            ("Preco Compra Total:", self.total_purchase_price),
         ]
 
-        for text, widget in fields:
+        self._fields_grid = grid
+        self._render_fields_grid(cols=2)
+        return grid
+
+    def _render_fields_grid(self, cols):
+        if not self._fields_grid:
+            return
+
+        grid = self._fields_grid
+        grid.clear_widgets()
+        grid.cols = cols
+
+        if cols == 1:
+            grid.spacing = [dp(10), dp(8)]
+            label_h = dp(24)
+            label_fs = sp(13)
+        else:
+            grid.spacing = [dp(14), dp(10)]
+            label_h = dp(40)
+            label_fs = sp(14)
+
+        for text, widget in self._field_defs:
             label = Label(
                 text=text,
                 size_hint_y=None,
                 height=label_h,
                 halign='left',
                 valign='middle',
-                text_size=(dp(140), None),
                 bold=True,
                 font_size=label_fs,
                 color=self.COLOR_TEXT
             )
+
+            if cols == 1:
+                label.bind(size=lambda inst, *_: setattr(inst, 'text_size', (inst.width, None)))
+            else:
+                label.text_size = (dp(140), None)
+
             grid.add_widget(label)
             grid.add_widget(widget)
-
-        return grid
 
     def _build_action_buttons(self):
         layout = BoxLayout(
@@ -715,8 +755,9 @@ class ProductForm(Popup):
             padding=[0, dp(8), 0, 0]
         )
 
-        # Adicionar espaço à esquerda para empurrar botões para direita
-        layout.add_widget(Label(size_hint_x=0.4))
+        # Adicionar espaco a esquerda para empurrar botoes para direita
+        spacer = Label(size_hint_x=0.4)
+        layout.add_widget(spacer)
 
         cancel_btn = MDFlatButton(
             text="Cancelar",
@@ -739,7 +780,74 @@ class ProductForm(Popup):
 
         layout.add_widget(cancel_btn)
         layout.add_widget(save_btn)
+
+        self._action_buttons_layout = layout
+        self._action_spacer = spacer
+        self._cancel_btn = cancel_btn
+        self._save_btn = save_btn
         return layout
+
+    def _update_responsive_layout(self):
+        if not self._content_layout:
+            return
+
+        compact = Window.width < dp(900) or self.size[0] < dp(900)
+        if compact == self._compact_layout:
+            return
+        self._compact_layout = compact
+
+        if compact:
+            if self._header_card:
+                self._header_card.height = dp(52)
+            self._content_layout.orientation = 'vertical'
+            if self._camera_section:
+                self._camera_section.size_hint_x = 1
+                self._camera_section.size_hint_y = None
+                self._camera_section.height = min(dp(320), max(dp(220), self.height * 0.35))
+            if self._form_section:
+                self._form_section.size_hint_x = 1
+                self._form_section.size_hint_y = 1
+            if self._form_scroll:
+                self._form_scroll.size_hint_y = 1
+            if self._fields_grid and self._fields_grid.cols != 1:
+                self._render_fields_grid(cols=1)
+            if self._action_buttons_layout:
+                self._action_buttons_layout.orientation = 'vertical'
+                self._action_buttons_layout.height = self.BUTTON_HEIGHT * 2 + dp(10)
+            if self._action_spacer:
+                self._action_spacer.size_hint_x = 0
+                self._action_spacer.width = 0
+                self._action_spacer.opacity = 0
+            if self._cancel_btn:
+                self._cancel_btn.size_hint_x = 1
+            if self._save_btn:
+                self._save_btn.size_hint_x = 1
+        else:
+            if self._header_card:
+                self._header_card.height = dp(56)
+            self._content_layout.orientation = 'horizontal'
+            if self._camera_section:
+                self._camera_section.size_hint_x = 0.36
+                self._camera_section.size_hint_y = 1
+                self._camera_section.height = 0
+            if self._form_section:
+                self._form_section.size_hint_x = 0.64
+                self._form_section.size_hint_y = 1
+            if self._form_scroll:
+                self._form_scroll.size_hint_y = 0.8
+            if self._fields_grid and self._fields_grid.cols != 2:
+                self._render_fields_grid(cols=2)
+            if self._action_buttons_layout:
+                self._action_buttons_layout.orientation = 'horizontal'
+                self._action_buttons_layout.height = self.BUTTON_HEIGHT
+            if self._action_spacer:
+                self._action_spacer.size_hint_x = 0.4
+                self._action_spacer.opacity = 1
+            if self._cancel_btn:
+                self._cancel_btn.size_hint_x = 0.3
+            if self._save_btn:
+                self._save_btn.size_hint_x = 0.3
+
 
     def _on_api_success(self, source: str, data: dict):
         self._set_status(f"Encontrado: {source}", self.COLOR_PRIMARY)
@@ -1295,6 +1403,18 @@ class ProductForm(Popup):
         self._category_lookup_barcode = None
         self._category_lookup_token = 0
         self._auto_calc_done = False
+        self._compact_layout = None
+        self._fields_grid = None
+        self._field_defs = []
+        self._action_buttons_layout = None
+        self._action_spacer = None
+        self._cancel_btn = None
+        self._save_btn = None
+        self._content_layout = None
+        self._camera_section = None
+        self._form_section = None
+        self._form_scroll = None
+        self._header_card = None
         self.barcode_input.focus = True
 
     def _populate_fields(self):
