@@ -90,51 +90,6 @@ class LossesScreen(MDScreen):
             screen = self.manager.get_screen("losses_history")
             Clock.schedule_once(lambda dt: screen.load_losses_table(), 0.1)
 
-    def export_losses_pdf(self, *args):
-        """Abrir seleção de período e gerar PDF de perdas."""
-        dialog = DateRangeDialog(database=self.db, callback=self._generate_losses_pdf)
-        dialog.open()
-
-    def _generate_losses_pdf(self, start_dt, end_dt):
-        """Gera PDF profissional de perdas."""
-        try:
-            metrics = self.db.calculate_loss_metrics(start_dt, end_dt) or {}
-            records = self.db.get_loss_records(start_dt, end_dt, limit=200)
-            data = {
-                "metrics": metrics,
-                "records": records,
-            }
-            filters = {
-                "start_date": start_dt,
-                "end_date": end_dt,
-                "product": "Todos os Produtos",
-                "category": "Todas as Categorias",
-            }
-            pdf_path = self.loss_report.generate(data, filters)
-            self._show_pdf_success(pdf_path)
-        except Exception as e:
-            self.show_dialog("Erro", f"Falha ao gerar PDF de perdas: {e}")
-
-    def _show_pdf_success(self, pdf_path):
-        """Mostra confirmação e opção de abrir PDF."""
-        dialog = MDDialog(
-            title="PDF Gerado",
-            text=f"Arquivo criado em:\n{pdf_path}",
-            buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(
-                    text="ABRIR",
-                    md_bg_color=_theme_color("info", (0.15, 0.45, 0.75, 1)),
-                    on_release=lambda x: self._open_pdf(dialog, pdf_path),
-                ),
-            ],
-        )
-        dialog.open()
-
-    def _open_pdf(self, dialog, pdf_path):
-        dialog.dismiss()
-        self.pdf_viewer.view_pdf(pdf_path)
-
     # ========== UI STATE MANAGEMENT (NOVO) ==========
     def update_ui_state(self):
         """Atualiza visibilidade dos cards baseado no estado"""
