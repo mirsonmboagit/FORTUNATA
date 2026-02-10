@@ -1,5 +1,28 @@
 import os
 import sys
+import os
+import json
+
+from kivymd.app import MDApp
+
+from kivy.uix.screenmanager import ScreenManager
+from kivy.core.window import Window
+from kivy.metrics import dp
+from kivy.properties import DictProperty
+
+from kivy.core.text import LabelBase
+from database.database import Database
+from admin.admin_screen import AdminScreen
+from manager.manager_screen import SalesScreen
+from user.login import LoginScreen
+from utils.reports_screen import ReportsScreen
+from utils.sales_history_screen import SalesHistoryScreen
+from utils.losses_screen import LossesScreen
+from utils.losses_history_screen import LossesHistoryScreen
+from utils.settings import AdminSettingsScreen
+from kivy.config import Config
+from utils.theme import get_theme_tokens
+
 
 if sys.platform.startswith('win'):
     try:
@@ -11,14 +34,12 @@ if sys.platform.startswith('win'):
         pass
 
 
-from kivy.config import Config
 Config.set('kivy', 'window_icon', 'icon4.ico')
 
 os.environ["KIVY_NO_WM_PEN"] = "1"
 
 
 # ✅ Registrar fontes customizadas
-from kivy.core.text import LabelBase
 
 # Obter o diretório base do projeto
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +47,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Construir caminhos absolutos para as fontes
 logo_font_path = os.path.join(BASE_DIR, 'fonts', 'h2.ttf')
 main_font_path = os.path.join(BASE_DIR, 'fonts', 'yahoo.ttf')
+joe_font_path = os.path.join(BASE_DIR, 'fonts', 'joe.ttf')
 
 # Verificar se as fontes existem e registrá-las
 if os.path.exists(logo_font_path):
@@ -42,21 +64,15 @@ else:
     print(f"⚠ Fonte não encontrada: {main_font_path}")
     print("  Usando Roboto como fallback para MainFont")
 
+if os.path.exists(joe_font_path):
+    LabelBase.register(name='JoeFont', fn_regular=joe_font_path)
+    print(f"✓ JoeFont carregada: {joe_font_path}")
+else:
+    print(f"⚠ Fonte não encontrada: {joe_font_path}")
+    print("  Usando Roboto como fallback para JoeFont")
+
 
 # ✅ KivyMD App
-from kivymd.app import MDApp
-
-from kivy.uix.screenmanager import ScreenManager
-from kivy.core.window import Window
-from kivy.metrics import dp
-
-from database.database import Database
-from admin.admin_screen import AdminScreen
-from manager.manager_screen import SalesScreen
-from user.login import LoginScreen
-from utils.reports_screen import ReportsScreen
-from utils.sales_history_screen import SalesHistoryScreen
-from utils.settings import AdminSettingsScreen
 
 
 screen_w, screen_h = Window.system_size
@@ -78,6 +94,7 @@ db.setup()
 
 
 class MainApp(MDApp):
+    theme_tokens = DictProperty({})
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -86,13 +103,17 @@ class MainApp(MDApp):
         self.db = db
         self._ai_notifications_seen_key = None
         self._ai_banners_shown = False
+        self._ai_banners_last_key = None
+        self.base_dir = BASE_DIR
+        self._app_settings_path = os.path.join(self.base_dir, "app_settings.json")
+        self.ai_enabled = True
+        self.theme_style = "Light"
+        self._load_app_settings()
+        self.apply_theme(self.theme_style, persist=False)
         
         # ============================================
         # CONFIGURAÇÃO DO TEMA KIVYMD
         # ============================================
-        
-        # Tema claro/escuro
-        self.theme_cls.theme_style = "Light"  # "Light" ou "Dark"
         
         # Paleta de cores primária (laranja)
         self.theme_cls.primary_palette = "Orange"
@@ -116,17 +137,51 @@ class MainApp(MDApp):
         # self.theme_cls.ripple_duration_in = 0.3
         # self.theme_cls.ripple_duration_out = 0.6
 
+    def _load_app_settings(self):
+        try:
+            if os.path.exists(self._app_settings_path):
+                with open(self._app_settings_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.ai_enabled = bool(data.get("ai_enabled", True))
+                theme_style = data.get("theme_style", self.theme_style)
+                if theme_style in ("Light", "Dark"):
+                    self.theme_style = theme_style
+        except Exception:
+            self.ai_enabled = True
+            self.theme_style = "Light"
+
+    def apply_theme(self, style, persist=True):
+        style = "Dark" if style == "Dark" else "Light"
+        self.theme_style = style
+        self.theme_cls.theme_style = style
+        self.theme_tokens = get_theme_tokens(style)
+        if persist:
+            self.save_app_settings()
+
+    def save_app_settings(self):
+        try:
+            data = {
+                "ai_enabled": bool(self.ai_enabled),
+                "theme_style": self.theme_style,
+            }
+            with open(self._app_settings_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def build(self):
         self.title = 'MERCEARIA'
         self.icon = 'icon/icon4.ico'
 
         sm = ScreenManager()
-        sm.add_widget(LoginScreen(name='login'))
-        sm.add_widget(AdminScreen(name='admin'))
         sm.add_widget(SalesScreen(name='manager'))
+        sm.add_widget(AdminScreen(name='admin'))
+        sm.add_widget(LoginScreen(name='login'))
         sm.add_widget(AdminSettingsScreen(app=self, name='settings'))
         sm.add_widget(ReportsScreen(name='reports'))
         sm.add_widget(SalesHistoryScreen(db=self.db, name='sales_history'))
+        sm.add_widget(LossesScreen(db=self.db, name='losses'))
+        sm.add_widget(LossesHistoryScreen(db=self.db, name='losses_history'))
        
 
         return sm
@@ -198,6 +253,7 @@ As fontes foram registradas no início do arquivo:
 
 - LogoFont (fonts/h2.ttf): Use para o texto "MERCEARIA" e outros logos
 - MainFont (fonts/yahoo.ttf): Use para todo o resto do texto
+- JoeFont (fonts/joe.ttf): Fonte customizada Joe
 
 Para usar nos arquivos .kv:
     MDLabel:
@@ -207,9 +263,14 @@ Para usar nos arquivos .kv:
     MDLabel:
         text: "Outros textos"
         font_name: "MainFont"
+    
+    MDLabel:
+        text: "Texto especial"
+        font_name: "JoeFont"
 
 As fontes também podem ser usadas diretamente no código Python:
     label = MDLabel(text="Texto", font_name="MainFont")
+    label_joe = MDLabel(text="Texto especial", font_name="JoeFont")
 
 IMPORTANTE: Se as fontes não forem encontradas, o sistema usará
 Roboto (fonte padrão) automaticamente como fallback.
@@ -219,7 +280,8 @@ Estrutura esperada:
     ├── MERCEARIA.py
     └── fonts/
         ├── h2.ttf
-        └── yahoo.ttf
+        ├── yahoo.ttf
+        └── joe.ttf  ← NOVA FONTE
 """
 
 

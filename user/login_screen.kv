@@ -2,7 +2,7 @@
     username: username
     password: password
 
-    md_bg_color: 0.97, 0.97, 0.97, 1
+    md_bg_color: app.theme_tokens['surface']
 
     MDBoxLayout:
         orientation: "horizontal"
@@ -22,12 +22,12 @@
                         source: "image/slide1.png"
                         allow_stretch: True
                         keep_ratio: True
-                        size_hint: 0.9, 0.9
+                        size_hint: 1.4, 1.2
                         pos_hint: {"center_x": 0.5, "center_y": 0.5}
 
                 MDFloatLayout:
                     Image:
-                        source: "image/slide2.png"
+                        source: "image/slide.png"
                         allow_stretch: True
                         keep_ratio: True
                         size_hint: 0.9, 0.9
@@ -35,18 +35,29 @@
 
                 MDFloatLayout:
                     Image:
-                        source: "image/slide3.png"
+                        source: "image/slide4.png"
                         allow_stretch: True
                         keep_ratio: True
                         size_hint: 0.9, 0.9
                         pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+                MDFloatLayout:
+                    Image:
+                        source: "image/slide5.png"
+                        allow_stretch: True
+                        keep_ratio: True
+                        size_hint: 0.9, 0.9
+                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+
+              
 
         MDSeparator:
             orientation: "vertical"
 
         MDBoxLayout:
             orientation: "vertical"
-            size_hint_x: 0.45
+            size_hint_x: 0.50
             padding: dp(60)
             spacing: dp(22)
 
@@ -57,7 +68,7 @@
                 bold: True
                 halign: "center"
                 theme_text_color: "Custom"
-                text_color: 1, 0.45, 0, 1
+                text_color: app.theme_tokens['primary']
 
             MDLabel:
                 text: "Sistema de Gestão Comercial"
@@ -128,9 +139,9 @@
                 font_size: sp(20)
                 size_hint_x: 1
                 height: dp(46)
-                md_bg_color: 0.35, 0.18, 0.05, 1
+                md_bg_color: app.theme_tokens['primary']
                 theme_text_color: "Custom"
-                text_color: 1, 1, 1, 1
+                text_color: app.theme_tokens['on_primary']
                 on_release: root.login()
 
             Widget:
@@ -146,7 +157,7 @@
                     font_name: "LogoFont"
                     font_size: sp(20)
                     theme_text_color: "Custom"
-                    text_color: 1, 0.45, 0, 1
+                    text_color: app.theme_tokens['primary']
                     on_release: root.forgot_password()
 
                 MDLabel:
@@ -161,5 +172,8 @@
                     font_name: "LogoFont"
                     font_size: sp(20)
                     theme_text_color: "Custom"
-                    text_color: 1, 0.45, 0, 1
+                    text_color: app.theme_tokens['primary']
                     on_release: root.register()
+
+
+                

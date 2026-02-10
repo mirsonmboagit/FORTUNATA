@@ -3,7 +3,9 @@ import json
 import os
 import re
 import time
+import random
 from dotenv import load_dotenv
+from kivy.app import App
 
 from database.database import Database
 
@@ -21,6 +23,13 @@ _AI_FAILURE_CACHE = {"ts": 0}
 def _safe_float(value, default=0.0):
     try:
         return float(value)
+    except Exception:
+        return default
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
     except Exception:
         return default
 
@@ -54,13 +63,6 @@ def _get_ai_client():
         return None, None
 
 
-def _safe_int(value, default=0):
-    try:
-        return int(value)
-    except Exception:
-        return default
-
-
 def _fetch_sales_velocity(db, days=14):
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     db.cursor.execute(
@@ -76,6 +78,18 @@ def _fetch_sales_velocity(db, days=14):
     return velocity
 
 
+def _get_product_daily_sales(db, product_id, days=14):
+    """Calcula vendas diárias médias de um produto específico"""
+    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    db.cursor.execute(
+        "SELECT COALESCE(SUM(quantity), 0) FROM sales "
+        "WHERE product_id = ? AND DATE(sale_date) >= ?",
+        (product_id, start_date),
+    )
+    total = _safe_float(db.cursor.fetchone()[0], 0.0)
+    return total / max(days, 1)
+
+
 def _build_forecasts(db, days=14, limit=10):
     velocity = _fetch_sales_velocity(db, days=days)
     db.cursor.execute(
@@ -86,16 +100,20 @@ def _build_forecasts(db, days=14, limit=10):
     forecasts = []
     expiry_risk = []
     today_date = datetime.now().date()
+    
     for prod_id, name, stock, by_weight, expiry_date, sale_price, unit_purchase_price in db.cursor.fetchall():
         avg_daily = _safe_float(velocity.get(prod_id, 0.0), 0.0)
         stock_value = _safe_float(stock, 0.0)
         days_left = None
         recommended_qty = 0.0
+        
         if avg_daily > 0:
             days_left = stock_value / avg_daily
             recommended_qty = max(0.0, (avg_daily * days) - stock_value)
+        
         unit = "kg" if by_weight else "un"
         forecasts.append({
+            "product_id": prod_id,
             "name": name,
             "stock": stock_value,
             "unit": unit,
@@ -144,26 +162,112 @@ def _extract_json(text):
         return None
 
 
+def _get_business_context():
+    """Gera contexto temporal dinâmico"""
+    now = datetime.now()
+    hora = now.hour
+    dia = now.day
+    dia_semana = now.strftime("%A")
+    
+    # Tom baseado na hora
+    if hora < 12:
+        tom = "tom de início de dia - energético mas focado"
+        saudacao = "Bom dia!"
+    elif hora < 18:
+        tom = "tom de tarde - direto e prático"
+        saudacao = "Boa tarde!"
+    else:
+        tom = "tom de fim de dia - reflexivo, olhando para amanhã"
+        saudacao = "Boa noite!"
+    
+    # Contexto do mês
+    if dia > 25:
+        contexto_mes = "Fim de mês - clientes geralmente têm mais dinheiro"
+    elif dia < 5:
+        contexto_mes = "Início de mês - movimento pode estar mais fraco"
+    else:
+        contexto_mes = "Meio de mês - movimento normal"
+    
+    return {
+        "tom": tom,
+        "saudacao": saudacao,
+        "dia_semana": dia_semana,
+        "contexto_mes": contexto_mes,
+        "hora": hora,
+    }
+
+
 def _generate_ai_insights(payload):
+    """Gera insights com IA - muito mais natural e dinâmico"""
     client, model = _get_ai_client()
     if not client or not model:
         return None
 
+    context = _get_business_context()
+    
     prompt = (
-        "Voce e um analista de vendas e stock. "
-        "Analise os dados e devolva apenas JSON, sem texto extra. "
-        "Idioma: Portugues de Mocambique. Sem emojis. "
-        "Maximo 3 itens por lista.\n\n"
-        "JSON_ESPERADO:\n"
+        f"Você é um gestor experiente de mercearia em Moçambique, "
+        f"conversando com o dono do negócio. {context['saudacao']}!\n\n"
+        
+        f"CONTEXTO ATUAL:\n"
+        f"- Dia: {context['dia_semana']}, {datetime.now().strftime('%d/%m/%Y')}\n"
+        f"- Hora: {context['hora']}h\n"
+        f"- Momento: {context['contexto_mes']}\n"
+        f"- Tom desejado: {context['tom']}\n\n"
+        
+        "PRINCÍPIOS DE COMUNICAÇÃO:\n"
+        "1. SEJA HUMANO - Varie as palavras, nunca repita frases iguais\n"
+        "2. SEJA ESPECÍFICO - Fale dos produtos pelo nome, use números reais\n"
+        "3. SEJA PRÁTICO - Diga O QUE fazer, NÃO diga QUANTO repor (o dono sabe disso)\n"
+        "4. SEJA VARIADO - Mude sempre a forma de alertar, use vocabulário diverso\n"
+        "5. PRIORIZE - Comece pelo que mais importa financeiramente HOJE\n"
+        "6. SEM LIMITES - Se tiver 10 problemas importantes, mencione TODOS\n"
+        "7. SEJA NATURAL - Como se estivesse conversando pessoalmente\n\n"
+        
+        "EXEMPLOS DE COMO COMUNICAR (varie entre estes estilos):\n"
+        "✅ 'Açúcar acabando - só 2 dias restam'\n"
+        "✅ 'Leite vendeu muito ontem, cuidado com o stock'\n"
+        "✅ 'Arroz está no fim, atenção'\n"
+        "✅ 'Óleo vendendo rápido esta semana'\n"
+        "✅ 'Farinha já está crítica'\n"
+        "✅ 'Fim de semana chegando, cerveja pode faltar'\n"
+        "✅ 'Leite vence em 5 dias, pense numa promoção'\n"
+        "✅ 'Iogurte vence amanhã, fazer promoção hoje'\n\n"
+        
+        "NUNCA FAÇA ASSIM:\n"
+        "❌ 'Precisa repor 50kg de arroz' (NÃO mencionar quantidades)\n"
+        "❌ 'Recomenda-se que...' (muito formal e robótico)\n"
+        "❌ 'É aconselhável...' (muito técnico)\n"
+        "❌ Sempre a mesma estrutura de frase\n"
+        "❌ Limitar a 3 itens quando há mais problemas\n"
+        "❌ Usar emojis\n\n"
+        
+        "ESTRUTURA JSON (IMPORTANTE - sem limite de itens!):\n"
         "{\n"
-        "  \"summary\": [\"...\"],\n"
-        "  \"alerts\": [\"...\"],\n"
-        "  \"recommendations\": [\"...\"],\n"
-        "  \"stock_actions\": [\"...\"],\n"
-        "  \"expiry_actions\": [\"...\"]\n"
+        "  'urgente_hoje': ['problemas que causam perda de dinheiro HOJE - listar TODOS'],\n"
+        "  'atencao_proximos_dias': ['monitorar nos próximos 2-3 dias - listar TODOS'],\n"
+        "  'oportunidades': ['ideias para vender/lucrar mais - listar TODAS'],\n"
+        "  'observacoes': ['padrões, comparações, insights - listar TODOS']\n"
         "}\n\n"
-        "DADOS:\n"
-        f"{json.dumps(payload, ensure_ascii=True)}"
+        
+        "REGRAS IMPORTANTES:\n"
+        "- Cada item = uma frase curta (máximo 10 palavras)\n"
+        "- Use vocabulário variado em CADA item\n"
+        "- Seja direto e objetivo\n"
+        "- Não repita estruturas\n"
+        "- Liste TUDO que for relevante (sem limite de 3!)\n\n"
+        
+        "EXEMPLOS DE BOA VARIAÇÃO:\n"
+        "Item 1: 'Farinha acabando em breve'\n"
+        "Item 2: 'Atenção: açúcar já está baixo'\n"
+        "Item 3: 'Arroz - menos de 3 dias'\n"
+        "Item 4: 'Cuidado com óleo, vendendo rápido'\n"
+        "Item 5: 'Sal crítico'\n\n"
+        
+        f"DADOS DO NEGÓCIO:\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n\n"
+        
+        "Analise TUDO e retorne JSON completo. Não economize nos insights!"
     )
 
     try:
@@ -178,10 +282,7 @@ def _generate_ai_insights(payload):
 
 
 def has_badge_alerts(insights):
-    """
-    Verifica se existem alertas que devem mostrar badges.
-    Retorna True se houver pelo menos um tipo de alerta.
-    """
+    """Verifica se existem alertas que devem mostrar badges"""
     return bool(
         insights.get("low_stock")
         or insights.get("expiring_7")
@@ -190,10 +291,7 @@ def has_badge_alerts(insights):
 
 
 def get_badge_counts(insights):
-    """
-    Retorna contadores individuais para cada tipo de badge.
-    Útil para mostrar notificações na UI.
-    """
+    """Retorna contadores individuais para cada tipo de badge"""
     return {
         "stock": len(insights.get("low_stock", [])),
         "expiry_7": len(insights.get("expiring_7", [])),
@@ -208,18 +306,8 @@ def get_badge_counts(insights):
 
 def build_admin_insights(db=None):
     """
-    Retorna insights simples para o admin.
-    Estrutura otimizada para badges independentes:
-    {
-        "summary": [str, ...],
-        "alerts": [str, ...],
-        "recommendations": [str, ...],
-        "low_stock": [(name, stock, is_by_weight), ...],  # Tuplas com 3 elementos
-        "expiring_15": [(name, days_left, date), ...],
-        "expiring_7": [(name, days_left, date), ...],
-        "alert_count": int,
-        "badge_counts": {"stock": int, "expiry_7": int, "expiry_15": int, "total": int}
-    }
+    Retorna insights completos para o admin.
+    Estrutura otimizada com dados enriquecidos.
     """
     db = db or Database()
     today_date = datetime.now().date()
@@ -235,18 +323,20 @@ def build_admin_insights(db=None):
     total_sales = _safe_float(total_sales, 0.0)
     total_count = int(total_count or 0)
 
-    # Produto lider (por total vendido em valor) hoje
+    # Produto líder (por total vendido em valor) hoje
     db.cursor.execute(
-        "SELECT p.description, COALESCE(SUM(s.total_price), 0) AS total_val "
-        "FROM sales s JOIN products p ON s.product_id = p.id "
+        "SELECT COALESCE(p.description, pa.description), COALESCE(SUM(s.total_price), 0) AS total_val "
+        "FROM sales s "
+        "LEFT JOIN products p ON s.product_id = p.id "
+        "LEFT JOIN products_archive pa ON s.product_id = pa.id "
         "WHERE DATE(s.sale_date) = ? "
-        "GROUP BY p.id ORDER BY total_val DESC LIMIT 1",
+        "GROUP BY s.product_id ORDER BY total_val DESC LIMIT 1",
         (today,),
     )
     row = db.cursor.fetchone()
     top_product = row[0] if row else "n/d"
 
-    # Horario mais forte hoje
+    # Horário mais forte hoje
     db.cursor.execute(
         "SELECT strftime('%H', sale_date) AS h, COALESCE(SUM(total_price), 0) AS total_val "
         "FROM sales WHERE DATE(sale_date) = ? "
@@ -256,19 +346,25 @@ def build_admin_insights(db=None):
     row = db.cursor.fetchone()
     peak_hour = f"{row[0]}:00-{row[0]}:59" if row else "n/d"
 
-    # Produtos com stock baixo - GARANTIR 3 ELEMENTOS NA TUPLA
+    # Produtos com stock baixo - COM DADOS DE VELOCIDADE
     low_threshold = 5
     db.cursor.execute(
-        "SELECT description, existing_stock, is_sold_by_weight FROM products "
-        "WHERE existing_stock <= ? ORDER BY existing_stock ASC LIMIT 10",
+        "SELECT id, description, existing_stock, is_sold_by_weight FROM products "
+        "WHERE existing_stock <= ? ORDER BY existing_stock ASC",
         (low_threshold,),
     )
-    low_stock = db.cursor.fetchall()
+    low_stock_raw = db.cursor.fetchall()
+    
+    low_stock = []
+    for prod_id, name, stock, is_weight in low_stock_raw:
+        daily_sales = _get_product_daily_sales(db, prod_id)
+        days_left = _safe_float(stock) / max(daily_sales, 0.1) if daily_sales > 0 else 999
+        low_stock.append((name, stock, is_weight, days_left, prod_id))
 
     # Produtos com lucro negativo
     db.cursor.execute(
         "SELECT description, profit_per_unit FROM products "
-        "WHERE profit_per_unit < 0 ORDER BY profit_per_unit ASC LIMIT 3"
+        "WHERE profit_per_unit < 0 ORDER BY profit_per_unit ASC"
     )
     negative_profit = db.cursor.fetchall()
 
@@ -300,45 +396,58 @@ def build_admin_insights(db=None):
     expiring_7.sort(key=lambda x: x[1])
     expiring_15.sort(key=lambda x: x[1])
 
-    forecasts, expiry_risk = _build_forecasts(db, days=14, limit=10)
+    forecasts, expiry_risk = _build_forecasts(db, days=14, limit=20)
 
     summary = [
         f"Total vendido hoje: {total_sales:.2f} MZN",
         f"Total de vendas hoje: {total_count}",
-        f"Produto lider: {top_product}",
-        f"Horario mais forte: {peak_hour}",
+        f"Produto líder: {top_product}",
+        f"Horário mais forte: {peak_hour}",
     ]
 
     alerts = []
     if total_count == 0:
-        alerts.append("Sem vendas registradas hoje.")
+        alerts.append("Sem vendas registadas hoje.")
     if low_stock:
         alerts.append(f"{len(low_stock)} produtos com stock baixo (<= {low_threshold}).")
     if expiring_15:
-        alerts.append(f"{len(expiring_15)} produtos a vencer em ate 15 dias.")
+        alerts.append(f"{len(expiring_15)} produtos a vencer em até 15 dias.")
     if expiring_7:
-        alerts.append(f"{len(expiring_7)} produtos a vencer em ate 7 dias.")
+        alerts.append(f"{len(expiring_7)} produtos a vencer em até 7 dias.")
     if negative_profit:
         alerts.append(f"{len(negative_profit)} produtos com lucro negativo.")
 
     recommendations = []
     recommendations_stock = []
     recommendations_expiry = []
+    
     if low_stock:
-        names = ", ".join([p[0] for p in low_stock[:3]])
-        rec = f"Repor stock: {names}."
-        recommendations.append(rec)
-        recommendations_stock.append(rec)
+        for item in low_stock[:5]:
+            name = item[0]
+            days = item[3]
+            if days < 1:
+                rec = f"{name} acaba hoje - repor urgente"
+            elif days < 2:
+                rec = f"{name} acaba amanhã"
+            else:
+                rec = f"{name} - {days:.0f} dias restantes"
+            recommendations.append(rec)
+            recommendations_stock.append(rec)
+    
     if expiring_7:
-        names = ", ".join([p[0] for p in expiring_7[:3]])
-        rec = f"Priorizar venda: {names}."
-        recommendations.append(rec)
-        recommendations_expiry.append(rec)
+        for item in expiring_7[:5]:
+            name = item[0]
+            days = item[1]
+            rec = f"{name} vence em {days} dias - priorizar venda"
+            recommendations.append(rec)
+            recommendations_expiry.append(rec)
+    
     if negative_profit:
         names = ", ".join([p[0] for p in negative_profit[:3]])
-        recommendations.append(f"Rever preco de: {names}.")
+        recommendations.append(f"Rever preço de: {names}.")
+    
     if not recommendations:
-        recommendations.append("Sem recomendacoes criticas no momento.")
+        recommendations.append("Sem recomendações críticas no momento.")
 
     alert_count = (
         (1 if total_count == 0 else 0)
@@ -361,59 +470,73 @@ def build_admin_insights(db=None):
         "expiry_risk": expiry_risk,
         "negative_profit": negative_profit,
         "alert_count": alert_count,
+        "badge_counts": get_badge_counts({"low_stock": low_stock, "expiring_7": expiring_7, "expiring_15": expiring_15}),
     }
-    
-    # Adicionar contadores de badges
-    result["badge_counts"] = get_badge_counts(result)
     
     return result
 
 
 def build_admin_insights_ai(db=None, cache_minutes=5):
+    """Gera insights enriquecidos com IA"""
     base = build_admin_insights(db)
+    try:
+        app = App.get_running_app()
+    except Exception:
+        app = None
+    if app and not getattr(app, "ai_enabled", True):
+        return base
     now = time.time()
+    
+    # Verificar falha recente da API (10min cooldown)
     if _AI_FAILURE_CACHE["ts"] and (now - _AI_FAILURE_CACHE["ts"] < 600):
         return base
+    
+    # Verificar cache
     if _AI_CACHE["data"] and (now - _AI_CACHE["ts"] < cache_minutes * 60):
         cached = _AI_CACHE["data"]
         return {**base, **cached}
 
+    # Preparar payload para IA
     payload = {
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "summary": base.get("summary", []),
-        "alerts": base.get("alerts", []),
-        "low_stock": [
+        "data": datetime.now().strftime("%d/%m/%Y"),
+        "hora": datetime.now().strftime("%H:%M"),
+        "resumo_vendas": {
+            "total_hoje": _safe_float(base.get("summary", ["0"])[0].split(":")[1].replace("MZN", "").strip() if base.get("summary") else "0"),
+            "quantidade_vendas": base.get("summary", [None, "0"])[1].split(":")[1].strip() if len(base.get("summary", [])) > 1 else "0",
+        },
+        "stock_baixo": [
             {
-                "name": item[0],
-                "stock": _safe_float(item[1]),
-                "unit": "kg" if (len(item) > 2 and item[2]) else "un",
+                "nome": item[0],
+                "stock_atual": _safe_float(item[1]),
+                "unidade": "kg" if item[2] else "un",
+                "dias_restantes": _safe_float(item[3]),
             }
             for item in base.get("low_stock", [])
         ],
-        "expiring_7": [
+        "vencimento_7dias": [
             {
-                "name": name,
-                "days_left": days,
-                "date": date_str,
+                "nome": name,
+                "dias_ate_vencer": days,
+                "data_vencimento": date_str,
                 "stock": stock,
-                "unit": unit,
+                "unidade": unit,
             }
             for name, days, date_str, stock, unit in base.get("expiring_7", [])
         ],
-        "expiring_15": [
+        "vencimento_15dias": [
             {
-                "name": name,
-                "days_left": days,
-                "date": date_str,
+                "nome": name,
+                "dias_ate_vencer": days,
+                "data_vencimento": date_str,
                 "stock": stock,
-                "unit": unit,
+                "unidade": unit,
             }
             for name, days, date_str, stock, unit in base.get("expiring_15", [])
         ],
-        "stock_forecast": base.get("stock_forecast", []),
-        "expiry_risk": base.get("expiry_risk", []),
-        "negative_profit": [
-            {"name": item[0], "profit": _safe_float(item[1])}
+        "previsao_stock": base.get("stock_forecast", [])[:10],
+        "risco_vencimento": base.get("expiry_risk", [])[:10],
+        "lucro_negativo": [
+            {"nome": item[0], "lucro_unitario": _safe_float(item[1])}
             for item in base.get("negative_profit", [])
         ],
     }
@@ -423,12 +546,13 @@ def build_admin_insights_ai(db=None, cache_minutes=5):
         return base
 
     ai_data = {
-        "ai_summary": ai.get("summary", []),
-        "ai_alerts": ai.get("alerts", []),
-        "ai_recommendations": ai.get("recommendations", []),
-        "ai_stock_notes": ai.get("stock_actions", []),
-        "ai_expiry_notes": ai.get("expiry_actions", []),
+        "ai_urgente_hoje": ai.get("urgente_hoje", []),
+        "ai_atencao_proximos_dias": ai.get("atencao_proximos_dias", []),
+        "ai_oportunidades": ai.get("oportunidades", []),
+        "ai_observacoes": ai.get("observacoes", []),
     }
+    
     _AI_CACHE["ts"] = now
     _AI_CACHE["data"] = ai_data
+    
     return {**base, **ai_data}

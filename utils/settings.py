@@ -1,5 +1,7 @@
 import sqlite3
 import bcrypt
+import os
+import json
 from datetime import datetime
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.boxlayout import MDBoxLayout
@@ -10,7 +12,7 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.card import MDCard
 from kivymd.uix.list import TwoLineListItem, OneLineListItem
 from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.selectioncontrol import MDCheckbox
+from kivymd.uix.selectioncontrol import MDCheckbox, MDSwitch
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -25,6 +27,7 @@ from utils.ai_popups import (
     build_banner_details_sections,
     render_auto_banners,
 )
+from utils.security_questions import QUESTIONS, hash_answer
 
 
 Builder.load_string('''
@@ -102,16 +105,49 @@ Builder.load_string('''
                                     icon: 'account-plus'
                                     font_size: dp(32)
                                     theme_text_color: 'Custom'
-                                    text_color: 1, 1, 1, 1
+                                    text_color: app.theme_tokens['on_primary']
                                     halign: 'center'
                             
                             MDLabel:
                                 text: 'Adicionar Usuário'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
-                                text_color: 1, 1, 1, 1
+                                text_color: app.theme_tokens['on_primary']
                                 halign: 'center'
                 
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.2, 0.6, 0.8, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.configure_security_questions()
+                    
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+                        
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+                            
+                                MDIcon:
+                                    icon: 'help-circle'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+                            
+                            MDLabel:
+                                text: 'Perguntas de Recuperacao'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
                     MDCard:
                         orientation: 'vertical'
                         padding: dp(20)
@@ -135,14 +171,14 @@ Builder.load_string('''
                                     icon: 'account-remove'
                                     font_size: dp(32)
                                     theme_text_color: 'Custom'
-                                    text_color: 1, 1, 1, 1
+                                    text_color: app.theme_tokens['on_primary']
                                     halign: 'center'
                             
                             MDLabel:
                                 text: 'Apagar Gerente'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
-                                text_color: 1, 1, 1, 1
+                                text_color: app.theme_tokens['on_primary']
                                 halign: 'center'
                 
                     MDCard:
@@ -168,14 +204,14 @@ Builder.load_string('''
                                     icon: 'account-edit'
                                     font_size: dp(32)
                                     theme_text_color: 'Custom'
-                                    text_color: 1, 1, 1, 1
+                                    text_color: app.theme_tokens['on_primary']
                                     halign: 'center'
                             
                             MDLabel:
                                 text: 'Alterar Dados Admin'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
-                                text_color: 1, 1, 1, 1
+                                text_color: app.theme_tokens['on_primary']
                                 halign: 'center'
                 
                     MDCard:
@@ -201,14 +237,14 @@ Builder.load_string('''
                                     icon: 'monitor-screenshot'
                                     font_size: dp(32)
                                     theme_text_color: 'Custom'
-                                    text_color: 1, 1, 1, 1
+                                    text_color: app.theme_tokens['on_primary']
                                     halign: 'center'
                             
                             MDLabel:
                                 text: 'Dimensões da Tela'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
-                                text_color: 1, 1, 1, 1
+                                text_color: app.theme_tokens['on_primary']
                                 halign: 'center'
                 
                     MDCard:
@@ -234,15 +270,107 @@ Builder.load_string('''
                                     icon: 'text-box-search'
                                     font_size: dp(32)
                                     theme_text_color: 'Custom'
-                                    text_color: 1, 1, 1, 1
+                                    text_color: app.theme_tokens['on_primary']
                                     halign: 'center'
                             
                             MDLabel:
                                 text: 'Logs do Sistema'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
-                                text_color: 1, 1, 1, 1
+                                text_color: app.theme_tokens['on_primary']
                                 halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.25, 0.45, 0.3, 1
+                        radius: [15]
+                        ripple_behavior: True
+
+                        MDBoxLayout:
+                            orientation: 'horizontal'
+                            spacing: dp(10)
+                            size_hint_y: None
+                            height: dp(40)
+
+                            MDIcon:
+                                icon: 'robot'
+                                font_size: dp(32)
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                            MDLabel:
+                                text: 'IA (Gemini)'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+
+                        MDBoxLayout:
+                            orientation: 'horizontal'
+                            spacing: dp(10)
+
+                            MDLabel:
+                                text: 'Ativar insights automáticos'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                font_style: 'Body2'
+
+                            Widget:
+
+                            MDSwitch:
+                                id: ai_toggle
+                                active: True
+                                on_active: root.toggle_ai(self.active)
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: app.theme_tokens['card_alt']
+                        radius: [15]
+                        ripple_behavior: True
+
+                        MDBoxLayout:
+                            orientation: 'horizontal'
+                            spacing: dp(10)
+                            size_hint_y: None
+                            height: dp(40)
+
+                            MDIcon:
+                                icon: 'weather-night'
+                                font_size: dp(32)
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['text_primary']
+                                halign: 'center'
+
+                            MDLabel:
+                                text: 'Modo Escuro'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['text_primary']
+
+                        MDBoxLayout:
+                            orientation: 'horizontal'
+                            spacing: dp(10)
+
+                            MDLabel:
+                                text: 'Ativar tema escuro'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['text_secondary']
+                                font_style: 'Body2'
+
+                            Widget:
+
+                            MDSwitch:
+                                id: theme_toggle
+                                active: False
+                                on_active: root.toggle_theme(self.active)
                 
                     MDCard:
                         orientation: 'vertical'
@@ -266,14 +394,14 @@ Builder.load_string('''
                                     icon: 'shield-lock'
                                     font_size: dp(32)
                                     theme_text_color: 'Custom'
-                                    text_color: 1, 1, 1, 1
+                                    text_color: app.theme_tokens['on_primary']
                                     halign: 'center'
                             
                             MDLabel:
                                 text: 'Segurança'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
-                                text_color: 1, 1, 1, 1
+                                text_color: app.theme_tokens['on_primary']
                                 halign: 'center'
         MDFloatingActionButton:
             id: ai_button
@@ -287,7 +415,7 @@ Builder.load_string('''
             id: ai_badge
             size_hint: None, None
             size: dp(24), dp(24)
-            md_bg_color: 0.95, 0.26, 0.21, 1
+            md_bg_color: app.theme_tokens['badge']
             radius: [dp(12)]
             elevation: 8
             pos_hint: {'right': 0.978, 'y': 0.098}
@@ -299,7 +427,7 @@ Builder.load_string('''
                 halign: 'center'
                 valign: 'middle'
                 theme_text_color: 'Custom'
-                text_color: 1, 1, 1, 1
+                text_color: app.theme_tokens['on_primary']
                 font_size: dp(12)
                 bold: True
 
@@ -501,13 +629,21 @@ class AddUserDialog:
             ))
             
             self.username = MDTextField(
-                hint_text='Nome de Usuário',
+                hint_text='Nome de Usu??rio',
                 mode='rectangle',
                 size_hint_y=None,
                 height=dp(56)
             )
             content.add_widget(self.username)
-            
+
+            self.email = MDTextField(
+                hint_text='Email (opcional)',
+                mode='rectangle',
+                size_hint_y=None,
+                height=dp(56)
+            )
+            content.add_widget(self.email)
+
             self.password = MDTextField(
                 hint_text='Senha',
                 password=True,
@@ -516,19 +652,19 @@ class AddUserDialog:
                 height=dp(56)
             )
             content.add_widget(self.password)
-            
+
             role_box = MDBoxLayout(
                 orientation='horizontal',
                 spacing=dp(10),
                 size_hint_y=None,
                 height=dp(56)
             )
-            
+
             role_box.add_widget(MDLabel(
-                text='Função:',
+                text='Fun????o:',
                 size_hint_x=0.3
             ))
-            
+
             self.role_admin_btn = MDRectangleFlatButton(
                 text='Admin',
                 size_hint_x=0.35,
@@ -539,11 +675,11 @@ class AddUserDialog:
                 size_hint_x=0.35,
                 on_release=lambda x: self.select_role('manager')
             )
-            
+
             role_box.add_widget(self.role_admin_btn)
             role_box.add_widget(self.role_manager_btn)
             content.add_widget(role_box)
-            
+
             self.selected_role = None
             
             self.dialog = MDDialog(
@@ -583,6 +719,7 @@ class AddUserDialog:
     def save_user(self, *args):
         username = self.username.text.strip()
         password = self.password.text.strip()
+        email = self.email.text.strip() if hasattr(self, "email") else ""
         
         if not username or not password or not self.selected_role:
             self.show_message('Erro', 'Todos os campos são obrigatórios')
@@ -594,11 +731,12 @@ class AddUserDialog:
             return
         
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        email_value = email if email else None
 
         try:
             self.db.cursor.execute(
-                "INSERT INTO users (username, password, role) VALUES (?, ?, ?)", 
-                (username, hashed_password, self.selected_role)
+                "INSERT INTO users (username, password, role, email) VALUES (?, ?, ?, ?)", 
+                (username, hashed_password, self.selected_role, email_value)
             )
             self.db.conn.commit()
             
@@ -623,6 +761,122 @@ class AddUserDialog:
         ).open()
 
 
+class SecurityQuestionsDialog:
+    def __init__(self):
+        self.dialog = None
+        self.db = Database()
+
+    def show(self):
+        if not self.dialog:
+            content = MDBoxLayout(
+                orientation='vertical',
+                spacing=dp(15),
+                padding=dp(20),
+                adaptive_height=True
+            )
+
+            content.add_widget(MDLabel(
+                text='Configurar perguntas de recuperacao',
+                theme_text_color='Secondary',
+                size_hint_y=None,
+                height=dp(30)
+            ))
+
+            self.username = MDTextField(
+                hint_text='Nome de usuario',
+                mode='rectangle',
+                size_hint_y=None,
+                height=dp(56)
+            )
+            content.add_widget(self.username)
+
+            self.answer_fields = []
+            for question in QUESTIONS:
+                content.add_widget(MDLabel(
+                    text=question,
+                    theme_text_color='Secondary',
+                    size_hint_y=None,
+                    height=dp(24)
+                ))
+                field = MDTextField(
+                    hint_text='Resposta',
+                    password=True,
+                    mode='rectangle',
+                    size_hint_y=None,
+                    height=dp(56)
+                )
+                self.answer_fields.append(field)
+                content.add_widget(field)
+
+            self.dialog = MDDialog(
+                title='Perguntas de Recuperacao',
+                type='custom',
+                content_cls=content,
+                size_hint=(0.9, None),
+                height=dp(560),
+                buttons=[
+                    MDFlatButton(
+                        text='CANCELAR',
+                        on_release=self.dismiss
+                    ),
+                    MDRaisedButton(
+                        text='SALVAR',
+                        on_release=self.save_answers
+                    )
+                ]
+            )
+
+        self.dialog.open()
+
+    def dismiss(self, *args):
+        self.dialog.dismiss()
+
+    def save_answers(self, *args):
+        username = self.username.text.strip()
+        answers = [field.text.strip() for field in self.answer_fields]
+
+        if not username or any(not ans for ans in answers):
+            self.show_message('Erro', 'Preencha usuario e todas as respostas')
+            return
+
+        try:
+            self.db.cursor.execute('SELECT COUNT(*) FROM users WHERE username = ?', (username,))
+            if self.db.cursor.fetchone()[0] == 0:
+                self.show_message('Erro', 'Usuario nao encontrado')
+                return
+
+            hashes = [hash_answer(ans) for ans in answers]
+            placeholder = hash_answer("__unused__")
+            now = datetime.now().isoformat()
+            self.db.cursor.execute(
+                'INSERT OR REPLACE INTO user_security_questions '
+                '(username, q1_hash, q2_hash, q3_hash, q4_hash, attempts, lock_until, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, 0, NULL, ?)',
+                (username, hashes[0], hashes[1], hashes[2], placeholder, now)
+            )
+            self.db.conn.commit()
+
+            app = App.get_running_app()
+            actor = getattr(app, 'current_user', None) or username
+            role = getattr(app, 'current_role', None) or 'admin'
+            self.db.log_action(
+                actor,
+                role,
+                'UPDATE_SECURITY_QUESTIONS',
+                f'Perguntas de recuperacao atualizadas para {username}'
+            )
+
+            self.show_message('Sucesso', 'Perguntas de recuperacao atualizadas!')
+            self.dialog.dismiss()
+        except Exception as e:
+            self.show_message('Erro', f'Erro ao salvar: {str(e)}')
+
+    def show_message(self, title, message):
+        MDDialog(
+            title=title,
+            text=message,
+            buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
+        ).open()
 class DeleteManagerDialog:
     def __init__(self):
         self.dialog = None
@@ -750,6 +1004,21 @@ class DeleteManagerDialog:
 class SystemLogsDialog:
     def __init__(self):
         self.dialog = None
+        self._action_labels = {
+            "LOGIN": "Login realizado",
+            "LOGOUT": "Logout realizado",
+            "CREATE_USER": "Usuário criado",
+            "DELETE_USER": "Usuário removido",
+            "UPDATE_ADMIN": "Dados do admin atualizados",
+            "ADD_PRODUCT": "Produto adicionado",
+            "UPDATE_PRODUCT": "Produto atualizado",
+            "DELETE_PRODUCT": "Produto removido",
+            "SALE": "Venda registrada",
+            "CANCEL_SALE": "Venda cancelada",
+            "SAVE_RECEIPT": "Recibo salvo",
+            "REGISTER_LOSS": "Perda registrada",
+            "APPROVE_LOSS": "Perda aprovada",
+        }
         
     def show(self):
         content = MDBoxLayout(
@@ -897,6 +1166,7 @@ class SystemLogsDialog:
                 log_id, username, role, action, details, timestamp = log
                 
                 timestamp_formatted = self.format_timestamp(timestamp)
+                action_label = self._action_to_label(action)
                 
                 action_icons = {
                     'LOGIN': 'login',
@@ -955,7 +1225,7 @@ class SystemLogsDialog:
                 info_box.add_widget(header)
                 
                 info_box.add_widget(MDLabel(
-                    text=f'[b]{action}[/b]',
+                    text=f'[b]{action_label}[/b]',
                     markup=True,
                     font_style='Body2',
                     size_hint_y=None,
@@ -982,6 +1252,14 @@ class SystemLogsDialog:
                 size_hint_y=None,
                 height=dp(50)
             ))
+
+    def _action_to_label(self, action):
+        if not action:
+            return "Ação desconhecida"
+        label = self._action_labels.get(action)
+        if label:
+            return label
+        return f"Ação: {action}"
 
     def export_logs_pdf(self):
         try:
@@ -1154,11 +1432,92 @@ class AdminSettingsScreen(MDScreen):
         self.app = app
         self.name = 'settings'
         self.notification_count = 0
+        self._ai_poll_ev = None
+        self._ai_toggle_ready = False
+        self._theme_toggle_ready = False
+        self._security_questions_dialog = None
+
+    def on_kv_post(self, base_widget):
+        self._ai_toggle_ready = False
+        self._theme_toggle_ready = False
+        app = App.get_running_app()
+        enabled = bool(getattr(app, "ai_enabled", True)) if app else True
+        if "ai_toggle" in self.ids:
+            self.ids.ai_toggle.active = enabled
+        if "theme_toggle" in self.ids:
+            is_dark = bool(app and getattr(app.theme_cls, "theme_style", "Light") == "Dark")
+            self.ids.theme_toggle.active = is_dark
+        Clock.schedule_once(self._enable_ai_toggle, 0)
+        Clock.schedule_once(self._enable_theme_toggle, 0)
 
     def on_enter(self):
         Clock.schedule_once(self._init_badge, 0.1)
         Clock.schedule_once(self.update_ai_badge, 0.15)
         Clock.schedule_once(self.show_auto_ai_popups, 0.2)
+        self._start_ai_polling()
+
+    def on_leave(self):
+        self._stop_ai_polling()
+
+    def _enable_ai_toggle(self, dt):
+        self._ai_toggle_ready = True
+    
+    def _enable_theme_toggle(self, dt):
+        self._theme_toggle_ready = True
+
+    def _settings_path(self):
+        app = App.get_running_app()
+        base_dir = getattr(app, "base_dir", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+        return os.path.join(base_dir, "app_settings.json")
+
+    def _save_app_settings_fallback(self, ai_enabled=None, theme_style=None):
+        try:
+            settings_path = self._settings_path()
+            data = {}
+            if os.path.exists(settings_path):
+                try:
+                    with open(settings_path, "r", encoding="utf-8") as f:
+                        data = json.load(f) or {}
+                except Exception:
+                    data = {}
+            if ai_enabled is not None:
+                data["ai_enabled"] = bool(ai_enabled)
+            if theme_style:
+                data["theme_style"] = theme_style
+            with open(self._settings_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def toggle_ai(self, enabled):
+        if not getattr(self, "_ai_toggle_ready", True):
+            return
+        app = App.get_running_app()
+        if app:
+            app.ai_enabled = bool(enabled)
+            if hasattr(app, "save_app_settings"):
+                app.save_app_settings()
+            else:
+                self._save_app_settings_fallback(app.ai_enabled, getattr(app, "theme_style", None))
+        else:
+            self._save_app_settings_fallback(ai_enabled=enabled)
+
+    def toggle_theme(self, enabled):
+        if not getattr(self, "_theme_toggle_ready", True):
+            return
+        app = App.get_running_app()
+        style = "Dark" if enabled else "Light"
+        if app:
+            if hasattr(app, "apply_theme"):
+                app.apply_theme(style)
+            elif hasattr(app, "save_app_settings"):
+                app.theme_cls.theme_style = style
+                app.theme_style = style
+                app.save_app_settings()
+            else:
+                self._save_app_settings_fallback(getattr(app, "ai_enabled", None), style)
+        else:
+            self._save_app_settings_fallback(theme_style=style)
 
     # ------------------------------------------------------------------
     # Sistema de Notificacoes e Animacao de Abanar
@@ -1266,7 +1625,12 @@ class AdminSettingsScreen(MDScreen):
     
     def add_user(self):
         AddUserDialog().show()
-    
+
+    def configure_security_questions(self):
+        if not self._security_questions_dialog:
+            self._security_questions_dialog = SecurityQuestionsDialog()
+        self._security_questions_dialog.show()
+
     def delete_manager(self):
         DeleteManagerDialog().show()
     
@@ -1322,15 +1686,30 @@ class AdminSettingsScreen(MDScreen):
         self.mark_notifications_seen(insights)
 
     def open_ai_menu(self, caller):
-        if not hasattr(self, "_ai_menu") or not self._ai_menu:
-            items = [
-                {"text": "Insights completos", "on_release": lambda x="full": self._open_ai_from_menu(x)},
-                {"text": "Reposicao de stock", "on_release": lambda x="stock": self._open_ai_from_menu(x)},
-                {"text": "Avisos de vencimento", "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
-            ]
-            self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
-        else:
-            self._ai_menu.caller = caller
+        app = App.get_running_app()
+        insights = build_admin_insights()
+        key = self._get_alert_key(insights)
+        badge_counts = insights.get("badge_counts") or {}
+        stock_count = badge_counts.get("stock", 0)
+        expiry_count = badge_counts.get("expiry_7", 0) + badge_counts.get("expiry_15", 0)
+        total_count = badge_counts.get("total", 0)
+
+        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
+            stock_count = 0
+            expiry_count = 0
+            total_count = 0
+
+        def _label(base, count):
+            return f"{base} ({count})" if count > 0 else base
+
+        items = [
+            {"text": _label("Insights completos", total_count), "on_release": lambda x="full": self._open_ai_from_menu(x)},
+            {"text": _label("Reposicao de stock", stock_count), "on_release": lambda x="stock": self._open_ai_from_menu(x)},
+            {"text": _label("Avisos de vencimento", expiry_count), "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
+        ]
+        if hasattr(self, "_ai_menu") and self._ai_menu:
+            self._ai_menu.dismiss()
+        self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
         self._ai_menu.open()
         self.mark_notifications_seen()
 
@@ -1388,18 +1767,23 @@ class AdminSettingsScreen(MDScreen):
             return
 
         app = App.get_running_app()
-        if getattr(app, "_ai_banners_shown", False):
-            return
-
         insights = build_admin_insights_ai()
         banners = build_auto_banner_data(insights)
+        key = self._get_alert_key(insights)
+
         if not banners:
+            if app:
+                app._ai_banners_last_key = key
             return
+
+        if app:
+            last_key = getattr(app, "_ai_banners_last_key", None)
+            if last_key == key:
+                return
+            app._ai_banners_last_key = key
 
         container = self.ids.ai_banner_container
         render_auto_banners(container, banners, auto_dismiss_seconds=10)
-        if app:
-            app._ai_banners_shown = True
 
     def update_ai_badge(self, *args):
         """Atualiza o badge do botao de insights com animacao vibrante."""
@@ -1416,3 +1800,17 @@ class AdminSettingsScreen(MDScreen):
             count = 0
 
         self.update_notification_badge(count)
+
+    def _poll_ai_alerts(self, dt):
+        self.update_ai_badge()
+        self.show_auto_ai_popups()
+
+    def _start_ai_polling(self):
+        if self._ai_poll_ev:
+            self._ai_poll_ev.cancel()
+        self._ai_poll_ev = Clock.schedule_interval(self._poll_ai_alerts, 30)
+
+    def _stop_ai_polling(self):
+        if self._ai_poll_ev:
+            self._ai_poll_ev.cancel()
+            self._ai_poll_ev = None

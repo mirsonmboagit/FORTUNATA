@@ -89,5 +89,6 @@ class Sixty60API:
             "category":       category,
             "price":          str(price) if price else "",
             "sold_by_weight": sold_by_weight,
+            "quantity":       size_info,
             "image":          raw.get("imageUrl") or raw.get("image") or raw.get("thumbnail") or "",
         }

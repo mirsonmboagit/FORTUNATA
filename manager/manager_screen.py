@@ -19,10 +19,25 @@ from kivy.lang import Builder
 from kivy.properties import StringProperty
 from database.database import Database
 from datetime import datetime
+from kivymd.uix.menu import MDDropdownMenu
+from kivymd.uix.snackbar import MDSnackbar
 import cv2
 from pyzbar.pyzbar import decode
 import numpy as np
 from kivy.core.audio import SoundLoader
+from kivy.animation import Animation
+from utils.ai_insights import build_admin_insights, build_admin_insights_ai
+from utils.ai_popups import (
+    build_auto_banner_data,
+    build_banner_details_sections,
+    render_auto_banners,
+)
+
+def _theme_color(name, fallback):
+  app = App.get_running_app()
+  tokens = getattr(app, "theme_tokens", {}) if app else {}
+  return tokens.get(name, fallback)
+
 
 # Carregar o arquivo KV
 Builder.load_file('manager/sales_screen.kv')
@@ -39,6 +54,14 @@ class ProductCard(MDCard):
   
   def setup_product(self):
     """Configurar dados do produto"""
+    app = App.get_running_app()
+    tokens = getattr(app, "theme_tokens", {}) if app else {}
+    primary = tokens.get("primary", [0.1, 0.5, 0.8, 1])
+    info = tokens.get("info", [0.1, 0.5, 0.8, 1])
+    warning = tokens.get("warning", [0.8, 0.4, 0.0, 1])
+    success = tokens.get("success", [0.15, 0.7, 0.3, 1])
+    danger = tokens.get("danger", [0.9, 0.2, 0.2, 1])
+
     product_id = self.product_data[0]
     product_name = self.product_data[1]
     product_stock = self.product_data[2]
@@ -52,11 +75,11 @@ class ProductCard(MDCard):
     # Tipo
     if is_sold_by_weight:
       self.ids.product_type_label.text = "KG"
-      self.ids.product_type_label.text_color = [0.8, 0.4, 0.0, 1]
+      self.ids.product_type_label.text_color = warning
       self.ids.product_price_header.text = "PREÇO/KG"
     else:
       self.ids.product_type_label.text = "UN"
-      self.ids.product_type_label.text_color = [0.1, 0.5, 0.8, 1]
+      self.ids.product_type_label.text_color = info
       self.ids.product_price_header.text = "PREÇO/UN"
     
     # Estoque com cores
@@ -64,11 +87,11 @@ class ProductCard(MDCard):
     self.ids.product_stock_label.text = stock_text
     
     if product_stock > 50:
-      self.ids.product_stock_label.text_color = [0.15, 0.7, 0.3, 1] # Verde
+      self.ids.product_stock_label.text_color = success
     elif product_stock > 20:
-      self.ids.product_stock_label.text_color = [0.9, 0.7, 0.1, 1] # Amarelo
+      self.ids.product_stock_label.text_color = warning
     else:
-      self.ids.product_stock_label.text_color = [0.9, 0.2, 0.2, 1] # Vermelho
+      self.ids.product_stock_label.text_color = danger
     
     # Preço
     self.ids.product_price_label.text = f"{product_price:.2f} MZN"
@@ -96,6 +119,9 @@ class SalesScreen(MDScreen):
     self.scanner_sound_error = None
     self.last_barcode = None
     self.last_barcode_time = 0
+    self.notification_count = 0
+    self.swing_event = None
+    self._ai_poll_ev = None
     
     # Propriedades para o header
     self.current_date = datetime.now().strftime("%d/%m/%Y")
@@ -348,17 +374,17 @@ class SalesScreen(MDScreen):
       orientation='vertical',
       size_hint_y=None,
       height=dp(70),
-      md_bg_color=[0.15, 0.65, 0.25, 1],
+      md_bg_color=_theme_color('success', [0.15, 0.65, 0.25, 1]),
       padding=dp(12),
       radius=[dp(10)]
     )
     
     title = MDLabel(
-      text='⚖ BALANÇA DIGITAL',
+      text='BALANÇA DIGITAL',
       font_style="H5",
       bold=True,
       theme_text_color="Custom",
-      text_color=[1, 1, 1, 1],
+      text_color=_theme_color('on_primary', [1, 1, 1, 1]),
       halign='center'
     )
     
@@ -366,7 +392,7 @@ class SalesScreen(MDScreen):
       text=product_name,
       font_style="Body1",
       theme_text_color="Custom",
-      text_color=[1, 1, 1, 0.9],
+      text_color=_theme_color('on_primary', [1, 1, 1, 0.9]),
       halign='center'
     )
     
@@ -423,7 +449,7 @@ class SalesScreen(MDScreen):
       height=dp(90),
       padding=dp(12),
       spacing=dp(4),
-      md_bg_color=[0.95, 0.95, 0.95, 1]
+      md_bg_color=_theme_color('card', [0.95, 0.95, 0.95, 1])
     )
     
     calc_title = MDLabel(
@@ -444,7 +470,7 @@ class SalesScreen(MDScreen):
       font_size=dp(17),
       bold=True,
       theme_text_color="Custom",
-      text_color=[0.12, 0.65, 0.25, 1],
+      text_color=_theme_color('success', [0.12, 0.65, 0.25, 1]),
       id='calc_result'
     )
     
@@ -459,18 +485,18 @@ class SalesScreen(MDScreen):
       if weight <= 0:
         calc_formula.text = 'Peso deve ser maior que 0'
         calc_result.text = ''
-        calc_formula.text_color = [0.9, 0.3, 0.3, 1]
+        calc_formula.text_color = _theme_color('danger', [0.9, 0.3, 0.3, 1])
         return False
 
       if weight > product_stock:
         calc_formula.text = f'Maximo: {product_stock:.2f} kg'
         calc_result.text = ''
-        calc_formula.text_color = [0.9, 0.3, 0.3, 1]
+        calc_formula.text_color = _theme_color('danger', [0.9, 0.3, 0.3, 1])
         return False
 
       total_price = weight * product_price_per_kg
       calc_formula.text = f'{weight:.2f} KG x {product_price_per_kg:.2f} MZN/KG ='
-      calc_formula.text_color = [0.2, 0.2, 0.2, 1]
+      calc_formula.text_color = _theme_color('text_primary', [0.2, 0.2, 0.2, 1])
       calc_result.text = f'TOTAL: {total_price:.2f} MZN'
       return True
 
@@ -490,7 +516,7 @@ class SalesScreen(MDScreen):
         _set_calc(weight)
       except ValueError:
         calc_formula.text = 'Digite um numero valido'
-        calc_formula.text_color = [0.9, 0.3, 0.3, 1]
+        calc_formula.text_color = _theme_color('danger', [0.9, 0.3, 0.3, 1])
         calc_result.text = ''
       finally:
         updating['active'] = False
@@ -513,7 +539,7 @@ class SalesScreen(MDScreen):
         _set_calc(weight)
       except ValueError:
         calc_formula.text = 'Digite um numero valido'
-        calc_formula.text_color = [0.9, 0.3, 0.3, 1]
+        calc_formula.text_color = _theme_color('danger', [0.9, 0.3, 0.3, 1])
         calc_result.text = ''
       finally:
         updating['active'] = False
@@ -530,12 +556,12 @@ class SalesScreen(MDScreen):
     
     cancel_btn = MDRaisedButton(
       text='✗ CANCELAR',
-      md_bg_color=[0.7, 0.3, 0.3, 1]
+      md_bg_color=_theme_color('danger', [0.7, 0.3, 0.3, 1])
     )
     
     add_btn = MDRaisedButton(
       text='✓ ADICIONAR',
-      md_bg_color=[0.12, 0.62, 0.22, 1]
+      md_bg_color=_theme_color('success', [0.12, 0.62, 0.22, 1])
     )
     
     buttons_box.add_widget(cancel_btn)
@@ -649,7 +675,7 @@ class SalesScreen(MDScreen):
       self.ids.cart_count_label.text = f'{len(self.cart_items)} itens'
 
     for i, item in enumerate(self.cart_items):
-      bg_color = [0.95, 0.97, 0.98, 1] if i % 2 == 0 else [1, 1, 1, 1]
+      bg_color = _theme_color('surface_alt', [0.95, 0.97, 0.98, 1]) if i % 2 == 0 else _theme_color('card', [1, 1, 1, 1])
 
       row = MDCard(
         orientation='horizontal',
@@ -688,7 +714,7 @@ class SalesScreen(MDScreen):
           size_hint_x=0.18,
           font_size=dp(11),
           theme_text_color="Custom",
-          text_color=[0.55, 0.35, 0.0, 1],
+          text_color=_theme_color('warning', [0.55, 0.35, 0.0, 1]),
           bold=True
         )
       else:
@@ -698,15 +724,14 @@ class SalesScreen(MDScreen):
           mode='rectangle',
           size_hint_x=0.18,
           size_hint_y=None,
-          height=dp(28),
+          height=dp(50),
           font_size=dp(11),
           halign='center',
-          line_color_normal=[0.75, 0.75, 0.75, 1],
-          line_color_focus=[0.2, 0.5, 0.8, 1],
-          fill_color=[0.96, 0.96, 0.96, 1],
-          text_color_normal=[0.15, 0.15, 0.15, 1],
-          text_color_focus=[0.15, 0.15, 0.15, 1],
-          hint_text_color=[0.5, 0.5, 0.5, 1]
+          line_color_normal=_theme_color('text_secondary', [0.75, 0.75, 0.75, 1]),
+          line_color_focus=_theme_color('primary', [0.2, 0.5, 0.8, 1]),
+          text_color_normal=_theme_color('text_primary', [0.15, 0.15, 0.15, 1]),
+          text_color_focus=_theme_color('text_primary', [0.15, 0.15, 0.15, 1]),
+          hint_text_color=_theme_color('text_secondary', [0.5, 0.5, 0.5, 1])
         )
         qty_widget.bind(text=lambda inst, val, idx=i: self.update_qty(idx, val))
 
@@ -716,14 +741,14 @@ class SalesScreen(MDScreen):
         size_hint_x=0.22,
         font_size=dp(11),
         theme_text_color="Custom",
-        text_color=[0.12, 0.65, 0.25, 1],
+        text_color=_theme_color('success', [0.12, 0.65, 0.25, 1]),
         bold=True
       )
 
       remove_btn = MDIconButton(
         icon='delete',
         theme_text_color="Custom",
-        text_color=[0.85, 0.2, 0.2, 1],
+        text_color=_theme_color('danger', [0.85, 0.2, 0.2, 1]),
         size_hint_x=0.10,
         pos_hint={'center_y': 0.5},
         on_release=lambda btn, idx=i: self.remove_from_cart(idx)
@@ -833,6 +858,17 @@ class SalesScreen(MDScreen):
     if 'sales_history' in self.manager.screen_names:
       history_screen = self.manager.get_screen('sales_history')
       Clock.schedule_once(lambda dt: history_screen.load_all_sales(), 0.1)
+
+  def open_losses_screen(self, *args):
+    """Abrir tela de perdas"""
+    if not self.manager:
+      return
+
+    self.manager.current = 'losses'
+    if 'losses' in self.manager.screen_names:
+      screen = self.manager.get_screen('losses')
+      Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
+
   
   def calculate_change(self, *args):
     """Calcular troco"""
@@ -843,10 +879,10 @@ class SalesScreen(MDScreen):
       
       if change >= 0:
         self.ids.change_label.text = f'{change:.2f} MZN'
-        self.ids.change_label.text_color = [0.16, 0.66, 0.16, 1]
+        self.ids.change_label.text_color = _theme_color('success', [0.16, 0.66, 0.16, 1])
       else:
         self.ids.change_label.text = 'INSUFICIENTE'
-        self.ids.change_label.text_color = [0.88, 0.22, 0.22, 1]
+        self.ids.change_label.text_color = _theme_color('danger', [0.88, 0.22, 0.22, 1])
         
     except ValueError:
       self.ids.change_label.text = '0.00 MZN'
@@ -861,17 +897,18 @@ class SalesScreen(MDScreen):
     """Ligar/desligar scanner"""
     if not self.scanning:
       self.scanning = True
-      self.ids.scan_btn.text = 'PARAR'
-      self.ids.scan_btn.md_bg_color = [0.88, 0.26, 0.26, 1]
+      self.ids.scan_btn.icon = 'barcode-off'
+      self.ids.scan_btn.md_bg_color = _theme_color('danger', [0.88, 0.26, 0.26, 1])
       self.ids.scanner_status.text = 'Iniciando...'
-      self.ids.scanner_status.text_color = [0.9, 0.7, 0.1, 1]
+      self.ids.scanner_status.text_color = _theme_color('warning', [0.9, 0.7, 0.1, 1])
       Clock.schedule_once(self.init_camera, 0.1)
     else:
       self.scanning = False
-      self.ids.scan_btn.text = 'INICIAR'
-      self.ids.scan_btn.md_bg_color = [0.16, 0.66, 0.26, 1]
+      self.ids.scan_btn.icon = 'barcode-scan'
+      
+      self.ids.scan_btn.md_bg_color = _theme_color('success', [0.16, 0.66, 0.26, 1])
       self.ids.scanner_status.text = 'Inativo'
-      self.ids.scanner_status.text_color = [0.5, 0.5, 0.5, 1]
+      self.ids.scanner_status.text_color = _theme_color('text_secondary', [0.5, 0.5, 0.5, 1])
       Clock.unschedule(self.update_camera)
       self.release_camera()
   
@@ -899,7 +936,7 @@ class SalesScreen(MDScreen):
         self.camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         
         self.ids.scanner_status.text = f'Ativo (Cam {self.current_camera})'
-        self.ids.scanner_status.text_color = [0.16, 0.72, 0.22, 1]
+        self.ids.scanner_status.text_color = _theme_color('success', [0.16, 0.72, 0.22, 1])
         
         self.last_barcode = None
         self.last_barcode_time = 0
@@ -907,15 +944,15 @@ class SalesScreen(MDScreen):
         Clock.schedule_interval(self.update_camera, 1.0 / 20.0)
       else:
         self.ids.scanner_status.text = 'Câmera não encontrada'
-        self.ids.scanner_status.text_color = [0.9, 0.2, 0.2, 1]
+        self.ids.scanner_status.text_color = _theme_color('danger', [0.9, 0.2, 0.2, 1])
         self.scanning = False
-        self.ids.scan_btn.text = 'INICIAR'
-        self.ids.scan_btn.md_bg_color = [0.16, 0.66, 0.26, 1]
+        self.ids.scan_btn.icon = 'barcode-scan'
+        self.ids.scan_btn.md_bg_color = _theme_color('success', [0.16, 0.66, 0.26, 1])
         
     except Exception as e:
       print(f"❌ Erro ao inicializar câmera: {e}")
       self.ids.scanner_status.text = 'Erro na câmera'
-      self.ids.scanner_status.text_color = [0.9, 0.2, 0.2, 1]
+      self.ids.scanner_status.text_color = _theme_color('danger', [0.9, 0.2, 0.2, 1])
       self.scanning = False
   
   def update_camera(self, dt):
@@ -950,7 +987,7 @@ class SalesScreen(MDScreen):
             self.last_barcode_time = current_time
             
             self.ids.scanner_status.text = 'Buscando...'
-            self.ids.scanner_status.text_color = [0.2, 0.5, 0.8, 1]
+            self.ids.scanner_status.text_color = _theme_color('primary', [0.2, 0.5, 0.8, 1])
             
             product = self.db.get_product_by_barcode(barcode_value)
             
@@ -958,11 +995,11 @@ class SalesScreen(MDScreen):
               self.add_to_cart(product)
               self.play_scanner_sound(success=True)
               self.ids.scanner_status.text = f'✓ {product[1][:15]}'
-              self.ids.scanner_status.text_color = [0.16, 0.72, 0.22, 1]
+              self.ids.scanner_status.text_color = _theme_color('success', [0.16, 0.72, 0.22, 1])
             else:
               self.play_scanner_sound(success=False)
               self.ids.scanner_status.text = '✗ Não encontrado'
-              self.ids.scanner_status.text_color = [0.88, 0.32, 0.22, 1]
+              self.ids.scanner_status.text_color = _theme_color('warning', [0.88, 0.32, 0.22, 1])
             
             pts = code.polygon
             if len(pts) == 4:
@@ -980,7 +1017,7 @@ class SalesScreen(MDScreen):
       else:
         if (current_time - self.last_barcode_time) > 2.5:
           self.ids.scanner_status.text = 'Ativo'
-          self.ids.scanner_status.text_color = [0.16, 0.72, 0.22, 1]
+          self.ids.scanner_status.text_color = _theme_color('success', [0.16, 0.72, 0.22, 1])
       
       buf = cv2.flip(frame, 0).tobytes()
       texture = Texture.create(
@@ -1006,10 +1043,10 @@ class SalesScreen(MDScreen):
     
     if was_scanning:
       self.scanning = True
-      self.ids.scan_btn.text = 'PARAR'
-      self.ids.scan_btn.md_bg_color = [0.88, 0.26, 0.26, 1]
+      self.ids.scan_btn.icon = 'barcode-off'
+      self.ids.scan_btn.md_bg_color = _theme_color('danger', [0.88, 0.26, 0.26, 1])
       self.ids.scanner_status.text = f'Trocando para cam {self.current_camera}...'
-      self.ids.scanner_status.text_color = [0.9, 0.7, 0.1, 1]
+      self.ids.scanner_status.text_color = _theme_color('warning', [0.9, 0.7, 0.1, 1])
       Clock.schedule_once(self.init_camera, 0.1)
   
   # ==========================================
@@ -1036,9 +1073,13 @@ class SalesScreen(MDScreen):
     change = paid - self.total_amount
     
     try:
+      app = App.get_running_app()
+      username = getattr(app, "current_user", None)
+      role = getattr(app, "current_role", None) or "manager"
+
       items_count = len(self.cart_items)
       for item in self.cart_items:
-        self.db.add_sale(item['id'], item['qty'], item['price'])
+        self.db.add_sale(item['id'], item['qty'], item['price'], username, role)
       
       self.show_message("✓ Venda finalizada com sucesso!")
       details = (
@@ -1124,12 +1165,12 @@ class SalesScreen(MDScreen):
     
     save_btn = MDRaisedButton(
       text='💾 SALVAR',
-      md_bg_color=[0.2, 0.5, 0.8, 1]
+      md_bg_color=_theme_color('primary', [0.2, 0.5, 0.8, 1])
     )
     
     close_btn = MDRaisedButton(
       text='✗ FECHAR',
-      md_bg_color=[0.5, 0.5, 0.5, 1]
+      md_bg_color=_theme_color('card_alt', [0.5, 0.5, 0.5, 1])
     )
     
     btn_layout.add_widget(save_btn)
@@ -1200,10 +1241,332 @@ class SalesScreen(MDScreen):
     
     self._log_action("LOGOUT", "Logout from sales")
     self.manager.current = 'login'
-  
+
+  def on_enter(self):
+    """Ao entrar na tela"""
+    Clock.schedule_once(self._init_badge, 0.1)
+    Clock.schedule_once(self.update_ai_badge, 0.15)
+    Clock.schedule_once(self.show_auto_ai_popups, 0.2)
+    self._start_ai_polling()
+
   def on_leave(self):
     """Ao sair da tela"""
     if self.scanning:
       self.scanning = False
       Clock.unschedule(self.update_camera)
       self.release_camera()
+    self._stop_ai_polling()
+
+
+# ------------------------------------------------------------------
+    # Snackbar for notifications
+    # ------------------------------------------------------------------
+  def show_snackbar(self, message):
+        MDSnackbar(
+            MDLabel(
+                text=message,
+                theme_text_color="Custom",
+                text_color=_theme_color('on_primary', [1, 1, 1, 1]),
+            ),
+            pos=(dp(10), dp(10)),
+            size_hint_x=0.5,
+        ).open()
+
+  def _get_alert_key(self, insights):
+        low_stock = sorted([item[0] for item in insights.get("low_stock", [])])
+        exp7 = sorted([item[0] for item in insights.get("expiring_7", [])])
+        exp15 = sorted([item[0] for item in insights.get("expiring_15", [])])
+
+        parts = []
+        if low_stock:
+            parts.append("ls:" + ",".join(low_stock))
+        if exp7:
+            parts.append("e7:" + ",".join(exp7))
+        if exp15:
+            parts.append("e15:" + ",".join(exp15))
+        return "|".join(parts)
+
+  def mark_notifications_seen(self, insights=None):
+        insights = insights or build_admin_insights(self.db)
+        key = self._get_alert_key(insights)
+        app = App.get_running_app()
+        if app:
+            app._ai_notifications_seen_key = key
+        self.update_notification_badge(0)
+
+  def show_ai_insights(self, *args):
+        """Abrir notificacoes em formato de banner"""
+        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
+            return
+        insights = build_admin_insights_ai(self.db)
+        banners = build_auto_banner_data(insights)
+        if not banners:
+            return
+        for banner in banners:
+            banner["details_sections"] = build_banner_details_sections(
+                insights, banner.get("kind"), max_lines=3
+            )
+        render_auto_banners(
+            self.ids.ai_banner_container,
+            banners,
+            auto_dismiss_seconds=None,
+            show_timer=False,
+        )
+        self.mark_notifications_seen(insights)
+
+  def open_ai_menu(self, caller):
+        """Abre menu AI e marca notificações como vistas"""
+        app = App.get_running_app()
+        insights = build_admin_insights(self.db)
+        key = self._get_alert_key(insights)
+        badge_counts = insights.get("badge_counts") or {}
+        stock_count = badge_counts.get("stock", 0)
+        expiry_count = badge_counts.get("expiry_7", 0) + badge_counts.get("expiry_15", 0)
+        total_count = badge_counts.get("total", 0)
+
+        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
+            stock_count = 0
+            expiry_count = 0
+            total_count = 0
+
+        def _label(base, count):
+            return f"{base} ({count})" if count > 0 else base
+
+        items = [
+            {"text": _label("Insights completos", total_count), "on_release": lambda x="full": self._open_ai_from_menu(x)},
+            {"text": _label("Reposicao de stock", stock_count), "on_release": lambda x="stock": self._open_ai_from_menu(x)},
+            {"text": _label("Avisos de vencimento", expiry_count), "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
+        ]
+        if hasattr(self, "_ai_menu") and self._ai_menu:
+            self._ai_menu.dismiss()
+        self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
+        self._ai_menu.open()
+        self.mark_notifications_seen()
+
+  def _open_ai_from_menu(self, key):
+        if hasattr(self, "_ai_menu") and self._ai_menu:
+            self._ai_menu.dismiss()
+        if key == "stock":
+            self.show_ai_stock_popup()
+        elif key == "expiry":
+            self.show_ai_expiry_popup()
+        else:
+            self.show_ai_insights()
+
+  def show_ai_stock_popup(self, *args, insights=None, on_close=None):
+        """Mostrar apenas banner de stock baixo"""
+        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
+            return
+        insights = insights or build_admin_insights_ai(self.db)
+        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "stock"]
+        if not banners:
+            return
+        for banner in banners:
+            banner["details_sections"] = build_banner_details_sections(
+                insights, banner.get("kind"), max_lines=3
+            )
+        render_auto_banners(
+            self.ids.ai_banner_container,
+            banners,
+            auto_dismiss_seconds=None,
+            show_timer=False,
+        )
+        self.mark_notifications_seen(insights)
+
+  def show_ai_expiry_popup(self, *args, insights=None, on_close=None):
+        """Mostrar apenas banner de vencimentos"""
+        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
+            return
+        insights = insights or build_admin_insights_ai(self.db)
+        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "expiry"]
+        if not banners:
+            return
+        for banner in banners:
+            banner["details_sections"] = build_banner_details_sections(
+                insights, banner.get("kind"), max_lines=3
+            )
+        render_auto_banners(
+            self.ids.ai_banner_container,
+            banners,
+            auto_dismiss_seconds=None,
+            show_timer=False,
+        )
+        self.mark_notifications_seen(insights)
+
+  def show_auto_ai_popups(self, *args):
+        """Mostra banners automaticos (stock e vencimentos)."""
+        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
+            return
+
+        app = App.get_running_app()
+        insights = build_admin_insights_ai(self.db)
+        banners = build_auto_banner_data(insights)
+        key = self._get_alert_key(insights)
+
+        if not banners:
+            if app:
+                app._ai_banners_last_key = key
+            return
+
+        if app:
+            last_key = getattr(app, "_ai_banners_last_key", None)
+            if last_key == key:
+                return
+            app._ai_banners_last_key = key
+
+        container = self.ids.ai_banner_container
+        render_auto_banners(container, banners, auto_dismiss_seconds=10)
+
+  def update_ai_badge(self, *args):
+        """Atualiza o badge do botão de insights com animação de abanar"""
+        insights = build_admin_insights(self.db)
+        key = self._get_alert_key(insights)
+        badge_counts = insights.get("badge_counts") or {}
+        count = badge_counts.get("total", 0)
+
+        if not key:
+            count = 0
+
+        app = App.get_running_app()
+        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
+            count = 0
+
+        self.update_notification_badge(count)
+
+  def _poll_ai_alerts(self, dt):
+        self.update_ai_badge()
+        self.show_auto_ai_popups()
+
+  def _start_ai_polling(self):
+        if self._ai_poll_ev:
+            self._ai_poll_ev.cancel()
+        self._ai_poll_ev = Clock.schedule_interval(self._poll_ai_alerts, 30)
+
+  def _stop_ai_polling(self):
+        if self._ai_poll_ev:
+            self._ai_poll_ev.cancel()
+            self._ai_poll_ev = None
+
+
+ # ------------------------------------------------------------------
+    # Sistema de Notificações e Animação de Abanar
+    # ------------------------------------------------------------------
+  def _init_badge(self, dt):
+        """Inicializa o badge de notificações"""
+        if hasattr(self.ids, 'ai_badge'):
+            self.ids.ai_badge.opacity = 0
+
+  def add_notification(self):
+        """Adiciona uma nova notificação"""
+        self.notification_count += 1
+        self.update_notification_badge(self.notification_count)
+
+  def clear_notifications(self):
+        """Limpa todas as notificações"""
+        self.notification_count = 0
+        self.update_notification_badge(0)
+
+  def update_notification_badge(self, count):
+        """
+        Atualiza o badge e controla a animação de abanar
+        
+        Args:
+            count (int): Número de notificações
+        """
+        self.notification_count = count
+        
+        if not hasattr(self.ids, 'ai_badge') or not hasattr(self.ids, 'ai_badge_label'):
+            return
+        
+        # Atualizar texto
+        self.ids.ai_badge_label.text = str(count)
+        
+        if count > 0:
+            self._show_badge()
+            self._start_swing_animation()
+        else:
+            self._hide_badge()
+            self._stop_swing_animation()
+
+  def _show_badge(self):
+        """Mostra o badge com animação pop"""
+        if not hasattr(self.ids, 'ai_badge'):
+            return
+        
+        # Pop in animation
+        self.ids.ai_badge.size = (dp(0), dp(0))
+        self.ids.ai_badge.opacity = 1
+        
+        anim = Animation(
+            size=(dp(24), dp(24)),
+            duration=0.3,
+            transition='out_back'
+        )
+        anim.start(self.ids.ai_badge)
+
+  def _hide_badge(self):
+        """Esconde o badge com animação"""
+        if not hasattr(self.ids, 'ai_badge'):
+            return
+        
+        anim = Animation(
+            opacity=0,
+            size=(dp(0), dp(0)),
+            duration=0.2
+        )
+        anim.start(self.ids.ai_badge)
+
+  def _start_swing_animation(self):
+        """Inicia animação de abanar/balançar a lâmpada"""
+        if not hasattr(self.ids, 'ai_button'):
+            return
+        
+        self._stop_swing_animation()
+        
+        def swing_cycle(dt):
+            if self.notification_count <= 0:
+                return False
+            
+            # Usar pos_hint para criar efeito de balanço (movimento lateral e vertical)
+            original_pos = {"right": 0.965, "y": 0.04}
+            
+            # Sequência de balanço simulando oscilação
+            swing = (
+                # Balanço para direita-cima
+                Animation(pos_hint={"right": 0.970, "y": 0.045}, duration=0.15, transition='out_sine') +
+                # Balanço para esquerda-baixo
+                Animation(pos_hint={"right": 0.960, "y": 0.035}, duration=0.3, transition='in_out_sine') +
+                # Balanço direita-meio
+                Animation(pos_hint={"right": 0.968, "y": 0.042}, duration=0.25, transition='in_out_sine') +
+                # Balanço esquerda-meio
+                Animation(pos_hint={"right": 0.962, "y": 0.038}, duration=0.25, transition='in_out_sine') +
+                # Balanço direita-pequeno
+                Animation(pos_hint={"right": 0.967, "y": 0.041}, duration=0.2, transition='in_out_sine') +
+                # Balanço esquerda-pequeno
+                Animation(pos_hint={"right": 0.963, "y": 0.039}, duration=0.2, transition='in_out_sine') +
+                # Volta ao centro
+                Animation(pos_hint=original_pos, duration=0.15, transition='out_sine')
+            )
+            swing.start(self.ids.ai_button)
+            return True
+        
+        # Executar balanço a cada 2.5 segundos
+        self.swing_event = Clock.schedule_interval(swing_cycle, 2.5)
+        swing_cycle(0)  # Executar imediatamente
+    
+  def _stop_swing_animation(self):
+        """Para a animação de abanar"""
+        if hasattr(self, 'swing_event') and self.swing_event:
+            self.swing_event.cancel()
+            self.swing_event = None
+        
+        if hasattr(self.ids, 'ai_button'):
+            Animation.cancel_all(self.ids.ai_button)
+            
+            # Retornar à posição original
+            anim = Animation(
+                pos_hint={"right": 0.965, "y": 0.04},
+                duration=0.2,
+                transition='out_sine'
+            )
+            anim.start(self.ids.ai_button)

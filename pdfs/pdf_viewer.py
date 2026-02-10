@@ -19,8 +19,15 @@ from kivy.graphics.texture import Texture
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.clock import Clock
+from kivy.app import App
 from PIL import Image as PILImage
 import io
+
+
+def _theme_color(name, fallback):
+    app = App.get_running_app()
+    tokens = getattr(app, "theme_tokens", {}) if app else {}
+    return tokens.get(name, fallback)
 
 
 class PDFViewer:
@@ -81,7 +88,7 @@ class PDFViewer:
             bold=True,
             halign="left",
             theme_text_color="Custom",
-            text_color=(0.2, 0.2, 0.2, 1),
+            text_color=_theme_color('text_primary', (0.2, 0.2, 0.2, 1)),
             size_hint_y=None,
             height=dp(24),
         ))
@@ -91,7 +98,7 @@ class PDFViewer:
             font_style="Caption",
             halign="left",
             theme_text_color="Custom",
-            text_color=(0.5, 0.5, 0.5, 1),
+            text_color=_theme_color('text_secondary', (0.5, 0.5, 0.5, 1)),
             size_hint_y=None,
             height=dp(18),
             shorten=True,
@@ -118,7 +125,7 @@ class PDFViewer:
                 ),
                 MDRaisedButton(
                     text="Visualizador interno",
-                    md_bg_color=(0.15, 0.52, 0.76, 1),
+                    md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
                     on_release=lambda x: [
                         self._view_internal(pdf_path),
                         self.options_dialog.dismiss(),
@@ -224,7 +231,7 @@ class PDFViewer:
             padding=[0, 0],
             elevation=4,
             radius=[dp(12)],
-            md_bg_color=(1, 1, 1, 1)
+            md_bg_color=_theme_color('card', (1, 1, 1, 1))
         )
 
         header = MDCard(
@@ -235,7 +242,7 @@ class PDFViewer:
             spacing=dp(8),
             radius=[dp(12), dp(12), 0, 0],
             elevation=0,
-            md_bg_color=(0.15, 0.52, 0.76, 1),
+            md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
         )
 
         title = MDLabel(
@@ -245,15 +252,15 @@ class PDFViewer:
             halign="left",
             valign="middle",
             theme_text_color="Custom",
-            text_color=(1, 1, 1, 1),
+            text_color=_theme_color('on_primary', (1, 1, 1, 1)),
         )
         title.bind(size=lambda inst, _: setattr(inst, "text_size", inst.size))
 
         close_btn = MDIconButton(
             icon="close",
             theme_text_color="Custom",
-            text_color=(1, 1, 1, 1),
-            md_bg_color=(1, 1, 1, 0.15),
+            text_color=_theme_color('on_primary', (1, 1, 1, 1)),
+            md_bg_color=_theme_color('card_alt', (1, 1, 1, 0.15)),
             pos_hint={"center_y": 0.5},
             on_release=lambda x: self._close_viewer(viewer_popup),
         )
@@ -308,7 +315,7 @@ class PDFViewer:
             padding=[dp(12), dp(8)],
             elevation=1,
             radius=[dp(8)],
-            md_bg_color=(0.97, 0.97, 0.97, 1),
+            md_bg_color=_theme_color('surface_alt', (0.97, 0.97, 0.97, 1)),
         )
 
         info_box = MDBoxLayout(
@@ -324,7 +331,7 @@ class PDFViewer:
             bold=True,
             halign='left',
             theme_text_color='Custom',
-            text_color=(0.2, 0.2, 0.2, 1),
+            text_color=_theme_color('text_primary', (0.2, 0.2, 0.2, 1)),
             shorten=True,
             shorten_from='right',
         )
@@ -336,7 +343,7 @@ class PDFViewer:
             font_style='Caption',
             halign='left',
             theme_text_color='Custom',
-            text_color=(0.5, 0.5, 0.5, 1),
+            text_color=_theme_color('text_secondary', (0.5, 0.5, 0.5, 1)),
         )
         self.page_label.bind(size=lambda inst, _: setattr(inst, "text_size", inst.size))
         info_box.add_widget(self.page_label)
@@ -383,7 +390,7 @@ class PDFViewer:
             icon=icon_name,
             theme_text_color="Custom",
             text_color=color,
-            md_bg_color=(1, 1, 1, 1),
+            md_bg_color=_theme_color('card', (1, 1, 1, 1)),
         )
         btn.bind(on_release=callback)
         return btn
@@ -625,7 +632,7 @@ class PDFViewer:
             bold=True,
             halign='left',
             theme_text_color='Custom',
-            text_color=(0.9, 0.5, 0.1, 1),
+            text_color=_theme_color('warning', (0.9, 0.5, 0.1, 1)),
             size_hint_y=None,
             height=dp(24),
         )
@@ -637,7 +644,7 @@ class PDFViewer:
             halign='left',
             valign='middle',
             theme_text_color='Custom',
-            text_color=(0.3, 0.3, 0.3, 1),
+            text_color=_theme_color('text_primary', (0.3, 0.3, 0.3, 1)),
             size_hint_y=None,
         )
         message.bind(size=lambda inst, _: setattr(inst, 'text_size', (inst.width, None)))
@@ -657,7 +664,7 @@ class PDFViewer:
                 ),
                 MDRaisedButton(
                     text='Abrir no navegador',
-                    md_bg_color=(0.15, 0.52, 0.76, 1),
+                    md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
                     on_release=lambda x: [
                         self._open_in_browser(pdf_path),
                         self.pymupdf_dialog.dismiss(),

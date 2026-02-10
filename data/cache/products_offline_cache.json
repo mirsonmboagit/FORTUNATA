@@ -1,0 +1,20 @@
+{
+  "6009522301262": {
+    "source": "Agregado",
+    "data": {
+      "barcode": "6009522301262",
+      "name": "Maionese Crosse & Blackwell, 750 g",
+      "price": "195.00",
+      "image": "https://cdn.bazara.co.mz/media/lazyloading/blank.png",
+      "brand": "CROSSE & BLACKWELL",
+      "category": "Mayonnaises",
+      "sold_by_weight": true,
+      "quantity": "750g",
+      "source_chain": [
+        "Bazara",
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-02-09T02:01:39.241959"
+  }
+}

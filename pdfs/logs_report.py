@@ -13,6 +13,30 @@ class LogsReport(BasePDFReport):
     Gera relatorio simples de logs do sistema em PDF.
     """
 
+    ACTION_LABELS = {
+        "LOGIN": "Login realizado",
+        "LOGOUT": "Logout realizado",
+        "CREATE_USER": "Usuário criado",
+        "DELETE_USER": "Usuário removido",
+        "UPDATE_ADMIN": "Dados do admin atualizados",
+        "ADD_PRODUCT": "Produto adicionado",
+        "UPDATE_PRODUCT": "Produto atualizado",
+        "DELETE_PRODUCT": "Produto removido",
+        "SALE": "Venda registrada",
+        "CANCEL_SALE": "Venda cancelada",
+        "SAVE_RECEIPT": "Recibo salvo",
+        "REGISTER_LOSS": "Perda registrada",
+        "APPROVE_LOSS": "Perda aprovada",
+    }
+
+    def _action_to_label(self, action):
+        if not action:
+            return "Ação desconhecida"
+        label = self.ACTION_LABELS.get(action)
+        if label:
+            return label
+        return f"Ação: {action}"
+
     def generate(self, logs, filters):
         pdf_path = self._get_timestamp_filename("relatorio_logs")
         doc = SimpleDocTemplate(
@@ -71,7 +95,7 @@ class LogsReport(BasePDFReport):
                 str(timestamp),
                 str(username),
                 str(role),
-                str(action),
+                self._action_to_label(action),
                 details_text,
             ])
 

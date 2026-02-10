@@ -11,7 +11,7 @@
         MDBoxLayout:
             orientation: 'vertical'
             spacing: 0
-            md_bg_color: 0.96, 0.96, 0.96, 1
+            md_bg_color: app.theme_tokens['surface']
 
             # Cabeçalho Moderno com MDCard
             MDCard:
@@ -20,7 +20,7 @@
                 padding: [dp(25), dp(12), dp(25), dp(12)]
                 spacing: dp(20)
                 elevation: 2
-                md_bg_color: 1, 1, 1, 1
+                md_bg_color: app.theme_tokens['card']
                 radius: [0, 0, 0, 0]
 
                 MDBoxLayout:
@@ -39,7 +39,7 @@
                             bold: True
                             halign: 'left'
                             theme_text_color: 'Custom'
-                            text_color: 0.2, 0.2, 0.2, 1
+                            text_color: app.theme_tokens['text_primary']
                             size_hint_y: None
                             height: dp(30)
 
@@ -48,7 +48,7 @@
                             font_style: 'Caption'
                             halign: 'left'
                             theme_text_color: 'Custom'
-                            text_color: 0.5, 0.5, 0.5, 1
+                            text_color: app.theme_tokens['text_secondary']
                             size_hint_y: None
                             height: dp(20)
 
@@ -64,8 +64,8 @@
                         MDRaisedButton:
                             text: 'Ver PDFs'
                             size_hint_x: 0.45
-                            md_bg_color: 1, 1, 1, 1
-                            text_color: 0.15, 0.52, 0.76, 1
+                            md_bg_color: app.theme_tokens['card']
+                            text_color: app.theme_tokens['primary']
                             elevation: 0
                             line_color: 0.15, 0.52, 0.76, 1
                             line_width: 1.5
@@ -74,8 +74,8 @@
                         MDRaisedButton:
                             text: 'Voltar'
                             size_hint_x: 0.45
-                            md_bg_color: 1, 1, 1, 1
-                            text_color: 0.85, 0.3, 0.3, 1
+                            md_bg_color: app.theme_tokens['card']
+                            text_color: app.theme_tokens['danger']
                             elevation: 0
                             line_color: 0.85, 0.3, 0.3, 1
                             line_width: 1.5
@@ -101,7 +101,7 @@
                         spacing: dp(0)
                         padding: [dp(25), dp(20), dp(25), dp(20)]
                         elevation: 1
-                        md_bg_color: 1, 1, 1, 1
+                        md_bg_color: app.theme_tokens['card']
                         radius: [dp(8)]
 
                         # Título do card
@@ -111,7 +111,7 @@
                             bold: True
                             halign: 'left'
                             theme_text_color: 'Custom'
-                            text_color: 0.25, 0.25, 0.25, 1
+                            text_color: app.theme_tokens['text_primary']
                             size_hint_y: None
                             height: dp(34)
 
@@ -138,7 +138,7 @@
                                     bold: True
                                     halign: 'left'
                                     theme_text_color: 'Custom'
-                                    text_color: 0.35, 0.35, 0.35, 1
+                                    text_color: app.theme_tokens['text_secondary']
                                     size_hint_y: None
                                     height: dp(20)
 
@@ -148,15 +148,15 @@
                                     font_style: 'Body2'
                                     halign: 'left'
                                     theme_text_color: 'Custom'
-                                    text_color: 0.5, 0.5, 0.5, 1
+                                    text_color: app.theme_tokens['text_secondary']
                                     size_hint_y: None
                                     height: dp(25)
 
                             MDRaisedButton:
                                 text: 'Selecionar'
                                 size_hint_x: 0.35
-                                md_bg_color: 0.8, 0.5, 0.15, 1
-                                text_color: 1, 1, 1, 1
+                                md_bg_color: app.theme_tokens['warning']
+                                text_color: app.theme_tokens['on_primary']
                                 elevation: 2
                                 on_release: root.select_date_range()
 
@@ -178,15 +178,15 @@
                                 bold: True
                                 halign: 'left'
                                 theme_text_color: 'Custom'
-                                text_color: 0.35, 0.35, 0.35, 1
+                                text_color: app.theme_tokens['text_secondary']
                                 size_hint_y: None
                                 height: dp(20)
 
                             MDRaisedButton:
                                 id: product_spinner
                                 text: 'Todos os Produtos'
-                                md_bg_color: 0.98, 0.98, 0.98, 1
-                                text_color: 0.25, 0.25, 0.25, 1
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['text_primary']
                                 elevation: 0
                                 on_release: root.open_product_menu(self)
 
@@ -208,15 +208,15 @@
                                 bold: True
                                 halign: 'left'
                                 theme_text_color: 'Custom'
-                                text_color: 0.35, 0.35, 0.35, 1
+                                text_color: app.theme_tokens['text_secondary']
                                 size_hint_y: None
                                 height: dp(20)
 
                             MDRaisedButton:
                                 id: category_spinner
                                 text: 'Todas as Categorias'
-                                md_bg_color: 0.98, 0.98, 0.98, 1
-                                text_color: 0.25, 0.25, 0.25, 1
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['text_primary']
                                 elevation: 0
                                 on_release: root.open_category_menu(self)
 
@@ -231,7 +231,7 @@
                         bold: True
                         halign: 'left'
                         theme_text_color: 'Custom'
-                        text_color: 0.3, 0.3, 0.3, 1
+                        text_color: app.theme_tokens['text_primary']
                         size_hint_y: None
                         height: dp(35)
 
@@ -246,8 +246,8 @@
                         # Relatório de Vendas
                         MDRaisedButton:
                             text: 'Relatório de Vendas'
-                            md_bg_color: 0.15, 0.52, 0.76, 1
-                            text_color: 1, 1, 1, 1
+                            md_bg_color: app.theme_tokens['primary']
+                            text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_sales_report()
@@ -255,8 +255,8 @@
                         # Relatório de Estoque
                         MDRaisedButton:
                             text: 'Relatório de Estoque'
-                            md_bg_color: 0.2, 0.65, 0.33, 1
-                            text_color: 1, 1, 1, 1
+                            md_bg_color: app.theme_tokens['success']
+                            text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_stock_report()
@@ -264,8 +264,8 @@
                         # Relatório de Lucro
                         MDRaisedButton:
                             text: 'Relatório de Lucro'
-                            md_bg_color: 0.8, 0.5, 0.15, 1
-                            text_color: 1, 1, 1, 1
+                            md_bg_color: app.theme_tokens['warning']
+                            text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_profit_report()
@@ -273,8 +273,8 @@
                         # Relatório Completo
                         MDRaisedButton:
                             text: 'Relatório Completo'
-                            md_bg_color: 0.55, 0.27, 0.65, 1
-                            text_color: 1, 1, 1, 1
+                            md_bg_color: app.theme_tokens['info']
+                            text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_complete_report()
@@ -299,7 +299,7 @@
             id: ai_badge
             size_hint: None, None
             size: dp(24), dp(24)
-            md_bg_color: 0.95, 0.26, 0.21, 1
+            md_bg_color: app.theme_tokens['badge']
             radius: [dp(12)]
             elevation: 8
             pos_hint: {"right": 0.978, "y": 0.098}
@@ -311,6 +311,6 @@
                 halign: "center"
                 valign: "middle"
                 theme_text_color: "Custom"
-                text_color: 1, 1, 1, 1
+                text_color: app.theme_tokens['on_primary']
                 font_size: dp(12)
                 bold: True

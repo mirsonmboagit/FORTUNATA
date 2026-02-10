@@ -1,5 +1,6 @@
 import requests
 
+import requests
 
 class OpenFoodFactsAPI:
     BASE_URL = "https://world.openfoodfacts.org/api/v2"
@@ -40,18 +41,53 @@ class OpenFoodFactsAPI:
         name = (
             raw.get("product_name_pt")
             or raw.get("product_name")
+            or raw.get("product_name_en")
+            or raw.get("product_name_fr")
+            or raw.get("product_name_es")
+            or raw.get("product_name_it")
+            or raw.get("product_name_de")
             or raw.get("generic_name")
+            or raw.get("abbreviated_product_name")
             or ""
         )
 
         brand = raw.get("brands", "")
+        if not brand:
+            brand_tags = raw.get("brands_tags") or []
+            if brand_tags:
+                brand = str(brand_tags[0]).replace("-", " ").replace("_", " ").title()
 
-        category = self._extract_category(raw.get("categories_tags", []))
+        category = self._extract_category(raw.get("categories_tags") or raw.get("categories_hierarchy") or [])
+        if not category:
+            categories_text = (
+                raw.get("categories")
+                or raw.get("categories_en")
+                or raw.get("categories_fr")
+                or raw.get("categories_pt")
+                or ""
+            )
+            if categories_text:
+                parts = [p.strip() for p in str(categories_text).split(",") if p.strip()]
+                if parts:
+                    category = parts[-1].title()
+        expiry = raw.get("expiration_date", "") or raw.get("expiration_date_en", "")
 
-        expiry = raw.get("expiration_date", "")
+        quantity_text = raw.get("quantity") or ""
+        if not quantity_text:
+            product_qty = raw.get("product_quantity")
+            product_unit = raw.get("product_quantity_unit") or ""
+            if product_qty:
+                if product_unit:
+                    quantity_text = f"{product_qty} {product_unit}".strip()
+                else:
+                    quantity_text = str(product_qty)
+        if not quantity_text:
+            quantity_text = raw.get("serving_size") or ""
 
-        quantity      = raw.get("quantity", "").lower()
-        sold_by_weight = any(unit in quantity for unit in self.WEIGHT_UNITS)
+        price = raw.get("price") or raw.get("product_price") or ""
+
+        quantity_lower = str(quantity_text).lower() if quantity_text else ""
+        sold_by_weight = any(unit in quantity_lower for unit in self.WEIGHT_UNITS)
 
         return {
             "name":           name,
@@ -59,7 +95,9 @@ class OpenFoodFactsAPI:
             "category":       category,
             "expiry_date":    expiry,
             "sold_by_weight": sold_by_weight,
-            "image":          raw.get("image_url", ""),
+            "quantity":       quantity_text if isinstance(quantity_text, str) else str(quantity_text),
+            "price":          str(price) if price else "",
+            "image":          raw.get("image_url") or raw.get("image_front_url") or raw.get("image_small_url") or "",
         }
 
     @staticmethod

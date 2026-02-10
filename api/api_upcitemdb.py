@@ -59,5 +59,6 @@ class UPCitemdbAPI:
             "brand":          brand,
             "category":       raw.get("category", ""),
             "sold_by_weight": sold_by_weight,
+            "quantity":       size,
             "image":          raw.get("images", [None])[0] if raw.get("images") else None,
         }

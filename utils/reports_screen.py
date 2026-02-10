@@ -1,5 +1,6 @@
 import sys
 import os
+import sys
 
 sys.path.insert(
     0,
@@ -36,9 +37,15 @@ from kivy.animation import Animation
 from kivy.lang import Builder
 from kivy.properties import ObjectProperty
 
+from database.database import Database
 from pdfs.sales_report import SalesReport
 from pdfs.stock_report import StockReport
 from pdfs.profit_report import ProfitReport
+
+def _theme_color(name, fallback):
+    app = App.get_running_app()
+    tokens = getattr(app, "theme_tokens", {}) if app else {}
+    return tokens.get(name, fallback)
 from pdfs.complete_report import CompleteReport
 from pdfs.pdf_viewer import PDFViewer
 
@@ -52,8 +59,10 @@ class DateRangeDialog(MDDialog):
     Permite seleção manual ou via atalhos predefinidos.
     """
     
-    def __init__(self, callback, **kwargs):
+    def __init__(self, callback, database, **kwargs):
+        super().__init__(**kwargs)
         self.callback = callback
+        self.database = database
         
         # Criar conteúdo
         content = self._create_content()
@@ -71,7 +80,7 @@ class DateRangeDialog(MDDialog):
                 ),
                 MDRaisedButton(
                     text="CONFIRMAR PERIODO",
-                    md_bg_color=(0.2, 0.65, 0.33, 1),
+                    md_bg_color=_theme_color('success', (0.2, 0.65, 0.33, 1)),
                     on_release=lambda x: self.confirm()
                 ),
             ],
@@ -96,7 +105,7 @@ class DateRangeDialog(MDDialog):
             font_style='Caption',
             halign='left',
             theme_text_color='Custom',
-            text_color=(0.5, 0.5, 0.5, 1),
+            text_color=_theme_color('text_secondary', (0.5, 0.5, 0.5, 1)),
             size_hint_y=None,
             height=dp(20)
         ))
@@ -125,7 +134,7 @@ class DateRangeDialog(MDDialog):
             bold=True,
             halign='left',
             theme_text_color='Custom',
-            text_color=(0.3, 0.3, 0.3, 1),
+            text_color=_theme_color('text_primary', (0.3, 0.3, 0.3, 1)),
             size_hint_y=None,
             height=dp(25)
         ))
@@ -149,8 +158,8 @@ class DateRangeDialog(MDDialog):
         for label, func in shortcuts:
             btn = MDRaisedButton(
                 text=label,
-                md_bg_color=(0.98, 0.98, 0.98, 1),
-                text_color=(0.8, 0.5, 0.15, 1),
+                md_bg_color=_theme_color('card_alt', (0.98, 0.98, 0.98, 1)),
+                text_color=_theme_color('warning', (0.8, 0.5, 0.15, 1)),
                 elevation=0,
                 size_hint_y=None,
                 height=dp(40),
@@ -222,7 +231,7 @@ class DateRangeDialog(MDDialog):
             buttons=[
                 MDRaisedButton(
                     text="ENTENDI",
-                    md_bg_color=(0.85, 0.3, 0.3, 1),
+                    md_bg_color=_theme_color('danger', (0.85, 0.3, 0.3, 1)),
                     on_release=lambda x: error_dialog.dismiss()
                 ),
             ],
@@ -243,12 +252,14 @@ class ReportsScreen(MDScreen):
     
     def __init__(self, **kwargs):
         super(ReportsScreen, self).__init__(**kwargs)
+        self.db = Database()
         self.notification_count = 0
         self.start_date = None
         self.end_date = None
         self.selected_product = None
         self.selected_category = None
         self.db_path = 'database/inventory.db'
+        self._ai_poll_ev = None
         
         # Menus dropdown do KivyMD
         self.product_menu = None
@@ -275,6 +286,10 @@ class ReportsScreen(MDScreen):
         Clock.schedule_once(self._init_badge, 0.1)
         Clock.schedule_once(self.update_ai_badge, 0.15)
         Clock.schedule_once(self.show_auto_ai_popups, 0.2)
+        self._start_ai_polling()
+
+    def on_leave(self):
+        self._stop_ai_polling()
 
     # ------------------------------------------------------------------
     # Sistema de Notificacoes e Animacao de Abanar
@@ -461,7 +476,7 @@ class ReportsScreen(MDScreen):
     # ----------------------------------------------------------------
     def select_date_range(self):
         """Abre dialog customizado de seleção de período."""
-        self.date_dialog = DateRangeDialog(callback=self.set_date_range)
+        self.date_dialog = DateRangeDialog(database=self.db, callback=self.set_date_range)
         self.date_dialog.open()
     
     def set_date_range(self, start, end):
@@ -487,11 +502,11 @@ class ReportsScreen(MDScreen):
             end_str = self.end_date.strftime("%d/%m/%Y")
             label.text = f"{start_str} ate {end_str}"
             label.theme_text_color = "Custom"
-            label.text_color = (0.2, 0.2, 0.2, 1)
+            label.text_color = _theme_color('text_primary', (0.2, 0.2, 0.2, 1))
         else:
             label.text = "Nenhum periodo selecionado"
             label.theme_text_color = "Custom"
-            label.text_color = (0.5, 0.5, 0.5, 1)
+            label.text_color = _theme_color('text_secondary', (0.5, 0.5, 0.5, 1))
     
     # ----------------------------------------------------------------
     # Atualização de Seleções
@@ -732,14 +747,14 @@ class ReportsScreen(MDScreen):
             font_style='Subtitle1',
             bold=True,
             theme_text_color='Custom',
-            text_color=(0.2, 0.2, 0.2, 1),
+            text_color=_theme_color('text_primary', (0.2, 0.2, 0.2, 1)),
         ))
         header.add_widget(MDLabel(
             text=f"{len(pdf_files)} item(ns)",
             font_style='Caption',
             halign='right',
             theme_text_color='Custom',
-            text_color=(0.5, 0.5, 0.5, 1),
+            text_color=_theme_color('text_secondary', (0.5, 0.5, 0.5, 1)),
         ))
         content.add_widget(header)
         content.add_widget(MDSeparator(height=dp(1)))
@@ -801,14 +816,14 @@ class ReportsScreen(MDScreen):
             padding=[dp(12), dp(10)],
             spacing=dp(12),
             elevation=2,
-            md_bg_color=(0.98, 0.98, 0.98, 1),
+            md_bg_color=_theme_color('card_alt', (0.98, 0.98, 0.98, 1)),
             radius=[dp(8)]
         )
 
         icon_box = MDBoxLayout(
             size_hint=(None, None),
             size=(dp(46), dp(46)),
-            md_bg_color=(0.15, 0.52, 0.76, 0.15),
+            md_bg_color=_theme_color('card_alt', (0.15, 0.52, 0.76, 0.15)),
             radius=[dp(8)],
             pos_hint={"center_y": 0.5}
         )
@@ -819,7 +834,7 @@ class ReportsScreen(MDScreen):
             halign='center',
             valign='middle',
             theme_text_color='Custom',
-            text_color=(0.15, 0.52, 0.76, 1),
+            text_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
         )
         icon_label.bind(size=lambda inst, _: setattr(inst, "text_size", inst.size))
         icon_box.add_widget(icon_label)
@@ -837,7 +852,7 @@ class ReportsScreen(MDScreen):
             font_style='Subtitle1',
             bold=True,
             theme_text_color='Custom',
-            text_color=(0.2, 0.2, 0.2, 1),
+            text_color=_theme_color('text_primary', (0.2, 0.2, 0.2, 1)),
             size_hint_y=None,
             height=dp(25)
         ))
@@ -846,7 +861,7 @@ class ReportsScreen(MDScreen):
             text=subtitle,
             font_style='Caption',
             theme_text_color='Custom',
-            text_color=(0.5, 0.5, 0.5, 1),
+            text_color=_theme_color('text_secondary', (0.5, 0.5, 0.5, 1)),
             size_hint_y=None,
             height=dp(18),
             shorten=True,
@@ -860,7 +875,7 @@ class ReportsScreen(MDScreen):
             text="Visualizar",
             size_hint=(None, None),
             size=(dp(110), dp(34)),
-            md_bg_color=(0.15, 0.52, 0.76, 1),
+            md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
             pos_hint={"center_y": 0.5},
             on_release=lambda x, path=pdf_path: self._view_and_close_dialog(path)
         )
@@ -889,7 +904,7 @@ class ReportsScreen(MDScreen):
             buttons=[
                 MDRaisedButton(
                     text="ENTENDI",
-                    md_bg_color=(0.85, 0.3, 0.3, 1),
+                    md_bg_color=_theme_color('danger', (0.85, 0.3, 0.3, 1)),
                     on_release=lambda x: self.error_dialog.dismiss()
                 ),
             ],
@@ -913,7 +928,7 @@ class ReportsScreen(MDScreen):
                 ),
                 MDRaisedButton(
                     text="VISUALIZAR PDF",
-                    md_bg_color=(0.15, 0.52, 0.76, 1),
+                    md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
                     on_release=lambda x: self._view_pdf_and_close(pdf_path)
                 ),
             ],
@@ -969,15 +984,30 @@ class ReportsScreen(MDScreen):
         self.mark_notifications_seen(insights)
 
     def open_ai_menu(self, caller):
-        if not hasattr(self, "_ai_menu") or not self._ai_menu:
-            items = [
-                {"text": "Insights completos", "on_release": lambda x="full": self._open_ai_from_menu(x)},
-                {"text": "Reposicao de stock", "on_release": lambda x="stock": self._open_ai_from_menu(x)},
-                {"text": "Avisos de vencimento", "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
-            ]
-            self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
-        else:
-            self._ai_menu.caller = caller
+        app = App.get_running_app()
+        insights = build_admin_insights()
+        key = self._get_alert_key(insights)
+        badge_counts = insights.get("badge_counts") or {}
+        stock_count = badge_counts.get("stock", 0)
+        expiry_count = badge_counts.get("expiry_7", 0) + badge_counts.get("expiry_15", 0)
+        total_count = badge_counts.get("total", 0)
+
+        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
+            stock_count = 0
+            expiry_count = 0
+            total_count = 0
+
+        def _label(base, count):
+            return f"{base} ({count})" if count > 0 else base
+
+        items = [
+            {"text": _label("Insights completos", total_count), "on_release": lambda x="full": self._open_ai_from_menu(x)},
+            {"text": _label("Reposicao de stock", stock_count), "on_release": lambda x="stock": self._open_ai_from_menu(x)},
+            {"text": _label("Avisos de vencimento", expiry_count), "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
+        ]
+        if hasattr(self, "_ai_menu") and self._ai_menu:
+            self._ai_menu.dismiss()
+        self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
         self._ai_menu.open()
         self.mark_notifications_seen()
 
@@ -1035,18 +1065,23 @@ class ReportsScreen(MDScreen):
             return
 
         app = App.get_running_app()
-        if getattr(app, "_ai_banners_shown", False):
+        insights = build_admin_insights_ai(self.db)
+        banners = build_auto_banner_data(insights)
+        key = self._get_alert_key(insights)
+
+        if not banners:
+            if app:
+                app._ai_banners_last_key = key
             return
 
-        insights = build_admin_insights_ai()
-        banners = build_auto_banner_data(insights)
-        if not banners:
-            return
+        if app:
+            last_key = getattr(app, "_ai_banners_last_key", None)
+            if last_key == key:
+                return
+            app._ai_banners_last_key = key
 
         container = self.ids.ai_banner_container
         render_auto_banners(container, banners, auto_dismiss_seconds=10)
-        if app:
-            app._ai_banners_shown = True
 
     def update_ai_badge(self, *args):
         """Atualiza o badge do botao de insights com animacao vibrante."""
@@ -1063,6 +1098,20 @@ class ReportsScreen(MDScreen):
             count = 0
 
         self.update_notification_badge(count)
+
+    def _poll_ai_alerts(self, dt):
+        self.update_ai_badge()
+        self.show_auto_ai_popups()
+
+    def _start_ai_polling(self):
+        if self._ai_poll_ev:
+            self._ai_poll_ev.cancel()
+        self._ai_poll_ev = Clock.schedule_interval(self._poll_ai_alerts, 30)
+
+    def _stop_ai_polling(self):
+        if self._ai_poll_ev:
+            self._ai_poll_ev.cancel()
+            self._ai_poll_ev = None
     
     # ----------------------------------------------------------------
     # Navegação

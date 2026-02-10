@@ -1,0 +1,120 @@
+<LossesHistoryScreen>:
+    name: "losses_history"
+    md_bg_color: app.theme_tokens['surface']
+
+    MDBoxLayout:
+        orientation: "vertical"
+
+        MDTopAppBar:
+            title: "Historico de Perdas"
+            md_bg_color: app.theme_tokens['primary']
+            specific_text_color: app.theme_tokens['on_primary']
+            elevation: 4
+            left_action_items: [["arrow-left", lambda x: root.go_back()]]
+            right_action_items: [["file-pdf-box", lambda x: root.export_losses_pdf()], ["refresh", lambda x: root.load_losses_table()]]
+
+        MDBoxLayout:
+            orientation: "vertical"
+            padding: dp(16)
+            spacing: dp(12)
+
+            MDCard:
+                orientation: "vertical"
+                padding: dp(0)
+                spacing: dp(0)
+                elevation: 2
+                radius: [dp(10)]
+                md_bg_color: app.theme_tokens['card']
+                size_hint_y: 1
+
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: dp(44)
+                    padding: [dp(16), 0]
+                    spacing: dp(0)
+                    md_bg_color: app.theme_tokens['primary']
+                    radius: [dp(10), dp(10), 0, 0]
+
+                    MDLabel:
+                        text: "Data"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        bold: True
+                        size_hint_x: 0.16
+                        halign: "left"
+                        font_size: dp(12)
+
+                    MDLabel:
+                        text: "Produto"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        bold: True
+                        size_hint_x: 0.36
+                        halign: "left"
+                        font_size: dp(12)
+
+                    MDLabel:
+                        text: "Tipo"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        bold: True
+                        size_hint_x: 0.14
+                        halign: "center"
+                        font_size: dp(12)
+
+                    MDLabel:
+                        text: "Qtd"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        bold: True
+                        size_hint_x: 0.10
+                        halign: "center"
+                        font_size: dp(12)
+
+                    MDLabel:
+                        text: "Custo"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        bold: True
+                        size_hint_x: 0.12
+                        halign: "right"
+                        font_size: dp(12)
+
+                    MDLabel:
+                        text: "Usuario"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        bold: True
+                        size_hint_x: 0.12
+                        halign: "right"
+                        font_size: dp(12)
+
+                ScrollView:
+                    do_scroll_x: False
+                    bar_width: dp(8)
+                    bar_color: 0.18, 0.28, 0.48, 0.6
+                    bar_inactive_color: 0.18, 0.28, 0.48, 0.2
+
+                    MDBoxLayout:
+                        id: losses_list
+                        orientation: "vertical"
+                        spacing: dp(0)
+                        padding: dp(0)
+                        size_hint_y: None
+                        height: self.minimum_height
+
+                MDBoxLayout:
+                    id: losses_empty
+                    orientation: "vertical"
+                    padding: dp(24)
+                    spacing: dp(8)
+                    size_hint_y: None
+                    height: 0
+                    opacity: 0
+                    disabled: True
+
+                    MDLabel:
+                        text: "Nenhuma perda registrada no periodo"
+                        halign: "center"
+                        theme_text_color: "Hint"
+                        font_style: "Subtitle1"
