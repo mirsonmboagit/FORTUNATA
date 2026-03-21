@@ -1,0 +1,36 @@
+{
+  "6009522301262": {
+    "source": "Open Food Facts",
+    "data": {
+      "name": "THE ORIGINAL TANGY MAYONNAISE",
+      "brand": "CROSSE & BLACKWELL",
+      "category": "Mayonnaises",
+      "expiry_date": "",
+      "sold_by_weight": true,
+      "quantity": "750g",
+      "price": "",
+      "image": "https://images.openfoodfacts.org/images/products/600/952/230/1262/front_en.34.400.jpg",
+      "barcode": "6009522301262"
+    },
+    "timestamp": "2026-02-11T23:00:27.045591"
+  },
+  "6001299026973": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "6001299026973",
+      "name": "Full Cream Milk",
+      "brand": "Clover ULTRA",
+      "category": "Dairy Milk",
+      "sold_by_weight": false,
+      "quantity": "1000ml",
+      "image": "https://images.openfoodfacts.org/images/products/600/129/902/6973/front_en.7.400.jpg",
+      "source_chain": [
+        "Open Food Facts"
+      ],
+      "price": "105.00",
+      "source": "UPCitemdb",
+      "is_new": true
+    },
+    "timestamp": "2026-02-19T23:19:36.759667"
+  }
+}

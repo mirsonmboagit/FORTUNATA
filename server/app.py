@@ -68,14 +68,20 @@ ALLOWLIST = {
     "get_sales_by_date",
     "get_sales_by_date_range",
     "get_all_sales",
+    "get_sale_details",
+    "refund_sale_item",
     "get_loss_records",
     "get_restock_records",
+    "get_stock_movements",
     "get_products_with_barcodes",
     "get_products_for_losses",
     "get_products_for_restock",
+    "get_products_for_stock_control",
     "get_products_for_filter",
     "get_categories",
     "get_report_data",
+    "get_productivity_report_data",
+    "get_admin_home_snapshot",
     "add_product",
     "update_product",
     "get_products_by_weight",
@@ -146,6 +152,11 @@ def rpc():
 
     try:
         with db_lock:
+            try:
+                if hasattr(db, "run_automation_tasks"):
+                    db.run_automation_tasks()
+            except Exception as auto_exc:
+                print(f"[automation] warning: {auto_exc}")
             result = fn(*args, **kwargs)
         return jsonify({"ok": True, "result": _normalize(result)})
     except Exception as exc:

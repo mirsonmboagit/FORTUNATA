@@ -18,16 +18,12 @@ from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.card import MDCard
 from kivymd.uix.list import OneLineListItem, TwoLineListItem
 from kivymd.uix.card import MDSeparator
-from utils.ai_insights import build_admin_insights, build_admin_insights_ai
-from utils.ai_popups import (
-    build_auto_banner_data,
-    build_banner_details_sections,
-    render_auto_banners,
-)
+from AI.controller import ProactiveIntelligenceController
 
 from datetime import datetime, timedelta
+from threading import Thread
+from time import perf_counter
 from kivy.metrics import dp, sp
-import pandas as pd
 from kivy.uix.scrollview import ScrollView
 from kivy.core.window import Window
 from kivy.clock import Clock
@@ -37,16 +33,13 @@ from kivy.lang import Builder
 from kivy.properties import ObjectProperty
 
 from database.provider import get_db
-from pdfs.sales_report import SalesReport
-from pdfs.stock_report import StockReport
-from pdfs.profit_report import ProfitReport
+from utils.expiry_alerts import evaluate_expiry_alert
+from utils.perf_utils import perf_start, perf_log
 
 def _theme_color(name, fallback):
     app = App.get_running_app()
     tokens = getattr(app, "theme_tokens", {}) if app else {}
     return tokens.get(name, fallback)
-from pdfs.complete_report import CompleteReport
-from pdfs.pdf_viewer import PDFViewer
 
 
 Builder.load_file('utils/reports_screen.kv')
@@ -245,23 +238,46 @@ class ReportsScreen(MDScreen):
     """
     
     # ObjectProperties para widgets do .kv
+    FILTERS_CACHE_SECONDS = 60
+    PRODUCTIVITY_CACHE_SECONDS = 15
     date_label = ObjectProperty(None)
     product_spinner = ObjectProperty(None)
     category_spinner = ObjectProperty(None)
     
     def __init__(self, **kwargs):
-        super(ReportsScreen, self).__init__(**kwargs)
-        self.db = get_db()
+        db = kwargs.pop("db", None)
+        self.db = db or get_db()
+        self.back_target = "admin_home"
         self.notification_count = 0
         self.start_date = None
         self.end_date = None
         self.selected_product = None
         self.selected_category = None
         self._ai_poll_ev = None
+        self._filters_loading = False
+        self._filters_loaded = False
+        self._filters_last_loaded_at = 0.0
+        self._filters_load_ev = None
+        self._filters_load_token = 0
+        self._productivity_dashboard = None
+        self._productivity_payload = None
+        self._productivity_error = None
+        self._productivity_loading = False
+        self._productivity_last_loaded_at = 0.0
+        self._productivity_load_token = 0
+        super(ReportsScreen, self).__init__(**kwargs)
+        self._intelligence = ProactiveIntelligenceController(
+            screen=self,
+            db=self.db,
+            history_title="Historico de monitorizacao dos relatorios",
+            auto_present_enabled=False,
+        )
         
         # Menus dropdown do KivyMD
         self.product_menu = None
         self.category_menu = None
+        self._product_menu_signature = ()
+        self._category_menu_signature = ()
         self.products_list = ['Todos os Produtos']
         self.categories_list = ['Todas as Categorias']
         
@@ -271,23 +287,231 @@ class ReportsScreen(MDScreen):
         self.success_dialog = None
         
         # Inicializar geradores de relatório
-        self.sales_report = SalesReport()
-        self.stock_report = StockReport()
-        self.profit_report = ProfitReport()
-        self.complete_report = CompleteReport()
-        self.pdf_viewer = PDFViewer(error_callback=self.show_error_popup)
+        self.sales_report = None
+        self.stock_report = None
+        self.profit_report = None
+        self.complete_report = None
+        self.pdf_viewer = None
+
+    def on_kv_post(self, base_widget):
+        self._ensure_productivity_dashboard()
+        Clock.schedule_once(lambda dt: self._render_productivity_dashboard(), 0)
     
     def on_enter(self):
         """Chamado quando a tela é exibida."""
-        self.load_filters()
+        self._ensure_filters_loaded()
         self._refresh_date_label()
+        self._ensure_productivity_loaded(force=False)
         Clock.schedule_once(self._init_badge, 0.1)
-        Clock.schedule_once(self.update_ai_badge, 0.15)
-        Clock.schedule_once(self.show_auto_ai_popups, 0.2)
-        self._start_ai_polling()
+        Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.15)
 
     def on_leave(self):
         self._stop_ai_polling()
+        self._productivity_load_token += 1
+        self._productivity_loading = False
+
+        if self._filters_load_ev:
+            self._filters_load_ev.cancel()
+            self._filters_load_ev = None
+
+    def _ensure_report_generators(self):
+        if self.sales_report is None:
+            from pdfs.sales_report import SalesReport
+            self.sales_report = SalesReport()
+        if self.stock_report is None:
+            from pdfs.stock_report import StockReport
+            self.stock_report = StockReport()
+        if self.profit_report is None:
+            from pdfs.profit_report import ProfitReport
+            self.profit_report = ProfitReport()
+        if self.complete_report is None:
+            from pdfs.complete_report import CompleteReport
+            self.complete_report = CompleteReport()
+
+    def _ensure_pdf_viewer(self):
+        if self.pdf_viewer is None:
+            from pdfs.pdf_viewer import PDFViewer
+            self.pdf_viewer = PDFViewer(error_callback=self.show_error_popup)
+        return self.pdf_viewer
+
+    def prepare_open_from_admin(self):
+        self._ensure_filters_loaded()
+        self._ensure_productivity_loaded(force=False)
+
+    def _ensure_filters_loaded(self, force=False):
+        if self._filters_loading:
+            return
+        age = perf_counter() - self._filters_last_loaded_at
+        if not force and self._filters_loaded and age < self.FILTERS_CACHE_SECONDS:
+            return
+        if self._filters_load_ev:
+            self._filters_load_ev.cancel()
+        self._filters_load_ev = Clock.schedule_once(lambda dt: self.load_filters(), 0.08)
+
+    def _ensure_productivity_dashboard(self):
+        host = self.ids.get("productivity_dashboard_host") if hasattr(self, "ids") else None
+        if host is None:
+            return None
+        if self._productivity_dashboard and self._productivity_dashboard.parent is host:
+            return self._productivity_dashboard
+        from ui.components.productivity_dashboard import ProductivityDashboard
+        host.clear_widgets()
+        self._productivity_dashboard = ProductivityDashboard()
+        host.add_widget(self._productivity_dashboard)
+        return self._productivity_dashboard
+
+    def _ensure_productivity_loaded(self, force=False):
+        dashboard = self._ensure_productivity_dashboard()
+        if dashboard is None:
+            return
+        if not self.start_date or not self.end_date:
+            self._render_productivity_dashboard()
+            return
+        if self._productivity_loading:
+            return
+        age = perf_counter() - self._productivity_last_loaded_at
+        if not force and self._productivity_payload is not None and age < self.PRODUCTIVITY_CACHE_SECONDS:
+            self._render_productivity_dashboard()
+            return
+        self._load_productivity_async()
+
+    def _load_productivity_async(self):
+        if not self.start_date or not self.end_date or self._productivity_loading:
+            return
+        token = self._productivity_load_token + 1
+        self._productivity_load_token = token
+        self._productivity_loading = True
+        self._productivity_error = None
+        self._render_productivity_dashboard()
+
+        start_dt = self.start_date.strftime("%Y-%m-%d %H:%M:%S")
+        end_dt = self.end_date.strftime("%Y-%m-%d %H:%M:%S")
+
+        def worker():
+            payload = None
+            error = None
+            try:
+                payload = self.db.get_productivity_report_data(start_dt, end_dt) or {}
+            except Exception as exc:
+                error = str(exc)
+            if (payload is None or payload == {}) and error is None:
+                last_error_fn = getattr(self.db, "last_error", None)
+                if callable(last_error_fn):
+                    error = last_error_fn()
+            Clock.schedule_once(
+                lambda dt, data=payload, err=error, tok=token: self._apply_productivity_payload(
+                    data,
+                    error=err,
+                    token=tok,
+                ),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_productivity_payload(self, payload, error=None, token=None):
+        if token is not None and token != self._productivity_load_token:
+            return
+        self._productivity_loading = False
+        self._productivity_last_loaded_at = perf_counter()
+        self._productivity_error = str(error).strip() if error else None
+        self._productivity_payload = payload or {}
+        self._render_productivity_dashboard()
+
+    def _render_productivity_dashboard(self):
+        dashboard = self._ensure_productivity_dashboard()
+        if dashboard is None:
+            return
+        if not self.start_date or not self.end_date:
+            dashboard.show_empty("Selecione um período para visualizar os gráficos de produtividade")
+            return
+        if self._productivity_loading:
+            dashboard.show_loading("A carregar gráficos de produtividade...")
+            return
+        if self._productivity_error:
+            dashboard.show_error("Falha ao carregar produtividade no momento.")
+            return
+
+        payload = self._productivity_payload or {}
+        summary = payload.get("summary") or {}
+        if int(summary.get("total_sales") or 0) <= 0:
+            dashboard.show_no_data("Sem vendas no período selecionado", summary=summary)
+            return
+
+        dashboard.set_payload(payload, self._build_productivity_insights(payload))
+
+    def _build_productivity_insights(self, payload):
+        payload = payload or {}
+        summary = payload.get("summary") or {}
+        daily_series = list(payload.get("daily_series") or [])
+        terminal_series = list(payload.get("terminal_series") or [])
+        insights = []
+
+        if terminal_series:
+            leader = terminal_series[0]
+            insights.append(
+                f"Caixa {leader.get('terminal_id')} liderou o período com "
+                f"{int(leader.get('sales_count') or 0)} vendas e {float(leader.get('revenue') or 0):.2f} MZN."
+            )
+
+        best_day = summary.get("best_day") or {}
+        if best_day:
+            insights.append(
+                f"O pico ocorreu em {datetime.fromisoformat(str(best_day.get('date'))).strftime('%d/%m')} "
+                f"com {int(best_day.get('sales_count') or 0)} vendas e {float(best_day.get('revenue') or 0):.2f} MZN."
+            )
+
+        if len(daily_series) >= 5 and len(insights) < 4:
+            avg_sales = sum(int(item.get("sales_count") or 0) for item in daily_series) / max(len(daily_series), 1)
+            worst_day = min(
+                daily_series,
+                key=lambda item: (
+                    int(item.get("sales_count") or 0),
+                    float(item.get("revenue") or 0.0),
+                    str(item.get("date") or ""),
+                ),
+            )
+            if avg_sales > 0 and int(worst_day.get("sales_count") or 0) < (avg_sales * 0.65):
+                insights.append(
+                    f"Houve quebra relevante em {datetime.fromisoformat(str(worst_day.get('date'))).strftime('%d/%m')}, "
+                    f"abaixo do ritmo médio do período."
+                )
+
+        avg_discount = float(summary.get("avg_discount_percent") or 0.0)
+        if len(insights) < 4:
+            for item in terminal_series:
+                sales_count = int(item.get("sales_count") or 0)
+                discount_percent = float(item.get("discount_percent") or 0.0)
+                if sales_count < 5:
+                    continue
+                if (avg_discount > 0 and discount_percent > (avg_discount * 1.25)) or (
+                    avg_discount <= 0 and discount_percent >= 5.0
+                ):
+                    insights.append(
+                        f"Caixa {item.get('terminal_id')} aplicou desconto médio acima do padrão do período."
+                    )
+                    break
+
+        avg_margin = summary.get("avg_margin_percent")
+        if len(insights) < 4 and avg_margin is not None:
+            comparable = [item for item in terminal_series if item.get("margin_percent") is not None]
+            if len(comparable) >= 2:
+                weakest = min(
+                    comparable,
+                    key=lambda item: (
+                        float(item.get("margin_percent") or 0.0),
+                        -int(item.get("sales_count") or 0),
+                    ),
+                )
+                if float(weakest.get("margin_percent") or 0.0) <= (float(avg_margin) - 5.0):
+                    insights.append(
+                        f"Caixa {weakest.get('terminal_id')} fechou com margem abaixo da média do período."
+                    )
+
+        if len(insights) <= 2:
+            insights.append("Operação estável no período, sem desvios fortes entre os caixas.")
+
+        return insights[:4]
 
     # ------------------------------------------------------------------
     # Sistema de Notificacoes e Animacao de Abanar
@@ -394,35 +618,72 @@ class ReportsScreen(MDScreen):
             anim.start(self.ids.ai_button)
     
     def load_filters(self):
-        """Carrega op??es de filtros do banco de dados."""
-        try:
-            products = self.db.get_products_for_filter()
-            self.products_list = ['Todos os Produtos'] + [f"{prod[0]} - {prod[1]}" for prod in products]
+        """Carrega opções de filtros do banco de dados."""
+        self._filters_load_ev = None
+        if self._filters_loading:
+            return
+        started_at = perf_start()
+        token = self._filters_load_token + 1
+        self._filters_load_token = token
+        self._filters_loading = True
 
-            categories = self.db.get_categories()
-            self.categories_list = ['Todas as Categorias'] + categories
-        except Exception as e:
-            print(f"Erro ao carregar filtros: {e}")
+        def worker():
+            products = []
+            categories = []
+            error = None
+            try:
+                products = self.db.get_products_for_filter() or []
+                categories = self.db.get_categories() or []
+            except Exception as exc:
+                error = exc
+
+            Clock.schedule_once(
+                lambda dt, prods=products, cats=categories, err=error, tok=token, started=started_at: self._apply_loaded_filters(
+                    prods,
+                    cats,
+                    err,
+                    tok,
+                    started,
+                ),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_loaded_filters(self, products, categories, error, token, started_at):
+        if token != self._filters_load_token:
+            return
+        try:
+            if error:
+                print(f"Erro ao carregar filtros: {error}")
+                return
+
+            new_products = ['Todos os Produtos'] + [f"{prod[0]} - {prod[1]}" for prod in (products or [])]
+            new_categories = ['Todas as Categorias'] + list(categories or [])
+            if new_products != self.products_list:
+                self.products_list = new_products
+                self._invalidate_product_menu()
+            if new_categories != self.categories_list:
+                self.categories_list = new_categories
+                self._invalidate_category_menu()
+            self._filters_loaded = True
+            self._filters_last_loaded_at = perf_counter()
+            perf_log(
+                "reports.load_filters",
+                started_at,
+                f"products={len(self.products_list)} categories={len(self.categories_list)}",
+            )
+        finally:
+            self._filters_loading = False
     
     # ----------------------------------------------------------------
     # Dropdown Menus para Produto e Categoria
     # ----------------------------------------------------------------
     def open_product_menu(self, item):
         """Abrir menu dropdown de produtos."""
-        menu_items = [
-            {
-                "text": product,
-                "viewclass": "OneLineListItem",
-                "on_release": lambda x=product: self.select_product(x),
-            } for product in self.products_list
-        ]
-        
-        self.product_menu = MDDropdownMenu(
-            caller=item,
-            items=menu_items,
-            width_mult=4,
-            max_height=dp(300),
-        )
+        self._ensure_product_menu(item)
+        if self.product_menu is None:
+            return
         self.product_menu.open()
     
     def select_product(self, product_name):
@@ -434,21 +695,66 @@ class ReportsScreen(MDScreen):
     
     def open_category_menu(self, item):
         """Abrir menu dropdown de categorias."""
+        self._ensure_category_menu(item)
+        if self.category_menu is None:
+            return
+        self.category_menu.open()
+
+    def _invalidate_product_menu(self):
+        if self.product_menu:
+            self.product_menu.dismiss()
+            self.product_menu = None
+        self._product_menu_signature = ()
+
+    def _invalidate_category_menu(self):
+        if self.category_menu:
+            self.category_menu.dismiss()
+            self.category_menu = None
+        self._category_menu_signature = ()
+
+    def _ensure_product_menu(self, caller):
+        signature = tuple(self.products_list or [])
+        if self.product_menu is not None and self._product_menu_signature == signature:
+            self.product_menu.caller = caller
+            return
+        self._invalidate_product_menu()
+        self._product_menu_signature = signature
+        menu_items = [
+            {
+                "text": product,
+                "viewclass": "OneLineListItem",
+                "on_release": lambda x=product: self.select_product(x),
+            }
+            for product in self.products_list
+        ]
+        self.product_menu = MDDropdownMenu(
+            caller=caller,
+            items=menu_items,
+            width_mult=4,
+            max_height=dp(300),
+        )
+
+    def _ensure_category_menu(self, caller):
+        signature = tuple(self.categories_list or [])
+        if self.category_menu is not None and self._category_menu_signature == signature:
+            self.category_menu.caller = caller
+            return
+        self._invalidate_category_menu()
+        self._category_menu_signature = signature
         menu_items = [
             {
                 "text": category,
                 "viewclass": "OneLineListItem",
                 "on_release": lambda x=category: self.select_category(x),
-            } for category in self.categories_list
+            }
+            for category in self.categories_list
         ]
-        
         self.category_menu = MDDropdownMenu(
-            caller=item,
+            caller=caller,
             items=menu_items,
             width_mult=4,
             max_height=dp(300),
         )
-        self.category_menu.open()
     
     def select_category(self, category_name):
         """Selecionar categoria do menu."""
@@ -470,6 +776,7 @@ class ReportsScreen(MDScreen):
         self.start_date = start
         self.end_date = end
         self._refresh_date_label()
+        self._ensure_productivity_loaded(force=True)
 
     def _refresh_date_label(self, *args):
         """Atualiza o texto do período selecionado na UI."""
@@ -525,7 +832,7 @@ class ReportsScreen(MDScreen):
         return True
     
     def get_filtered_data(self):
-        """Obt?m dados filtrados do banco de dados."""
+        """Obtém dados filtrados do banco de dados."""
         start_dt = self.start_date.strftime("%Y-%m-%d %H:%M:%S")
         end_dt = self.end_date.strftime("%Y-%m-%d %H:%M:%S")
         try:
@@ -544,7 +851,7 @@ class ReportsScreen(MDScreen):
 
             df['sold_stock'] = df['sold_in_period']
 
-            # Calcular m?tricas usando vendas do per?odo
+            # Calcular métricas usando vendas do período
             df['entrada'] = df['existing_stock'] + df['sold_stock']
             df['saida'] = df['sold_stock']
             df['remanescente'] = df['existing_stock']
@@ -554,8 +861,16 @@ class ReportsScreen(MDScreen):
                 (df['lucro_unitario'] / df['unit_purchase_price']) * 100
             ).fillna(0)
             df['valor_total_vendas'] = df['total_sales']
+            expiry_values = df['expiry_date'] if 'expiry_date' in df.columns else [None] * len(df)
+            expiry_alerts = [evaluate_expiry_alert(value) for value in expiry_values]
+            df['expiry_alert_level'] = [item['level'] for item in expiry_alerts]
+            df['expiry_alert_label'] = [item['label'] for item in expiry_alerts]
+            df['expiry_alert_short'] = [item['short_label'] for item in expiry_alerts]
+            df['expiry_days_left'] = [item['days_left'] for item in expiry_alerts]
+            df['expiry_alert_color'] = [item['color_hex'] for item in expiry_alerts]
+            df['expiry_has_alert'] = [bool(item['is_alert']) for item in expiry_alerts]
 
-            # Se n?o h? vendas no per?odo, retorna vazio
+            # Se não há vendas no período, retorna vazio
             if df['sold_stock'].sum() == 0:
                 return None
 
@@ -595,6 +910,7 @@ class ReportsScreen(MDScreen):
             return
         
         try:
+            self._ensure_report_generators()
             pdf_path = self.sales_report.generate(df, self._get_filters_dict())
             self.show_success_popup(pdf_path)
         except Exception as e:
@@ -612,6 +928,7 @@ class ReportsScreen(MDScreen):
             return
         
         try:
+            self._ensure_report_generators()
             pdf_path = self.stock_report.generate(df, self._get_filters_dict())
             self.show_success_popup(pdf_path)
         except Exception as e:
@@ -629,6 +946,7 @@ class ReportsScreen(MDScreen):
             return
         
         try:
+            self._ensure_report_generators()
             pdf_path = self.profit_report.generate(df, self._get_filters_dict())
             self.show_success_popup(pdf_path)
         except Exception as e:
@@ -646,6 +964,7 @@ class ReportsScreen(MDScreen):
             return
         
         try:
+            self._ensure_report_generators()
             pdf_path = self.complete_report.generate(df, self._get_filters_dict())
             self.show_success_popup(pdf_path)
         except Exception as e:
@@ -681,7 +1000,7 @@ class ReportsScreen(MDScreen):
 
         # Abre o popup do PDFViewer com o arquivo mais recente
         latest_pdf = pdf_files[0]
-        self.pdf_viewer.view_pdf(latest_pdf)
+        self._ensure_pdf_viewer().view_pdf(latest_pdf)
     
     def _create_pdf_list_dialog(self, pdf_files):
         """Cria dialog com lista de PDFs usando KivyMD."""
@@ -844,7 +1163,7 @@ class ReportsScreen(MDScreen):
         """Visualiza PDF e fecha dialog."""
         if hasattr(self, 'pdf_dialog'):
             self.pdf_dialog.dismiss()
-        self.pdf_viewer.view_pdf(pdf_path)
+        self._ensure_pdf_viewer().view_pdf(pdf_path)
     
     # ----------------------------------------------------------------
     # Dialogs de Erro e Sucesso usando KivyMD
@@ -895,183 +1214,42 @@ class ReportsScreen(MDScreen):
         """Visualiza PDF e fecha dialog de sucesso."""
         if self.success_dialog:
             self.success_dialog.dismiss()
-        self.pdf_viewer.view_pdf(pdf_path)
-
-    def _get_alert_key(self, insights):
-        low_stock = sorted([item[0] for item in insights.get("low_stock", [])])
-        exp7 = sorted([item[0] for item in insights.get("expiring_7", [])])
-        exp15 = sorted([item[0] for item in insights.get("expiring_15", [])])
-
-        parts = []
-        if low_stock:
-            parts.append("ls:" + ",".join(low_stock))
-        if exp7:
-            parts.append("e7:" + ",".join(exp7))
-        if exp15:
-            parts.append("e15:" + ",".join(exp15))
-        return "|".join(parts)
-
-    def mark_notifications_seen(self, insights=None):
-        insights = insights or build_admin_insights()
-        key = self._get_alert_key(insights)
-        app = App.get_running_app()
-        if app:
-            app._ai_notifications_seen_key = key
-        self.update_notification_badge(0)
+        self._ensure_pdf_viewer().view_pdf(pdf_path)
 
     def show_ai_insights(self, *args):
-        """Abrir notificacoes em formato de banner"""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = build_admin_insights_ai()
-        banners = build_auto_banner_data(insights)
-        if not banners:
-            return
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self.open_ai_menu()
 
-    def open_ai_menu(self, caller):
-        app = App.get_running_app()
-        insights = build_admin_insights()
-        key = self._get_alert_key(insights)
-        badge_counts = insights.get("badge_counts") or {}
-        stock_count = badge_counts.get("stock", 0)
-        expiry_count = badge_counts.get("expiry_7", 0) + badge_counts.get("expiry_15", 0)
-        total_count = badge_counts.get("total", 0)
-
-        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
-            stock_count = 0
-            expiry_count = 0
-            total_count = 0
-
-        def _label(base, count):
-            return f"{base} ({count})" if count > 0 else base
-
-        items = [
-            {"text": _label("Insights completos", total_count), "on_release": lambda x="full": self._open_ai_from_menu(x)},
-            {"text": _label("Reposicao de stock", stock_count), "on_release": lambda x="stock": self._open_ai_from_menu(x)},
-            {"text": _label("Avisos de vencimento", expiry_count), "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
-        ]
-        if hasattr(self, "_ai_menu") and self._ai_menu:
-            self._ai_menu.dismiss()
-        self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
-        self._ai_menu.open()
-        self.mark_notifications_seen()
+    def open_ai_menu(self, caller=None):
+        self._intelligence.open_history()
 
     def _open_ai_from_menu(self, key):
-        if hasattr(self, "_ai_menu") and self._ai_menu:
-            self._ai_menu.dismiss()
-        if key == "stock":
-            self.show_ai_stock_popup()
-        elif key == "expiry":
-            self.show_ai_expiry_popup()
-        else:
-            self.show_ai_insights()
+        self._intelligence.open_history()
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = insights or build_admin_insights_ai()
-        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "stock"]
-        if not banners:
-            return
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self._intelligence.refresh()
 
     def show_ai_expiry_popup(self, *args, insights=None, on_close=None):
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = insights or build_admin_insights_ai()
-        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "expiry"]
-        if not banners:
-            return
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self._intelligence.refresh()
 
     def show_auto_ai_popups(self, *args):
-        """Mostra banners automaticos (stock e vencimentos)."""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-
-        app = App.get_running_app()
-        insights = build_admin_insights_ai(self.db)
-        banners = build_auto_banner_data(insights)
-        key = self._get_alert_key(insights)
-
-        if not banners:
-            if app:
-                app._ai_banners_last_key = key
-            return
-
-        if app:
-            last_key = getattr(app, "_ai_banners_last_key", None)
-            if last_key == key:
-                return
-            app._ai_banners_last_key = key
-
-        container = self.ids.ai_banner_container
-        render_auto_banners(container, banners, auto_dismiss_seconds=10)
+        self._intelligence.refresh()
 
     def update_ai_badge(self, *args):
-        """Atualiza o badge do botao de insights com animacao vibrante."""
-        insights = build_admin_insights()
-        key = self._get_alert_key(insights)
-        badge_counts = insights.get("badge_counts") or {}
-        count = badge_counts.get("total", 0)
-
-        if not key:
-            count = 0
-
-        app = App.get_running_app()
-        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
-            count = 0
-
-        self.update_notification_badge(count)
+        self.update_notification_badge(0)
 
     def _poll_ai_alerts(self, dt):
-        self.update_ai_badge()
-        self.show_auto_ai_popups()
+        self._intelligence.refresh()
 
     def _start_ai_polling(self):
-        if self._ai_poll_ev:
-            self._ai_poll_ev.cancel()
-        self._ai_poll_ev = Clock.schedule_interval(self._poll_ai_alerts, 30)
+        self._intelligence.start()
 
     def _stop_ai_polling(self):
-        if self._ai_poll_ev:
-            self._ai_poll_ev.cancel()
-            self._ai_poll_ev = None
+        self._intelligence.stop()
     
     # ----------------------------------------------------------------
     # Navegação
     # ----------------------------------------------------------------
     def go_back(self):
         """Volta para a tela anterior."""
-        self.manager.current = 'admin'
+        target = self.back_target if getattr(self, "back_target", None) in getattr(self.manager, "screen_names", []) else "admin"
+        self.manager.current = target

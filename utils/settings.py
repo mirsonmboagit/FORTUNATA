@@ -2,6 +2,7 @@ import sqlite3
 import os
 import json
 from datetime import datetime
+from threading import Thread
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.dialog import MDDialog
@@ -10,7 +11,6 @@ from kivymd.uix.textfield import MDTextField
 from kivymd.uix.label import MDLabel
 from kivymd.uix.card import MDCard
 from kivymd.uix.list import TwoLineListItem, OneLineListItem
-from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.selectioncontrol import MDCheckbox, MDSwitch
 from kivy.metrics import dp
 from kivy.clock import Clock
@@ -18,15 +18,19 @@ from kivy.core.window import Window
 from kivy.app import App
 from kivy.animation import Animation
 from database.provider import get_db
-from pdfs.logs_report import LogsReport
+from AI.controller import ProactiveIntelligenceController
 from kivy.lang import Builder
-from utils.ai_insights import build_admin_insights, build_admin_insights_ai
-from utils.ai_popups import (
-    build_auto_banner_data,
-    build_banner_details_sections,
-    render_auto_banners,
-)
 from utils.security_questions import QUESTIONS
+
+
+def _get_logs_report_class():
+    from pdfs.logs_report import LogsReport
+    return LogsReport
+
+
+def _get_api_manager_class():
+    from api.api_manager import APIManager
+    return APIManager
 
 
 Builder.load_string('''
@@ -68,7 +72,7 @@ Builder.load_string('''
                 MDRectangleFlatButton:
                     text: 'Voltar'
                     icon: 'arrow-left'
-                    on_press: root.manager.current = 'admin'
+                    on_press: root.go_back()
                     size_hint: None, None
                     size: dp(130), dp(48)
                     pos_hint: {'center_y': 0.5}
@@ -285,6 +289,204 @@ Builder.load_string('''
                         spacing: dp(10)
                         size_hint_y: None
                         height: dp(120)
+                        md_bg_color: 0.15, 0.55, 0.7, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.prefill_ranxo_cache()
+
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+
+                                MDIcon:
+                                    icon: 'database'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+
+                            MDLabel:
+                                text: 'Pre-carregar cache Ranxo'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.2, 0.55, 0.45, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.prefill_bazara_cache()
+
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+
+                                MDIcon:
+                                    icon: 'database'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+
+                            MDLabel:
+                                text: 'Pre-carregar cache Bazara'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.7, 0.35, 0.2, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.reset_bazara_cache()
+
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+
+                                MDIcon:
+                                    icon: 'refresh'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+
+                            MDLabel:
+                                text: 'Reset cache Bazara'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.4, 0.5, 0.8, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.backfill_bazara_barcodes()
+
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+
+                                MDIcon:
+                                    icon: 'barcode'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+
+                            MDLabel:
+                                text: 'Backfill codigos de barras Bazara'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.2, 0.45, 0.7, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.prefill_upcitemdb_cache()
+
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+
+                                MDIcon:
+                                    icon: 'database'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+
+                            MDLabel:
+                                text: 'Atualizar cache UPCitemdb'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.2, 0.5, 0.6, 1
+                        radius: [15]
+                        ripple_behavior: True
+                        on_press: root.refresh_cache_from_apis()
+
+                        MDBoxLayout:
+                            orientation: 'vertical'
+                            spacing: dp(8)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(40)
+
+                                MDIcon:
+                                    icon: 'cloud-sync'
+                                    font_size: dp(32)
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+                                    halign: 'center'
+
+                            MDLabel:
+                                text: 'Atualizar cache (APIs)'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
                         md_bg_color: 0.25, 0.45, 0.3, 1
                         radius: [15]
                         ripple_behavior: True
@@ -303,7 +505,7 @@ Builder.load_string('''
                                 halign: 'center'
 
                             MDLabel:
-                                text: 'IA (Gemini)'
+                                text: 'Monitor Inteligente'
                                 font_style: 'H6'
                                 theme_text_color: 'Custom'
                                 text_color: app.theme_tokens['on_primary']
@@ -313,7 +515,7 @@ Builder.load_string('''
                             spacing: dp(10)
 
                             MDLabel:
-                                text: 'Ativar insights automáticos'
+                                text: 'Ativar banners inteligentes'
                                 theme_text_color: 'Custom'
                                 text_color: app.theme_tokens['on_primary']
                                 font_style: 'Body2'
@@ -321,7 +523,53 @@ Builder.load_string('''
                             Widget:
 
                             MDSwitch:
-                                id: ai_toggle
+                                id: smart_monitor_toggle
+                                active: True
+                                on_active: root.toggle_smart_monitor(self.active)
+
+                    MDCard:
+                        orientation: 'vertical'
+                        padding: dp(20)
+                        spacing: dp(10)
+                        size_hint_y: None
+                        height: dp(120)
+                        md_bg_color: 0.22, 0.40, 0.62, 1
+                        radius: [15]
+                        ripple_behavior: True
+
+                        MDBoxLayout:
+                            orientation: 'horizontal'
+                            spacing: dp(10)
+                            size_hint_y: None
+                            height: dp(40)
+
+                            MDIcon:
+                                icon: 'api'
+                                font_size: dp(32)
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                halign: 'center'
+
+                            MDLabel:
+                                text: 'Gemini / API'
+                                font_style: 'H6'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+
+                        MDBoxLayout:
+                            orientation: 'horizontal'
+                            spacing: dp(10)
+
+                            MDLabel:
+                                text: 'Ativar analise externa opcional'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['on_primary']
+                                font_style: 'Body2'
+
+                            Widget:
+
+                            MDSwitch:
+                                id: api_ai_toggle
                                 active: True
                                 on_active: root.toggle_ai(self.active)
 
@@ -404,7 +652,7 @@ Builder.load_string('''
                                 halign: 'center'
         MDFloatingActionButton:
             id: ai_button
-            icon: 'icon/idea.ico'
+            icon: 'assets/icon/idea.ico'
             elevation: 6
             pos_hint: {'right': 0.965, 'y': 0.04}
             on_release: root.open_ai_menu(self)
@@ -440,8 +688,16 @@ Builder.load_string('''
 class ChangeAdminDataDialog:
     def __init__(self):
         self.dialog = None
-        
+
     def show(self):
+        app = App.get_running_app()
+        session_user = (getattr(app, 'current_user', None) or '').strip() if app else ''
+        session_role = (getattr(app, 'current_role', None) or '').strip() if app else ''
+
+        if session_role and session_role != 'admin':
+            self.show_message('Erro', 'Apenas administrador pode alterar estes dados')
+            return
+
         if not self.dialog:
             content = MDBoxLayout(
                 orientation='vertical',
@@ -449,30 +705,30 @@ class ChangeAdminDataDialog:
                 padding=dp(20),
                 adaptive_height=True
             )
-            
+
             content.add_widget(MDLabel(
                 text='Atualize suas credenciais de acesso',
                 theme_text_color='Secondary',
                 size_hint_y=None,
                 height=dp(30)
             ))
-            
+
             self.current_username = MDTextField(
-                hint_text='Usuário Atual',
+                hint_text='Usuario Atual',
                 mode='rectangle',
                 size_hint_y=None,
                 height=dp(56)
             )
             content.add_widget(self.current_username)
-            
+
             self.new_username = MDTextField(
-                hint_text='Novo Usuário (opcional)',
+                hint_text='Novo Usuario (opcional)',
                 mode='rectangle',
                 size_hint_y=None,
                 height=dp(56)
             )
             content.add_widget(self.new_username)
-            
+
             self.current_password = MDTextField(
                 hint_text='Senha Atual',
                 password=True,
@@ -481,7 +737,7 @@ class ChangeAdminDataDialog:
                 height=dp(56)
             )
             content.add_widget(self.current_password)
-            
+
             self.new_password = MDTextField(
                 hint_text='Nova Senha (opcional)',
                 password=True,
@@ -490,7 +746,7 @@ class ChangeAdminDataDialog:
                 height=dp(56)
             )
             content.add_widget(self.new_password)
-            
+
             self.confirm_password = MDTextField(
                 hint_text='Confirmar Nova Senha',
                 password=True,
@@ -499,7 +755,7 @@ class ChangeAdminDataDialog:
                 height=dp(56)
             )
             content.add_widget(self.confirm_password)
-            
+
             self.dialog = MDDialog(
                 title='Alterar Dados do Administrador',
                 type='custom',
@@ -515,32 +771,54 @@ class ChangeAdminDataDialog:
                     )
                 ]
             )
-        
+
+        # Abre sempre com o usuario logado e campos sensiveis limpos.
+        self.current_username.text = session_user
+        self.current_username.readonly = bool(session_user)
+        self.new_username.text = ''
+        self.current_password.text = ''
+        self.new_password.text = ''
+        self.confirm_password.text = ''
+
         self.dialog.open()
-    
+
     def dismiss(self, *args):
         self.dialog.dismiss()
-    
+
     def save_changes(self, *args):
-        current_username = self.current_username.text.strip()
+        app = App.get_running_app()
+        session_user = (getattr(app, 'current_user', None) or '').strip() if app else ''
+
+        current_username = session_user or self.current_username.text.strip()
         new_username = self.new_username.text.strip()
         current_password = self.current_password.text.strip()
         new_password = self.new_password.text.strip()
         confirm_password = self.confirm_password.text.strip()
-        
+
         if not current_username or not current_password:
-            self.show_message('Erro', 'Preencha usuário e senha atuais')
+            self.show_message('Erro', 'Preencha usuario e senha atuais')
             return
-        
+
+        if new_username and new_username == current_username:
+            new_username = ''
+
+        if confirm_password and not new_password:
+            self.show_message('Erro', 'Informe a nova senha para confirmar')
+            return
+
         if new_password and new_password != confirm_password:
-            self.show_message('Erro', 'As senhas não coincidem')
+            self.show_message('Erro', 'As senhas nao coincidem')
             return
-        
+
+        if not new_username and not new_password:
+            self.show_message('Erro', 'Nenhuma alteracao solicitada')
+            return
+
         try:
             with get_db() as db:
-                admin_data = db.get_user(current_username)
-                if not admin_data or admin_data[3] != 'admin':
-                    self.show_message('Erro', 'Usu?rio n?o encontrado ou n?o ? administrador')
+                current_role = db.get_user_role(current_username)
+                if current_role != 'admin':
+                    self.show_message('Erro', 'Usuario nao encontrado ou nao e administrador')
                     return
 
                 role = db.validate_user(current_username, current_password)
@@ -548,12 +826,8 @@ class ChangeAdminDataDialog:
                     self.show_message('Erro', 'Senha atual incorreta')
                     return
 
-                if not new_username and not new_password:
-                    self.show_message('Erro', 'Nenhuma altera??o solicitada')
-                    return
-
                 if new_username and db.user_exists(new_username, exclude_username=current_username):
-                    self.show_message('Erro', 'Este nome de usu?rio j? est? em uso')
+                    self.show_message('Erro', 'Este nome de usuario ja esta em uso')
                     return
 
                 if not db.update_admin_profile(
@@ -561,30 +835,40 @@ class ChangeAdminDataDialog:
                     new_username=new_username or None,
                     new_password=new_password or None,
                 ):
-                    self.show_message('Erro', 'N?o foi poss?vel atualizar os dados')
+                    self.show_message('Erro', 'Nao foi possivel atualizar os dados')
                     return
 
+                updated_username = new_username if new_username else current_username
+
                 db.log_action(
-                    new_username if new_username else current_username,
+                    updated_username,
                     'admin',
                     'UPDATE_ADMIN',
-                    f'Dados do admin atualizados'
+                    'Dados do admin atualizados'
                 )
+
+                if app:
+                    app.current_user = updated_username
+                    app.current_role = 'admin'
+                    app._ai_notifications_seen_key = None
+                    app._ai_banners_shown = False
 
                 self.show_message('Sucesso', 'Dados atualizados com sucesso!')
                 self.dialog.dismiss()
-                
+
         except sqlite3.IntegrityError:
-            self.show_message('Erro', 'Nome de usuário já existe')
+            self.show_message('Erro', 'Nome de usuario ja existe')
         except Exception as e:
             self.show_message('Erro', f'Erro ao atualizar: {str(e)}')
-    
+
     def show_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
-        ).open()
+            buttons=[MDFlatButton(text='OK')]
+        )
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.open()
 
 
 class AddUserDialog:
@@ -609,7 +893,7 @@ class AddUserDialog:
             ))
             
             self.username = MDTextField(
-                hint_text='Nome de Usu??rio',
+                hint_text='Nome de Usuário',
                 mode='rectangle',
                 size_hint_y=None,
                 height=dp(56)
@@ -641,7 +925,7 @@ class AddUserDialog:
             )
 
             role_box.add_widget(MDLabel(
-                text='Fun????o:',
+                text='Função:',
                 size_hint_x=0.3
             ))
 
@@ -706,24 +990,24 @@ class AddUserDialog:
             return
         
         if self.db.user_exists(username):
-            self.show_message('Erro', 'Nome de usu?rio j? existe')
+            self.show_message('Erro', 'Nome de usuário já existe')
             return
 
         email_value = email if email else None
 
         try:
             if not self.db.create_user(username, password, self.selected_role, email=email_value):
-                self.show_message('Erro', 'N?o foi poss?vel criar o usu?rio')
+                self.show_message('Erro', 'Não foi possível criar o usuário')
                 return
 
             self.db.log_action(
                 username,
                 self.selected_role,
                 'CREATE_USER',
-                f'Novo usu?rio criado: {username} ({self.selected_role})'
+                f'Novo usuário criado: {username} ({self.selected_role})'
             )
 
-            self.show_message('Sucesso', f'Usu?rio "{username}" criado com sucesso!')
+            self.show_message('Sucesso', f'Usuário "{username}" criado com sucesso!')
             self.dialog.dismiss()
 
         except Exception as e:
@@ -951,10 +1235,10 @@ class DeleteManagerDialog:
                     'admin',
                     'admin',
                     'DELETE_USER',
-                    f'Gerente exclu?do: {self.selected_manager}'
+                    f'Gerente excluído: {self.selected_manager}'
                 )
 
-                self.show_message('Sucesso', f'Gerente "{self.selected_manager}" exclu?do!')
+                self.show_message('Sucesso', f'Gerente "{self.selected_manager}" excluído!')
                 self.dialog.dismiss()
         
         except Exception as e:
@@ -1256,7 +1540,7 @@ class SystemLogsDialog:
                 "action": self.action_filter.text.strip(),
                 "role": "manager" if self.manager_only.active else "todos",
             }
-            pdf_path = LogsReport().generate(logs, filters)
+            pdf_path = _get_logs_report_class()().generate(logs, filters)
             self._show_simple_dialog("PDF Gerado", f"Arquivo criado em:\\n{pdf_path}")
         except Exception as e:
             self._show_simple_dialog("Erro", f"Falha ao gerar PDF: {e}")
@@ -1413,37 +1697,63 @@ class AdminSettingsScreen(MDScreen):
     def __init__(self, app, **kwargs):
         super().__init__(**kwargs)
         self.app = app
+        self.db = getattr(app, "db", None) or get_db()
+        self.back_target = "admin_home"
         self.name = 'settings'
         self.notification_count = 0
         self._ai_poll_ev = None
-        self._ai_toggle_ready = False
+        self._intelligence = ProactiveIntelligenceController(
+            screen=self,
+            db=self.db,
+            history_title="Historico de monitorizacao",
+            auto_present_enabled=False,
+        )
+        self._api_toggle_ready = False
+        self._smart_monitor_toggle_ready = False
         self._theme_toggle_ready = False
         self._security_questions_dialog = None
+        self._change_admin_data_dialog = None
+        self._ranxo_prefill_dialog = None
+        self._ranxo_prefill_running = False
+        self._bazara_prefill_reset = False
+        self._bazara_backfill_mode = False
 
     def on_kv_post(self, base_widget):
-        self._ai_toggle_ready = False
+        self._api_toggle_ready = False
+        self._smart_monitor_toggle_ready = False
         self._theme_toggle_ready = False
         app = App.get_running_app()
-        enabled = bool(getattr(app, "ai_enabled", True)) if app else True
-        if "ai_toggle" in self.ids:
-            self.ids.ai_toggle.active = enabled
+        enabled = bool(getattr(app, "smart_monitor_enabled", True)) if app else True
+        api_enabled = bool(getattr(app, "ai_enabled", True)) if app else True
+        if "smart_monitor_toggle" in self.ids:
+            self.ids.smart_monitor_toggle.active = enabled
+        if "api_ai_toggle" in self.ids:
+            self.ids.api_ai_toggle.active = api_enabled
         if "theme_toggle" in self.ids:
             is_dark = bool(app and getattr(app.theme_cls, "theme_style", "Light") == "Dark")
             self.ids.theme_toggle.active = is_dark
-        Clock.schedule_once(self._enable_ai_toggle, 0)
+        Clock.schedule_once(self._enable_api_toggle, 0)
+        Clock.schedule_once(self._enable_smart_monitor_toggle, 0)
         Clock.schedule_once(self._enable_theme_toggle, 0)
 
     def on_enter(self):
         Clock.schedule_once(self._init_badge, 0.1)
-        Clock.schedule_once(self.update_ai_badge, 0.15)
-        Clock.schedule_once(self.show_auto_ai_popups, 0.2)
-        self._start_ai_polling()
+        Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.15)
 
     def on_leave(self):
         self._stop_ai_polling()
 
-    def _enable_ai_toggle(self, dt):
-        self._ai_toggle_ready = True
+    def go_back(self):
+        if not self.manager:
+            return
+        target = self.back_target if getattr(self, "back_target", None) in self.manager.screen_names else "admin_home"
+        self.manager.current = target
+
+    def _enable_api_toggle(self, dt):
+        self._api_toggle_ready = True
+
+    def _enable_smart_monitor_toggle(self, dt):
+        self._smart_monitor_toggle_ready = True
     
     def _enable_theme_toggle(self, dt):
         self._theme_toggle_ready = True
@@ -1453,7 +1763,7 @@ class AdminSettingsScreen(MDScreen):
         base_dir = getattr(app, "base_dir", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
         return os.path.join(base_dir, "app_settings.json")
 
-    def _save_app_settings_fallback(self, ai_enabled=None, theme_style=None):
+    def _save_app_settings_fallback(self, ai_enabled=None, smart_monitor_enabled=None, theme_style=None):
         try:
             settings_path = self._settings_path()
             data = {}
@@ -1465,6 +1775,8 @@ class AdminSettingsScreen(MDScreen):
                     data = {}
             if ai_enabled is not None:
                 data["ai_enabled"] = bool(ai_enabled)
+            if smart_monitor_enabled is not None:
+                data["smart_monitor_enabled"] = bool(smart_monitor_enabled)
             if theme_style:
                 data["theme_style"] = theme_style
             with open(self._settings_path(), "w", encoding="utf-8") as f:
@@ -1472,8 +1784,26 @@ class AdminSettingsScreen(MDScreen):
         except Exception:
             pass
 
+    def toggle_smart_monitor(self, enabled):
+        if not getattr(self, "_smart_monitor_toggle_ready", True):
+            return
+        app = App.get_running_app()
+        if app:
+            app.smart_monitor_enabled = bool(enabled)
+            if hasattr(app, "save_app_settings"):
+                app.save_app_settings()
+            else:
+                self._save_app_settings_fallback(
+                    ai_enabled=getattr(app, "ai_enabled", None),
+                    smart_monitor_enabled=app.smart_monitor_enabled,
+                    theme_style=getattr(app, "theme_style", None),
+                )
+        else:
+            self._save_app_settings_fallback(smart_monitor_enabled=enabled)
+        self._intelligence.set_enabled(bool(enabled))
+
     def toggle_ai(self, enabled):
-        if not getattr(self, "_ai_toggle_ready", True):
+        if not getattr(self, "_api_toggle_ready", True):
             return
         app = App.get_running_app()
         if app:
@@ -1481,7 +1811,11 @@ class AdminSettingsScreen(MDScreen):
             if hasattr(app, "save_app_settings"):
                 app.save_app_settings()
             else:
-                self._save_app_settings_fallback(app.ai_enabled, getattr(app, "theme_style", None))
+                self._save_app_settings_fallback(
+                    ai_enabled=app.ai_enabled,
+                    smart_monitor_enabled=getattr(app, "smart_monitor_enabled", None),
+                    theme_style=getattr(app, "theme_style", None),
+                )
         else:
             self._save_app_settings_fallback(ai_enabled=enabled)
 
@@ -1498,9 +1832,435 @@ class AdminSettingsScreen(MDScreen):
                 app.theme_style = style
                 app.save_app_settings()
             else:
-                self._save_app_settings_fallback(getattr(app, "ai_enabled", None), style)
+                self._save_app_settings_fallback(
+                    ai_enabled=getattr(app, "ai_enabled", None),
+                    smart_monitor_enabled=getattr(app, "smart_monitor_enabled", None),
+                    theme_style=style,
+                )
         else:
             self._save_app_settings_fallback(theme_style=style)
+
+    # ------------------------------------------------------------------
+    # Prefill Ranxo cache
+    # ------------------------------------------------------------------
+    def prefill_ranxo_cache(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Prefill Ranxo em andamento.")
+            return
+
+        dialog = MDDialog(
+            title="Pre-carregar cache Ranxo",
+            text="Isto pode demorar alguns minutos e usar internet. Continuar?",
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_ranxo_prefill(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _confirm_ranxo_prefill(self, dialog):
+        dialog.dismiss()
+        self._start_ranxo_prefill()
+
+    def _start_ranxo_prefill(self):
+        if self._ranxo_prefill_running:
+            return
+        self._ranxo_prefill_running = True
+        self._ranxo_prefill_dialog = MDDialog(
+            title="Pre-carregar cache Ranxo",
+            text="Preparando...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_ranxo_prefill, daemon=True).start()
+
+    def _dismiss_ranxo_prefill(self, *args):
+        if self._ranxo_prefill_running:
+            return
+        if self._ranxo_prefill_dialog:
+            self._ranxo_prefill_dialog.dismiss()
+            self._ranxo_prefill_dialog = None
+
+    def _run_ranxo_prefill(self):
+        db = getattr(self.app, "db", None) or get_db()
+        manager = _get_api_manager_class()(
+            database=db,
+            on_success=lambda *args, **kwargs: None,
+            on_failure=lambda *args, **kwargs: None,
+            on_status=None,
+        )
+
+        def on_progress(stats):
+            Clock.schedule_once(lambda dt, s=stats: self._update_ranxo_progress(s), 0)
+
+        stats = manager.prefill_ranxo_cache(on_progress=on_progress, delay=0.2)
+        Clock.schedule_once(lambda dt, s=stats: self._finish_ranxo_prefill(s), 0)
+
+    def _update_ranxo_progress(self, stats: dict):
+        if not self._ranxo_prefill_dialog:
+            return
+        message = stats.get("message")
+        lines = []
+        if message:
+            lines.append(message)
+        lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
+        lines.append(f"Sucessos: {stats.get('success', 0)}")
+        lines.append(f"Sem codigo de barras: {stats.get('no_sku', 0)}")
+        lines.append(f"Erros: {stats.get('errors', 0)}")
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    def _finish_ranxo_prefill(self, stats: dict):
+        self._ranxo_prefill_running = False
+        if not self._ranxo_prefill_dialog:
+            return
+        lines = [
+            "Prefill concluido.",
+            f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
+            f"Sucessos: {stats.get('success', 0)}",
+            f"Sem codigo de barras: {stats.get('no_sku', 0)}",
+            f"Erros: {stats.get('errors', 0)}",
+        ]
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Prefill Bazara cache (GraphQL)
+    # ------------------------------------------------------------------
+    def prefill_bazara_cache(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Tarefa em andamento.")
+            return
+
+        dialog = MDDialog(
+            title="Pre-carregar cache Bazara",
+            text="Vai buscar todos os produtos via GraphQL e abrir cada pagina para obter o codigo de barras. Continuar?",
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_bazara_prefill(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _confirm_bazara_prefill(self, dialog):
+        dialog.dismiss()
+        self._start_bazara_prefill(reset=False)
+
+    def backfill_bazara_barcodes(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Tarefa em andamento.")
+            return
+
+        dialog = MDDialog(
+            title="Backfill codigos de barras Bazara",
+            text="Vai buscar codigos de barras para itens ja no cache. Continuar?",
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_bazara_backfill(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _confirm_bazara_backfill(self, dialog):
+        dialog.dismiss()
+        self._start_bazara_backfill()
+
+    def reset_bazara_cache(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Tarefa em andamento.")
+            return
+
+        dialog = MDDialog(
+            title="Reset cache Bazara",
+            text="Vai apagar o cache Bazara e recriar do zero via GraphQL. Continuar?",
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_reset_bazara(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _confirm_reset_bazara(self, dialog):
+        dialog.dismiss()
+        self._start_bazara_prefill(reset=True)
+
+    def _start_bazara_prefill(self, reset: bool):
+        if self._ranxo_prefill_running:
+            return
+        self._ranxo_prefill_running = True
+        self._bazara_prefill_reset = bool(reset)
+        self._bazara_backfill_mode = False
+        title = "Reset cache Bazara" if self._bazara_prefill_reset else "Pre-carregar cache Bazara"
+        self._ranxo_prefill_dialog = MDDialog(
+            title=title,
+            text="Preparando...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_bazara_prefill, daemon=True).start()
+
+    def _start_bazara_backfill(self):
+        if self._ranxo_prefill_running:
+            return
+        self._ranxo_prefill_running = True
+        self._bazara_prefill_reset = False
+        self._bazara_backfill_mode = True
+        self._ranxo_prefill_dialog = MDDialog(
+            title="Backfill codigos de barras Bazara",
+            text="Preparando...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_bazara_backfill, daemon=True).start()
+
+    def _run_bazara_prefill(self):
+        db = getattr(self.app, "db", None) or get_db()
+        manager = _get_api_manager_class()(
+            database=db,
+            on_success=lambda *args, **kwargs: None,
+            on_failure=lambda *args, **kwargs: None,
+            on_status=None,
+        )
+
+        def on_progress(stats):
+            Clock.schedule_once(lambda dt, s=stats: self._update_bazara_progress(s), 0)
+
+        stats = manager.prefill_bazara_offline_cache(
+            on_progress=on_progress,
+            delay=0.2,
+            reset=self._bazara_prefill_reset,
+        )
+        Clock.schedule_once(lambda dt, s=stats: self._finish_bazara_prefill(s), 0)
+
+    def _run_bazara_backfill(self):
+        db = getattr(self.app, "db", None) or get_db()
+        manager = _get_api_manager_class()(
+            database=db,
+            on_success=lambda *args, **kwargs: None,
+            on_failure=lambda *args, **kwargs: None,
+            on_status=None,
+        )
+
+        def on_progress(stats):
+            Clock.schedule_once(lambda dt, s=stats: self._update_bazara_backfill_progress(s), 0)
+
+        stats = manager.backfill_bazara_barcodes(on_progress=on_progress, delay=0.2)
+        Clock.schedule_once(lambda dt, s=stats: self._finish_bazara_backfill(s), 0)
+
+    def _update_bazara_progress(self, stats: dict):
+        if not self._ranxo_prefill_dialog:
+            return
+        message = stats.get("message")
+        lines = []
+        if message:
+            lines.append(message)
+        lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
+        lines.append(f"Sucessos: {stats.get('success', 0)}")
+        lines.append(f"Novos: {stats.get('new', 0)}")
+        lines.append(f"Sem SKU: {stats.get('no_sku', 0)}")
+        lines.append(f"Erros: {stats.get('errors', 0)}")
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    def _update_bazara_backfill_progress(self, stats: dict):
+        if not self._ranxo_prefill_dialog:
+            return
+        message = stats.get("message")
+        lines = []
+        if message:
+            lines.append(message)
+        lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
+        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Movidos: {stats.get('moved', 0)}")
+        lines.append(f"Sem codigo de barras: {stats.get('no_barcode', 0)}")
+        lines.append(f"Erros: {stats.get('errors', 0)}")
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    def _finish_bazara_prefill(self, stats: dict):
+        self._ranxo_prefill_running = False
+        self._bazara_prefill_reset = False
+        self._bazara_backfill_mode = False
+        if not self._ranxo_prefill_dialog:
+            return
+        lines = [
+            "Prefill concluido.",
+            f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
+            f"Sucessos: {stats.get('success', 0)}",
+            f"Novos: {stats.get('new', 0)}",
+            f"Sem SKU: {stats.get('no_sku', 0)}",
+            f"Erros: {stats.get('errors', 0)}",
+        ]
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    def _finish_bazara_backfill(self, stats: dict):
+        self._ranxo_prefill_running = False
+        self._bazara_backfill_mode = False
+        if not self._ranxo_prefill_dialog:
+            return
+        lines = [
+            "Backfill concluido.",
+            f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
+            f"Atualizados: {stats.get('updated', 0)}",
+            f"Movidos: {stats.get('moved', 0)}",
+            f"Sem codigo de barras: {stats.get('no_barcode', 0)}",
+            f"Erros: {stats.get('errors', 0)}",
+        ]
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Atualizar cache via UPCitemdb
+    # ------------------------------------------------------------------
+    def prefill_upcitemdb_cache(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Tarefa em andamento.")
+            return
+
+        dialog = MDDialog(
+            title="Atualizar cache UPCitemdb",
+            text="Vai usar os barcodes do cache atual e consultar UPCitemdb. Continuar?",
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_upcitemdb_prefill(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _confirm_upcitemdb_prefill(self, dialog):
+        dialog.dismiss()
+        self._start_upcitemdb_prefill()
+
+    def _start_upcitemdb_prefill(self):
+        if self._ranxo_prefill_running:
+            return
+        self._ranxo_prefill_running = True
+        self._ranxo_prefill_dialog = MDDialog(
+            title="Atualizar cache UPCitemdb",
+            text="Preparando...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_upcitemdb_prefill, daemon=True).start()
+
+    def _run_upcitemdb_prefill(self):
+        db = getattr(self.app, "db", None) or get_db()
+        manager = _get_api_manager_class()(
+            database=db,
+            on_success=lambda *args, **kwargs: None,
+            on_failure=lambda *args, **kwargs: None,
+            on_status=None,
+        )
+
+        def on_progress(stats):
+            Clock.schedule_once(lambda dt, s=stats: self._update_upcitemdb_progress(s), 0)
+
+        stats = manager.refresh_offline_cache_from_apis(
+            source_names=["UPCitemdb"],
+            on_progress=on_progress,
+            delay=0.2,
+        )
+        Clock.schedule_once(lambda dt, s=stats: self._finish_upcitemdb_prefill(s), 0)
+
+    def _update_upcitemdb_progress(self, stats: dict):
+        if not self._ranxo_prefill_dialog:
+            return
+        message = stats.get("message")
+        lines = []
+        if message:
+            lines.append(message)
+        lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
+        lines.append(f"Encontrados: {stats.get('found', 0)}")
+        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Erros: {stats.get('errors', 0)}")
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    def _finish_upcitemdb_prefill(self, stats: dict):
+        self._ranxo_prefill_running = False
+        if not self._ranxo_prefill_dialog:
+            return
+        lines = [
+            "Atualizacao concluida.",
+            f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
+            f"Encontrados: {stats.get('found', 0)}",
+            f"Atualizados: {stats.get('updated', 0)}",
+            f"Erros: {stats.get('errors', 0)}",
+        ]
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Atualizar cache via APIs (UPCitemdb/Ranxo/Open Food Facts)
+    # ------------------------------------------------------------------
+    def refresh_cache_from_apis(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Outra tarefa em andamento.")
+            return
+
+        dialog = MDDialog(
+            title="Atualizar cache via APIs",
+            text="Vai usar os barcodes do cache atual e consultar UPCitemdb, Ranxo e Open Food Facts. Continuar?",
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
+                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_refresh_cache(dialog)),
+            ],
+        )
+        dialog.open()
+
+    def _confirm_refresh_cache(self, dialog):
+        dialog.dismiss()
+        self._start_refresh_cache()
+
+    def _start_refresh_cache(self):
+        if self._ranxo_prefill_running:
+            return
+        self._ranxo_prefill_running = True
+        self._ranxo_prefill_dialog = MDDialog(
+            title="Atualizar cache via APIs",
+            text="Preparando...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_refresh_cache, daemon=True).start()
+
+    def _run_refresh_cache(self):
+        db = getattr(self.app, "db", None) or get_db()
+        manager = _get_api_manager_class()(
+            database=db,
+            on_success=lambda *args, **kwargs: None,
+            on_failure=lambda *args, **kwargs: None,
+            on_status=None,
+        )
+
+        def on_progress(stats):
+            Clock.schedule_once(lambda dt, s=stats: self._update_refresh_progress(s), 0)
+
+        stats = manager.refresh_offline_cache_from_apis(
+            source_names=["UPCitemdb", "Ranxo", "Open Food Facts"],
+            on_progress=on_progress,
+            delay=0.2,
+        )
+        Clock.schedule_once(lambda dt, s=stats: self._finish_refresh_cache(s), 0)
+
+    def _update_refresh_progress(self, stats: dict):
+        if not self._ranxo_prefill_dialog:
+            return
+        message = stats.get("message")
+        lines = []
+        if message:
+            lines.append(message)
+        lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
+        lines.append(f"Encontrados: {stats.get('found', 0)}")
+        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Erros: {stats.get('errors', 0)}")
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
+
+    def _finish_refresh_cache(self, stats: dict):
+        self._ranxo_prefill_running = False
+        if not self._ranxo_prefill_dialog:
+            return
+        lines = [
+            "Atualizacao concluida.",
+            f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
+            f"Encontrados: {stats.get('found', 0)}",
+            f"Atualizados: {stats.get('updated', 0)}",
+            f"Erros: {stats.get('errors', 0)}",
+        ]
+        self._ranxo_prefill_dialog.text = "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Sistema de Notificacoes e Animacao de Abanar
@@ -1618,7 +2378,9 @@ class AdminSettingsScreen(MDScreen):
         DeleteManagerDialog().show()
     
     def change_admin_data(self):
-        ChangeAdminDataDialog().show()
+        if not self._change_admin_data_dialog:
+            self._change_admin_data_dialog = ChangeAdminDataDialog()
+        self._change_admin_data_dialog.show()
     
     def change_screen_size(self):
         ScreenSizeDialog(self.app).show()
@@ -1626,174 +2388,36 @@ class AdminSettingsScreen(MDScreen):
     def view_system_logs(self):
         SystemLogsDialog().show()
 
-    def _get_alert_key(self, insights):
-        low_stock = sorted([item[0] for item in insights.get("low_stock", [])])
-        exp7 = sorted([item[0] for item in insights.get("expiring_7", [])])
-        exp15 = sorted([item[0] for item in insights.get("expiring_15", [])])
-
-        parts = []
-        if low_stock:
-            parts.append("ls:" + ",".join(low_stock))
-        if exp7:
-            parts.append("e7:" + ",".join(exp7))
-        if exp15:
-            parts.append("e15:" + ",".join(exp15))
-        return "|".join(parts)
-
-    def mark_notifications_seen(self, insights=None):
-        insights = insights or build_admin_insights()
-        key = self._get_alert_key(insights)
-        app = App.get_running_app()
-        if app:
-            app._ai_notifications_seen_key = key
-        self.update_notification_badge(0)
-
     def show_ai_insights(self, *args):
-        """Abrir notificacoes em formato de banner"""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = build_admin_insights_ai()
-        banners = build_auto_banner_data(insights)
-        if not banners:
-            return
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self.open_ai_menu()
 
-    def open_ai_menu(self, caller):
-        app = App.get_running_app()
-        insights = build_admin_insights()
-        key = self._get_alert_key(insights)
-        badge_counts = insights.get("badge_counts") or {}
-        stock_count = badge_counts.get("stock", 0)
-        expiry_count = badge_counts.get("expiry_7", 0) + badge_counts.get("expiry_15", 0)
-        total_count = badge_counts.get("total", 0)
-
-        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
-            stock_count = 0
-            expiry_count = 0
-            total_count = 0
-
-        def _label(base, count):
-            return f"{base} ({count})" if count > 0 else base
-
-        items = [
-            {"text": _label("Insights completos", total_count), "on_release": lambda x="full": self._open_ai_from_menu(x)},
-            {"text": _label("Reposicao de stock", stock_count), "on_release": lambda x="stock": self._open_ai_from_menu(x)},
-            {"text": _label("Avisos de vencimento", expiry_count), "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
-        ]
-        if hasattr(self, "_ai_menu") and self._ai_menu:
-            self._ai_menu.dismiss()
-        self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
-        self._ai_menu.open()
-        self.mark_notifications_seen()
+    def open_ai_menu(self, caller=None):
+        self._intelligence.open_history()
 
     def _open_ai_from_menu(self, key):
-        if hasattr(self, "_ai_menu") and self._ai_menu:
-            self._ai_menu.dismiss()
-        if key == "stock":
-            self.show_ai_stock_popup()
-        elif key == "expiry":
-            self.show_ai_expiry_popup()
-        else:
-            self.show_ai_insights()
+        self._intelligence.open_history()
+
+    def open_ai_assistant(self, *args):
+        self._intelligence.open_history()
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = insights or build_admin_insights_ai()
-        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "stock"]
-        if not banners:
-            return
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self._intelligence.refresh()
 
     def show_ai_expiry_popup(self, *args, insights=None, on_close=None):
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = insights or build_admin_insights_ai()
-        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "expiry"]
-        if not banners:
-            return
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self._intelligence.refresh()
 
     def show_auto_ai_popups(self, *args):
-        """Mostra banners automaticos (stock e vencimentos)."""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-
-        app = App.get_running_app()
-        insights = build_admin_insights_ai()
-        banners = build_auto_banner_data(insights)
-        key = self._get_alert_key(insights)
-
-        if not banners:
-            if app:
-                app._ai_banners_last_key = key
-            return
-
-        if app:
-            last_key = getattr(app, "_ai_banners_last_key", None)
-            if last_key == key:
-                return
-            app._ai_banners_last_key = key
-
-        container = self.ids.ai_banner_container
-        render_auto_banners(container, banners, auto_dismiss_seconds=10)
+        self._intelligence.refresh()
 
     def update_ai_badge(self, *args):
-        """Atualiza o badge do botao de insights com animacao vibrante."""
-        insights = build_admin_insights()
-        key = self._get_alert_key(insights)
-        badge_counts = insights.get("badge_counts") or {}
-        count = badge_counts.get("total", 0)
-
-        if not key:
-            count = 0
-
-        app = App.get_running_app()
-        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
-            count = 0
-
-        self.update_notification_badge(count)
+        self.update_notification_badge(0)
 
     def _poll_ai_alerts(self, dt):
-        self.update_ai_badge()
-        self.show_auto_ai_popups()
+        self._intelligence.refresh()
 
     def _start_ai_polling(self):
-        if self._ai_poll_ev:
-            self._ai_poll_ev.cancel()
-        self._ai_poll_ev = Clock.schedule_interval(self._poll_ai_alerts, 30)
+        self._intelligence.start()
 
     def _stop_ai_polling(self):
-        if self._ai_poll_ev:
-            self._ai_poll_ev.cancel()
-            self._ai_poll_ev = None
+        self._intelligence.stop()
+

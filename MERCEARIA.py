@@ -2,26 +2,22 @@ import os
 import sys
 import os
 import json
+from utils.logging_setup import configure_runtime_logging
+
+configure_runtime_logging()
 
 from kivymd.app import MDApp
 
 from kivy.uix.screenmanager import ScreenManager
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.properties import DictProperty
 
 from kivy.core.text import LabelBase
 from database.provider import get_db
-from admin.admin_screen import AdminScreen
-from manager.manager_screen import SalesScreen
-from user.login import LoginScreen
-from utils.reports_screen import ReportsScreen
-from utils.sales_history_screen import SalesHistoryScreen
-from utils.losses_screen import LossesScreen
-from utils.losses_history_screen import LossesHistoryScreen
-from utils.restock_screen import RestockScreen
-from utils.restock_history_screen import RestockHistoryScreen
-from utils.settings import AdminSettingsScreen
+from user.login import AdminLoginScreen, ManagerLoginScreen
+from user.profile_selector import ProfileSelectorScreen
 from kivy.config import Config
 from utils.theme import get_theme_tokens
 
@@ -91,10 +87,6 @@ Window.minimum_width  = dp(1000)
 Window.minimum_height = dp(580)
 
 
-db = get_db()
-db.setup()
-
-
 class MainApp(MDApp):
     theme_tokens = DictProperty({})
 
@@ -102,13 +94,18 @@ class MainApp(MDApp):
         super().__init__(**kwargs)
         self.current_user = None
         self.current_role = None
-        self.db = db
+        self.db = get_db()
+        self._screen_manager = None
+        self._screen_factories = {}
+        self._screen_warmup_ev = None
+        self._screen_warmup_queue = []
         self._ai_notifications_seen_key = None
         self._ai_banners_shown = False
         self._ai_banners_last_key = None
         self.base_dir = BASE_DIR
         self._app_settings_path = os.path.join(self.base_dir, "app_settings.json")
         self.ai_enabled = True
+        self.smart_monitor_enabled = True
         self.theme_style = "Light"
         self._load_app_settings()
         self.apply_theme(self.theme_style, persist=False)
@@ -145,11 +142,13 @@ class MainApp(MDApp):
                 with open(self._app_settings_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self.ai_enabled = bool(data.get("ai_enabled", True))
+                self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
                 theme_style = data.get("theme_style", self.theme_style)
                 if theme_style in ("Light", "Dark"):
                     self.theme_style = theme_style
         except Exception:
             self.ai_enabled = True
+            self.smart_monitor_enabled = True
             self.theme_style = "Light"
 
     def apply_theme(self, style, persist=True):
@@ -164,6 +163,7 @@ class MainApp(MDApp):
         try:
             data = {
                 "ai_enabled": bool(self.ai_enabled),
+                "smart_monitor_enabled": bool(self.smart_monitor_enabled),
                 "theme_style": self.theme_style,
             }
             with open(self._app_settings_path, "w", encoding="utf-8") as f:
@@ -176,19 +176,134 @@ class MainApp(MDApp):
         self.icon = 'icon/icon4.ico'
 
         sm = ScreenManager()
-        sm.add_widget(SalesScreen(name='manager'))
-        sm.add_widget(AdminScreen(name='admin'))
-        sm.add_widget(LoginScreen(name='login'))
-        sm.add_widget(AdminSettingsScreen(app=self, name='settings'))
-        sm.add_widget(ReportsScreen(name='reports'))
-        sm.add_widget(SalesHistoryScreen(db=self.db, name='sales_history'))
-        sm.add_widget(LossesScreen(db=self.db, name='losses'))
-        sm.add_widget(RestockScreen(db=self.db, name='restock'))
-        sm.add_widget(LossesHistoryScreen(db=self.db, name='losses_history'))
-        sm.add_widget(RestockHistoryScreen(db=self.db, name='restock_history'))
-       
-
+        self._screen_manager = sm
+        sm.add_widget(ProfileSelectorScreen(name='login'))
+        sm.add_widget(AdminLoginScreen(
+            db=self.db,
+            name='login_admin',
+            back_screen='login',
+            success_screen='admin_home',
+        ))
+        sm.add_widget(ManagerLoginScreen(
+            db=self.db,
+            name='login_manager',
+            back_screen='login',
+            success_screen='manager',
+        ))
+        self._screen_factories = {
+            'admin_home': self._build_admin_home_screen,
+            'manager': self._build_manager_screen,
+            'admin': self._build_admin_screen,
+            'settings': self._build_settings_screen,
+            'reports': self._build_reports_screen,
+            'sales_history': self._build_sales_history_screen,
+            'losses': self._build_losses_screen,
+            'restock': self._build_restock_screen,
+            'losses_history': self._build_losses_history_screen,
+            'restock_history': self._build_restock_history_screen,
+        }
+        sm.current = 'login'
         return sm
+
+    def on_stop(self):
+        if self._screen_warmup_ev:
+            self._screen_warmup_ev.cancel()
+            self._screen_warmup_ev = None
+
+    def ensure_screen(self, name):
+        manager = self._screen_manager or self.root
+        if manager is None:
+            return None
+        if name in manager.screen_names:
+            return manager.get_screen(name)
+        factory = self._screen_factories.get(name)
+        if factory is None:
+            return None
+        screen = factory()
+        if screen is None:
+            return None
+        manager.add_widget(screen)
+        return screen
+
+    def warmup_screens(self, screen_names, delay=0.14):
+        manager = self._screen_manager or self.root
+        if manager is None:
+            return False
+
+        known = set(getattr(manager, "screen_names", []) or [])
+        queued = set(self._screen_warmup_queue)
+        added = False
+        for screen_name in screen_names or []:
+            if not screen_name or screen_name in known or screen_name in queued:
+                continue
+            self._screen_warmup_queue.append(screen_name)
+            queued.add(screen_name)
+            added = True
+
+        if added and self._screen_warmup_ev is None:
+            self._schedule_screen_warmup(delay)
+        return added
+
+    def _schedule_screen_warmup(self, delay):
+        if self._screen_warmup_ev or not self._screen_warmup_queue:
+            return
+        wait = max(0.04, float(delay or 0.0))
+        self._screen_warmup_ev = Clock.schedule_once(
+            lambda dt, next_delay=wait: self._consume_screen_warmup(next_delay),
+            wait,
+        )
+
+    def _consume_screen_warmup(self, delay):
+        self._screen_warmup_ev = None
+        if not self._screen_warmup_queue:
+            return
+        screen_name = self._screen_warmup_queue.pop(0)
+        try:
+            self.ensure_screen(screen_name)
+        except Exception:
+            pass
+        if self._screen_warmup_queue:
+            self._schedule_screen_warmup(delay)
+
+    def _build_admin_home_screen(self):
+        from admin.admin_home_screen import AdminHomeScreen
+        return AdminHomeScreen(db=self.db, name='admin_home')
+
+    def _build_manager_screen(self):
+        from manager.manager_screen import SalesScreen
+        return SalesScreen(db=self.db, name='manager')
+
+    def _build_admin_screen(self):
+        from admin.admin_screen import AdminScreen
+        return AdminScreen(db=self.db, name='admin')
+
+    def _build_settings_screen(self):
+        from utils.settings import AdminSettingsScreen
+        return AdminSettingsScreen(app=self, name='settings')
+
+    def _build_reports_screen(self):
+        from utils.reports_screen import ReportsScreen
+        return ReportsScreen(db=self.db, name='reports')
+
+    def _build_sales_history_screen(self):
+        from utils.sales_history_screen import SalesHistoryScreen
+        return SalesHistoryScreen(db=self.db, name='sales_history')
+
+    def _build_losses_screen(self):
+        from utils.losses_screen import LossesScreen
+        return LossesScreen(db=self.db, name='losses')
+
+    def _build_restock_screen(self):
+        from utils.restock_screen import RestockScreen
+        return RestockScreen(db=self.db, name='restock')
+
+    def _build_losses_history_screen(self):
+        from utils.losses_history_screen import LossesHistoryScreen
+        return LossesHistoryScreen(db=self.db, name='losses_history')
+
+    def _build_restock_history_screen(self):
+        from utils.restock_history_screen import RestockHistoryScreen
+        return RestockHistoryScreen(db=self.db, name='restock_history')
 
     def on_start(self):
         Window.set_title('MERCEARIA')
@@ -290,4 +405,7 @@ Estrutura esperada:
 
 
 if __name__ == '__main__':
-    MainApp().run()
+    try:
+        MainApp().run()
+    except KeyboardInterrupt:
+        pass

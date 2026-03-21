@@ -64,7 +64,7 @@
                         font_size: dp(12)
                         theme_text_color: "Hint"
 
-                # ==================== PRODUTO SELECIONADO (sempre visÃ­vel quando selecionado) ====================
+                # ==================== PRODUTO SELECIONADO (sempre visível quando selecionado) ====================
                 MDCard:
                     id: selected_product_card
                     orientation: "vertical"
@@ -106,6 +106,7 @@
                             on_release: root.clear_selection()
 
                     MDBoxLayout:
+                        id: selected_product_meta_row
                         size_hint_y: None
                         height: dp(20)
                         spacing: dp(16)
@@ -167,8 +168,9 @@
                         size_hint_y: None
                         height: dp(16)
 
-                    # Ãrea do scanner
+                    # Área do scanner
                     MDCard:
+                        id: scanner_preview_card
                         orientation: "vertical"
                         size_hint_y: None
                         height: dp(120)
@@ -193,8 +195,9 @@
                         size_hint_y: None
                         height: dp(16)
 
-                    # BotÃµes do scanner
+                    # Botões do scanner
                     MDBoxLayout:
+                        id: scanner_buttons_row
                         size_hint_y: None
                         height: dp(40)
                         spacing: dp(8)
@@ -230,7 +233,7 @@
                             padding: 0
                             spacing: dp(2)
 
-                # ==================== FORMULÃRIO DE PERDA (aparece quando produto selecionado) ====================
+                # ==================== FORMULÁRIO DE PERDA (aparece quando produto selecionado) ====================
                 MDCard:
                     id: loss_form_card
                     orientation: "vertical"
@@ -252,6 +255,7 @@
 
                     # Tipo de perda + Quantidade
                     MDBoxLayout:
+                        id: loss_type_qty_row
                         size_hint_y: None
                         height: dp(52)
                         spacing: dp(10)
@@ -273,7 +277,7 @@
                             on_text: root.on_qty_change(self.text)
                             size_hint_x: 0.45
 
-                    # Motivo (obrigatÃ³rio)
+                    # Motivo (obrigatório)
                     MDTextField:
                         id: reason_input
                         hint_text: "Motivo da perda (obrigatorio)"
@@ -281,7 +285,7 @@
                         size_hint_y: None
                         height: dp(48)
 
-                    # ObservaÃ§Ã£o (opcional)
+                    # Observação (opcional)
                     MDTextField:
                         id: note_input
                         hint_text: "Observacao adicional (opcional)"
@@ -289,7 +293,7 @@
                         size_hint_y: None
                         height: dp(48)
 
-                    # EvidÃªncia (opcional)
+                    # Evidência (opcional)
                     MDTextField:
                         id: evidence_input
                         hint_text: "Caminho da evidencia (opcional)"

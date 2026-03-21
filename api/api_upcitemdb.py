@@ -32,11 +32,11 @@ class UPCitemdbAPI:
             data = response.json()
 
             if data.get("code") != "OK":
-                return None
+                return self._build_placeholder(barcode)
 
             items = data.get("items", [])
             if not items:
-                return None
+                return self._build_placeholder(barcode)
 
             return self._parse_product(items[0])
 
@@ -61,4 +61,14 @@ class UPCitemdbAPI:
             "sold_by_weight": sold_by_weight,
             "quantity":       size,
             "image":          raw.get("images", [None])[0] if raw.get("images") else None,
+        }
+
+    @staticmethod
+    def _build_placeholder(barcode: str) -> dict:
+        """Retorna um placeholder quando a API não encontra o produto."""
+        return {
+            "name": "Novo Produto",
+            "barcode": str(barcode).strip(),
+            "source": "UPCitemdb",
+            "is_new": True,
         }

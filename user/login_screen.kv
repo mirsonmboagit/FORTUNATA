@@ -1,199 +1,522 @@
-<LoginScreen>:
-    username: username
-    password: password
+<LoginFeatureCard@MDCard>:
+    radius: [dp(16)]
+    elevation: 0
+    padding: [dp(14), dp(12), dp(14), dp(12)]
+    spacing: dp(4)
+    orientation: "vertical"
+    md_bg_color: app.theme_tokens['card_alt']
 
+<LoginInfoPill@MDCard>:
+    radius: [dp(16)]
+    elevation: 0
+    padding: [dp(12), dp(8), dp(12), dp(8)]
+    md_bg_color: app.theme_tokens['card_alt']
+
+<LoginScreen>:
+    username: username_input
+    password: password_input
     md_bg_color: app.theme_tokens['surface']
 
-    MDBoxLayout:
-        id: root_layout
-        orientation: "horizontal"
+    FloatLayout:
+        canvas.before:
+            Color:
+                rgba: app.theme_tokens['surface']
+            Rectangle:
+                pos: self.pos
+                size: self.size
+            Color:
+                rgba:
+                    (
+                    app.theme_tokens['primary'][0],
+                    app.theme_tokens['primary'][1],
+                    app.theme_tokens['primary'][2],
+                    0.08
+                    ) if root.login_variant == "admin" else (
+                    app.theme_tokens['success'][0],
+                    app.theme_tokens['success'][1],
+                    app.theme_tokens['success'][2],
+                    0.08
+                    )
+            Ellipse:
+                size: dp(280), dp(280)
+                pos: self.right - dp(200), self.top - dp(140)
+            Color:
+                rgba:
+                    (
+                    app.theme_tokens['primary'][0],
+                    app.theme_tokens['primary'][1],
+                    app.theme_tokens['primary'][2],
+                    0.04
+                    ) if root.login_variant == "admin" else (
+                    app.theme_tokens['success'][0],
+                    app.theme_tokens['success'][1],
+                    app.theme_tokens['success'][2],
+                    0.04
+                    )
+            Ellipse:
+                size: dp(220), dp(220)
+                pos: self.x - dp(60), self.y - dp(40)
 
         MDBoxLayout:
-            id: carousel_panel
-            size_hint_x: 0.55
-            padding: dp(30)
+            id: root_layout
+            orientation: "horizontal"
+            spacing: dp(20)
+            padding: [dp(24), dp(20), dp(24), dp(20)]
 
-            Carousel:
-                id: carousel
-                loop: True
-                direction: "right"
-                anim_move_duration: 0.8
-
-                MDFloatLayout:
-                    Image:
-                        source: "image/slide1.png"
-                        allow_stretch: True
-                        keep_ratio: True
-                        size_hint: 1.4, 1.2
-                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-
-                MDFloatLayout:
-                    Image:
-                        source: "image/slide.png"
-                        allow_stretch: True
-                        keep_ratio: True
-                        size_hint: 0.9, 0.9
-                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-
-                MDFloatLayout:
-                    Image:
-                        source: "image/slide4.png"
-                        allow_stretch: True
-                        keep_ratio: True
-                        size_hint: 0.9, 0.9
-                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-
-                MDFloatLayout:
-                    Image:
-                        source: "image/slide5.png"
-                        allow_stretch: True
-                        keep_ratio: True
-                        size_hint: 0.9, 0.9
-                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-
-                MDFloatLayout:
-                    Image:
-                        source: "image/slide6.png"
-                        allow_stretch: True
-                        keep_ratio: True
-                        size_hint: 0.9, 0.9
-                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-
-                MDFloatLayout:
-                    Image:
-                        source: "image/slide7.png"
-                        allow_stretch: True
-                        keep_ratio: True
-                        size_hint: 0.9, 0.9
-                        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-
-        MDSeparator:
-            id: divider
-            orientation: "vertical"
-
-        MDScrollView:
-            id: form_scroll
-            do_scroll_x: False
-
-            MDBoxLayout:
-                id: form_panel
-                orientation: "vertical"
-                size_hint_x: 1
-                size_hint_y: None
-                height: self.minimum_height
-                padding: dp(60)
-                spacing: dp(22)
-
-                MDLabel:
-                    text: "MERCEARIA"
-                    font_name: "MainFont"
-                    font_size: sp(40)
-                    bold: True
-                    halign: "center"
-                    theme_text_color: "Custom"
-                    text_color: app.theme_tokens['primary']
-
-                MDLabel:
-                    text: "Sistema de GestÃ£o Comercial"
-                    font_name: "LogoFont"
-                    font_size: sp(20)
-                    halign: "center"
-                    theme_text_color: "Hint"
-
-                Widget:
-                    size_hint_y: None
-                    height: dp(30)
-
-                MDLabel:
-                    text: "LOGIN"
-                    font_name: "MainFont"
-                    font_size: sp(28)
-                    bold: True
-                    halign: "center"
-                    theme_text_color: "Primary"
-
-                Widget:
-                    size_hint_y: None
-                    height: dp(20)
-
-                MDLabel:
-                    text: "Utilizador:"
-                    font_name: "LogoFont"
-                    font_size: sp(20)
-                    bold: True
-                    theme_text_color: "Secondary"
-
-                MDTextField:
-                    id: username
-                    hint_text: "Digite seu utilizador"
-                    mode: "rectangle"
-                    font_name: "LogoFont"
-                    font_size: sp(20)
-                    error: True if root.username_error else False
-                    helper_text: root.username_error
-                    helper_text_mode: "on_error"
-
-                MDLabel:
-                    text: "Palavra-passe:"
-                    font_name: "LogoFont"
-                    font_size: sp(20)
-                    bold: True
-                    theme_text_color: "Secondary"
-
-                MDTextField:
-                    id: password
-                    hint_text: "Digite sua palavra-passe"
-                    mode: "rectangle"
-                    font_name: "LogoFont"
-                    font_size: sp(20)
-                    password: True
-                    error: True if root.username_error else False
-                    helper_text: root.password_error
-                    helper_text_mode: "on_error"
-                    on_text_validate: root.login()
-
-                Widget:
-                    size_hint_y: None
-                    height: dp(20)
-
-                MDRaisedButton:
-                    text: "INICIAR SESSÃƒO"
-                    font_name: "LogoFont"
-                    font_size: sp(20)
-                    size_hint_x: 1
-                    height: dp(46)
-                    md_bg_color: app.theme_tokens['primary']
-                    theme_text_color: "Custom"
-                    text_color: app.theme_tokens['on_primary']
-                    on_release: root.login()
-
-                Widget:
-                    size_hint_y: None
-                    height: dp(12)
+            AnchorLayout:
+                id: hero_anchor
+                anchor_x: "center"
+                anchor_y: "top"
+                size_hint_x: 0.56
 
                 MDBoxLayout:
+                    id: hero_column
+                    orientation: "vertical"
+                    spacing: dp(14)
+                    size_hint: 1, None
+                    height: self.minimum_height
+
+                    MDCard:
+                        id: admin_preview_card
+                        size_hint_y: None
+                        height: dp(286)
+                        radius: [dp(26)]
+                        elevation: 2
+                        md_bg_color: app.theme_tokens['card']
+                        opacity: 1 if root.login_variant == "admin" else 0
+                        disabled: root.login_variant != "admin"
+
+                        Carousel:
+                            id: carousel
+                            loop: True
+                            direction: "right"
+
+                            MDBoxLayout:
+                                orientation: "vertical"
+                                padding: [dp(18), dp(16), dp(18), dp(16)]
+                                spacing: dp(12)
+
+                                Image:
+                                    source: "assets/image/slide1.png"
+                                    fit_mode: "contain"
+                                    size_hint_y: None
+                                    height: dp(170)
+
+                                MDCard:
+                                    size_hint_y: None
+                                    height: dp(82)
+                                    radius: [dp(18)]
+                                    elevation: 0
+                                    padding: [dp(16), dp(12), dp(16), dp(12)]
+                                    spacing: dp(4)
+                                    orientation: "vertical"
+                                    md_bg_color: app.theme_tokens['card_alt']
+
+                                    MDLabel:
+                                        text: "Visao administrativa"
+                                        font_style: "Caption"
+                                        theme_text_color: "Custom"
+                                        text_color: app.theme_tokens['primary']
+                                        size_hint_y: None
+                                        height: dp(18)
+
+                                    MDLabel:
+                                        text: "Catalogo, relatorios e controlo num unico acesso."
+                                        font_size: sp(14)
+                                        bold: True
+                                        theme_text_color: "Custom"
+                                        text_color: app.theme_tokens['text_primary']
+                                        text_size: self.width, None
+                                        adaptive_height: True
+
+                            MDBoxLayout:
+                                orientation: "vertical"
+                                padding: [dp(18), dp(16), dp(18), dp(16)]
+                                spacing: dp(12)
+
+                                Image:
+                                    source: "assets/image/slide6.png"
+                                    fit_mode: "contain"
+                                    size_hint_y: None
+                                    height: dp(170)
+
+                                MDCard:
+                                    size_hint_y: None
+                                    height: dp(82)
+                                    radius: [dp(18)]
+                                    elevation: 0
+                                    padding: [dp(16), dp(12), dp(16), dp(12)]
+                                    spacing: dp(4)
+                                    orientation: "vertical"
+                                    md_bg_color: app.theme_tokens['card_alt']
+
+                                    MDLabel:
+                                        text: "Decisao operacional"
+                                        font_style: "Caption"
+                                        theme_text_color: "Custom"
+                                        text_color: app.theme_tokens['primary']
+                                        size_hint_y: None
+                                        height: dp(18)
+
+                                    MDLabel:
+                                        text: "Abertura limpa para supervisao, ajustes e acompanhamento."
+                                        font_size: sp(14)
+                                        bold: True
+                                        theme_text_color: "Custom"
+                                        text_color: app.theme_tokens['text_primary']
+                                        text_size: self.width, None
+                                        adaptive_height: True
+
+                    MDCard:
+                        id: manager_preview_card
+                        size_hint_y: None
+                        height: dp(268)
+                        radius: [dp(26)]
+                        elevation: 2
+                        md_bg_color: app.theme_tokens['card']
+                        opacity: 1 if root.login_variant == "manager" else 0
+                        disabled: root.login_variant != "manager"
+
+                        MDBoxLayout:
+                            orientation: "vertical"
+                            padding: [dp(18), dp(16), dp(18), dp(16)]
+                            spacing: dp(12)
+
+                            Image:
+                                source: "assets/image/slide2.png"
+                                fit_mode: "contain"
+                                size_hint_y: None
+                                height: dp(160)
+
+                            MDCard:
+                                size_hint_y: None
+                                height: dp(82)
+                                radius: [dp(18)]
+                                elevation: 0
+                                padding: [dp(16), dp(12), dp(16), dp(12)]
+                                spacing: dp(4)
+                                orientation: "vertical"
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDLabel:
+                                    text: "Operacao de atendimento"
+                                    font_style: "Caption"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['success']
+                                    size_hint_y: None
+                                    height: dp(18)
+
+                                MDLabel:
+                                    text: "Entrada direta para vendas, historico e perdas."
+                                    font_size: sp(14)
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['text_primary']
+                                    text_size: self.width, None
+                                    adaptive_height: True
+
+                    MDCard:
+                        id: hero_shell
+                        size_hint_y: None
+                        height: self.minimum_height
+                        radius: [dp(24)]
+                        elevation: 1
+                        padding: [dp(22), dp(20), dp(22), dp(20)]
+                        spacing: dp(14)
+                        orientation: "vertical"
+                        md_bg_color: app.theme_tokens['card']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(34)
+                            spacing: dp(10)
+
+                            LoginInfoPill:
+                                size_hint: None, None
+                                size: dp(170), dp(34)
+                                md_bg_color:
+                                    (
+                                    app.theme_tokens['primary'][0],
+                                    app.theme_tokens['primary'][1],
+                                    app.theme_tokens['primary'][2],
+                                    0.14
+                                    ) if root.login_variant == "admin" else (
+                                    app.theme_tokens['success'][0],
+                                    app.theme_tokens['success'][1],
+                                    app.theme_tokens['success'][2],
+                                    0.14
+                                    )
+
+                                MDLabel:
+                                    text: root.identity_badge
+                                    halign: "center"
+                                    font_style: "Caption"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+
+                            Widget:
+
+                            MDLabel:
+                                text: "Backoffice" if root.login_variant == "admin" else "Atendimento"
+                                halign: "right"
+                                font_style: "Caption"
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['text_secondary']
+
+                        MDLabel:
+                            text: root.hero_title
+                            font_size: sp(23)
+                            bold: True
+                            line_height: 1.0
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_primary']
+                            text_size: self.width, None
+                            adaptive_height: True
+
+                        MDLabel:
+                            text: root.hero_subtitle
+                            font_size: sp(13)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_secondary']
+                            text_size: self.width, None
+                            adaptive_height: True
+
+                        MDGridLayout:
+                            id: admin_highlights_grid
+                            cols: 2
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            LoginInfoPill:
+                                size_hint_y: None
+                                height: dp(42)
+                                md_bg_color:
+                                    (
+                                    app.theme_tokens['primary'][0],
+                                    app.theme_tokens['primary'][1],
+                                    app.theme_tokens['primary'][2],
+                                    0.10
+                                    ) if root.login_variant == "admin" else (
+                                    app.theme_tokens['success'][0],
+                                    app.theme_tokens['success'][1],
+                                    app.theme_tokens['success'][2],
+                                    0.10
+                                    )
+
+                                MDLabel:
+                                    text: root.feature_one if root.login_variant == "admin" else "Venda, historico e perdas"
+                                    halign: "center"
+                                    font_style: "Caption"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+
+                            LoginInfoPill:
+                                size_hint_y: None
+                                height: dp(42)
+
+                                MDLabel:
+                                    text: "Leitura rapida e layout leve"
+                                    halign: "center"
+                                    font_style: "Caption"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['text_secondary']
+
+            MDSeparator:
+                id: divider
+                orientation: "vertical"
+                size_hint_x: None
+                width: dp(1)
+                color: app.theme_tokens['divider']
+
+            MDScrollView:
+                id: form_scroll
+                do_scroll_x: False
+                bar_width: 0
+                size_hint_x: 0.42
+
+                MDBoxLayout:
+                    orientation: "vertical"
                     adaptive_height: True
-                    spacing: dp(10)
+                    spacing: dp(12)
+                    padding: [0, dp(6), 0, dp(6)]
 
-                    MDTextButton:
-                        text: "Esqueci a senha"
-                        font_name: "LogoFont"
-                        font_size: sp(20)
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['primary']
-                        on_release: root.forgot_password()
+                    MDBoxLayout:
+                        id: form_top_actions
+                        size_hint_y: None
+                        height: dp(38)
+                        spacing: dp(10)
 
-                    MDLabel:
-                        text: "|"
+                        MDFlatButton:
+                            text: "Voltar"
+                            size_hint_x: None
+                            width: dp(104) if root.show_back_button else 0
+                            opacity: 1 if root.show_back_button else 0
+                            disabled: not root.show_back_button
+                            on_release: root.go_back()
+
+                        Widget:
+
+                        MDFlatButton:
+                            text: root.theme_toggle_text
+                            size_hint_x: None
+                            width: dp(140) if root.show_theme_toggle else 0
+                            opacity: 1 if root.show_theme_toggle else 0
+                            disabled: not root.show_theme_toggle
+                            on_release: root.toggle_theme()
+
+                    MDCard:
+                        id: form_column
                         size_hint_x: None
-                        width: dp(10)
-                        halign: "center"
-                        theme_text_color: "Hint"
+                        width: dp(430)
+                        adaptive_height: True
+                        pos_hint: {"center_x": 0.5}
+                        radius: [dp(26)]
+                        elevation: 2
+                        padding: [dp(26), dp(24), dp(26), dp(24)]
+                        spacing: dp(14)
+                        orientation: "vertical"
+                        md_bg_color: app.theme_tokens['card']
 
-                    MDTextButton:
-                        text: "Criar nova conta"
-                        font_name: "LogoFont"
-                        font_size: sp(20)
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['primary']
-                        on_release: root.register()
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(48)
+                            spacing: dp(12)
+
+                            MDBoxLayout:
+                                orientation: "vertical"
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: "MERCEARIA"
+                                    font_size: sp(22)
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+
+                                MDLabel:
+                                    text: root.profile_name
+                                    font_style: "Caption"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['text_secondary']
+                                    size_hint_y: None
+                                    height: dp(16)
+
+                            Widget:
+
+                            LoginInfoPill:
+                                size_hint: None, None
+                                size: dp(136), dp(34)
+                                md_bg_color:
+                                    (
+                                    app.theme_tokens['primary'][0],
+                                    app.theme_tokens['primary'][1],
+                                    app.theme_tokens['primary'][2],
+                                    0.12
+                                    ) if root.login_variant == "admin" else (
+                                    app.theme_tokens['success'][0],
+                                    app.theme_tokens['success'][1],
+                                    app.theme_tokens['success'][2],
+                                    0.12
+                                    )
+
+                                MDLabel:
+                                    text: root.identity_badge
+                                    halign: "center"
+                                    font_style: "Caption"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+
+                        MDSeparator:
+                            height: dp(1)
+
+                        MDLabel:
+                            text: root.login_heading
+                            font_size: sp(21)
+                            bold: True
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_primary']
+                            text_size: self.width, None
+                            adaptive_height: True
+
+                        MDLabel:
+                            text: root.login_caption
+                            font_size: sp(13)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_secondary']
+                            text_size: self.width, None
+                            adaptive_height: True
+
+                        MDTextField:
+                            id: username_input
+                            hint_text: "Utilizador"
+                            helper_text: root.username_error
+                            helper_text_mode: "on_error"
+                            mode: "rectangle"
+                            size_hint_y: None
+                            height: dp(54)
+                            disabled: root.operation_in_progress or root.login_blocked
+                            line_color_focus: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+
+                        MDTextField:
+                            id: password_input
+                            hint_text: "Palavra-passe"
+                            helper_text: root.password_error
+                            helper_text_mode: "on_error"
+                            password: True
+                            mode: "rectangle"
+                            size_hint_y: None
+                            height: dp(54)
+                            disabled: root.operation_in_progress or root.login_blocked
+                            line_color_focus: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+                            on_text_validate: root.login()
+
+                        MDRaisedButton:
+                            id: login_button
+                            text: root.login_button_text
+                            size_hint_y: None
+                            height: dp(46)
+                            disabled: root.operation_in_progress or root.login_blocked
+                            md_bg_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            on_release: root.login()
+
+                        MDLabel:
+                            text: root.operation_status
+                            size_hint_y: None
+                            height: self.texture_size[1] if root.operation_status else 0
+                            opacity: 1 if root.operation_status else 0
+                            halign: "center"
+                            font_size: sp(12)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_secondary']
+                            text_size: self.width, None
+
+                        MDBoxLayout:
+                            id: form_links_row
+                            orientation: "horizontal"
+                            adaptive_height: True
+                            spacing: dp(8)
+
+                            MDFlatButton:
+                                id: forgot_button
+                                text: "Esqueci a senha"
+                                disabled: root.operation_in_progress
+                                on_release: root.forgot_password()
+
+                            MDFlatButton:
+                                id: register_button
+                                text: "Criar nova conta"
+                                disabled: root.operation_in_progress
+                                on_release: root.register()
+
+                        MDLabel:
+                            text: root.form_footer_text
+                            font_style: "Caption"
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_secondary']
+                            text_size: self.width, None
+                            adaptive_height: True

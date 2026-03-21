@@ -6,11 +6,16 @@ from kivy.clock import Clock
 import time
 import json
 import os
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
+from xml.etree import ElementTree as ET
+from bs4 import BeautifulSoup
 
 from api.api_bazara import BazaraAPI
 from api.api_openfoodfacts import OpenFoodFactsAPI
+from api.api_ranxo import RanxoAPI
 from api.api_upcitemdb import UPCitemdbAPI
 from api.api_sixty60 import Sixty60API
 
@@ -41,6 +46,7 @@ class APIManager:
     # APIs externas
     EXTERNAL_SOURCES = [
         ("Bazara",         BazaraAPI()),
+        ("Ranxo",          RanxoAPI()),
         ("Open Food Facts", OpenFoodFactsAPI()),
         ("UPCitemdb",      UPCitemdbAPI()),
         ("Sixty60",        Sixty60API()),
@@ -67,10 +73,15 @@ class APIManager:
         self.cache_file = self._get_cache_file_path()
         self.offline_cache = self._load_offline_cache()
         self.offline_cache_duration = timedelta(days=30)  # Cache offline dura 30 dias
+
+        # Cache separado para Open Food Facts
+        self.openfoodfacts_cache_file = self._get_openfoodfacts_cache_file_path()
+        self.openfoodfacts_cache = self._load_openfoodfacts_cache()
         
         # Configurações
         self.timeout_per_api = 5
-        self.use_parallel_search = True
+        # Sequencial para dar feedback claro de cada API no status.
+        self.use_parallel_search = False
         self.auto_save_to_offline = True  # Salvar automaticamente em arquivo
         self.max_offline_entries = 1000   # Máximo de produtos no cache offline
         
@@ -90,6 +101,12 @@ class APIManager:
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir / "products_offline_cache.json"
 
+    def _get_openfoodfacts_cache_file_path(self):
+        """Retorna caminho do arquivo de cache do Open Food Facts."""
+        cache_dir = Path("data/cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / "openfoodfacts_cache.json"
+
     def _load_offline_cache(self):
         """Carrega cache do arquivo JSON."""
         try:
@@ -101,6 +118,18 @@ class APIManager:
         except Exception as e:
             print(f"[APIManager] Erro ao carregar cache offline: {e}")
         
+        return {}
+
+    def _load_openfoodfacts_cache(self):
+        """Carrega cache do Open Food Facts do arquivo JSON."""
+        try:
+            if self.openfoodfacts_cache_file.exists():
+                with open(self.openfoodfacts_cache_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    print(f"[APIManager] Cache Open Food Facts carregado: {len(data)} produtos")
+                    return data
+        except Exception as e:
+            print(f"[APIManager] Erro ao carregar cache Open Food Facts: {e}")
         return {}
 
     def _save_offline_cache(self):
@@ -126,6 +155,15 @@ class APIManager:
             print(f"[APIManager] Cache offline salvo: {len(self.offline_cache)} produtos")
         except Exception as e:
             print(f"[APIManager] Erro ao salvar cache offline: {e}")
+
+    def _save_openfoodfacts_cache(self):
+        """Salva cache do Open Food Facts no arquivo JSON."""
+        try:
+            with open(self.openfoodfacts_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(self.openfoodfacts_cache, f, ensure_ascii=False, indent=2)
+            print(f"[APIManager] Cache Open Food Facts salvo: {len(self.openfoodfacts_cache)} produtos")
+        except Exception as e:
+            print(f"[APIManager] Erro ao salvar cache Open Food Facts: {e}")
 
     def _clean_expired_offline(self):
         """Remove entradas expiradas do cache offline."""
@@ -187,20 +225,9 @@ class APIManager:
         try:
             barcode = self._normalize_barcode(barcode)
             if not barcode:
-                self._notify_status("C?digo inv?lido")
+                self._notify_status("Código inválido")
                 Clock.schedule_once(lambda dt: self.on_failure(), 0)
                 return
-            bazara_result = self._fetch_bazara_first(barcode)
-            if bazara_result:
-                self.stats['api_hits'] += 1
-                source_name, data = bazara_result
-                self._save_to_memory_cache(barcode, source_name, data)
-                if self.auto_save_to_offline:
-                    self._save_to_offline_cache(barcode, source_name, data)
-                self._notify_status(f"Encontrado em {source_name}")
-                Clock.schedule_once(lambda dt: self.on_success(source_name, data), 0)
-                return
-
             # NÍVEL 0: Cache em memória
             if not force_external:
                 cached = self._get_from_memory_cache(barcode)
@@ -235,7 +262,7 @@ class APIManager:
 
             # NIVEL 3: APIs externas
             self._notify_status("Buscando online...")
-            external_sources = self._get_external_sources(include_bazara=False)
+            external_sources = self._get_external_sources(include_bazara=True)
             if self.use_parallel_search:
                 result = self._search_parallel(barcode, sources=external_sources)
             else:
@@ -316,23 +343,16 @@ class APIManager:
                 )
     
             found_external = False
-            bazara_result = self._fetch_bazara_first(barcode)
-            if bazara_result:
-                source_name, data = bazara_result
-                updated = _merge_data(source_name, data)
-                found_external = True
-                if updated:
-                    _emit_partial(source_name)
     
-            # N?VEL 0: Cache em mem?ria
+            # NÍVEL 0: Cache em memória
             if not force_external:
                 cached = self._get_from_memory_cache(barcode)
                 if cached:
                     self.stats['memory_hits'] += 1
-                    _merge_data(cached.get('source', 'Cache (mem?ria)'), cached.get('data', {}))
-                    _emit_partial(cached.get('source', 'Cache (mem?ria)'))
+                    _merge_data(cached.get('source', 'Cache (memória)'), cached.get('data', {}))
+                    _emit_partial(cached.get('source', 'Cache (memória)'))
     
-            # N?VEL 1: Cache offline
+            # NÍVEL 1: Cache offline
             if not force_external and _missing_fields():
                 offline_result = self._get_from_offline_cache(barcode)
                 if offline_result:
@@ -340,7 +360,7 @@ class APIManager:
                     _merge_data(offline_result.get('source', 'Cache (offline)'), offline_result.get('data', {}))
                     _emit_partial(offline_result.get('source', 'Cache (offline)'))
     
-            # N?VEL 2: Banco local
+            # NÍVEL 2: Banco local
             if not force_external and _missing_fields():
                 local_result = self._search_local(barcode)
                 if local_result:
@@ -348,35 +368,50 @@ class APIManager:
                     _merge_data('Banco Local', local_result)
                     _emit_partial('Banco Local')
     
-            # N?VEL 3: APIs externas
+            # NÍVEL 3: APIs externas
             if _missing_fields():
-                external_sources = self._get_external_sources(include_bazara=False)
+                external_sources = self._get_external_sources(include_bazara=True)
                 if external_sources:
-                    with ThreadPoolExecutor(max_workers=len(external_sources)) as executor:
-                        future_to_source = {
-                            executor.submit(self._fetch_with_timeout, api, barcode, self.timeout_per_api): source_name
-                            for source_name, api in external_sources
-                        }
+                    if self.use_parallel_search:
+                        self._notify_status("Buscando em múltiplas fontes...")
+                        with ThreadPoolExecutor(max_workers=len(external_sources)) as executor:
+                            future_to_source = {
+                                executor.submit(self._fetch_with_timeout, api, barcode, self.timeout_per_api): source_name
+                                for source_name, api in external_sources
+                            }
     
-                        for future in as_completed(future_to_source):
-                            source_name = future_to_source[future]
-                            try:
-                                result = future.result()
-                            except Exception:
-                                result = None
+                            for future in as_completed(future_to_source):
+                                source_name = future_to_source[future]
+                                try:
+                                    result = future.result()
+                                except Exception:
+                                    result = None
     
+                                if not result:
+                                    continue
+    
+                                found_external = True
+                                updated = _merge_data(source_name, result)
+                                if updated:
+                                    _emit_partial(source_name)
+    
+                                if not _missing_fields():
+                                    for f in future_to_source:
+                                        f.cancel()
+                                    break
+                    else:
+                        for source_name, api in external_sources:
+                            if not _missing_fields():
+                                break
+                            self._notify_status(f"Buscando em {source_name}...")
+                            result = self._fetch_with_timeout(api, barcode, self.timeout_per_api)
                             if not result:
+                                self._notify_status(f"Sem resultado em {source_name}.")
                                 continue
-    
                             found_external = True
                             updated = _merge_data(source_name, result)
                             if updated:
                                 _emit_partial(source_name)
-    
-                            if not _missing_fields():
-                                for f in future_to_source:
-                                    f.cancel()
-                                break
     
             if found_external:
                 self.stats['api_hits'] += 1
@@ -451,8 +486,10 @@ class APIManager:
                 result = api.fetch(barcode)
                 if result:
                     return (source_name, result)
+                self._notify_status(f"Sem resultado em {source_name}.")
             except Exception as e:
                 print(f"[APIManager] Erro em {source_name}: {e}")
+                self._notify_status(f"Erro em {source_name}.")
                 continue
         
         return None
@@ -524,6 +561,9 @@ class APIManager:
 
     def _save_to_memory_cache(self, barcode: str, source: str, data):
         """Salva no cache em memória."""
+        if isinstance(data, dict) and not data.get("barcode"):
+            data = dict(data)
+            data["barcode"] = barcode
         self.memory_cache[barcode] = {
             'source': source,
             'data': data,
@@ -551,8 +591,44 @@ class APIManager:
                 pass
         return None
 
+    @staticmethod
+    def _is_openfoodfacts_source(source: str, data: dict | None) -> bool:
+        if source and "open food facts" in source.lower():
+            return True
+        if isinstance(data, dict):
+            chain = data.get("source_chain")
+            if isinstance(chain, list):
+                for item in chain:
+                    if isinstance(item, str) and "open food facts" in item.lower():
+                        return True
+        return False
+
+    def _save_to_openfoodfacts_cache(self, barcode: str, data: dict):
+        payload = dict(data) if isinstance(data, dict) else {}
+        if not payload.get("barcode"):
+            payload["barcode"] = barcode
+        self.openfoodfacts_cache[barcode] = {
+            "source": "Open Food Facts",
+            "data": payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+        Thread(target=self._save_openfoodfacts_cache, daemon=True).start()
+
+    def _upsert_openfoodfacts_cache(self, barcode: str, data: dict):
+        payload = dict(data) if isinstance(data, dict) else {}
+        if not payload.get("barcode"):
+            payload["barcode"] = barcode
+        self.openfoodfacts_cache[barcode] = {
+            "source": "Open Food Facts",
+            "data": payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+
     def _save_to_offline_cache(self, barcode: str, source: str, data):
         """Salva no cache offline (arquivo JSON)."""
+        if isinstance(data, dict) and not data.get("barcode"):
+            data = dict(data)
+            data["barcode"] = barcode
         self.offline_cache[barcode] = {
             'source': source,
             'data': data,
@@ -561,6 +637,8 @@ class APIManager:
         
         # Salvar arquivo (async para não bloquear)
         Thread(target=self._save_offline_cache, daemon=True).start()
+        if self._is_openfoodfacts_source(source, data):
+            self._save_to_openfoodfacts_cache(barcode, data)
 
     # ========== GERENCIAMENTO ==========
     
@@ -569,6 +647,8 @@ class APIManager:
         self.memory_cache.clear()
         self.offline_cache.clear()
         self._save_offline_cache()
+        self.openfoodfacts_cache.clear()
+        self._save_openfoodfacts_cache()
         print("[APIManager] Todos os caches limpos")
 
     def clear_memory_cache(self):
@@ -582,6 +662,9 @@ class APIManager:
         if barcode in self.offline_cache:
             del self.offline_cache[barcode]
             self._save_offline_cache()
+        if barcode in self.openfoodfacts_cache:
+            del self.openfoodfacts_cache[barcode]
+            self._save_openfoodfacts_cache()
 
     def export_offline_cache(self, filepath: str):
         """Exporta cache offline para outro arquivo (backup)."""
@@ -687,3 +770,556 @@ class APIManager:
             return ""
         cleaned = "".join(c for c in str(barcode) if c.isprintable()).strip()
         return cleaned.replace(" ", "")
+
+    # ========== RANXO PREFILL ==========
+
+    def prefill_ranxo_cache(self, on_progress=None, delay: float = 0.2):
+        """
+        Prefill do cache offline usando sitemap do Ranxo.
+        Executa em modo sequencial e salva uma unica vez no final.
+        """
+        stats = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "new": 0,
+            "no_sku": 0,
+            "errors": 0,
+        }
+        original_max = self.max_offline_entries
+        session = requests.Session()
+        session.headers.update(getattr(RanxoAPI, "HEADERS", {}))
+        timeout = getattr(RanxoAPI, "REQUEST_TIMEOUT", 6)
+
+        try:
+            sitemap_urls = self._ranxo_get_sitemap_urls(session, timeout)
+            product_urls = self._ranxo_get_product_urls(session, sitemap_urls, timeout)
+            stats["total"] = len(product_urls)
+
+            if stats["total"] > self.max_offline_entries:
+                self.max_offline_entries = stats["total"]
+
+            self._emit_prefill_progress(on_progress, stats, "Iniciando prefill Ranxo...")
+
+            for idx, url in enumerate(product_urls, 1):
+                stats["processed"] = idx
+                try:
+                    data = self._ranxo_fetch_product_data(session, url, timeout)
+                    if not data or not data.get("barcode"):
+                        stats["no_sku"] += 1
+                    else:
+                        updated, created = self._merge_offline_entry(data["barcode"], data, "Ranxo")
+                        if updated:
+                            stats["success"] += 1
+                        if created:
+                            stats["new"] += 1
+                except Exception:
+                    stats["errors"] += 1
+
+                if idx % 5 == 0 or idx == stats["total"]:
+                    self._emit_prefill_progress(on_progress, stats)
+
+                if delay:
+                    time.sleep(delay)
+
+            if stats["success"] > 0:
+                self._save_offline_cache()
+
+            self._emit_prefill_progress(on_progress, stats, "Prefill concluido.")
+            return stats
+
+        finally:
+            self.max_offline_entries = original_max
+
+    def prefill_bazara_cache(self, on_progress=None, delay: float = 0.2):
+        """
+        Prefill do cache offline usando sitemap do Bazara (requer permissao).
+        Executa em modo sequencial e salva uma unica vez no final.
+        """
+        stats = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "new": 0,
+            "no_sku": 0,
+            "errors": 0,
+        }
+        original_max = self.max_offline_entries
+        session = requests.Session()
+        session.headers.update(getattr(BazaraAPI, "HEADERS", {}))
+        timeout = getattr(BazaraAPI, "REQUEST_TIMEOUT", 6)
+
+        try:
+            url_keys = self._bazara_get_url_keys(session, timeout)
+            stats["total"] = len(url_keys)
+
+            if stats["total"] > self.max_offline_entries:
+                self.max_offline_entries = stats["total"]
+
+            self._emit_prefill_progress(on_progress, stats, "Iniciando prefill Bazara...")
+
+            for idx, url_key in enumerate(url_keys, 1):
+                stats["processed"] = idx
+                try:
+                    data = self._bazara_fetch_product_by_url_key(session, url_key, timeout)
+                    if not data or not data.get("barcode"):
+                        stats["no_sku"] += 1
+                    else:
+                        updated, created = self._merge_offline_entry(data["barcode"], data, "Bazara")
+                        if updated:
+                            stats["success"] += 1
+                        if created:
+                            stats["new"] += 1
+                except Exception:
+                    stats["errors"] += 1
+
+                if idx % 5 == 0 or idx == stats["total"]:
+                    self._emit_prefill_progress(on_progress, stats)
+
+                if delay:
+                    time.sleep(delay)
+
+            if stats["success"] > 0:
+                self._save_offline_cache()
+
+            self._emit_prefill_progress(on_progress, stats, "Prefill concluido.")
+            return stats
+
+        finally:
+            self.max_offline_entries = original_max
+
+    def prefill_bazara_offline_cache(self, on_progress=None, delay: float = 0.2, reset: bool = False):
+        """
+        Prefill do cache offline do Bazara via GraphQL.
+        Salva no arquivo bazara_offline_cache.json (separado do cache principal).
+        """
+        try:
+            from api.bazara_prefill import prefill_bazara_cache
+        except Exception:
+            stats = {
+                "total": 0,
+                "processed": 0,
+                "success": 0,
+                "new": 0,
+                "updated": 0,
+                "no_sku": 0,
+                "errors": 1,
+                "pages": 0,
+            }
+            self._emit_prefill_progress(on_progress, stats, "Erro ao iniciar prefill Bazara.")
+            return stats
+
+        return prefill_bazara_cache(delay=delay, reset=reset, on_progress=on_progress)
+
+    def backfill_bazara_barcodes(self, on_progress=None, delay: float = 0.2, limit: int | None = None):
+        """
+        Preenche codigos de barras no cache offline do Bazara usando GraphQL e pagina do produto.
+        """
+        try:
+            from api.bazara_backfill_barcodes import backfill_barcodes
+        except Exception:
+            stats = {
+                "total": 0,
+                "processed": 0,
+                "updated": 0,
+                "skipped": 0,
+                "no_barcode": 0,
+                "errors": 1,
+                "moved": 0,
+            }
+            self._emit_prefill_progress(on_progress, stats, "Erro ao iniciar backfill Bazara.")
+            return stats
+
+        return backfill_barcodes(delay=delay, limit=limit, on_progress=on_progress)
+
+    def _bazara_get_url_keys(self, session, timeout: int):
+        sitemap_url = "https://bazara.co.mz/sitemap.xml"
+        xml_text = self._fetch_text_with_retries(session, sitemap_url, timeout, attempts=2)
+        if not xml_text:
+            return []
+        return self._bazara_extract_url_keys(xml_text)
+
+    def _bazara_extract_url_keys(self, xml_text: str):
+        try:
+            root = ET.fromstring(xml_text)
+        except Exception:
+            return []
+        ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        keys = []
+        for loc in root.findall(".//ns:url/ns:loc", ns):
+            value = (loc.text or "").strip()
+            if not value:
+                continue
+            path = urlparse(value).path
+            last = path.split("/")[-1]
+            if not last.endswith(".html"):
+                continue
+            key = last[:-5].strip()
+            if key:
+                keys.append(key)
+        seen = set()
+        ordered = []
+        for key in keys:
+            if key not in seen:
+                seen.add(key)
+                ordered.append(key)
+        return ordered
+
+    def _bazara_fetch_product_by_url_key(self, session, url_key: str, timeout: int):
+        if not url_key:
+            return None
+        url = "https://bazara.co.mz/graphql"
+        query = (
+            "query ($key: String!) { "
+            "products(filter: { url_key: { eq: $key } }) { "
+            "items { "
+            "name sku url_key "
+            "small_image { url } "
+            "image { url } "
+            "price_range { minimum_price { final_price { value currency } } } "
+            "categories { name } "
+            "} } }"
+        )
+        payload = {"query": query, "variables": {"key": url_key}}
+        headers = {
+            "User-Agent": getattr(BazaraAPI, "HEADERS", {}).get("User-Agent", "Mozilla/5.0"),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        response = self._post_json_with_retries(session, url, payload, headers, timeout, attempts=2)
+        if not response:
+            return None
+        items = (((response.get("data") or {}).get("products") or {}).get("items")) or []
+        if not items:
+            return None
+        item = items[0] or {}
+
+        sku = (item.get("sku") or "").strip()
+        if not self._bazara_valid_sku(sku):
+            return {"barcode": None}
+
+        name = item.get("name") or ""
+        price = self._bazara_extract_graphql_price(item)
+        image = self._bazara_extract_graphql_image(item)
+        category = self._bazara_extract_graphql_category(item)
+
+        return {
+            "barcode": sku,
+            "name": name,
+            "price": price,
+            "image": image,
+            "category": category,
+        }
+
+    @staticmethod
+    def _bazara_valid_sku(sku: str) -> bool:
+        return bool(str(sku).strip())
+
+    @staticmethod
+    def _bazara_extract_graphql_price(item: dict) -> str:
+        price_range = item.get("price_range") or {}
+        minimum = price_range.get("minimum_price") or {}
+        final_price = minimum.get("final_price") or {}
+        value = final_price.get("value")
+        if value is None:
+            return ""
+        try:
+            return str(value)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _bazara_extract_graphql_image(item: dict) -> str:
+        small = item.get("small_image") or {}
+        image = item.get("image") or {}
+        return small.get("url") or image.get("url") or ""
+
+    def _bazara_extract_graphql_category(self, item: dict) -> str | None:
+        categories = item.get("categories") or []
+        preferred = None
+        for cat in categories:
+            name = (cat or {}).get("name")
+            if not name:
+                continue
+            lowered = str(name).strip().lower()
+            if lowered in {"todos produtos", "todos os produtos", "todos"}:
+                continue
+            preferred = name
+            break
+        if not preferred and categories:
+            preferred = (categories[0] or {}).get("name")
+        if not preferred:
+            return None
+        return BazaraAPI.CATEGORY_MAP.get(preferred, preferred)
+
+    @staticmethod
+    def _fetch_text_with_retries(session, url: str, timeout: int, attempts: int = 2):
+        for _ in range(max(attempts, 1)):
+            try:
+                resp = session.get(url, timeout=timeout)
+                if resp.status_code == 200:
+                    return resp.text
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _post_json_with_retries(session, url: str, payload: dict, headers: dict, timeout: int, attempts: int = 2):
+        for _ in range(max(attempts, 1)):
+            try:
+                resp = session.post(url, json=payload, headers=headers, timeout=timeout)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                if isinstance(data, dict) and not data.get("errors"):
+                    return data
+            except Exception:
+                continue
+        return None
+
+    def refresh_offline_cache_from_apis(
+        self,
+        source_names=None,
+        on_progress=None,
+        delay: float = 0.2,
+    ):
+        """
+        Atualiza o cache offline usando os barcodes existentes e APIs externas.
+        Salva o arquivo uma unica vez no final.
+        """
+        stats = {
+            "total": 0,
+            "processed": 0,
+            "found": 0,
+            "updated": 0,
+            "errors": 0,
+        }
+        barcodes = list(self.offline_cache.keys())
+        stats["total"] = len(barcodes)
+
+        if not barcodes:
+            self._emit_prefill_progress(on_progress, stats, "Cache offline vazio.")
+            return stats
+
+        if source_names:
+            wanted = {str(name).lower() for name in source_names}
+            sources = [(n, api) for n, api in self.EXTERNAL_SOURCES if n.lower() in wanted]
+        else:
+            sources = list(self.EXTERNAL_SOURCES)
+
+        if not sources:
+            self._emit_prefill_progress(on_progress, stats, "Nenhuma API configurada.")
+            return stats
+
+        self._emit_prefill_progress(on_progress, stats, "Atualizando cache online...")
+        openfoodfacts_updated = False
+
+        for idx, barcode in enumerate(barcodes, 1):
+            stats["processed"] = idx
+            for source_name, api in sources:
+                try:
+                    self._emit_prefill_progress(
+                        on_progress,
+                        stats,
+                        f"Buscando {barcode} em {source_name}...",
+                    )
+                    result = self._fetch_with_timeout(api, barcode, self.timeout_per_api)
+                    if not result:
+                        continue
+                    stats["found"] += 1
+                    if isinstance(result, dict) and not result.get("barcode"):
+                        result = dict(result)
+                        result["barcode"] = barcode
+                    updated, _created = self._merge_offline_entry(barcode, result, source_name)
+                    if updated:
+                        stats["updated"] += 1
+                    if self._is_openfoodfacts_source(source_name, result):
+                        self._upsert_openfoodfacts_cache(barcode, result)
+                        openfoodfacts_updated = True
+                except Exception:
+                    stats["errors"] += 1
+
+            if idx % 5 == 0 or idx == stats["total"]:
+                self._emit_prefill_progress(on_progress, stats)
+            if delay:
+                time.sleep(delay)
+
+        self._save_offline_cache()
+        if openfoodfacts_updated:
+            self._save_openfoodfacts_cache()
+        self._emit_prefill_progress(on_progress, stats, "Atualizacao concluida.")
+        return stats
+
+    def _emit_prefill_progress(self, on_progress, stats: dict, message: str | None = None):
+        if not on_progress:
+            return
+        payload = dict(stats)
+        if message:
+            payload["message"] = message
+        on_progress(payload)
+
+    def _ranxo_get_sitemap_urls(self, session, timeout: int):
+        index_url = "https://www.ranxo.co.mz/wp-sitemap.xml"
+        response = session.get(index_url, timeout=timeout)
+        if response.status_code != 200:
+            return []
+        return self._ranxo_extract_sitemap_urls(response.text)
+
+    def _ranxo_extract_sitemap_urls(self, xml_text: str):
+        try:
+            root = ET.fromstring(xml_text)
+        except Exception:
+            return []
+        ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        urls = []
+        for loc in root.findall(".//ns:sitemap/ns:loc", ns):
+            value = (loc.text or "").strip()
+            if "wp-sitemap-posts-product" in value:
+                urls.append(value)
+        return urls
+
+    def _ranxo_get_product_urls(self, session, sitemap_urls, timeout: int):
+        product_urls = []
+        for sitemap_url in sitemap_urls:
+            try:
+                response = session.get(sitemap_url, timeout=timeout)
+                if response.status_code != 200:
+                    continue
+                product_urls.extend(self._ranxo_extract_product_urls(response.text))
+            except Exception:
+                continue
+        # Deduplicar mantendo ordem
+        seen = set()
+        ordered = []
+        for url in product_urls:
+            if url not in seen:
+                seen.add(url)
+                ordered.append(url)
+        return ordered
+
+    def _ranxo_extract_product_urls(self, xml_text: str):
+        try:
+            root = ET.fromstring(xml_text)
+        except Exception:
+            return []
+        ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        urls = []
+        for loc in root.findall(".//ns:url/ns:loc", ns):
+            value = (loc.text or "").strip()
+            if value:
+                urls.append(value)
+        return urls
+
+    def _ranxo_fetch_product_data(self, session, product_url: str, timeout: int):
+        response = session.get(product_url, timeout=timeout, allow_redirects=True)
+        if response.status_code != 200:
+            return None
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        sku = self._ranxo_extract_sku(soup)
+        if not self._ranxo_valid_sku(sku):
+            return {"barcode": None}
+
+        name = self._ranxo_extract_name(soup)
+        price_text = self._ranxo_extract_price(soup)
+        price = RanxoAPI.normalize_price(price_text)
+        image = self._ranxo_extract_image(soup)
+        category = self._ranxo_extract_category(soup)
+
+        return {
+            "barcode": sku,
+            "name": name,
+            "price": price,
+            "image": image,
+            "category": category,
+        }
+
+    @staticmethod
+    def _ranxo_extract_sku(soup: BeautifulSoup) -> str:
+        sku_tag = soup.select_one("span.sku")
+        return sku_tag.get_text(strip=True) if sku_tag else ""
+
+    @staticmethod
+    def _ranxo_extract_name(soup: BeautifulSoup) -> str:
+        name_tag = soup.select_one("h1.product_title")
+        return name_tag.get_text(strip=True) if name_tag else ""
+
+    @staticmethod
+    def _ranxo_extract_price(soup: BeautifulSoup) -> str:
+        price_tag = soup.select_one(".price")
+        return price_tag.get_text(" ", strip=True) if price_tag else ""
+
+    @staticmethod
+    def _ranxo_extract_image(soup: BeautifulSoup) -> str:
+        meta = soup.select_one('meta[property="og:image"]')
+        if meta and meta.has_attr("content"):
+            return meta["content"]
+        img = soup.select_one("figure.woocommerce-product-gallery__wrapper img, .woocommerce-product-gallery__image img")
+        if img and img.has_attr("src"):
+            return img["src"]
+        return ""
+
+    @staticmethod
+    def _ranxo_extract_category(soup: BeautifulSoup) -> str | None:
+        crumbs = [a.get_text(strip=True) for a in soup.select("nav.woocommerce-breadcrumb a")]
+        if crumbs:
+            for name in reversed(crumbs):
+                if name and name.lower() not in ("inicio", "início"):
+                    return name
+        posted = soup.select(".posted_in a")
+        if posted:
+            return posted[0].get_text(strip=True)
+        return None
+
+    @staticmethod
+    def _ranxo_valid_sku(sku: str) -> bool:
+        if not sku:
+            return False
+        cleaned = str(sku).strip()
+        if len(cleaned) < 8:
+            return False
+        return cleaned.isalnum()
+
+    def _merge_offline_entry(self, barcode: str, new_data: dict, source: str):
+        created = False
+        updated = False
+
+        entry = self.offline_cache.get(barcode)
+        if not entry:
+            created = True
+            entry = {
+                "source": source,
+                "data": {"barcode": barcode},
+                "timestamp": datetime.now().isoformat(),
+            }
+            self.offline_cache[barcode] = entry
+
+        data = entry.get("data") or {}
+        if not data.get("barcode"):
+            data["barcode"] = barcode
+            updated = True
+
+        for key, value in (new_data or {}).items():
+            if not value:
+                continue
+            if not data.get(key):
+                data[key] = value
+                updated = True
+
+        chain = data.get("source_chain")
+        if isinstance(chain, list):
+            if source not in chain:
+                chain.append(source)
+                data["source_chain"] = chain
+                updated = True
+        elif chain is None:
+            data["source_chain"] = [source]
+            updated = True
+
+        entry["data"] = data
+        if updated:
+            if not entry.get("source"):
+                entry["source"] = source
+            entry["timestamp"] = datetime.now().isoformat()
+
+        return updated, created

@@ -2,7 +2,7 @@
 #:import hex kivy.utils.get_color_from_hex
 
 <SalesScreen>:
-    name: 'sales'
+    name: 'manager'
     
     FloatLayout:
         MDBoxLayout:
@@ -12,51 +12,90 @@
             # ==================== HEADER ====================
             MDTopAppBar:
                 id: top_bar
-                title: "VENDAS"
+                title: "OPERACAO DE VENDAS"
                 md_bg_color: app.theme_tokens['primary']
                 specific_text_color: app.theme_tokens['on_primary']
                 elevation: 2
-                left_action_items: [["arrow-left", lambda x: root.go_back()]]
-                
-                MDBoxLayout:
-                    size_hint_x: None
-                    width: self.minimum_width
-                    spacing: dp(6)
-                    padding: [0, 0, dp(8), 0]
-                    pos_hint: {"right": 1, "center_y": 0.5}
-    
-                    MDFlatButton:
-                        text: "Historico"
+                left_action_items: [["logout", lambda x: root.return_to_login()]]
+
+            MDCard:
+                id: manager_toolbar_card
+                orientation: 'vertical'
+                size_hint_y: None
+                height: self.minimum_height
+                padding: [dp(10), dp(8), dp(10), dp(8)]
+                radius: [0, 0, dp(12), dp(12)]
+                elevation: 1
+                md_bg_color: app.theme_tokens['card']
+
+                MDGridLayout:
+                    id: top_actions_grid
+                    cols: 5
+                    adaptive_height: True
+                    spacing: dp(8)
+
+                    MDRaisedButton:
+                        id: products_action_btn
+                        text: "PRODUTOS"
+                        md_bg_color: app.theme_tokens['primary']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
-                        md_bg_color: 1, 1, 1, 0.12
-                        size_hint_y: None
-                        height: dp(28)
+                        font_size: dp(11)
+                        on_release: root.open_products_panel()
+
+                    MDRaisedButton:
+                        id: history_action_btn
+                        text: "HISTORICO"
+                        md_bg_color: app.theme_tokens['card_alt']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_primary']
+                        font_size: dp(11)
                         on_release: root.open_sales_history()
 
-                    MDFlatButton:
-                        text: "Perdas"
+                    MDRaisedButton:
+                        id: losses_action_btn
+                        text: "PERDAS"
+                        md_bg_color: app.theme_tokens['card_alt']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_primary']
+                        font_size: dp(11)
+                        on_release: root.open_losses_screen()
+
+                    MDRaisedButton:
+                        id: refresh_action_btn
+                        text: "ATUALIZAR"
+                        md_bg_color: app.theme_tokens['success']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
-                        md_bg_color: 1, 1, 1, 0.12
-                        size_hint_y: None
-                        height: dp(28)
-                        on_release: root.open_losses_screen()
+                        font_size: dp(11)
+                        on_release: root.refresh_products_panel()
+
+                    MDRaisedButton:
+                        id: theme_action_btn
+                        text: root.theme_action_text
+                        md_bg_color: app.theme_tokens['warning']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        font_size: dp(11)
+                        on_release: root.toggle_theme()
             
             # ==================== MAIN CONTENT ====================
             MDBoxLayout:
+                id: main_content
                 orientation: 'horizontal'
                 padding: dp(10)
                 spacing: dp(10)
                 
                 # ========== LEFT COLUMN: PRODUCTS (38%) ==========
                 MDBoxLayout:
+                    id: products_panel
                     orientation: 'vertical'
                     size_hint_x: 0.38
                     spacing: dp(8)
                     
                     # Search Card
                     MDCard:
+                        id: search_card
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
@@ -78,7 +117,7 @@
                         
                         MDTextField:
                             id: search_input
-                            hint_text: "Nome, ID ou CÃ³digo de Barras..."
+                            hint_text: "Nome, ID ou Código de Barras..."
                             mode: "rectangle"
                             size_hint_y: None
                             height: dp(38)
@@ -88,6 +127,7 @@
                     
                     # Products Card
                     MDCard:
+                        id: products_card
                         orientation: 'vertical'
                         padding: dp(10)
                         spacing: dp(6)
@@ -107,7 +147,7 @@
                                 spacing: dp(6)
                                 
                                 MDLabel:
-                                    text: "Produtos DisponÃ­veis"
+                                    text: "Produtos Disponíveis"
                                     font_style: "Subtitle1"
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['primary']
@@ -128,16 +168,36 @@
                             size_hint_y: None
                             height: dp(4)
                         
-                        ScrollView:
-                            do_scroll_x: False
-                            
-                            MDList:
+                        FloatLayout:
+                            RecycleView:
                                 id: products_list
-                                padding: 0
-                                spacing: dp(5)
+                                viewclass: "RecycleProductCard"
+                                scroll_type: ['bars', 'content']
+                                bar_width: dp(6)
+                                do_scroll_x: False
+                                on_scroll_y: root.on_products_scroll(self.scroll_y)
+
+                                RecycleBoxLayout:
+                                    default_size: None, dp(82)
+                                    default_size_hint: 1, None
+                                    size_hint_y: None
+                                    height: self.minimum_height
+                                    orientation: "vertical"
+                                    spacing: dp(5)
+
+                            MDLabel:
+                                id: products_empty_label
+                                text: "Nenhum produto disponivel"
+                                halign: "center"
+                                theme_text_color: "Secondary"
+                                italic: True
+                                pos_hint: {"center_x": 0.5, "center_y": 0.5}
+                                opacity: 0
+                                disabled: True
                 
                 # ========== MIDDLE COLUMN: CART (40%) ==========
                 MDCard:
+                    id: cart_panel
                     orientation: 'vertical'
                     size_hint_x: 0.40
                     padding: dp(10)
@@ -171,6 +231,7 @@
                                 size_hint_y: 0.35
                         
                         MDRaisedButton:
+                            id: clear_cart_btn
                             text: "LIMPAR"
                             md_bg_color: app.theme_tokens['danger']
                             size_hint_x: 0.3
@@ -282,12 +343,14 @@
                 
                 # ========== RIGHT COLUMN: SCANNER + PAYMENT (22%) ==========
                 MDBoxLayout:
+                    id: side_panel
                     orientation: 'vertical'
                     size_hint_x: 0.22
                     spacing: dp(8)
                     
                     # Scanner Card (40%)
                     MDCard:
+                        id: scanner_card
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
@@ -364,6 +427,7 @@
                     
                     # Payment Card (60%)
                     MDCard:
+                        id: payment_card
                         orientation: 'vertical'
                         size_hint_y: 0.60
                         padding: dp(10)
@@ -438,14 +502,16 @@
                         Widget:
                             size_hint_y: 0.12
                         
-                        # Action Buttons - Mais largos e espaÃ§ados
+                        # Action Buttons - Mais largos e espaçados
                         MDBoxLayout:
+                            id: payment_actions_box
                             orientation: 'vertical'
                             size_hint_y: None
                             height: dp(115)
                             spacing: dp(8)
                             
                             MDRaisedButton:
+                                id: finalize_btn
                                 text: "FINALIZAR VENDA"
                                 md_bg_color: app.theme_tokens['success']
                                 font_size: dp(12)
@@ -454,6 +520,7 @@
                                 on_release: root.finalize_sale()
                             
                             MDRaisedButton:
+                                id: receipt_btn
                                 text: "IMPRIMIR RECIBO"
                                 md_bg_color: app.theme_tokens['primary']
                                 font_size: dp(11)
@@ -462,6 +529,7 @@
                                 on_release: root.print_receipt()
                             
                             MDRaisedButton:
+                                id: cancel_btn
                                 text: "CANCELAR VENDA"
                                 md_bg_color: app.theme_tokens['danger']
                                 font_size: dp(11)
@@ -479,8 +547,8 @@
 
         MDFloatingActionButton:
             id: ai_button
-            icon: "icon/idea.ico"
-            elevation: 6
+            icon: "assets/icon/idea.ico"
+            elevation: 2
             pos_hint: {"right": 0.965, "y": 0.04}
             on_release: root.open_ai_menu(self)
 
@@ -490,7 +558,7 @@
             size: dp(24), dp(24)
             md_bg_color: app.theme_tokens["badge"]
             radius: [dp(12)]
-            elevation: 8
+            elevation: 1
             pos_hint: {"right": 0.978, "y": 0.098}
             opacity: 0
 
@@ -507,16 +575,16 @@
 <ProductCard>:
     orientation: 'vertical'
     size_hint_y: None
-    height: dp(58)
+    height: dp(82)
     padding: 0
     spacing: 0
     radius: [dp(8)]
-    elevation: 2
+    elevation: 1
     ripple_behavior: True
     
     MDBoxLayout:
-        padding: dp(5)
-        spacing: dp(3)
+        padding: [dp(6), dp(5), dp(6), dp(5)]
+        spacing: dp(4)
         
         # ID Field
         MDBoxLayout:
@@ -549,7 +617,7 @@
         # Name Field
         MDBoxLayout:
             orientation: 'vertical'
-            size_hint_x: 0.27
+            size_hint_x: 0.30
             spacing: dp(2)
             
             MDLabel:
@@ -569,7 +637,17 @@
                 theme_text_color: "Primary"
                 shorten: True
                 shorten_from: "right"
-                size_hint_y: 0.65
+                size_hint_y: 0.40
+
+            MDLabel:
+                id: product_meta_label
+                text: ""
+                font_size: dp(9)
+                halign: "left"
+                theme_text_color: "Secondary"
+                shorten: True
+                shorten_from: "right"
+                size_hint_y: 0.25
         
         MDSeparator:
             orientation: 'vertical'
@@ -630,12 +708,12 @@
         # Price Field
         MDBoxLayout:
             orientation: 'vertical'
-            size_hint_x: 0.23
+            size_hint_x: 0.18
             spacing: dp(2)
             
             MDLabel:
                 id: product_price_header
-                text: "PREÃ‡O"
+                text: "PREÇO"
                 font_size: dp(7)
                 halign: "center"
                 theme_text_color: "Secondary"
@@ -643,23 +721,84 @@
                 size_hint_y: 0.35
             
             MDLabel:
-                id: product_price_label
+                id: product_price_base_label
+                text: ""
+                font_size: dp(10)
+                halign: "center"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_secondary']
+                size_hint_y: 0.3
+
+            MDLabel:
+                id: product_price_promo_label
                 text: ""
                 font_size: dp(12)
                 halign: "center"
                 bold: True
                 theme_text_color: "Custom"
                 text_color: app.theme_tokens['success']
-                size_hint_y: 0.65
+                size_hint_y: 0.35
         
         MDSeparator:
             orientation: 'vertical'
             width: dp(1)
         
-        # Add Button
-        MDRaisedButton:
-            text: "+ ADD"
-            md_bg_color: app.theme_tokens['success']
-            size_hint_x: 0.17
-            font_size: dp(11)
-            on_release: root.on_add_click()
+        # Add Buttons
+        MDBoxLayout:
+            id: add_buttons_box
+            size_hint_x: 0.22
+            spacing: dp(4)
+
+            MDBoxLayout:
+                id: add_unit_wrap
+                orientation: "vertical"
+                size_hint_x: 0.5
+                spacing: dp(2)
+                padding: [0, dp(2), 0, dp(2)]
+
+                MDIconButton:
+                    id: add_unit_btn
+                    icon: "plus-circle"
+                    md_bg_color: app.theme_tokens['primary']
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['on_primary']
+                    size_hint: None, None
+                    size: dp(36), dp(36)
+                    pos_hint: {"center_x": 0.5}
+                    on_release: root.on_add_unit_click()
+
+                MDLabel:
+                    id: add_unit_label
+                    text: "UNID"
+                    halign: "center"
+                    font_size: dp(8)
+                    size_hint_y: None
+                    height: dp(14)
+                    theme_text_color: "Secondary"
+
+            MDBoxLayout:
+                id: add_pack_wrap
+                orientation: "vertical"
+                size_hint_x: 0.5
+                spacing: dp(2)
+                padding: [0, dp(2), 0, dp(2)]
+
+                MDIconButton:
+                    id: add_pack_btn
+                    icon: "package-variant-closed-plus"
+                    md_bg_color: app.theme_tokens['success']
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['on_primary']
+                    size_hint: None, None
+                    size: dp(36), dp(36)
+                    pos_hint: {"center_x": 0.5}
+                    on_release: root.on_add_pack_click()
+
+                MDLabel:
+                    id: add_pack_label
+                    text: "OUTROS"
+                    halign: "center"
+                    font_size: dp(8)
+                    size_hint_y: None
+                    height: dp(14)
+                    theme_text_color: "Secondary"

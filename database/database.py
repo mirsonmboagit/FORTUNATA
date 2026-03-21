@@ -1,8 +1,11 @@
-import sqlite3
 import os
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta, date
+from time import perf_counter
 import bcrypt
+
+from utils.perf_utils import perf_log, should_log_debug
 
 NEAR_EXPIRY_DAYS = 15
 LOSS_QTY_LIMIT_UN = 10
@@ -33,6 +36,40 @@ def _parse_date(value):
         except Exception:
             continue
     return None
+
+
+def _parse_datetime_value(value, end_of_day=False):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt_value = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        dt_value = None
+        try:
+            dt_value = datetime.fromisoformat(text)
+        except Exception:
+            pass
+        if dt_value is None:
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d",
+                "%d/%m/%Y %H:%M:%S",
+                "%d/%m/%Y",
+            ):
+                try:
+                    dt_value = datetime.strptime(text, fmt)
+                    break
+                except Exception:
+                    continue
+        if dt_value is None:
+            return None
+    if end_of_day and dt_value.hour == 0 and dt_value.minute == 0 and dt_value.second == 0:
+        dt_value = dt_value.replace(hour=23, minute=59, second=59)
+    return dt_value.replace(microsecond=0)
 
 
 def _fetch_sales_velocity(db, days=14):
@@ -121,6 +158,12 @@ def _build_forecasts(db, days=14, limit=10):
     return forecasts[:limit], expiry_risk[:limit]
 
 class Database:
+    SKU_PREFIX_DEFAULT = "LOJA"
+    BACKUP_RETENTION_DAYS = 30
+    BACKUP_INTERVAL_HOURS = 24
+    RECONCILE_INTERVAL_MINUTES = 60
+    RECONCILE_DIFF_TOLERANCE = 0.0001
+
     def __init__(self, db_name="inventory.db", db_path=None, db_folder="database"):
         # Guardamos o nome simples
         self.db_name = db_name
@@ -134,13 +177,19 @@ class Database:
             self.db_folder = db_folder
             self.db_path = os.path.join(self.db_folder, self.db_name)
 
-        # Criamos a pasta se n??o existir
+        # Criamos a pasta se nÃƒÂ£o existir
         if self.db_folder and not os.path.exists(self.db_folder):
             os.makedirs(self.db_folder)
-            print(f"???? Pasta '{self.db_folder}' criada!")
+            print(f"Pasta '{self.db_folder}' criada!")
 
         self.conn = None
         self.cursor = None
+        self.backup_root = os.path.join(self.db_folder or ".", "backups")
+        self.sku_prefix = self._sanitize_sku_token(
+            os.getenv("SKU_PREFIX", self.SKU_PREFIX_DEFAULT),
+            fallback=self.SKU_PREFIX_DEFAULT,
+            max_len=8,
+        )
         self.connect()
         self.setup()
     
@@ -150,19 +199,52 @@ class Database:
             # IMPORTANTE: Usamos o self.db_path aqui
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.cursor = self.conn.cursor()
-            print(f"✅ Conectado com sucesso em: {self.db_path}")
-        except sqlite3.Error as e:
-            print(f"❌ Erro ao conectar: {e}")
+            print(f"Ã¢Å“â€¦ Conectado com sucesso em: {self.db_path}")
+        except (sqlite3.Error, ValueError) as e:
+            self.conn.rollback()
+            print(f"Ã¢ÂÅ’ Erro ao conectar: {e}")
     
     def close(self):
-        """Fechar a conexão com o banco de dados"""
+        """Fechar a conexÃƒÂ£o com o banco de dados"""
         if self.conn:
             self.conn.close()
+
+    @staticmethod
+    def _sanitize_sku_token(value, fallback="SKU", max_len=8):
+        token = "".join(ch for ch in str(value or "") if ch.isalnum()).upper()
+        if not token:
+            token = fallback
+        return token[:max_len]
+
+    def _sku_manual_token(self, description):
+        return self._sanitize_sku_token(description, fallback="PROD", max_len=3)
+
+    def _build_sku(self, product_id, description):
+        manual = self._sku_manual_token(description)
+        return f"{manual}-{self.sku_prefix}-{int(product_id):06d}"
+
+    def _rebuild_all_skus(self):
+        """Regera SKUs no formato MANUAL-PREFIXO-000001 para produtos e arquivo."""
+        self.cursor.execute("SELECT id, description FROM products")
+        for product_id, description in self.cursor.fetchall():
+            sku = self._build_sku(product_id, description)
+            self.cursor.execute(
+                "UPDATE products SET sku = ? WHERE id = ?",
+                (sku, product_id),
+            )
+
+        self.cursor.execute("SELECT id, description FROM products_archive")
+        for product_id, description in self.cursor.fetchall():
+            sku = self._build_sku(product_id, description)
+            self.cursor.execute(
+                "UPDATE products_archive SET sku = ? WHERE id = ?",
+                (sku, product_id),
+            )
     
     def setup(self):
         """Configurar tabelas do banco de dados"""
         try:
-            # Tabela de usuários (administrador e gerente)
+            # Tabela de usuÃƒÂ¡rios (administrador e gerente)
             self.cursor.execute(''' 
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
@@ -231,10 +313,13 @@ class Database:
                 status_source TEXT DEFAULT 'MANUAL',
                 status_reason TEXT,
                 status_updated_at TEXT,
-                status_updated_by TEXT
+                status_updated_by TEXT,
+                sku TEXT,
+                units_per_package INTEGER,
+                allow_pack_sale INTEGER DEFAULT 0
             )''')
 
-            # Tabela de produtos arquivados (excluídos)
+            # Tabela de produtos arquivados (excluÃƒÂ­dos)
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS products_archive (
                 id INTEGER PRIMARY KEY,
@@ -256,6 +341,9 @@ class Database:
                 status_reason TEXT,
                 status_updated_at TEXT,
                 status_updated_by TEXT,
+                sku TEXT,
+                units_per_package INTEGER,
+                allow_pack_sale INTEGER DEFAULT 0,
                 deleted_at TEXT,
                 deleted_by TEXT
             )''')
@@ -271,16 +359,16 @@ class Database:
                 timestamp TEXT NOT NULL
             )''')
             
-            # ===== VERIFICAR E ADICIONAR COLUNAS NECESSÁRIAS =====
+            # ===== VERIFICAR E ADICIONAR COLUNAS NECESSÃƒÂRIAS =====
             self.cursor.execute("PRAGMA table_info(products)")
             columns = [column[1] for column in self.cursor.fetchall()]
             # Nao criar usuario padrao automaticamente
             if 'is_sold_by_weight' not in columns:
-                print("⚙️ Adicionando coluna 'is_sold_by_weight' à tabela products...")
+                print("Ã¢Å¡â„¢Ã¯Â¸Â Adicionando coluna 'is_sold_by_weight' ÃƒÂ  tabela products...")
                 self.cursor.execute("ALTER TABLE products ADD COLUMN is_sold_by_weight INTEGER DEFAULT 0")
-                print("✅ Coluna 'is_sold_by_weight' adicionada com sucesso!")
+                print("Ã¢Å“â€¦ Coluna 'is_sold_by_weight' adicionada com sucesso!")
             
-            # ===== ADICIONAR COLUNAS DE STATUS (se necessário) =====
+            # ===== ADICIONAR COLUNAS DE STATUS (se necessÃƒÂ¡rio) =====
             def ensure_column(table, column, col_def):
                 self.cursor.execute(f"PRAGMA table_info({table})")
                 cols = [c[1] for c in self.cursor.fetchall()]
@@ -295,17 +383,23 @@ class Database:
             ensure_column("products", "status_updated_at", "TEXT")
             ensure_column("products", "status_updated_by", "TEXT")
             ensure_column("products", "package_quantity", "TEXT")
+            ensure_column("products", "sku", "TEXT")
+            ensure_column("products", "units_per_package", "INTEGER")
+            ensure_column("products", "allow_pack_sale", "INTEGER DEFAULT 0")
             ensure_column("products_archive", "package_quantity", "TEXT")
             ensure_column("products_archive", "status", "TEXT")
             ensure_column("products_archive", "status_source", "TEXT")
             ensure_column("products_archive", "status_reason", "TEXT")
             ensure_column("products_archive", "status_updated_at", "TEXT")
             ensure_column("products_archive", "status_updated_by", "TEXT")
+            ensure_column("products_archive", "sku", "TEXT")
+            ensure_column("products_archive", "units_per_package", "INTEGER")
+            ensure_column("products_archive", "allow_pack_sale", "INTEGER DEFAULT 0")
             ensure_column("products_archive", "deleted_at", "TEXT")
             ensure_column("products_archive", "deleted_by", "TEXT")
 
             # ===== ALTERAR TIPO DE DADOS PARA SUPORTAR DECIMAIS (KG) =====
-            # Verificar se as colunas de estoque já são REAL (suportam decimais)
+            # Verificar se as colunas de estoque jÃƒÂ¡ sÃƒÂ£o REAL (suportam decimais)
             self.cursor.execute("PRAGMA table_info(products)")
             columns_info = self.cursor.fetchall()
             
@@ -318,11 +412,11 @@ class Database:
                 elif col[1] == 'sold_stock':
                     sold_stock_type = col[2]
             
-            # Se as colunas forem INTEGER, precisamos recriá-las como REAL
+            # Se as colunas forem INTEGER, precisamos recriÃƒÂ¡-las como REAL
             if existing_stock_type == 'INTEGER' or sold_stock_type == 'INTEGER':
-                print("⚙️ Convertendo colunas de estoque para suportar valores decimais (KG)...")
+                print("Ã¢Å¡â„¢Ã¯Â¸Â Convertendo colunas de estoque para suportar valores decimais (KG)...")
                 
-                # Criar tabela temporária com tipos corretos
+                # Criar tabela temporÃƒÂ¡ria com tipos corretos
                 self.cursor.execute(''' 
                 CREATE TABLE IF NOT EXISTS products_temp (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,28 +437,32 @@ class Database:
                     status_source TEXT DEFAULT 'MANUAL',
                     status_reason TEXT,
                     status_updated_at TEXT,
-                    status_updated_by TEXT
+                    status_updated_by TEXT,
+                    sku TEXT,
+                    units_per_package INTEGER,
+                    allow_pack_sale INTEGER DEFAULT 0
                 )''')
                 
-                # Copiar dados para tabela temporária
+                # Copiar dados para tabela temporÃƒÂ¡ria
                 self.cursor.execute('''
                 INSERT INTO products_temp 
                 SELECT id, description, category, CAST(existing_stock AS REAL), 
                        CAST(sold_stock AS REAL), sale_price, total_purchase_price, 
                        unit_purchase_price, profit_per_unit, barcode, expiry_date, 
                        date_added, is_sold_by_weight,
-                       NULL,
-                       'ATIVO', 'MANUAL', NULL, NULL, NULL
+                       package_quantity,
+                       status, status_source, status_reason, status_updated_at, status_updated_by,
+                       sku, units_per_package, allow_pack_sale
                 FROM products
                 ''')
                 
                 # Remover tabela antiga
                 self.cursor.execute('DROP TABLE products')
                 
-                # Renomear tabela temporária
+                # Renomear tabela temporÃƒÂ¡ria
                 self.cursor.execute('ALTER TABLE products_temp RENAME TO products')
                 
-                print("✅ Colunas convertidas para REAL (suportam decimais)!")
+                print("Ã¢Å“â€¦ Colunas convertidas para REAL (suportam decimais)!")
             
             # Tabela de vendas (atualizada para aceitar quantidades decimais - KG)
             self.cursor.execute(''' 
@@ -374,6 +472,7 @@ class Database:
                 quantity REAL NOT NULL,
                 sale_price REAL NOT NULL,
                 total_price REAL NOT NULL,
+                is_promotional INTEGER DEFAULT 0,
                 sale_date TEXT NOT NULL,
                 created_by TEXT,
                 created_role TEXT,
@@ -385,6 +484,30 @@ class Database:
             ensure_column("sales", "created_by", "TEXT")
             ensure_column("sales", "created_role", "TEXT")
             ensure_column("sales", "terminal_id", "TEXT")
+            ensure_column("sales", "is_promotional", "INTEGER DEFAULT 0")
+
+            # Tabela de devolucoes/estornos de venda
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS sales_returns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sale_id INTEGER NOT NULL,
+                    product_id INTEGER NOT NULL,
+                    returned_qty REAL NOT NULL,
+                    sale_price REAL NOT NULL,
+                    total_refund REAL NOT NULL,
+                    reason TEXT,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT,
+                    created_role TEXT,
+                    terminal_id TEXT,
+                    stock_movement_id INTEGER,
+                    FOREIGN KEY (sale_id) REFERENCES sales (id),
+                    FOREIGN KEY (product_id) REFERENCES products (id),
+                    FOREIGN KEY (stock_movement_id) REFERENCES stock_movements (id)
+                )
+                '''
+            )
 
             # Atualizar status default para registros antigos
             self.cursor.execute(
@@ -395,8 +518,14 @@ class Database:
                 "UPDATE products SET status_source = 'MANUAL' "
                 "WHERE status_source IS NULL OR status_source = ''"
             )
+            # Regerar SKU no formato MANUAL-PREFIXO-000001
+            self._rebuild_all_skus()
+            self.cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_products_sku "
+                "ON products (sku)"
+            )
 
-            # Tabela de movimentos de stock (livro-razão)
+            # Tabela de movimentos de stock (livro-razÃƒÂ£o)
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS stock_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -413,6 +542,8 @@ class Database:
                 stock_after REAL,
                 reason TEXT,
                 note TEXT,
+                supplier_name TEXT,
+                invoice_number TEXT,
                 evidence_path TEXT,
                 reference_table TEXT,
                 reference_id INTEGER,
@@ -426,6 +557,8 @@ class Database:
                 applied INTEGER DEFAULT 1,
                 FOREIGN KEY (product_id) REFERENCES products (id)
             )''')
+            ensure_column("stock_movements", "supplier_name", "TEXT")
+            ensure_column("stock_movements", "invoice_number", "TEXT")
 
             # Historico de status do produto
             self.cursor.execute('''
@@ -462,6 +595,32 @@ class Database:
                 FOREIGN KEY (related_movement_id) REFERENCES stock_movements (id)
             )''')
 
+            # Estado de tarefas automÃ¡ticas (backup/reconciliaÃ§Ã£o)
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS automation_state (
+                state_key TEXT PRIMARY KEY,
+                state_value TEXT,
+                updated_at TEXT NOT NULL
+            )''')
+
+            # Registo de inconsistÃªncias encontradas na reconciliaÃ§Ã£o de stock
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock_reconciliation_issues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                check_run_at TEXT NOT NULL,
+                product_id INTEGER,
+                issue_type TEXT NOT NULL,
+                movement_id INTEGER,
+                stock_before REAL,
+                stock_after REAL,
+                expected_stock_after REAL,
+                current_stock REAL,
+                diff_qty REAL,
+                details TEXT,
+                FOREIGN KEY (product_id) REFERENCES products (id),
+                FOREIGN KEY (movement_id) REFERENCES stock_movements (id)
+            )''')
+
             # Indices para performance
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_movements_product_date "
@@ -472,6 +631,10 @@ class Database:
                 "ON stock_movements (movement_type, created_at)"
             )
             self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sales_returns_sale "
+                "ON sales_returns (sale_id, created_at)"
+            )
+            self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_products_status "
                 "ON products (status)"
             )
@@ -479,27 +642,67 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_fraud_status "
                 "ON fraud_alerts (status, severity)"
             )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reconcile_product_date "
+                "ON stock_reconciliation_issues (product_id, check_run_at)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_barcode "
+                "ON products (barcode)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_description "
+                "ON products (description)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_category "
+                "ON products (category)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_date_added "
+                "ON products (date_added)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_sale_filter "
+                "ON products (status, expiry_date, existing_stock)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sales_sale_date "
+                "ON sales (sale_date)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sales_product_date "
+                "ON sales (product_id, sale_date)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sales_terminal_date "
+                "ON sales (terminal_id, sale_date)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_logs_timestamp "
+                "ON user_logs (timestamp)"
+            )
             
             self.conn.commit()
-            print("✅ Banco de dados configurado com suporte completo a vendas por KG e sistema de perdas!")
+            print("Ã¢Å“â€¦ Banco de dados configurado com suporte completo a vendas por KG e sistema de perdas!")
             
-        except sqlite3.Error as e:
-            print(f"❌ Erro ao configurar o banco de dados: {e}")
+        except (sqlite3.Error, ValueError) as e:
+            print(f"Ã¢ÂÅ’ Erro ao configurar o banco de dados: {e}")
             import traceback
             traceback.print_exc()
     
     def validate_user(self, username, password):
-        """Validar credenciais do usuário usando hashing"""
+        """Validar credenciais do usuÃƒÂ¡rio usando hashing"""
         try:
             self.cursor.execute(
                 "SELECT password, role FROM users WHERE username = ?", (username,)
             )
             result = self.cursor.fetchone()
             if result and bcrypt.checkpw(password.encode('utf-8'), result[0]):
-                return result[1]  # Retorna a role do usuário
+                return result[1]  # Retorna a role do usuÃƒÂ¡rio
             return None
-        except sqlite3.Error as e:
-            print(f"Erro ao validar usuário: {e}")
+        except (sqlite3.Error, ValueError) as e:
+            print(f"Erro ao validar usuÃƒÂ¡rio: {e}")
             return None
 
 
@@ -508,7 +711,7 @@ class Database:
         try:
             self.cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
             return self.cursor.fetchone()[0] > 0
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             print(f"Erro ao verificar admin: {e}")
             return False
 
@@ -526,7 +729,7 @@ class Database:
         except sqlite3.IntegrityError:
             self.conn.rollback()
             return False
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             print(f"Erro ao criar admin: {e}")
             self.conn.rollback()
             return False
@@ -830,7 +1033,7 @@ class Database:
             return {"ok": False, "reason": "error"}
 
     def log_action(self, username, role, action, details=""):
-        """Registrar ação do usuário no log do sistema"""
+        """Registrar aÃƒÂ§ÃƒÂ£o do usuÃƒÂ¡rio no log do sistema"""
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.cursor.execute(
@@ -845,7 +1048,7 @@ class Database:
             print(f"Erro ao registrar log: {e}")
             self.conn.rollback()
     
-    # ==================== MÉTODOS PARA PRODUTOS ====================
+    # ==================== MÃƒâ€°TODOS PARA PRODUTOS ====================
     
     def _now_str(self):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -868,6 +1071,336 @@ class Database:
             ).replace(microsecond=0)
             return t.strftime("%Y-%m-%d %H:%M:%S")
         return value
+
+    # ==================== AUTOMAÃ‡Ã•ES CRÃTICAS ====================
+    def _get_automation_state_dt(self, state_key):
+        try:
+            self.cursor.execute(
+                "SELECT state_value FROM automation_state WHERE state_key = ?",
+                (state_key,),
+            )
+            row = self.cursor.fetchone()
+            if not row or not row[0]:
+                return None
+            return datetime.fromisoformat(str(row[0]))
+        except Exception:
+            return None
+
+    def _set_automation_state(self, state_key, state_value):
+        now = self._now_str()
+        self.cursor.execute(
+            """
+            INSERT INTO automation_state (state_key, state_value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(state_key) DO UPDATE SET
+                state_value = excluded.state_value,
+                updated_at = excluded.updated_at
+            """,
+            (state_key, str(state_value or ""), now),
+        )
+
+    def _cleanup_old_backups(self, retention_days=None):
+        retention_days = retention_days or self.BACKUP_RETENTION_DAYS
+        root = self.backup_root
+        if not os.path.isdir(root):
+            return 0
+
+        cutoff = datetime.now() - timedelta(days=int(retention_days))
+        removed = 0
+
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for fname in filenames:
+                if not fname.lower().endswith((".db", ".sqlite", ".sqlite3", ".bak")):
+                    continue
+                fpath = os.path.join(dirpath, fname)
+                try:
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+                    if mtime < cutoff:
+                        os.remove(fpath)
+                        removed += 1
+                except Exception:
+                    continue
+
+        # Limpar diretÃ³rios vazios de forma segura
+        for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
+            try:
+                if dirpath != root and not os.listdir(dirpath):
+                    os.rmdir(dirpath)
+            except Exception:
+                pass
+
+        return removed
+
+    def _verify_backup_restore(self, backup_path):
+        # 1) Integridade do backup
+        try:
+            with sqlite3.connect(backup_path) as conn_backup:
+                cur = conn_backup.cursor()
+                cur.execute("PRAGMA integrity_check")
+                row = cur.fetchone()
+                if not row or str(row[0]).lower() != "ok":
+                    return False, "integrity_check_failed"
+        except Exception as e:
+            return False, f"integrity_open_failed: {e}"
+
+        # 2) SimulaÃ§Ã£o de restauraÃ§Ã£o para arquivo temporÃ¡rio
+        tmp_fd = None
+        tmp_path = None
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(prefix="restore_test_", suffix=".db")
+            os.close(tmp_fd)
+            tmp_fd = None
+
+            with sqlite3.connect(backup_path) as src, sqlite3.connect(tmp_path) as dst:
+                src.backup(dst)
+                cur = dst.cursor()
+                cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
+                tables_count = int((cur.fetchone() or [0])[0])
+                if tables_count <= 0:
+                    return False, "restore_validation_failed_no_tables"
+                cur.execute("SELECT 1 FROM sqlite_master WHERE name = 'products' LIMIT 1")
+                if not cur.fetchone():
+                    return False, "restore_validation_failed_products_missing"
+            return True, "ok"
+        except Exception as e:
+            return False, f"restore_test_failed: {e}"
+        finally:
+            try:
+                if tmp_fd is not None:
+                    os.close(tmp_fd)
+            except Exception:
+                pass
+            try:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+
+    def create_verified_backup(self):
+        """
+        Cria backup automÃ¡tico e valida restauraÃ§Ã£o.
+        Retorna dict com status e caminho.
+        """
+        try:
+            now = datetime.now()
+            day_folder = os.path.join(self.backup_root, now.strftime("%Y-%m-%d"))
+            os.makedirs(day_folder, exist_ok=True)
+
+            db_stem = os.path.splitext(os.path.basename(self.db_path))[0] or "inventory"
+            backup_name = f"{db_stem}_backup_{now.strftime('%H-%M-%S')}.sqlite3"
+            backup_path = os.path.join(day_folder, backup_name)
+
+            # Garantir estado consistente antes de copiar
+            self.conn.commit()
+            with sqlite3.connect(backup_path) as backup_conn:
+                self.conn.backup(backup_conn)
+
+            ok, reason = self._verify_backup_restore(backup_path)
+            if not ok:
+                try:
+                    os.remove(backup_path)
+                except Exception:
+                    pass
+                return {"ok": False, "path": backup_path, "reason": reason}
+
+            removed = self._cleanup_old_backups(self.BACKUP_RETENTION_DAYS)
+            return {"ok": True, "path": backup_path, "removed_old": removed}
+        except Exception as e:
+            return {"ok": False, "path": None, "reason": str(e)}
+
+    def run_stock_reconciliation(self):
+        """
+        Reconcilia stock atual com cadeia de movimentos aplicados.
+        Regras:
+        - consistÃªncia por movimento: stock_before +/- qty == stock_after
+        - consistÃªncia de cadeia: stock_before de um movimento deve igualar
+          stock_after do movimento anterior do mesmo produto
+        - consistÃªncia final: Ãºltimo stock_after deve bater com products.existing_stock
+        """
+        now = self._now_str()
+        tolerance = float(self.RECONCILE_DIFF_TOLERANCE)
+        issues = []
+
+        try:
+            self.cursor.execute("SELECT id, existing_stock FROM products")
+            products_stock = {int(pid): float(stk or 0.0) for pid, stk in self.cursor.fetchall()}
+
+            # Cadeia cronolÃ³gica por produto
+            self.cursor.execute(
+                """
+                SELECT product_id, id, direction, qty, stock_before, stock_after
+                FROM stock_movements
+                WHERE applied = 1
+                ORDER BY product_id ASC, created_at ASC, id ASC
+                """
+            )
+            chain_rows = self.cursor.fetchall()
+
+            previous_after = {}
+            latest_after = {}
+
+            for product_id, movement_id, direction, qty, stock_before, stock_after in chain_rows:
+                product_id = int(product_id)
+                qty = float(qty or 0.0)
+                before = float(stock_before or 0.0)
+                after = float(stock_after or 0.0)
+                prev = previous_after.get(product_id)
+
+                if prev is not None and abs(before - prev) > tolerance:
+                    issues.append(
+                        (
+                            now,
+                            product_id,
+                            "CHAIN_BREAK",
+                            movement_id,
+                            before,
+                            after,
+                            prev,
+                            products_stock.get(product_id),
+                            before - prev,
+                            f"before={before:.4f} previous_after={prev:.4f}",
+                        )
+                    )
+
+                if direction == "IN":
+                    expected_after = before + qty
+                elif direction == "OUT":
+                    expected_after = before - qty
+                else:
+                    expected_after = before
+
+                if direction not in ("IN", "OUT") or abs(after - expected_after) > tolerance:
+                    issues.append(
+                        (
+                            now,
+                            product_id,
+                            "MOVEMENT_MISMATCH",
+                            movement_id,
+                            before,
+                            after,
+                            expected_after,
+                            products_stock.get(product_id),
+                            after - expected_after,
+                            f"direction={direction} qty={qty:.4f}",
+                        )
+                    )
+
+                previous_after[product_id] = after
+                latest_after[product_id] = after
+
+            # Verificar estado final da tabela products
+            for product_id, current_stock in products_stock.items():
+                if product_id not in latest_after:
+                    continue
+                expected_current = float(latest_after[product_id])
+                diff = current_stock - expected_current
+                if abs(diff) > tolerance:
+                    issues.append(
+                        (
+                            now,
+                            product_id,
+                            "FINAL_STOCK_MISMATCH",
+                            None,
+                            None,
+                            expected_current,
+                            expected_current,
+                            current_stock,
+                            diff,
+                            f"products.existing_stock={current_stock:.4f} latest_after={expected_current:.4f}",
+                        )
+                    )
+
+            # Limpar registros antigos para nÃ£o crescer indefinidamente
+            self.cursor.execute(
+                """
+                DELETE FROM stock_reconciliation_issues
+                WHERE check_run_at < DATETIME('now', '-90 day')
+                """
+            )
+
+            if issues:
+                self.cursor.executemany(
+                    """
+                    INSERT INTO stock_reconciliation_issues (
+                        check_run_at, product_id, issue_type, movement_id,
+                        stock_before, stock_after, expected_stock_after,
+                        current_stock, diff_qty, details
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    issues,
+                )
+
+            self.conn.commit()
+            return {
+                "ok": True,
+                "checked_products": len(products_stock),
+                "issues_found": len(issues),
+            }
+        except Exception as e:
+            self.conn.rollback()
+            return {
+                "ok": False,
+                "checked_products": 0,
+                "issues_found": 0,
+                "reason": str(e),
+            }
+
+    def run_automation_tasks(self, force=False):
+        """
+        Executa automaÃ§Ãµes crÃ­ticas:
+        1) backup automÃ¡tico com teste de restauraÃ§Ã£o
+        2) reconciliaÃ§Ã£o automÃ¡tica de stock
+        """
+        now = datetime.now()
+        summary = {
+            "backup": {"executed": False, "ok": True, "reason": ""},
+            "reconcile": {"executed": False, "ok": True, "issues": 0, "reason": ""},
+        }
+        try:
+            # Backup diÃ¡rio
+            should_backup = bool(force)
+            if not should_backup:
+                last_backup = self._get_automation_state_dt("auto_backup_last_run")
+                should_backup = (last_backup is None) or (
+                    now - last_backup >= timedelta(hours=self.BACKUP_INTERVAL_HOURS)
+                )
+            if should_backup:
+                backup_result = self.create_verified_backup()
+                summary["backup"]["executed"] = True
+                summary["backup"]["ok"] = bool(backup_result.get("ok"))
+                summary["backup"]["reason"] = str(backup_result.get("reason") or "")
+                self._set_automation_state("auto_backup_last_run", now.isoformat())
+                self._set_automation_state(
+                    "auto_backup_last_status",
+                    "ok" if backup_result.get("ok") else (backup_result.get("reason") or "error"),
+                )
+
+            # ReconciliaÃ§Ã£o horÃ¡ria
+            should_reconcile = bool(force)
+            if not should_reconcile:
+                last_reconcile = self._get_automation_state_dt("auto_reconcile_last_run")
+                should_reconcile = (last_reconcile is None) or (
+                    now - last_reconcile >= timedelta(minutes=self.RECONCILE_INTERVAL_MINUTES)
+                )
+            if should_reconcile:
+                rec_result = self.run_stock_reconciliation()
+                summary["reconcile"]["executed"] = True
+                summary["reconcile"]["ok"] = bool(rec_result.get("ok"))
+                summary["reconcile"]["issues"] = int(rec_result.get("issues_found") or 0)
+                summary["reconcile"]["reason"] = str(rec_result.get("reason") or "")
+                self._set_automation_state("auto_reconcile_last_run", now.isoformat())
+                self._set_automation_state(
+                    "auto_reconcile_last_status",
+                    f"ok:{summary['reconcile']['issues']}"
+                    if rec_result.get("ok")
+                    else (rec_result.get("reason") or "error"),
+                )
+
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Erro ao executar automacoes: {e}")
+        return summary
 
     # ==================== STATUS E EXPIRACAO ====================
     def set_product_status(self, product_id, new_status, reason, username, source="MANUAL"):
@@ -996,6 +1529,8 @@ class Database:
         terminal_id=None,
         unit_cost=None,
         unit_price=None,
+        supplier_name=None,
+        invoice_number=None,
         approval_status="APPROVED",
         approved_by=None,
         approved_at=None,
@@ -1052,10 +1587,24 @@ class Database:
                     )
             else:
                 stock_after = stock_before + qty
-                cursor.execute(
-                    "UPDATE products SET existing_stock = existing_stock + ? WHERE id = ?",
-                    (qty, product_id),
-                )
+                if movement_type == "RETURN":
+                    cursor.execute(
+                        """
+                        UPDATE products
+                        SET existing_stock = existing_stock + ?,
+                            sold_stock = CASE
+                                WHEN sold_stock >= ? THEN sold_stock - ?
+                                ELSE 0
+                            END
+                        WHERE id = ?
+                        """,
+                        (qty, qty, qty, product_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE products SET existing_stock = existing_stock + ? WHERE id = ?",
+                        (qty, product_id),
+                    )
         else:
             stock_after = stock_before
 
@@ -1070,16 +1619,16 @@ class Database:
             INSERT INTO stock_movements (
                 product_id, movement_type, direction, qty, unit,
                 unit_cost, unit_price, total_cost, total_price,
-                stock_before, stock_after, reason, note, evidence_path,
+                stock_before, stock_after, reason, note, supplier_name, invoice_number, evidence_path,
                 reference_table, reference_id, created_at, created_by,
                 created_role, terminal_id, approval_status, approved_by,
                 approved_at, applied
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 product_id, movement_type, direction, qty, unit,
                 unit_cost, unit_price, total_cost, total_price,
-                stock_before, stock_after, reason, note, evidence_path,
+                stock_before, stock_after, reason, note, supplier_name, invoice_number, evidence_path,
                 reference_table, reference_id, now_str, created_by,
                 created_role, terminal_id, approval_status, approved_by,
                 approved_at, applied
@@ -1103,6 +1652,8 @@ class Database:
         terminal_id=None,
         unit_cost=None,
         unit_price=None,
+        supplier_name=None,
+        invoice_number=None,
     ):
         """Registra movimento e aplica no stock imediatamente."""
         try:
@@ -1122,6 +1673,8 @@ class Database:
                 terminal_id=terminal_id,
                 unit_cost=unit_cost,
                 unit_price=unit_price,
+                supplier_name=supplier_name,
+                invoice_number=invoice_number,
                 approval_status="APPROVED",
                 approved_by=created_by,
                 approved_at=self._now_str(),
@@ -1289,10 +1842,24 @@ class Database:
                     )
             else:
                 stock_after = stock_before + qty
-                self.cursor.execute(
-                    "UPDATE products SET existing_stock = existing_stock + ? WHERE id = ?",
-                    (qty, product_id),
-                )
+                if movement_type == "RETURN":
+                    self.cursor.execute(
+                        """
+                        UPDATE products
+                        SET existing_stock = existing_stock + ?,
+                            sold_stock = CASE
+                                WHEN sold_stock >= ? THEN sold_stock - ?
+                                ELSE 0
+                            END
+                        WHERE id = ?
+                        """,
+                        (qty, qty, qty, product_id),
+                    )
+                else:
+                    self.cursor.execute(
+                        "UPDATE products SET existing_stock = existing_stock + ? WHERE id = ?",
+                        (qty, product_id),
+                    )
 
             now_str = self._now_str()
             self.cursor.execute(
@@ -1394,14 +1961,16 @@ class Database:
         product_id,
         qty,
         unit_cost,
-        reason="Reposição de stock",
+        reason="ReposiÃƒÂ§ÃƒÂ£o de stock",
         note="",
         evidence_path=None,
         created_by=None,
         created_role=None,
         terminal_id=None,
+        supplier_name=None,
+        invoice_number=None,
     ):
-        """Registra reposição de stock e atualiza custo médio."""
+        """Registra reposiÃƒÂ§ÃƒÂ£o de stock e atualiza custo mÃƒÂ©dio."""
         try:
             qty = float(qty)
             unit_cost = float(unit_cost)
@@ -1437,6 +2006,8 @@ class Database:
                 terminal_id=terminal_id,
                 unit_cost=unit_cost,
                 unit_price=sale_price,
+                supplier_name=supplier_name,
+                invoice_number=invoice_number,
                 approval_status="APPROVED",
                 approved_by=created_by,
                 approved_at=self._now_str(),
@@ -1474,7 +2045,7 @@ class Database:
             return None
 
     def get_loss_records(self, start_dt, end_dt, limit=200):
-        """Lista detalhada de perdas no período."""
+        """Lista detalhada de perdas no perÃƒÂ­odo."""
         start = self._to_dt_str(start_dt, end=False)
         end = self._to_dt_str(end_dt, end=True)
         try:
@@ -1512,10 +2083,10 @@ class Database:
             print(f"Erro ao obter registros de perdas: {e}")
             return []
 
-    # ==================== NOVO: MÉTODOS DE CÁLCULO DE PERDAS ====================
+    # ==================== NOVO: MÃƒâ€°TODOS DE CÃƒÂLCULO DE PERDAS ====================
     
     def get_restock_records(self, start_dt, end_dt, limit=300):
-        """Lista detalhada de reposiÃ§Ãµes no perÃ­odo."""
+        """Lista detalhada de reposiÃƒÂ§ÃƒÂµes no perÃƒÂ­odo."""
         start = self._to_dt_str(start_dt, end=False)
         end = self._to_dt_str(end_dt, end=True)
         try:
@@ -1547,15 +2118,15 @@ class Database:
             )
             return self.cursor.fetchall()
         except sqlite3.Error as e:
-            print(f"Erro ao obter reposiÃ§Ãµes: {e}")
+            print(f"Erro ao obter reposiÃƒÂ§ÃƒÂµes: {e}")
             return []
 
     def calculate_loss_metrics(self, start_dt, end_dt):
         """
-        Calcula todas as métricas de perdas para um período
+        Calcula todas as mÃƒÂ©tricas de perdas para um perÃƒÂ­odo
         
         Returns:
-            Dict com todas as métricas ou None em caso de erro
+            Dict com todas as mÃƒÂ©tricas ou None em caso de erro
         """
         start = self._to_dt_str(start_dt, end=False)
         end = self._to_dt_str(end_dt, end=True)
@@ -1670,14 +2241,14 @@ class Database:
             }
             
         except sqlite3.Error as e:
-            print(f"Erro ao calcular métricas de perdas: {e}")
+            print(f"Erro ao calcular mÃƒÂ©tricas de perdas: {e}")
             return None
 
-    # ==================== NOVO: DETECÇÃO DE FRAUDE ====================
+    # ==================== NOVO: DETECÃƒâ€¡ÃƒÆ’O DE FRAUDE ====================
     
     def detect_fraud_patterns(self, days_lookback=30):
         """
-        Detecta padrões suspeitos nos últimos X dias
+        Detecta padrÃƒÂµes suspeitos nos ÃƒÂºltimos X dias
         
         Returns:
             Lista de alertas ordenados por severidade
@@ -1687,7 +2258,7 @@ class Database:
         
         alerts = []
         
-        # 1. Utilizadores com perdas acima da média
+        # 1. Utilizadores com perdas acima da mÃƒÂ©dia
         try:
             start = self._to_dt_str(start_date, end=False)
             end = self._to_dt_str(end_date, end=True)
@@ -1727,7 +2298,7 @@ class Database:
                             'alert_type': 'HIGH_LOSS_USER',
                             'severity': severity,
                             'title': f'Utilizador com perdas elevadas: {user}',
-                            'description': f'{user} registou perdas de {cost:.2f} MZN ({percentage_above:.1f}% acima da média)',
+                            'description': f'{user} registou perdas de {cost:.2f} MZN ({percentage_above:.1f}% acima da mÃƒÂ©dia)',
                             'related_user': user,
                             'related_product_id': None,
                             'data': {
@@ -1784,7 +2355,7 @@ class Database:
         except Exception as e:
             print(f"Erro ao detectar produtos com perdas repetidas: {e}")
         
-        # 3. Perdas fora do horário (22h-6h)
+        # 3. Perdas fora do horÃƒÂ¡rio (22h-6h)
         try:
             self.cursor.execute(
                 f"""
@@ -1817,8 +2388,8 @@ class Database:
                 alerts.append({
                     'alert_type': 'OFF_HOURS_LOSS',
                     'severity': 2,
-                    'title': f'Perda fora do horário: {user}',
-                    'description': f'Perda registada às {time_str} por {user} ({movement_type}, {cost:.2f} MZN)',
+                    'title': f'Perda fora do horÃƒÂ¡rio: {user}',
+                    'description': f'Perda registada ÃƒÂ s {time_str} por {user} ({movement_type}, {cost:.2f} MZN)',
                     'related_user': user,
                     'related_product_id': product_id,
                     'data': {
@@ -1830,9 +2401,9 @@ class Database:
                     }
                 })
         except Exception as e:
-            print(f"Erro ao detectar perdas fora do horário: {e}")
+            print(f"Erro ao detectar perdas fora do horÃƒÂ¡rio: {e}")
         
-        # 4. Perdas sem evidência (acima de 50% do limite)
+        # 4. Perdas sem evidÃƒÂªncia (acima de 50% do limite)
         try:
             high_value_threshold = LOSS_VALUE_LIMIT_MZN * 0.5
             
@@ -1863,7 +2434,7 @@ class Database:
                 alerts.append({
                     'alert_type': 'NO_EVIDENCE',
                     'severity': 2,
-                    'title': f'Perda sem evidência: {cost:.2f} MZN',
+                    'title': f'Perda sem evidÃƒÂªncia: {cost:.2f} MZN',
                     'description': f'{user} registou {movement_type} de {cost:.2f} MZN sem foto/comprovativo',
                     'related_user': user,
                     'related_product_id': product_id,
@@ -1875,14 +2446,14 @@ class Database:
                     }
                 })
         except Exception as e:
-            print(f"Erro ao detectar perdas sem evidência: {e}")
+            print(f"Erro ao detectar perdas sem evidÃƒÂªncia: {e}")
         
         return sorted(alerts, key=lambda x: x['severity'], reverse=True)
 
-    # ==================== NOVO: APROVAÇÕES PENDENTES ====================
+    # ==================== NOVO: APROVAÃƒâ€¡Ãƒâ€¢ES PENDENTES ====================
     
     def get_pending_approvals(self):
-        """Obter todas as perdas pendentes de aprovação"""
+        """Obter todas as perdas pendentes de aprovaÃƒÂ§ÃƒÂ£o"""
         try:
             loss_types = list(LOSS_TYPES)
             placeholders = ",".join(["?"] * len(loss_types))
@@ -1918,59 +2489,154 @@ class Database:
             return self.cursor.fetchall()
             
         except sqlite3.Error as e:
-            print(f"Erro ao obter aprovações pendentes: {e}")
+            print(f"Erro ao obter aprovaÃƒÂ§ÃƒÂµes pendentes: {e}")
             return []
 
-    def add_product(self, description, category, existing_stock, sold_stock, sale_price, total_purchase_price, unit_purchase_price, barcode=None, expiry_date=None, is_sold_by_weight=False, package_quantity=None):
+    @staticmethod
+    def _normalize_pack_sale_fields(is_sold_by_weight, units_per_package, allow_pack_sale):
+        """Normaliza e valida configuracao de venda por embalagem."""
+        if is_sold_by_weight:
+            return None, 0
+
+        allow_flag = 1 if bool(allow_pack_sale) else 0
+        if not allow_flag:
+            return None, 0
+
+        if units_per_package in (None, ""):
+            raise ValueError("units_per_package must be >= 2 when allow_pack_sale is enabled")
+
+        try:
+            units = int(float(units_per_package))
+        except (TypeError, ValueError):
+            raise ValueError("units_per_package must be an integer value")
+
+        if units < 2:
+            raise ValueError("units_per_package must be >= 2 when allow_pack_sale is enabled")
+
+        return units, 1
+
+    def add_product(
+        self,
+        description,
+        category,
+        existing_stock,
+        sold_stock,
+        sale_price,
+        total_purchase_price,
+        unit_purchase_price,
+        barcode=None,
+        expiry_date=None,
+        is_sold_by_weight=False,
+        package_quantity=None,
+        units_per_package=None,
+        allow_pack_sale=False,
+    ):
         """Adicionar um novo produto ao banco de dados"""
         try:
             profit_per_unit = sale_price - unit_purchase_price
             date_added = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            normalized_units, normalized_allow = self._normalize_pack_sale_fields(
+                is_sold_by_weight,
+                units_per_package,
+                allow_pack_sale,
+            )
     
-            self.cursor.execute(''' 
-            INSERT INTO products (description, category, existing_stock, sold_stock, sale_price, total_purchase_price, unit_purchase_price, profit_per_unit, barcode, expiry_date, date_added, is_sold_by_weight, package_quantity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
-            ''', (description, category, float(existing_stock), float(sold_stock), sale_price, total_purchase_price, unit_purchase_price, profit_per_unit, barcode, expiry_date, date_added, 1 if is_sold_by_weight else 0, package_quantity))
-            
-            self.conn.commit()
-            
+            self.cursor.execute(
+                '''
+                INSERT INTO products (
+                    description, category, existing_stock, sold_stock, sale_price,
+                    total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
+                    expiry_date, date_added, is_sold_by_weight, package_quantity,
+                    units_per_package, allow_pack_sale
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    description,
+                    category,
+                    float(existing_stock),
+                    float(sold_stock),
+                    sale_price,
+                    total_purchase_price,
+                    unit_purchase_price,
+                    profit_per_unit,
+                    barcode,
+                    expiry_date,
+                    date_added,
+                    1 if is_sold_by_weight else 0,
+                    package_quantity,
+                    normalized_units,
+                    normalized_allow,
+                ),
+            )
             product_id = self.cursor.lastrowid
+            sku = self._build_sku(product_id, description)
+            self.cursor.execute(
+                "UPDATE products SET sku = ? WHERE id = ?",
+                (sku, product_id),
+            )
+            self.conn.commit()
             tipo = "KG" if is_sold_by_weight else "UNIDADE"
-            print(f"✅ Produto adicionado com sucesso! ID: {product_id} | Tipo: {tipo}")
+            print(f"Ã¢Å“â€¦ Produto adicionado com sucesso! ID: {product_id} | Tipo: {tipo}")
             
             return product_id
             
-        except sqlite3.Error as e:
-            print(f"❌ Erro ao adicionar produto: {e}")
+        except (sqlite3.Error, ValueError) as e:
+            print(f"Ã¢ÂÅ’ Erro ao adicionar produto: {e}")
             import traceback
             traceback.print_exc()
+            self.conn.rollback()
             return None
     
-    def update_product(self, id, description, category, existing_stock, sold_stock, sale_price, total_purchase_price, unit_purchase_price, barcode=None, expiry_date=None, is_sold_by_weight=False, package_quantity=None):
+    def update_product(
+        self,
+        id,
+        description,
+        category,
+        existing_stock,
+        sold_stock,
+        sale_price,
+        total_purchase_price,
+        unit_purchase_price,
+        barcode=None,
+        expiry_date=None,
+        is_sold_by_weight=False,
+        package_quantity=None,
+        units_per_package=None,
+        allow_pack_sale=False,
+    ):
         """Atualizar produto existente"""
         try:
             profit_per_unit = sale_price - unit_purchase_price
+            normalized_units, normalized_allow = self._normalize_pack_sale_fields(
+                is_sold_by_weight,
+                units_per_package,
+                allow_pack_sale,
+            )
             self.cursor.execute(
                 """UPDATE products SET 
                    description = ?, category = ?, existing_stock = ?, sold_stock = ?, 
                    sale_price = ?, total_purchase_price = ?, unit_purchase_price = ?, 
-                   profit_per_unit = ?, barcode = ?, expiry_date = ?, is_sold_by_weight = ?, package_quantity = ?
+                   profit_per_unit = ?, barcode = ?, expiry_date = ?, is_sold_by_weight = ?, package_quantity = ?,
+                   units_per_package = ?, allow_pack_sale = ?
                    WHERE id = ?""", 
                 (description, category, float(existing_stock), float(sold_stock), sale_price, 
-                 total_purchase_price, unit_purchase_price, profit_per_unit, barcode, expiry_date, 1 if is_sold_by_weight else 0, package_quantity, id)
+                 total_purchase_price, unit_purchase_price, profit_per_unit, barcode, expiry_date,
+                 1 if is_sold_by_weight else 0, package_quantity, normalized_units, normalized_allow, id)
             )
             self.conn.commit()
             
             tipo = "KG" if is_sold_by_weight else "UNIDADE"
-            print(f"✅ Produto {id} atualizado com sucesso! | Tipo: {tipo}")
+            print(f"Ã¢Å“â€¦ Produto {id} atualizado com sucesso! | Tipo: {tipo}")
             
-        except sqlite3.Error as e:
-            print(f"❌ Erro ao atualizar produto: {e}")
+        except (sqlite3.Error, ValueError) as e:
+            print(f"Ã¢ÂÅ’ Erro ao atualizar produto: {e}")
             import traceback
             traceback.print_exc()
+            self.conn.rollback()
     
     def delete_product(self, id, username=None):
-        """Excluir produto (hard delete) e arquivar histórico"""
+        """Excluir produto (hard delete) e arquivar histÃƒÂ³rico"""
         try:
             user = username or "SYSTEM"
             self.cursor.execute(
@@ -1978,7 +2644,8 @@ class Database:
                 SELECT id, description, category, existing_stock, sold_stock, sale_price,
                        total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                        expiry_date, date_added, is_sold_by_weight, package_quantity,
-                       status, status_source, status_reason, status_updated_at, status_updated_by
+                       status, status_source, status_reason, status_updated_at, status_updated_by,
+                       sku, units_per_package, allow_pack_sale
                 FROM products WHERE id = ?
                 """,
                 (id,),
@@ -1995,8 +2662,9 @@ class Database:
                     total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                     expiry_date, date_added, is_sold_by_weight, package_quantity,
                     status, status_source, status_reason, status_updated_at, status_updated_by,
+                    sku, units_per_package, allow_pack_sale,
                     deleted_at, deleted_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (*row, deleted_at, user),
             )
@@ -2012,9 +2680,27 @@ class Database:
 
     def get_all_products(self):
         """Obter todos os produtos - COM SUPORTE A KG"""
+        return self.get_all_products_page(limit=None, offset=0)
+
+    def _readonly_fetchall(self, query, params=()):
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute(query, tuple(params))
+            return cur.fetchall()
+
+    def get_all_products_page(
+        self,
+        search_text="",
+        category=None,
+        sold_by_weight=None,
+        limit=120,
+        offset=0,
+    ):
+        """Lista paginada de produtos para a tela admin."""
+        started_at = perf_counter()
         try:
-            self.cursor.execute(""" 
-                SELECT 
+            query = """
+                SELECT
                     p.id,
                     p.description,
                     p.existing_stock,
@@ -2024,9 +2710,9 @@ class Database:
                     p.unit_purchase_price,
                     p.profit_per_unit,
                     (p.profit_per_unit * p.sold_stock) as total_profit,
-                    CASE 
+                    CASE
                         WHEN p.sold_stock > 0 THEN (p.profit_per_unit * p.sold_stock * 100) / (p.unit_purchase_price * p.sold_stock)
-                        ELSE 0 
+                        ELSE 0
                     END as profit_percentage,
                     (p.sale_price - p.unit_purchase_price) / p.unit_purchase_price * 100 as price_percentage,
                     p.category,
@@ -2039,27 +2725,54 @@ class Database:
                     p.status_reason,
                     p.status_updated_at,
                     p.status_updated_by,
-                    p.package_quantity
+                    p.package_quantity,
+                    p.sku,
+                    p.units_per_package,
+                    p.allow_pack_sale
                 FROM products p
-                ORDER BY p.id DESC
-            """)
-            results = self.cursor.fetchall()
-            
-            if results:
-                kg_count = sum(1 for r in results if r[15])
-                un_count = len(results) - kg_count
-                print(f"\n📊 Total: {len(results)} produtos ({kg_count} por KG, {un_count} por UNIDADE)")
-            
-            return results
-            
+                WHERE 1=1
+            """
+            params = []
+            search = (search_text or "").strip().lower()
+            if search:
+                query += """
+                    AND (
+                        CAST(p.id AS TEXT) LIKE ?
+                        OR LOWER(COALESCE(p.description, '')) LIKE ?
+                        OR LOWER(COALESCE(p.category, '')) LIKE ?
+                        OR LOWER(COALESCE(p.barcode, '')) LIKE ?
+                        OR LOWER(COALESCE(p.sku, '')) LIKE ?
+                    )
+                """
+                like = f"%{search}%"
+                params.extend([like, like, like, like, like])
+
+            if category and category not in ("Todas", "Todas as Categorias"):
+                query += " AND p.category = ?"
+                params.append(category)
+
+            if sold_by_weight is not None:
+                query += " AND p.is_sold_by_weight = ?"
+                params.append(1 if bool(sold_by_weight) else 0)
+
+            query += " ORDER BY p.id DESC"
+            if limit:
+                query += " LIMIT ? OFFSET ?"
+                params.extend([int(limit), max(0, int(offset or 0))])
+
+            rows = self._readonly_fetchall(query, params)
+            perf_log(
+                "db.get_all_products_page",
+                started_at,
+                f"rows={len(rows)} limit={limit} offset={offset}",
+            )
+            return rows
         except sqlite3.Error as e:
-            print(f"❌ Erro ao obter produtos: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Erro ao obter produtos paginados: {e}")
             return []
-    
+
     def get_product(self, id):
-        """Obter um produto específico"""
+        """Obter um produto especÃƒÂ­fico"""
         try:
             self.cursor.execute(""" 
                 SELECT 
@@ -2082,40 +2795,89 @@ class Database:
                     p.status_reason,
                     p.status_updated_at,
                     p.status_updated_by,
-                    p.package_quantity
+                    p.package_quantity,
+                    p.sku,
+                    p.units_per_package,
+                    p.allow_pack_sale
                 FROM products p
                 WHERE p.id = ?""", (id,))
             return self.cursor.fetchone()
         except sqlite3.Error as e:
-            print(f"❌ Erro ao obter produto: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao obter produto: {e}")
             return None
     
     def get_products_for_sale(self):
-        """Obter produtos disponíveis para venda - COM INFO DE PESO"""
+        """Obter produtos disponiveis para venda."""
+        return self.get_products_for_sale_page(limit=None, offset=0, refresh_statuses=True)
+
+    def get_products_for_sale_page(
+        self,
+        search_text="",
+        limit=200,
+        offset=0,
+        refresh_statuses=False,
+    ):
+        """Lista paginada para tela de vendas."""
+        started_at = perf_counter()
         try:
-            self.refresh_auto_statuses()
-            self.cursor.execute(""" 
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
+            if refresh_statuses:
+                self.refresh_auto_statuses()
+
+            query = """
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale
                 FROM products
                 WHERE existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
                   AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
-                ORDER BY description ASC
-            """)
-            results = self.cursor.fetchall()
-            
-            if results:
-                print(f"\n🛒 Produtos disponíveis para venda: {len(results)}")
-                for r in results:
-                    tipo = "⚖️ KG" if r[5] else "📦 UN"
-                    print(f"   ID {r[0]:4d}: {r[1]:30s} | Estoque: {r[2]:7.2f} | Tipo: {tipo}")
-            
-            return results
-            
+            """
+            params = []
+            search = (search_text or "").strip().lower()
+            if search:
+                query += """
+                  AND (
+                    CAST(id AS TEXT) LIKE ?
+                    OR LOWER(COALESCE(description, '')) LIKE ?
+                    OR LOWER(COALESCE(barcode, '')) LIKE ?
+                  )
+                """
+                like = f"%{search}%"
+                params.extend([like, like, like])
+
+            query += " ORDER BY description ASC"
+            if limit:
+                query += " LIMIT ? OFFSET ?"
+                params.extend([int(limit), max(0, int(offset or 0))])
+
+            rows = self._readonly_fetchall(query, params)
+            perf_log(
+                "db.get_products_for_sale_page",
+                started_at,
+                f"rows={len(rows)} limit={limit} offset={offset}",
+            )
+            return rows
         except sqlite3.Error as e:
-            print(f"❌ Erro ao obter produtos para venda: {e}")
+            print(f"Erro ao obter produtos para venda: {e}")
             return []
-    
+
+    def get_products_for_sale_ids(self, product_ids):
+        """Obtem snapshot de produtos por IDs para validacao de stock."""
+        try:
+            ids = [int(pid) for pid in (product_ids or []) if pid is not None]
+            if not ids:
+                return []
+            placeholders = ",".join(["?"] * len(ids))
+            query = f"""
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale
+                FROM products
+                WHERE id IN ({placeholders})
+            """
+            return self._readonly_fetchall(query, ids)
+        except Exception as e:
+            print(f"Erro ao obter produtos por IDs: {e}")
+            return []
+
     def get_products_by_weight(self):
         """Obter apenas produtos vendidos por peso (kg)"""
         try:
@@ -2140,34 +2902,37 @@ class Database:
                     p.status_reason,
                     p.status_updated_at,
                     p.status_updated_by,
-                    p.package_quantity
+                    p.package_quantity,
+                    p.sku,
+                    p.units_per_package,
+                    p.allow_pack_sale
                 FROM products p
                 WHERE p.is_sold_by_weight = 1
                 ORDER BY p.description ASC
             """)
             results = self.cursor.fetchall()
-            print(f"⚖️ Produtos vendidos por KG: {len(results)}")
+            print(f"Ã¢Å¡â€“Ã¯Â¸Â Produtos vendidos por KG: {len(results)}")
             return results
             
         except sqlite3.Error as e:
-            print(f"❌ Erro ao obter produtos por peso: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao obter produtos por peso: {e}")
             return []
     
     def get_product_by_barcode(self, barcode):
-        """Buscar produto pelo código de barras - VERSÃO ROBUSTA COM SUPORTE A KG"""
+        """Buscar produto pelo cÃƒÂ³digo de barras - VERSÃƒÆ’O ROBUSTA COM SUPORTE A KG"""
         try:
             self.refresh_auto_statuses()
             barcode_clean = barcode.strip() if barcode else ""
             
-            print(f"\n🔍 DB: Buscando código de barras...")
-            print(f"   Código recebido: '{barcode}' (tamanho: {len(barcode)})")
-            print(f"   Código limpo: '{barcode_clean}' (tamanho: {len(barcode_clean)})")
+            print(f"\nÃ°Å¸â€Â DB: Buscando cÃƒÂ³digo de barras...")
+            print(f"   CÃƒÂ³digo recebido: '{barcode}' (tamanho: {len(barcode)})")
+            print(f"   CÃƒÂ³digo limpo: '{barcode_clean}' (tamanho: {len(barcode_clean)})")
             
             if not barcode_clean:
-                print(f"   ⚠️ Código vazio após limpeza!")
+                print(f"   Ã¢Å¡Â Ã¯Â¸Â CÃƒÂ³digo vazio apÃƒÂ³s limpeza!")
                 return None
             
-            # ESTRATÉGIA 1: Busca EXATA
+            # ESTRATÃƒâ€°GIA 1: Busca EXATA
             self.cursor.execute(""" 
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
                 FROM products
@@ -2179,12 +2944,12 @@ class Database:
             result = self.cursor.fetchone()
             
             if result:
-                tipo = "⚖️ KG" if result[5] else "📦 UNIDADE"
-                print(f"✅ Encontrado com busca EXATA!")
+                tipo = "Ã¢Å¡â€“Ã¯Â¸Â KG" if result[5] else "Ã°Å¸â€œÂ¦ UNIDADE"
+                print(f"Ã¢Å“â€¦ Encontrado com busca EXATA!")
                 print(f"   ID: {result[0]} | Nome: {result[1]} | Tipo: {tipo}")
                 return result
             
-            # ESTRATÉGIA 2: Busca com TRIM
+            # ESTRATÃƒâ€°GIA 2: Busca com TRIM
             self.cursor.execute(""" 
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
                 FROM products
@@ -2196,12 +2961,12 @@ class Database:
             result = self.cursor.fetchone()
             
             if result:
-                tipo = "⚖️ KG" if result[5] else "📦 UNIDADE"
-                print(f"✅ Encontrado com busca TRIM!")
+                tipo = "Ã¢Å¡â€“Ã¯Â¸Â KG" if result[5] else "Ã°Å¸â€œÂ¦ UNIDADE"
+                print(f"Ã¢Å“â€¦ Encontrado com busca TRIM!")
                 print(f"   ID: {result[0]} | Nome: {result[1]} | Tipo: {tipo}")
                 return result
             
-            # ESTRATÉGIA 3: Busca case-insensitive
+            # ESTRATÃƒâ€°GIA 3: Busca case-insensitive
             self.cursor.execute(""" 
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
                 FROM products
@@ -2213,41 +2978,78 @@ class Database:
             result = self.cursor.fetchone()
             
             if result:
-                tipo = "⚖️ KG" if result[5] else "📦 UNIDADE"
-                print(f"✅ Encontrado com busca case-insensitive!")
+                tipo = "Ã¢Å¡â€“Ã¯Â¸Â KG" if result[5] else "Ã°Å¸â€œÂ¦ UNIDADE"
+                print(f"Ã¢Å“â€¦ Encontrado com busca case-insensitive!")
                 print(f"   ID: {result[0]} | Nome: {result[1]} | Tipo: {tipo}")
                 return result
             
-            print(f"\n❌ Código '{barcode_clean}' NÃO ENCONTRADO no banco de dados")
+            print(f"\nÃ¢ÂÅ’ CÃƒÂ³digo '{barcode_clean}' NÃƒÆ’O ENCONTRADO no banco de dados")
             
-            # Listar códigos disponíveis para debug
+            # Listar cÃƒÂ³digos disponÃƒÂ­veis para debug
             self.cursor.execute("SELECT barcode FROM products WHERE barcode IS NOT NULL AND barcode != ''")
             available_barcodes = self.cursor.fetchall()
             if available_barcodes:
-                print(f"\n📋 Códigos disponíveis no banco ({len(available_barcodes)}):")
+                print(f"\nÃ°Å¸â€œâ€¹ CÃƒÂ³digos disponÃƒÂ­veis no banco ({len(available_barcodes)}):")
                 for bc in available_barcodes[:5]:  # Mostrar apenas 5 primeiros
                     print(f"   - '{bc[0]}'")
             
             return None
             
         except sqlite3.Error as e:
-            print(f"❌ Erro SQL ao buscar código de barras: {e}")
+            print(f"Ã¢ÂÅ’ Erro SQL ao buscar cÃƒÂ³digo de barras: {e}")
             import traceback
             traceback.print_exc()
             return None
         except Exception as e:
-            print(f"❌ Erro geral ao buscar código de barras: {e}")
+            print(f"Ã¢ÂÅ’ Erro geral ao buscar cÃƒÂ³digo de barras: {e}")
             import traceback
             traceback.print_exc()
             return None
     
-    # ==================== MÉTODOS PARA VENDAS ====================
+    # ==================== MÃƒâ€°TODOS PARA VENDAS ====================
     
-    def add_sale(self, product_id, quantity, sale_price, username=None, role=None, terminal_id=None):
+    def find_product_by_barcode_fast(self, barcode):
+        """Consulta read-only otimizada para leituras frequentes na tela de vendas."""
+        try:
+            barcode_clean = (barcode or "").strip()
+            if not barcode_clean:
+                return None
+
+            rows = self._readonly_fetchall(
+                """
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
+                FROM products
+                WHERE barcode IS NOT NULL
+                  AND TRIM(barcode) != ''
+                  AND existing_stock > 0
+                  AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
+                  AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
+                  AND LOWER(TRIM(barcode)) = LOWER(TRIM(?))
+                ORDER BY
+                  CASE
+                    WHEN barcode = ? THEN 0
+                    WHEN TRIM(barcode) = ? THEN 1
+                    ELSE 2
+                  END,
+                  id DESC
+                LIMIT 1
+                """,
+                (barcode_clean, barcode_clean, barcode_clean),
+            )
+            return rows[0] if rows else None
+        except sqlite3.Error as e:
+            print(f"Erro SQL ao buscar codigo de barras: {e}")
+            return None
+        except Exception as e:
+            print(f"Erro geral ao buscar codigo de barras: {e}")
+            return None
+
+    def add_sale(self, product_id, quantity, sale_price, username=None, role=None, terminal_id=None, is_promotional=False):
         """Adicionar nova venda - SUPORTA QUANTIDADES DECIMAIS (KG) - ATUALIZA ESTOQUE"""
         try:
             quantity = float(quantity)
             total_price = quantity * sale_price
+            promo_flag = 1 if is_promotional else 0
             sale_date = self._now_str()
             created_by = username or "SYSTEM"
             created_role = role or "manager"
@@ -2299,9 +3101,29 @@ class Database:
                 return None
 
             self.cursor.execute("""
-                INSERT INTO sales (product_id, quantity, sale_price, total_price, sale_date, created_by, created_role, terminal_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (product_id, quantity, sale_price, total_price, sale_date, created_by, created_role, terminal_id))
+                INSERT INTO sales (
+                    product_id,
+                    quantity,
+                    sale_price,
+                    total_price,
+                    is_promotional,
+                    sale_date,
+                    created_by,
+                    created_role,
+                    terminal_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                product_id,
+                quantity,
+                sale_price,
+                total_price,
+                promo_flag,
+                sale_date,
+                created_by,
+                created_role,
+                terminal_id,
+            ))
             sale_id = self.cursor.lastrowid
 
             self.conn.commit()
@@ -2311,20 +3133,22 @@ class Database:
             stock_after = after_info[0]
             sold_after = after_info[1]
 
-            print("")
-            print("=" * 70)
-            print("VENDA REGISTRADA COM SUCESSO!")
-            print("=" * 70)
-            print(f"   Produto: {product_name}")
-            print(f"   Quantidade: {quantity:.2f} {tipo}")
-            print(f"   Preco unitario: {sale_price:.2f} MZN")
-            print(f"   Total: {total_price:.2f} MZN")
-            print("   ---")
-            print(f"   Estoque ANTES: {stock_before:.2f} {tipo}")
-            print(f"   Estoque DEPOIS: {stock_after:.2f} {tipo} (- {quantity:.2f})")
-            print(f"   Total vendido: {sold_after:.2f} {tipo} (+ {quantity:.2f})")
-            print("=" * 70)
-            print("")
+            if should_log_debug():
+                print("")
+                print("=" * 70)
+                print("VENDA REGISTRADA COM SUCESSO!")
+                print("=" * 70)
+                print(f"   Produto: {product_name}")
+                print(f"   Quantidade: {quantity:.2f} {tipo}")
+                print(f"   Preco unitario: {sale_price:.2f} MZN")
+                print(f"   Total: {total_price:.2f} MZN")
+                print(f"   Base de preco: {'PROMOCIONAL' if promo_flag else 'NORMAL'}")
+                print("   ---")
+                print(f"   Estoque ANTES: {stock_before:.2f} {tipo}")
+                print(f"   Estoque DEPOIS: {stock_after:.2f} {tipo} (- {quantity:.2f})")
+                print(f"   Total vendido: {sold_after:.2f} {tipo} (+ {quantity:.2f})")
+                print("=" * 70)
+                print("")
 
             return sale_id
 
@@ -2341,43 +3165,200 @@ class Database:
             self.conn.rollback()
             return None
 
-    def get_all_sales(self):
+    def _get_sale_returned_qty_tx(self, cursor, sale_id):
+        cursor.execute(
+            "SELECT COALESCE(SUM(returned_qty), 0) FROM sales_returns WHERE sale_id = ?",
+            (sale_id,),
+        )
+        row = cursor.fetchone()
+        return float(row[0] or 0.0) if row else 0.0
+
+    def _query_sales_with_returns(self, where_clause="", params=(), limit=None, offset=0):
+        query = """
+            SELECT
+                s.id,
+                COALESCE(p.description, pa.description) AS product_name,
+                s.quantity,
+                s.sale_price,
+                s.total_price,
+                s.sale_date,
+                COALESCE(sr.returned_qty, 0) AS returned_qty,
+                CASE
+                    WHEN (s.quantity - COALESCE(sr.returned_qty, 0)) > 0
+                        THEN (s.quantity - COALESCE(sr.returned_qty, 0))
+                    ELSE 0
+                END AS available_qty,
+                s.created_by,
+                s.created_role,
+                COALESCE(s.is_promotional, 0) AS is_promotional
+            FROM sales s
+            LEFT JOIN products p ON s.product_id = p.id
+            LEFT JOIN products_archive pa ON s.product_id = pa.id
+            LEFT JOIN (
+                SELECT sale_id, COALESCE(SUM(returned_qty), 0) AS returned_qty
+                FROM sales_returns
+                GROUP BY sale_id
+            ) sr ON sr.sale_id = s.id
+        """
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        query += " ORDER BY s.sale_date DESC, s.id DESC"
+        final_params = list(params or ())
+        if limit:
+            query += " LIMIT ? OFFSET ?"
+            final_params.extend([int(limit), max(0, int(offset or 0))])
+        self.cursor.execute(query, tuple(final_params))
+        return self.cursor.fetchall()
+
+    def get_sale_details(self, sale_id):
+        try:
+            rows = self._query_sales_with_returns("s.id = ?", (sale_id,))
+            if not rows:
+                return None
+            return rows[0]
+        except Exception as e:
+            print(f"Erro ao obter detalhes da venda: {e}")
+            return None
+
+    def refund_sale_item(self, sale_id, quantity, reason="", username=None, role=None, terminal_id=None):
+        """Registra estorno/devolucao parcial ou total de uma venda."""
+        try:
+            sale_id = int(sale_id)
+            quantity = float(quantity)
+            if quantity <= 0:
+                return {"ok": False, "message": "Quantidade invalida"}
+
+            self.cursor.execute(
+                """
+                SELECT id, product_id, quantity, sale_price
+                FROM sales
+                WHERE id = ?
+                """,
+                (sale_id,),
+            )
+            sale = self.cursor.fetchone()
+            if not sale:
+                return {"ok": False, "message": "Venda nao encontrada"}
+
+            _sid, product_id, sold_qty, sale_price = sale
+            sold_qty = float(sold_qty or 0)
+            sale_price = float(sale_price or 0)
+
+            already_returned = self._get_sale_returned_qty_tx(self.cursor, sale_id)
+            available_qty = max(0.0, sold_qty - already_returned)
+            if available_qty <= 0:
+                return {"ok": False, "message": "Venda ja estornada por completo"}
+            if quantity > (available_qty + 1e-9):
+                return {
+                    "ok": False,
+                    "message": f"Quantidade acima do disponivel para estorno ({available_qty:.2f})",
+                }
+
+            created_by = username or "SYSTEM"
+            created_role = role or "manager"
+            reason = (reason or "").strip() or "Devolucao de venda"
+            total_refund = quantity * sale_price
+            now_str = self._now_str()
+
+            movement_id = self._record_stock_movement_tx(
+                self.cursor,
+                product_id,
+                "RETURN",
+                quantity,
+                "IN",
+                reason=reason,
+                note=f"Estorno da venda #{sale_id}",
+                reference_table="sales",
+                reference_id=sale_id,
+                created_by=created_by,
+                created_role=created_role,
+                terminal_id=terminal_id,
+                unit_price=sale_price,
+                approval_status="APPROVED",
+                approved_by=created_by,
+                approved_at=now_str,
+                apply_stock=True,
+            )
+            if not movement_id:
+                self.conn.rollback()
+                return {"ok": False, "message": "Falha ao aplicar retorno de stock"}
+
+            self.cursor.execute(
+                """
+                INSERT INTO sales_returns (
+                    sale_id,
+                    product_id,
+                    returned_qty,
+                    sale_price,
+                    total_refund,
+                    reason,
+                    created_at,
+                    created_by,
+                    created_role,
+                    terminal_id,
+                    stock_movement_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sale_id,
+                    product_id,
+                    quantity,
+                    sale_price,
+                    total_refund,
+                    reason,
+                    now_str,
+                    created_by,
+                    created_role,
+                    terminal_id,
+                    movement_id,
+                ),
+            )
+            return_id = self.cursor.lastrowid
+            self.conn.commit()
+            return {
+                "ok": True,
+                "message": "Estorno registado com sucesso",
+                "return_id": return_id,
+                "movement_id": movement_id,
+                "sale_id": sale_id,
+                "qty": quantity,
+                "total_refund": total_refund,
+            }
+        except sqlite3.Error as e:
+            print(f"Erro SQL ao estornar venda: {e}")
+            self.conn.rollback()
+            return {"ok": False, "message": f"Erro SQL: {e}"}
+        except Exception as e:
+            print(f"Erro ao estornar venda: {e}")
+            self.conn.rollback()
+            return {"ok": False, "message": str(e)}
+
+    def get_all_sales(self, limit=None, offset=0):
         """Obter todas as vendas"""
         try:
-            self.cursor.execute(""" 
-                SELECT s.id, COALESCE(p.description, pa.description), s.quantity, s.sale_price, s.total_price, s.sale_date
-                FROM sales s
-                LEFT JOIN products p ON s.product_id = p.id
-                LEFT JOIN products_archive pa ON s.product_id = pa.id
-                ORDER BY s.sale_date DESC
-            """)
-            return self.cursor.fetchall()
+            return self._query_sales_with_returns(limit=limit, offset=offset)
         except sqlite3.Error as e:
-            print(f"❌ Erro ao obter vendas: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao obter vendas: {e}")
             return []
     
-    def get_sales_by_date(self, date_str):
-        """Buscar vendas por data específica"""
+    def get_sales_by_date(self, date_str, limit=None, offset=0):
+        """Buscar vendas por data especÃƒÂ­fica"""
         try:
             date_obj = datetime.strptime(date_str, "%d/%m/%Y")
             formatted_date = date_obj.strftime("%Y-%m-%d")
             
-            self.cursor.execute("""
-                SELECT s.id, COALESCE(p.description, pa.description), s.quantity, s.sale_price, s.total_price, s.sale_date
-                FROM sales s
-                LEFT JOIN products p ON s.product_id = p.id
-                LEFT JOIN products_archive pa ON s.product_id = pa.id
-                WHERE DATE(s.sale_date) = ?
-                ORDER BY s.sale_date DESC
-            """, (formatted_date,))
-            
-            return self.cursor.fetchall()
+            return self._query_sales_with_returns(
+                "DATE(s.sale_date) = ?",
+                (formatted_date,),
+                limit=limit,
+                offset=offset,
+            )
         except Exception as e:
-            print(f"❌ Erro ao buscar vendas por data: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por data: {e}")
             return []
 
-    def get_sales_by_date_range(self, start_date, end_date):
-        """Buscar vendas por período (intervalo de datas)"""
+    def get_sales_by_date_range(self, start_date, end_date, limit=None, offset=0):
+        """Buscar vendas por perÃƒÂ­odo (intervalo de datas)"""
         try:
             start_obj = datetime.strptime(start_date, "%d/%m/%Y")
             end_obj = datetime.strptime(end_date, "%d/%m/%Y")
@@ -2385,52 +3366,40 @@ class Database:
             formatted_start = start_obj.strftime("%Y-%m-%d")
             formatted_end = end_obj.strftime("%Y-%m-%d")
             
-            self.cursor.execute("""
-                SELECT s.id, COALESCE(p.description, pa.description), s.quantity, s.sale_price, s.total_price, s.sale_date
-                FROM sales s
-                LEFT JOIN products p ON s.product_id = p.id
-                LEFT JOIN products_archive pa ON s.product_id = pa.id
-                WHERE DATE(s.sale_date) BETWEEN ? AND ?
-                ORDER BY s.sale_date DESC
-            """, (formatted_start, formatted_end))
-            
-            return self.cursor.fetchall()
+            return self._query_sales_with_returns(
+                "DATE(s.sale_date) BETWEEN ? AND ?",
+                (formatted_start, formatted_end),
+                limit=limit,
+                offset=offset,
+            )
         except Exception as e:
-            print(f"❌ Erro ao buscar vendas por período: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por perÃƒÂ­odo: {e}")
             return []
 
-    def get_sales_by_month(self, month, year):
-        """Buscar vendas por mês específico"""
+    def get_sales_by_month(self, month, year, limit=None, offset=0):
+        """Buscar vendas por mÃƒÂªs especÃƒÂ­fico"""
         try:
-            self.cursor.execute("""
-                SELECT s.id, COALESCE(p.description, pa.description), s.quantity, s.sale_price, s.total_price, s.sale_date
-                FROM sales s
-                LEFT JOIN products p ON s.product_id = p.id
-                LEFT JOIN products_archive pa ON s.product_id = pa.id
-                WHERE strftime('%m', s.sale_date) = ? AND strftime('%Y', s.sale_date) = ?
-                ORDER BY s.sale_date DESC
-            """, (f"{month:02d}", str(year)))
-            
-            return self.cursor.fetchall()
+            return self._query_sales_with_returns(
+                "strftime('%m', s.sale_date) = ? AND strftime('%Y', s.sale_date) = ?",
+                (f"{month:02d}", str(year)),
+                limit=limit,
+                offset=offset,
+            )
         except Exception as e:
-            print(f"❌ Erro ao buscar vendas por mês: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por mÃƒÂªs: {e}")
             return []
 
-    def get_sales_by_year(self, year):
-        """Buscar vendas por ano específico"""
+    def get_sales_by_year(self, year, limit=None, offset=0):
+        """Buscar vendas por ano especÃƒÂ­fico"""
         try:
-            self.cursor.execute("""
-                SELECT s.id, COALESCE(p.description, pa.description), s.quantity, s.sale_price, s.total_price, s.sale_date
-                FROM sales s
-                LEFT JOIN products p ON s.product_id = p.id
-                LEFT JOIN products_archive pa ON s.product_id = pa.id
-                WHERE strftime('%Y', s.sale_date) = ?
-                ORDER BY s.sale_date DESC
-            """, (str(year),))
-            
-            return self.cursor.fetchall()
+            return self._query_sales_with_returns(
+                "strftime('%Y', s.sale_date) = ?",
+                (str(year),),
+                limit=limit,
+                offset=offset,
+            )
         except Exception as e:
-            print(f"❌ Erro ao buscar vendas por ano: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por ano: {e}")
             return []
 
     def get_today_sales(self):
@@ -2438,22 +3407,16 @@ class Database:
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             
-            self.cursor.execute("""
-                SELECT s.id, COALESCE(p.description, pa.description), s.quantity, s.sale_price, s.total_price, s.sale_date
-                FROM sales s
-                LEFT JOIN products p ON s.product_id = p.id
-                LEFT JOIN products_archive pa ON s.product_id = pa.id
-                WHERE DATE(s.sale_date) = ?
-                ORDER BY s.sale_date DESC
-            """, (today,))
-            
-            return self.cursor.fetchall()
+            return self._query_sales_with_returns(
+                "DATE(s.sale_date) = ?",
+                (today,),
+            )
         except Exception as e:
-            print(f"❌ Erro ao buscar vendas de hoje: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao buscar vendas de hoje: {e}")
             return []
 
     def get_sales_statistics_by_date(self, date_str):
-        """Obter estatísticas de vendas por data específica"""
+        """Obter estatÃƒÂ­sticas de vendas por data especÃƒÂ­fica"""
         try:
             date_obj = datetime.strptime(date_str, "%d/%m/%Y")
             formatted_date = date_obj.strftime("%Y-%m-%d")
@@ -2472,7 +3435,7 @@ class Database:
             
             return self.cursor.fetchone()
         except Exception as e:
-            print(f"❌ Erro ao obter estatísticas por data: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao obter estatÃƒÂ­sticas por data: {e}")
             return None
 
     def get_monthly_sales_summary(self, month, year):
@@ -2492,10 +3455,10 @@ class Database:
             
             return self.cursor.fetchall()
         except Exception as e:
-            print(f"❌ Erro ao obter resumo mensal: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao obter resumo mensal: {e}")
             return []
     
-    # ==================== MÉTODOS PARA GERENTES ====================
+    # ==================== MÃƒâ€°TODOS PARA GERENTES ====================
 
     def get_all_managers(self):
         """Obter todos os gerentes"""
@@ -2503,11 +3466,11 @@ class Database:
             self.cursor.execute("SELECT username FROM users WHERE role = 'manager'")
             return [manager[0] for manager in self.cursor.fetchall()]
         except sqlite3.Error as e:
-            print(f"❌ Erro ao buscar gerentes: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao buscar gerentes: {e}")
             return []
     
     def delete_manager(self, username):
-        """Excluir um gerente específico"""
+        """Excluir um gerente especÃƒÂ­fico"""
         try:
             self.cursor.execute("SELECT username FROM users WHERE role = 'manager'")
             current_managers = self.cursor.fetchall()
@@ -2519,13 +3482,13 @@ class Database:
             manager = self.cursor.fetchone()
             
             if not manager:
-                return False, "Gerente não encontrado"
+                return False, "Gerente nÃƒÂ£o encontrado"
             
             self.cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'manager'")
             manager_count = self.cursor.fetchone()[0]
             
             if manager_count <= 1:
-                return False, "Não é possível excluir o último gerente"
+                return False, "NÃƒÂ£o ÃƒÂ© possÃƒÂ­vel excluir o ÃƒÂºltimo gerente"
             
             self.cursor.execute(
                 "DELETE FROM users WHERE username = ? AND role = 'manager'", 
@@ -2533,16 +3496,16 @@ class Database:
             )
             self.conn.commit()
             
-            print(f"✅ Gerente '{username}' excluído com sucesso!")
-            return True, "Gerente excluído com sucesso"
+            print(f"Ã¢Å“â€¦ Gerente '{username}' excluÃƒÂ­do com sucesso!")
+            return True, "Gerente excluÃƒÂ­do com sucesso"
         
         except sqlite3.Error as e:
             self.conn.rollback()
-            print(f"❌ Erro ao excluir gerente: {e}")
+            print(f"Ã¢ÂÅ’ Erro ao excluir gerente: {e}")
             return False, f"Erro ao excluir gerente: {str(e)}"
         except Exception as e:
             self.conn.rollback()
-            print(f"❌ Erro inesperado: {e}")
+            print(f"Ã¢ÂÅ’ Erro inesperado: {e}")
             return False, f"Erro inesperado: {str(e)}"
     
     def get_products_with_barcodes(self):
@@ -2578,7 +3541,7 @@ class Database:
             print(f"Erro ao obter produtos para perdas: {e}")
             return []
 
-    def get_products_for_restock(self):
+    def get_products_for_restock(self, include_velocity=False, velocity_days=14):
         """Obter produtos para tela de reposicao"""
         try:
             self.cursor.execute(
@@ -2589,9 +3552,199 @@ class Database:
                 FROM products
                 """
             )
-            return self.cursor.fetchall()
+            rows = self.cursor.fetchall()
+            if not include_velocity:
+                return rows
+
+            velocity = _fetch_sales_velocity(self, days=velocity_days)
+            enriched = []
+            for row in rows:
+                pid, name, stock, price, cost, barcode, is_weight, exp, status = row
+                stock_val = _safe_float(stock, 0.0)
+                avg_daily = _safe_float(velocity.get(pid, 0.0), 0.0)
+                days_left = (stock_val / avg_daily) if avg_daily > 0 else None
+                enriched.append(
+                    (
+                        pid,
+                        name,
+                        stock_val,
+                        price,
+                        cost,
+                        barcode,
+                        is_weight,
+                        exp,
+                        status,
+                        avg_daily,
+                        days_left,
+                    )
+                )
+
+            enriched.sort(
+                key=lambda r: (
+                    r[10] is None,
+                    r[10] if r[10] is not None else 999999,
+                    r[2],
+                )
+            )
+            return enriched
         except sqlite3.Error as e:
             print(f"Erro ao obter produtos para reposicao: {e}")
+            return []
+
+    def get_products_for_stock_control(self, include_velocity=False, velocity_days=14):
+        """Obter produtos para painel unificado de controlo de stock."""
+        try:
+            self.cursor.execute(
+                """
+                SELECT
+                    p.id,
+                    p.description,
+                    p.existing_stock,
+                    p.sale_price,
+                    p.unit_purchase_price,
+                    p.barcode,
+                    p.is_sold_by_weight,
+                    p.expiry_date,
+                    p.status,
+                    MAX(sm.created_at) AS last_stock_update_at
+                FROM products p
+                LEFT JOIN stock_movements sm
+                    ON sm.product_id = p.id
+                   AND sm.applied = 1
+                GROUP BY
+                    p.id,
+                    p.description,
+                    p.existing_stock,
+                    p.sale_price,
+                    p.unit_purchase_price,
+                    p.barcode,
+                    p.is_sold_by_weight,
+                    p.expiry_date,
+                    p.status
+                """
+            )
+            rows = self.cursor.fetchall()
+
+            velocity = _fetch_sales_velocity(self, days=velocity_days) if include_velocity else {}
+            enriched = []
+            for row in rows:
+                (
+                    pid,
+                    name,
+                    stock,
+                    price,
+                    cost,
+                    barcode,
+                    is_weight,
+                    exp,
+                    status,
+                    last_update_at,
+                ) = row
+                stock_val = _safe_float(stock, 0.0)
+                avg_daily = _safe_float(velocity.get(pid, 0.0), 0.0) if include_velocity else 0.0
+                days_left = (stock_val / avg_daily) if avg_daily > 0 else None
+                enriched.append(
+                    (
+                        pid,
+                        name,
+                        stock_val,
+                        price,
+                        cost,
+                        barcode,
+                        is_weight,
+                        exp,
+                        status,
+                        avg_daily,
+                        days_left,
+                        last_update_at,
+                    )
+                )
+
+            if include_velocity:
+                enriched.sort(
+                    key=lambda r: (
+                        r[10] is None,
+                        r[10] if r[10] is not None else 999999,
+                        r[2],
+                    )
+                )
+            else:
+                enriched.sort(key=lambda r: (r[2], (r[1] or "").lower()))
+            return enriched
+        except sqlite3.Error as e:
+            print(f"Erro ao obter produtos para controlo de stock: {e}")
+            return []
+
+    def get_stock_movements(
+        self,
+        start_dt,
+        end_dt,
+        direction=None,
+        product_id=None,
+        include_sales=True,
+        limit=300,
+    ):
+        """Lista movimentos de stock para painel unificado."""
+        start = self._to_dt_str(start_dt, end=False)
+        end = self._to_dt_str(end_dt, end=True)
+        try:
+            where = [
+                "sm.applied = 1",
+                "sm.created_at BETWEEN ? AND ?",
+            ]
+            params = [start, end]
+
+            if direction in ("IN", "OUT"):
+                where.append("sm.direction = ?")
+                params.append(direction)
+
+            if product_id is not None:
+                where.append("sm.product_id = ?")
+                params.append(int(product_id))
+
+            if not include_sales:
+                where.append("sm.movement_type <> 'SALE'")
+
+            limit_clause = ""
+            if limit:
+                limit_clause = "LIMIT ?"
+                params.append(int(limit))
+
+            self.cursor.execute(
+                f"""
+                SELECT
+                    sm.id,
+                    sm.created_at,
+                    CASE WHEN sm.direction = 'IN' THEN sm.created_at ELSE NULL END AS entry_date,
+                    CASE WHEN sm.direction = 'OUT' THEN sm.created_at ELSE NULL END AS exit_date,
+                    DATE(sm.created_at) AS update_day,
+                    sm.direction,
+                    sm.movement_type,
+                    sm.product_id,
+                    COALESCE(p.description, pa.description) AS product_name,
+                    sm.qty,
+                    sm.unit,
+                    sm.unit_cost,
+                    sm.total_cost,
+                    sm.stock_before,
+                    sm.stock_after,
+                    sm.reason,
+                    sm.note,
+                    sm.created_by,
+                    sm.supplier_name,
+                    sm.invoice_number
+                FROM stock_movements sm
+                LEFT JOIN products p ON sm.product_id = p.id
+                LEFT JOIN products_archive pa ON sm.product_id = pa.id
+                WHERE {" AND ".join(where)}
+                ORDER BY sm.created_at DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter movimentos de stock: {e}")
             return []
 
     def get_products_for_filter(self):
@@ -2626,6 +3779,7 @@ class Database:
             p.sale_price,
             p.total_purchase_price,
             p.unit_purchase_price,
+            p.expiry_date,
             COALESCE(SUM(s.quantity), 0) as sold_in_period,
             COALESCE(SUM(s.total_price), 0) as total_sales
         FROM products p
@@ -2650,7 +3804,7 @@ class Database:
         query += """
         GROUP BY 
             p.id, p.description, p.existing_stock, p.sale_price,
-            p.total_purchase_price, p.unit_purchase_price, p.category
+            p.total_purchase_price, p.unit_purchase_price, p.category, p.expiry_date
         """
 
         try:
@@ -2661,9 +3815,626 @@ class Database:
             print(f"Erro ao obter dados filtrados: {e}")
             return []
 
-    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100):
+    def get_productivity_report_data(self, start_date, end_date):
+        """Obter dados agregados de produtividade por dia e terminal."""
+        start_dt = _parse_datetime_value(start_date)
+        end_dt = _parse_datetime_value(end_date, end_of_day=True)
+        if not start_dt or not end_dt:
+            return {
+                "summary": {
+                    "start_date": str(start_date or ""),
+                    "end_date": str(end_date or ""),
+                    "total_sales": 0,
+                    "total_revenue": 0.0,
+                    "total_quantity": 0.0,
+                    "avg_ticket": 0.0,
+                    "active_terminals": 0,
+                    "avg_margin_percent": None,
+                    "avg_discount_percent": 0.0,
+                    "best_day": None,
+                },
+                "daily_series": [],
+                "terminal_series": [],
+            }
+
+        query = """
+        SELECT
+            DATE(s.sale_date) AS sale_day,
+            COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL') AS terminal_id,
+            COUNT(*) AS sales_count,
+            COALESCE(SUM(s.quantity), 0) AS quantity,
+            COALESCE(SUM(s.total_price), 0) AS revenue,
+            COALESCE(
+                SUM(
+                    COALESCE(s.quantity, 0) *
+                    COALESCE(COALESCE(p.unit_purchase_price, pa.unit_purchase_price), 0)
+                ),
+                0
+            ) AS total_cost,
+            COALESCE(
+                AVG(
+                    CASE
+                        WHEN COALESCE(COALESCE(p.sale_price, pa.sale_price), s.sale_price, 0) > 0 THEN
+                            CASE
+                                WHEN COALESCE(COALESCE(p.sale_price, pa.sale_price), s.sale_price) > COALESCE(s.sale_price, 0)
+                                THEN
+                                    (
+                                        COALESCE(COALESCE(p.sale_price, pa.sale_price), s.sale_price) - COALESCE(s.sale_price, 0)
+                                    ) / COALESCE(COALESCE(p.sale_price, pa.sale_price), s.sale_price)
+                                ELSE 0
+                            END
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS avg_discount_ratio,
+            MIN(s.sale_date) AS first_sale_at,
+            MAX(s.sale_date) AS last_sale_at
+        FROM sales s
+        LEFT JOIN products p ON s.product_id = p.id
+        LEFT JOIN products_archive pa ON s.product_id = pa.id
+        WHERE s.sale_date BETWEEN ? AND ?
+        GROUP BY DATE(s.sale_date), COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL')
+        ORDER BY sale_day ASC, terminal_id ASC
+        """
+
+        try:
+            self.cursor.execute(
+                query,
+                (
+                    start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            rows = self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter produtividade filtrada: {e}")
+            return {
+                "summary": {
+                    "start_date": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "end_date": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "total_sales": 0,
+                    "total_revenue": 0.0,
+                    "total_quantity": 0.0,
+                    "avg_ticket": 0.0,
+                    "active_terminals": 0,
+                    "avg_margin_percent": None,
+                    "avg_discount_percent": 0.0,
+                    "best_day": None,
+                },
+                "daily_series": [],
+                "terminal_series": [],
+            }
+
+        daily_map = {}
+        terminal_map = {}
+        total_sales = 0
+        total_revenue = 0.0
+        total_quantity = 0.0
+        total_cost = 0.0
+        total_discount_weight = 0.0
+
+        for row in rows:
+            sale_day = str(row[0] or "")
+            terminal_id = str(row[1] or "CAIXA-PRINCIPAL")
+            sales_count = int(row[2] or 0)
+            quantity = _safe_float(row[3], 0.0)
+            revenue = _safe_float(row[4], 0.0)
+            cost = _safe_float(row[5], 0.0)
+            avg_discount_ratio = _safe_float(row[6], 0.0)
+            first_sale_at = row[7]
+            last_sale_at = row[8]
+
+            total_sales += sales_count
+            total_revenue += revenue
+            total_quantity += quantity
+            total_cost += cost
+            total_discount_weight += avg_discount_ratio * sales_count
+
+            day_entry = daily_map.setdefault(
+                sale_day,
+                {
+                    "date": sale_day,
+                    "sales_count": 0,
+                    "revenue": 0.0,
+                    "quantity": 0.0,
+                    "terminals": set(),
+                },
+            )
+            day_entry["sales_count"] += sales_count
+            day_entry["revenue"] += revenue
+            day_entry["quantity"] += quantity
+            day_entry["terminals"].add(terminal_id)
+
+            terminal_entry = terminal_map.setdefault(
+                terminal_id,
+                {
+                    "terminal_id": terminal_id,
+                    "sales_count": 0,
+                    "revenue": 0.0,
+                    "quantity": 0.0,
+                    "total_cost": 0.0,
+                    "discount_weight": 0.0,
+                    "active_days": set(),
+                    "first_sale_at": None,
+                    "last_sale_at": None,
+                },
+            )
+            terminal_entry["sales_count"] += sales_count
+            terminal_entry["revenue"] += revenue
+            terminal_entry["quantity"] += quantity
+            terminal_entry["total_cost"] += cost
+            terminal_entry["discount_weight"] += avg_discount_ratio * sales_count
+            terminal_entry["active_days"].add(sale_day)
+            if first_sale_at and (not terminal_entry["first_sale_at"] or str(first_sale_at) < str(terminal_entry["first_sale_at"])):
+                terminal_entry["first_sale_at"] = first_sale_at
+            if last_sale_at and (not terminal_entry["last_sale_at"] or str(last_sale_at) > str(terminal_entry["last_sale_at"])):
+                terminal_entry["last_sale_at"] = last_sale_at
+
+        daily_series = []
+        cursor_day = start_dt.date()
+        end_day = end_dt.date()
+        while cursor_day <= end_day:
+            day_key = cursor_day.isoformat()
+            day_entry = daily_map.get(day_key)
+            if day_entry:
+                daily_series.append(
+                    {
+                        "date": day_key,
+                        "sales_count": int(day_entry["sales_count"]),
+                        "revenue": round(_safe_float(day_entry["revenue"]), 2),
+                        "quantity": round(_safe_float(day_entry["quantity"]), 3),
+                        "active_terminals": len(day_entry["terminals"]),
+                    }
+                )
+            else:
+                daily_series.append(
+                    {
+                        "date": day_key,
+                        "sales_count": 0,
+                        "revenue": 0.0,
+                        "quantity": 0.0,
+                        "active_terminals": 0,
+                    }
+                )
+            cursor_day += timedelta(days=1)
+
+        best_day = None
+        if daily_series:
+            candidate = max(
+                daily_series,
+                key=lambda item: (
+                    int(item.get("sales_count") or 0),
+                    _safe_float(item.get("revenue")),
+                    str(item.get("date") or ""),
+                ),
+            )
+            if int(candidate.get("sales_count") or 0) > 0:
+                best_day = {
+                    "date": str(candidate.get("date") or ""),
+                    "sales_count": int(candidate.get("sales_count") or 0),
+                    "revenue": round(_safe_float(candidate.get("revenue")), 2),
+                }
+
+        terminal_series = []
+        for terminal_id, terminal_entry in terminal_map.items():
+            revenue = _safe_float(terminal_entry["revenue"])
+            sales_count = int(terminal_entry["sales_count"] or 0)
+            margin_percent = None
+            if revenue > 0:
+                margin_percent = ((revenue - _safe_float(terminal_entry["total_cost"])) / revenue) * 100.0
+            discount_percent = 0.0
+            if sales_count > 0:
+                discount_percent = (_safe_float(terminal_entry["discount_weight"]) / sales_count) * 100.0
+            terminal_series.append(
+                {
+                    "terminal_id": terminal_id,
+                    "sales_count": sales_count,
+                    "revenue": round(revenue, 2),
+                    "quantity": round(_safe_float(terminal_entry["quantity"]), 3),
+                    "avg_ticket": round(revenue / sales_count, 2) if sales_count > 0 else 0.0,
+                    "margin_percent": round(margin_percent, 2) if margin_percent is not None else None,
+                    "discount_percent": round(discount_percent, 2),
+                    "active_days": len(terminal_entry["active_days"]),
+                    "first_sale_at": terminal_entry["first_sale_at"],
+                    "last_sale_at": terminal_entry["last_sale_at"],
+                }
+            )
+
+        terminal_series.sort(
+            key=lambda item: (
+                -int(item.get("sales_count") or 0),
+                -_safe_float(item.get("revenue")),
+                str(item.get("terminal_id") or ""),
+            )
+        )
+
+        avg_margin_percent = None
+        if total_revenue > 0:
+            avg_margin_percent = ((total_revenue - total_cost) / total_revenue) * 100.0
+
+        avg_discount_percent = 0.0
+        if total_sales > 0:
+            avg_discount_percent = (total_discount_weight / total_sales) * 100.0
+
+        return {
+            "summary": {
+                "start_date": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_date": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "total_sales": total_sales,
+                "total_revenue": round(total_revenue, 2),
+                "total_quantity": round(total_quantity, 3),
+                "avg_ticket": round(total_revenue / total_sales, 2) if total_sales > 0 else 0.0,
+                "active_terminals": len(terminal_series),
+                "avg_margin_percent": round(avg_margin_percent, 2) if avg_margin_percent is not None else None,
+                "avg_discount_percent": round(avg_discount_percent, 2),
+                "best_day": best_day,
+            },
+            "daily_series": daily_series,
+            "terminal_series": terminal_series,
+        }
+
+    def get_admin_home_snapshot(self, lookback_days=7):
+        """Retorna um snapshot agregado para a HOME do administrador."""
+        try:
+            lookback_days = max(3, min(int(lookback_days or 7), 30))
+        except Exception:
+            lookback_days = 7
+
+        now = datetime.now()
+        today_date = now.date()
+        start_date = today_date - timedelta(days=lookback_days - 1)
+        today_iso = today_date.isoformat()
+        start_iso = start_date.isoformat()
+        month_key = now.strftime("%m")
+        year_key = now.strftime("%Y")
+        low_threshold = 5
+
+        def _empty_snapshot():
+            return {
+                "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "lookback_days": lookback_days,
+                "summary": {
+                    "total_products": 0,
+                    "critical_stock": 0,
+                    "out_of_stock": 0,
+                    "sales_today_count": 0,
+                    "revenue_today": 0.0,
+                    "revenue_month": 0.0,
+                    "total_users": 0,
+                    "total_clients": None,
+                    "active_suppliers": 0,
+                },
+                "comparison": {
+                    "recent_average_revenue": 0.0,
+                    "delta_percent": None,
+                    "direction": "none",
+                },
+                "sales_series": [],
+                "stock_flow_series": [],
+                "top_products": [],
+                "alerts": {
+                    "counts": {
+                        "critical_stock": 0,
+                        "out_of_stock": 0,
+                        "expired": 0,
+                        "expiring_soon": 0,
+                        "pending_approvals": 0,
+                        "fraud_alerts": 0,
+                        "negative_profit": 0,
+                    },
+                    "low_stock_items": [],
+                    "out_of_stock_items": [],
+                    "expired_items": [],
+                    "expiring_items": [],
+                    "pending_items": [],
+                    "fraud_items": [],
+                    "negative_profit_items": [],
+                },
+                "context": {
+                    "top_product_today": None,
+                    "peak_hour": None,
+                },
+            }
+
+        snapshot = _empty_snapshot()
+
+        try:
+            insights = self.get_admin_insights() or {}
+            expiry_levels = insights.get("expiry_levels") or {}
+
+            self.cursor.execute("SELECT COUNT(*) FROM products")
+            total_products = int(self.cursor.fetchone()[0] or 0)
+
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM products WHERE existing_stock > 0 AND existing_stock <= ?",
+                (low_threshold,),
+            )
+            critical_stock_count = int(self.cursor.fetchone()[0] or 0)
+
+            self.cursor.execute("SELECT COUNT(*) FROM products WHERE existing_stock <= 0")
+            out_of_stock_count = int(self.cursor.fetchone()[0] or 0)
+
+            self.cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = int(self.cursor.fetchone()[0] or 0)
+
+            self.cursor.execute(
+                "SELECT COUNT(DISTINCT supplier_name) FROM stock_movements "
+                "WHERE supplier_name IS NOT NULL AND TRIM(supplier_name) != ''"
+            )
+            active_suppliers = int(self.cursor.fetchone()[0] or 0)
+
+            self.cursor.execute(
+                "SELECT COUNT(*), COALESCE(SUM(total_price), 0) "
+                "FROM sales WHERE DATE(sale_date) = ?",
+                (today_iso,),
+            )
+            sales_today_count, revenue_today = self.cursor.fetchone()
+            sales_today_count = int(sales_today_count or 0)
+            revenue_today = round(_safe_float(revenue_today), 2)
+
+            self.cursor.execute(
+                "SELECT COALESCE(SUM(total_price), 0) "
+                "FROM sales WHERE strftime('%m', sale_date) = ? AND strftime('%Y', sale_date) = ?",
+                (month_key, year_key),
+            )
+            revenue_month = round(_safe_float(self.cursor.fetchone()[0]), 2)
+
+            self.cursor.execute(
+                "SELECT id, description, existing_stock, is_sold_by_weight "
+                "FROM products WHERE existing_stock <= 0 "
+                "ORDER BY LOWER(description) ASC LIMIT 6"
+            )
+            out_of_stock_items = [
+                {
+                    "product_id": row[0],
+                    "name": row[1],
+                    "stock": round(_safe_float(row[2]), 2),
+                    "is_weight": bool(row[3]),
+                }
+                for row in self.cursor.fetchall()
+            ]
+
+            self.cursor.execute(
+                "SELECT DATE(sale_date) AS sale_day, COUNT(*) AS sales_count, "
+                "COALESCE(SUM(total_price), 0) AS revenue "
+                "FROM sales WHERE DATE(sale_date) BETWEEN ? AND ? "
+                "GROUP BY DATE(sale_date) ORDER BY DATE(sale_date) ASC",
+                (start_iso, today_iso),
+            )
+            sales_map = {
+                str(row[0]): {
+                    "sales_count": int(row[1] or 0),
+                    "revenue": round(_safe_float(row[2]), 2),
+                }
+                for row in self.cursor.fetchall()
+            }
+
+            self.cursor.execute(
+                "SELECT DATE(created_at) AS movement_day, "
+                "COALESCE(SUM(CASE WHEN direction = 'IN' THEN qty ELSE 0 END), 0) AS qty_in, "
+                "COALESCE(SUM(CASE WHEN direction = 'OUT' THEN qty ELSE 0 END), 0) AS qty_out "
+                "FROM stock_movements "
+                "WHERE applied = 1 AND DATE(created_at) BETWEEN ? AND ? "
+                "GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC",
+                (start_iso, today_iso),
+            )
+            stock_map = {
+                str(row[0]): {
+                    "in_qty": round(_safe_float(row[1]), 2),
+                    "out_qty": round(_safe_float(row[2]), 2),
+                }
+                for row in self.cursor.fetchall()
+            }
+
+            self.cursor.execute(
+                "SELECT COALESCE(p.description, pa.description), "
+                "COALESCE(SUM(s.quantity), 0) AS total_qty, "
+                "COALESCE(SUM(s.total_price), 0) AS total_revenue "
+                "FROM sales s "
+                "LEFT JOIN products p ON s.product_id = p.id "
+                "LEFT JOIN products_archive pa ON s.product_id = pa.id "
+                "WHERE DATE(s.sale_date) BETWEEN ? AND ? "
+                "GROUP BY s.product_id "
+                "ORDER BY total_revenue DESC, total_qty DESC LIMIT 5",
+                (start_iso, today_iso),
+            )
+            top_products = [
+                {
+                    "name": row[0] or "Produto",
+                    "quantity": round(_safe_float(row[1]), 2),
+                    "revenue": round(_safe_float(row[2]), 2),
+                }
+                for row in self.cursor.fetchall()
+            ]
+
+            self.cursor.execute(
+                "SELECT COALESCE(p.description, pa.description), "
+                "COALESCE(SUM(s.quantity), 0) AS total_qty, "
+                "COALESCE(SUM(s.total_price), 0) AS total_revenue "
+                "FROM sales s "
+                "LEFT JOIN products p ON s.product_id = p.id "
+                "LEFT JOIN products_archive pa ON s.product_id = pa.id "
+                "WHERE DATE(s.sale_date) = ? "
+                "GROUP BY s.product_id "
+                "ORDER BY total_revenue DESC, total_qty DESC LIMIT 1",
+                (today_iso,),
+            )
+            row = self.cursor.fetchone()
+            top_product_today = None
+            if row:
+                top_product_today = {
+                    "name": row[0] or "Produto",
+                    "quantity": round(_safe_float(row[1]), 2),
+                    "revenue": round(_safe_float(row[2]), 2),
+                }
+
+            self.cursor.execute(
+                "SELECT strftime('%H', sale_date) AS hour_key, COALESCE(SUM(total_price), 0) AS total_revenue "
+                "FROM sales WHERE DATE(sale_date) = ? "
+                "GROUP BY hour_key ORDER BY total_revenue DESC LIMIT 1",
+                (today_iso,),
+            )
+            row = self.cursor.fetchone()
+            peak_hour = None
+            if row and row[0] is not None:
+                peak_hour = f"{row[0]}:00-{row[0]}:59"
+
+            sales_series = []
+            stock_flow_series = []
+            current_day = start_date
+            while current_day <= today_date:
+                day_key = current_day.isoformat()
+                sales_entry = sales_map.get(day_key, {})
+                stock_entry = stock_map.get(day_key, {})
+                sales_series.append(
+                    {
+                        "date": day_key,
+                        "sales_count": int(sales_entry.get("sales_count") or 0),
+                        "revenue": round(_safe_float(sales_entry.get("revenue")), 2),
+                    }
+                )
+                stock_flow_series.append(
+                    {
+                        "date": day_key,
+                        "in_qty": round(_safe_float(stock_entry.get("in_qty")), 2),
+                        "out_qty": round(_safe_float(stock_entry.get("out_qty")), 2),
+                    }
+                )
+                current_day += timedelta(days=1)
+
+            recent_values = [item["revenue"] for item in sales_series[:-1] if _safe_float(item["revenue"]) >= 0]
+            recent_average = round(sum(recent_values) / len(recent_values), 2) if recent_values else 0.0
+            delta_percent = None
+            direction = "none"
+            if recent_average > 0:
+                delta_percent = round(((revenue_today - recent_average) / recent_average) * 100.0, 2)
+                if delta_percent >= 5:
+                    direction = "above"
+                elif delta_percent <= -5:
+                    direction = "below"
+                else:
+                    direction = "stable"
+            elif revenue_today > 0:
+                direction = "above"
+
+            low_stock_items = []
+            for name, stock, is_weight, days_left, product_id in (insights.get("low_stock") or [])[:6]:
+                low_stock_items.append(
+                    {
+                        "product_id": product_id,
+                        "name": name,
+                        "stock": round(_safe_float(stock), 2),
+                        "is_weight": bool(is_weight),
+                        "days_left": round(_safe_float(days_left), 1) if days_left is not None and _safe_float(days_left) < 999 else None,
+                    }
+                )
+
+            def _expiry_items(rows):
+                items = []
+                for name, days_left, date_str, stock, unit in list(rows or [])[:6]:
+                    items.append(
+                        {
+                            "name": name,
+                            "days_left": int(days_left or 0),
+                            "date": date_str,
+                            "stock": round(_safe_float(stock), 2),
+                            "unit": unit,
+                        }
+                    )
+                return items
+
+            expired_items = _expiry_items(expiry_levels.get("vencido"))
+            expiring_items = _expiry_items(
+                (expiry_levels.get("critico") or []) + (expiry_levels.get("alto") or [])
+            )
+
+            negative_profit_items = [
+                {
+                    "name": row[0],
+                    "profit_per_unit": round(_safe_float(row[1]), 2),
+                }
+                for row in list(insights.get("negative_profit") or [])[:6]
+            ]
+
+            pending_items = []
+            for row in (self.get_pending_approvals() or [])[:6]:
+                pending_items.append(
+                    {
+                        "id": row[0],
+                        "product_id": row[1],
+                        "product_name": row[2],
+                        "movement_type": row[3],
+                        "qty": round(_safe_float(row[4]), 2),
+                        "unit": row[5],
+                        "total_cost": round(_safe_float(row[6]), 2),
+                        "created_at": row[11],
+                        "created_by": row[12],
+                    }
+                )
+
+            fraud_items = []
+            for item in (self.detect_fraud_patterns(days_lookback=30) or [])[:6]:
+                fraud_items.append(
+                    {
+                        "title": item.get("title"),
+                        "severity": int(item.get("severity") or 0),
+                        "description": item.get("description"),
+                    }
+                )
+
+            snapshot["summary"] = {
+                "total_products": total_products,
+                "critical_stock": critical_stock_count,
+                "out_of_stock": out_of_stock_count,
+                "sales_today_count": sales_today_count,
+                "revenue_today": revenue_today,
+                "revenue_month": revenue_month,
+                "total_users": total_users,
+                "total_clients": None,
+                "active_suppliers": active_suppliers,
+            }
+            snapshot["comparison"] = {
+                "recent_average_revenue": recent_average,
+                "delta_percent": delta_percent,
+                "direction": direction,
+            }
+            snapshot["sales_series"] = sales_series
+            snapshot["stock_flow_series"] = stock_flow_series
+            snapshot["top_products"] = top_products
+            snapshot["alerts"] = {
+                "counts": {
+                    "critical_stock": len(low_stock_items),
+                    "out_of_stock": out_of_stock_count,
+                    "expired": len(expired_items),
+                    "expiring_soon": len(expiring_items),
+                    "pending_approvals": len(pending_items),
+                    "fraud_alerts": len(fraud_items),
+                    "negative_profit": len(negative_profit_items),
+                },
+                "low_stock_items": low_stock_items,
+                "out_of_stock_items": out_of_stock_items,
+                "expired_items": expired_items,
+                "expiring_items": expiring_items,
+                "pending_items": pending_items,
+                "fraud_items": fraud_items,
+                "negative_profit_items": negative_profit_items,
+            }
+            snapshot["context"] = {
+                "top_product_today": top_product_today,
+                "peak_hour": peak_hour,
+            }
+            return snapshot
+        except Exception as e:
+            print(f"Erro ao obter snapshot da HOME admin: {e}")
+            return snapshot
+
+    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100, offset=0):
         """Obter logs do sistema com filtros"""
-        query = "SELECT * FROM user_logs WHERE 1=1"
+        query = (
+            "SELECT id, username, role, action, details, timestamp "
+            "FROM user_logs WHERE 1=1"
+        )
         params = []
 
         if user_filter:
@@ -2680,8 +4451,9 @@ class Database:
 
         query += " ORDER BY timestamp DESC"
         if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+            query += " LIMIT ? OFFSET ?"
+            params.append(int(limit))
+            params.append(max(0, int(offset or 0)))
 
         try:
             self.cursor.execute(query, params)
@@ -2763,25 +4535,51 @@ class Database:
         )
         expiring_15 = []
         expiring_7 = []
+        expiry_levels = {
+            "vencido": [],
+            "critico": [],
+            "alto": [],
+            "medio": [],
+            "leve": [],
+        }
+        expiring_90 = []
         for name, expiry_date, stock, is_by_weight in self.cursor.fetchall():
             exp_date = _parse_date(expiry_date)
             if not exp_date:
                 continue
             days_left = (exp_date - today_date).days
-            if days_left < 0:
-                continue
             unit = "kg" if is_by_weight else "un"
+            expiry_tuple = (
+                name,
+                days_left,
+                exp_date.strftime("%d/%m/%Y"),
+                _safe_float(stock),
+                unit,
+            )
+
+            if days_left <= 0:
+                expiry_levels["vencido"].append(expiry_tuple)
+                continue
             if days_left <= 7:
-                expiring_7.append(
-                    (name, days_left, exp_date.strftime("%d/%m/%Y"), _safe_float(stock), unit)
-                )
+                expiring_7.append(expiry_tuple)
+                expiry_levels["critico"].append(expiry_tuple)
             elif days_left <= 15:
-                expiring_15.append(
-                    (name, days_left, exp_date.strftime("%d/%m/%Y"), _safe_float(stock), unit)
-                )
+                expiring_15.append(expiry_tuple)
+                expiry_levels["alto"].append(expiry_tuple)
+            elif days_left <= 30:
+                expiry_levels["alto"].append(expiry_tuple)
+            elif days_left <= 60:
+                expiry_levels["medio"].append(expiry_tuple)
+            elif days_left <= 90:
+                expiry_levels["leve"].append(expiry_tuple)
+            if days_left <= 90:
+                expiring_90.append(expiry_tuple)
 
         expiring_7.sort(key=lambda x: x[1])
         expiring_15.sort(key=lambda x: x[1])
+        expiring_90.sort(key=lambda x: x[1])
+        for level in ("vencido", "critico", "alto", "medio", "leve"):
+            expiry_levels[level].sort(key=lambda x: x[1])
 
         forecasts, expiry_risk = _build_forecasts(self, days=14, limit=20)
 
@@ -2797,10 +4595,16 @@ class Database:
             alerts.append("Sem vendas registadas hoje.")
         if low_stock:
             alerts.append(f"{len(low_stock)} produtos com stock baixo (<= {low_threshold}).")
-        if expiring_15:
-            alerts.append(f"{len(expiring_15)} produtos a vencer em ate 15 dias.")
-        if expiring_7:
-            alerts.append(f"{len(expiring_7)} produtos a vencer em ate 7 dias.")
+        if expiry_levels["vencido"]:
+            alerts.append(f"{len(expiry_levels['vencido'])} produtos vencidos.")
+        if expiry_levels["critico"]:
+            alerts.append(f"{len(expiry_levels['critico'])} produtos em alerta critico (7 dias).")
+        if expiry_levels["alto"]:
+            alerts.append(f"{len(expiry_levels['alto'])} produtos em alerta alto (30 dias).")
+        if expiry_levels["medio"]:
+            alerts.append(f"{len(expiry_levels['medio'])} produtos em alerta medio (60 dias).")
+        if expiry_levels["leve"]:
+            alerts.append(f"{len(expiry_levels['leve'])} produtos em alerta leve (90 dias).")
         if negative_profit:
             alerts.append(f"{len(negative_profit)} produtos com lucro negativo.")
 
@@ -2815,11 +4619,22 @@ class Database:
                 recommendations.append(rec)
                 recommendations_stock.append(rec)
 
-        if expiring_7:
-            for name, days, _date_str, _stock, _unit in expiring_7[:3]:
+        expiry_priority = (
+            expiry_levels["vencido"]
+            + expiry_levels["critico"]
+            + expiry_levels["alto"]
+            + expiry_levels["medio"]
+            + expiry_levels["leve"]
+        )
+        for name, days, _date_str, _stock, _unit in expiry_priority[:3]:
+            if days <= 0:
+                rec = f"{name} vencido - retirar da venda"
+            elif days <= 7:
                 rec = f"{name} vence em {days} dias - priorizar venda"
-                recommendations.append(rec)
-                recommendations_expiry.append(rec)
+            else:
+                rec = f"{name} vence em {days} dias - acompanhar"
+            recommendations.append(rec)
+            recommendations_expiry.append(rec)
 
         if negative_profit:
             names = ", ".join([p[0] for p in negative_profit[:3]])
@@ -2831,9 +4646,20 @@ class Database:
         alert_count = (
             (1 if total_count == 0 else 0)
             + len(low_stock)
-            + len(expiring_15)
-            + len(expiring_7)
+            + len(expiry_levels["vencido"])
+            + len(expiry_levels["critico"])
+            + len(expiry_levels["alto"])
+            + len(expiry_levels["medio"])
+            + len(expiry_levels["leve"])
             + len(negative_profit)
+        )
+
+        expiry_total = (
+            len(expiry_levels["vencido"])
+            + len(expiry_levels["critico"])
+            + len(expiry_levels["alto"])
+            + len(expiry_levels["medio"])
+            + len(expiry_levels["leve"])
         )
 
         return {
@@ -2845,15 +4671,23 @@ class Database:
             "low_stock": low_stock,
             "expiring_15": expiring_15,
             "expiring_7": expiring_7,
+            "expiring_90": expiring_90,
+            "expiry_levels": expiry_levels,
             "stock_forecast": forecasts,
             "expiry_risk": expiry_risk,
             "negative_profit": negative_profit,
             "alert_count": alert_count,
             "badge_counts": {
                 "stock": len(low_stock),
+                "expiry_vencido": len(expiry_levels["vencido"]),
+                "expiry_critico": len(expiry_levels["critico"]),
+                "expiry_alto": len(expiry_levels["alto"]),
+                "expiry_medio": len(expiry_levels["medio"]),
+                "expiry_leve": len(expiry_levels["leve"]),
+                "expiry_total": expiry_total,
                 "expiry_7": len(expiring_7),
                 "expiry_15": len(expiring_15),
-                "total": len(low_stock) + len(expiring_7) + len(expiring_15),
+                "total": len(low_stock) + expiry_total,
             },
         }
 
@@ -2868,3 +4702,5 @@ class Database:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+

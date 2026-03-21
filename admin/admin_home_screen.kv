@@ -1,0 +1,277 @@
+<HomeButtonCard@MDCard+ButtonBehavior>:
+    ripple_behavior: True
+
+<AdminHomeScreen>:
+    FloatLayout:
+        MDBoxLayout:
+            orientation: "vertical"
+            md_bg_color: app.theme_tokens["surface"]
+
+            MDTopAppBar:
+                title: "HOME do Administrador"
+                md_bg_color: app.theme_tokens["primary"]
+                specific_text_color: app.theme_tokens["on_primary"]
+                elevation: 4
+                right_action_items: [["refresh", lambda x: root.refresh_home()], ["chart-bar", lambda x: root.open_reports()], ["cog", lambda x: root.go_to_settings()], ["logout", lambda x: root.logout()]]
+
+            MDBoxLayout:
+                orientation: "vertical"
+                spacing: dp(10)
+                padding: [dp(12), dp(12), dp(12), dp(12)]
+
+                MDCard:
+                    size_hint_y: None
+                    height: min(max(dp(94), root.height * 0.15), dp(106))
+                    padding: [dp(18), dp(14), dp(18), dp(14)]
+                    radius: [dp(16)]
+                    elevation: 2
+                    md_bg_color: app.theme_tokens["primary"]
+                    canvas.before:
+                        Color:
+                            rgba: 1, 1, 1, 0.08
+                        Ellipse:
+                            size: dp(180), dp(180)
+                            pos: self.right - dp(140), self.top - dp(120)
+                        Ellipse:
+                            size: dp(120), dp(120)
+                            pos: self.x - dp(24), self.y - dp(28)
+
+                    MDBoxLayout:
+                        id: hero_content
+                        spacing: dp(14)
+
+                        MDBoxLayout:
+                            orientation: "vertical"
+                            spacing: dp(6)
+
+                            MDLabel:
+                                text: root.home_title
+                                font_style: "H6"
+                                bold: True
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens["on_primary"]
+
+                            MDLabel:
+                                text: root.home_subtitle
+                                font_style: "Caption"
+                                theme_text_color: "Custom"
+                                text_color: 1, 1, 1, 0.92
+                                text_size: self.width, None
+
+                            MDLabel:
+                                text: root.status_text
+                                font_style: "Caption"
+                                theme_text_color: "Custom"
+                                text_color: 1, 1, 1, 0.92
+
+                        MDBoxLayout:
+                            orientation: "vertical"
+                            spacing: dp(8)
+                            size_hint_x: None
+                            width: dp(300)
+
+                            MDLabel:
+                                text: root.datetime_text
+                                halign: "right"
+                                font_style: "Caption"
+                                theme_text_color: "Custom"
+                                text_color: 1, 1, 1, 0.95
+                                size_hint_y: None
+                                height: dp(20)
+
+                            MDBoxLayout:
+                                id: hero_actions
+                                spacing: dp(8)
+                                size_hint_y: None
+                                height: dp(36)
+
+                                MDRaisedButton:
+                                    text: "Adicionar"
+                                    md_bg_color: app.theme_tokens["on_primary"]
+                                    text_color: app.theme_tokens["primary"]
+                                    size_hint_x: None
+                                    width: dp(112)
+                                    on_release: root.add_product()
+
+                                MDRaisedButton:
+                                    text: "Relatorios"
+                                    md_bg_color: 1, 1, 1, 0.12
+                                    text_color: app.theme_tokens["on_primary"]
+                                    elevation: 0
+                                    line_color: 1, 1, 1, 0.35
+                                    line_width: 1
+                                    size_hint_x: None
+                                    width: dp(112)
+                                    on_release: root.open_reports()
+
+                MDBoxLayout:
+                    id: main_shell
+                    orientation: "horizontal"
+                    spacing: dp(10)
+                    size_hint_y: 1
+
+                    MDBoxLayout:
+                        id: left_col
+                        orientation: "vertical"
+                        spacing: dp(10)
+                        size_hint_x: 0.64
+
+                        MDCard:
+                            orientation: "vertical"
+                            spacing: dp(8)
+                            size_hint_y: None
+                            height: dp(148)
+                            padding: [dp(12), dp(10), dp(12), dp(12)]
+                            radius: [dp(14)]
+                            elevation: 1
+                            md_bg_color: app.theme_tokens["card"]
+
+                            MDLabel:
+                                text: "Visao Geral"
+                                font_style: "Subtitle1"
+                                bold: True
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens["text_primary"]
+                                size_hint_y: None
+                                height: dp(22)
+
+                            MDGridLayout:
+                                id: summary_grid
+                                cols: 4
+                                spacing: dp(8)
+                                size_hint_y: 1
+
+                        MDBoxLayout:
+                            id: sales_chart_host
+                            orientation: "vertical"
+                            size_hint_y: 1
+
+                    MDBoxLayout:
+                        id: right_col
+                        orientation: "vertical"
+                        spacing: dp(10)
+                        size_hint_x: 0.36
+
+                        MDCard:
+                            orientation: "vertical"
+                            spacing: dp(8)
+                            size_hint_y: 0.34
+                            padding: [dp(12), dp(10), dp(12), dp(12)]
+                            radius: [dp(14)]
+                            elevation: 1
+                            md_bg_color: app.theme_tokens["card"]
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(22)
+
+                                MDLabel:
+                                    text: "Alertas"
+                                    font_style: "Subtitle1"
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens["text_primary"]
+
+                                MDLabel:
+                                    id: alerts_meta_label
+                                    text: ""
+                                    font_style: "Caption"
+                                    halign: "right"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens["text_secondary"]
+
+                            MDGridLayout:
+                                id: alerts_grid
+                                cols: 2
+                                spacing: dp(8)
+                                size_hint_y: 1
+
+                        MDCard:
+                            orientation: "vertical"
+                            spacing: dp(8)
+                            size_hint_y: 0.40
+                            padding: [dp(12), dp(10), dp(12), dp(12)]
+                            radius: [dp(14)]
+                            elevation: 1
+                            md_bg_color: app.theme_tokens["card"]
+
+                            MDLabel:
+                                text: "Atalhos"
+                                font_style: "Subtitle1"
+                                bold: True
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens["text_primary"]
+                                size_hint_y: None
+                                height: dp(22)
+
+                            MDGridLayout:
+                                id: quick_actions_grid
+                                cols: 2
+                                spacing: dp(8)
+                                size_hint_y: 1
+
+                        MDCard:
+                            orientation: "vertical"
+                            spacing: dp(8)
+                            size_hint_y: 0.26
+                            padding: [dp(12), dp(10), dp(12), dp(12)]
+                            radius: [dp(14)]
+                            elevation: 1
+                            md_bg_color: app.theme_tokens["card_alt"]
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(22)
+
+                                MDLabel:
+                                    text: "Insights"
+                                    font_style: "Subtitle1"
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens["text_primary"]
+
+                                MDLabel:
+                                    id: insights_meta_label
+                                    text: ""
+                                    font_style: "Caption"
+                                    halign: "right"
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens["text_secondary"]
+
+                            MDGridLayout:
+                                id: insights_grid
+                                cols: 2
+                                spacing: dp(8)
+                                size_hint_y: 1
+
+        FloatLayout:
+            id: ai_banner_container
+            size_hint: 1, 1
+            pos: 0, 0
+
+        MDFloatingActionButton:
+            id: ai_button
+            icon: "assets/icon/idea.ico"
+            elevation: 2
+            pos_hint: {"right": 0.972, "y": 0.03}
+            on_release: root.open_ai_menu(self)
+
+        MDCard:
+            id: ai_badge
+            size_hint: None, None
+            size: dp(24), dp(24)
+            md_bg_color: app.theme_tokens["badge"]
+            radius: [dp(12)]
+            elevation: 1
+            pos_hint: {"right": 0.984, "y": 0.088}
+            opacity: 0
+
+            MDLabel:
+                id: ai_badge_label
+                text: "0"
+                halign: "center"
+                valign: "middle"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens["on_primary"]
+                font_size: dp(12)
+                bold: True

@@ -49,6 +49,8 @@ class StockReport(BasePDFReport):
         self._add_stock_summary(elements, data)
         elements.append(Spacer(1, 20))
         self._add_critical_stock_alert(elements, data)
+        elements.append(Spacer(1, 16))
+        self._add_expiry_alerts(elements, data)
         elements.append(PageBreak())
         self._add_stock_details(elements, data)
         self._create_footer(elements)
@@ -244,6 +246,95 @@ class StockReport(BasePDFReport):
                 ]))
         
         elements.append(alert_table)
+
+    def _add_expiry_alerts(self, elements, data):
+        """Adiciona secao de alertas de vencimento com niveis e cores."""
+        if "expiry_has_alert" not in data.columns:
+            return
+
+        expiry_rows = data[data["expiry_has_alert"] == True].copy()
+        if expiry_rows.empty:
+            return
+
+        expiry_rows = expiry_rows.sort_values(
+            by=["expiry_days_left", "description"],
+            ascending=[True, True],
+            na_position="last",
+        )
+
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            "ExpiryAlertTitle",
+            parent=styles["Heading2"],
+            fontSize=14,
+            textColor=colors.HexColor("#8B1A1A"),
+            spaceAfter=10,
+            fontName="Helvetica-Bold",
+        )
+        elements.append(
+            Paragraph(
+                f"Alertas de Vencimento (janela de 90 dias): {len(expiry_rows)} produto(s)",
+                title_style,
+            )
+        )
+
+        table_data = [["Produto", "Categoria", "Validade", "Dias", "Nivel"]]
+        for _, row in expiry_rows.head(24).iterrows():
+            expiry_day = self._format_expiry_date(row.get("expiry_date"))
+            days_left = row.get("expiry_days_left")
+            days_text = "--"
+            if pd.notna(days_left):
+                try:
+                    days_text = str(int(days_left))
+                except Exception:
+                    days_text = str(days_left)
+            table_data.append(
+                [
+                    str(row.get("description", ""))[:30],
+                    str(row.get("category", ""))[:14] if pd.notna(row.get("category")) else "N/A",
+                    expiry_day,
+                    days_text,
+                    str(row.get("expiry_alert_label", "Sem alerta")),
+                ]
+            )
+
+        table = Table(
+            table_data,
+            colWidths=[3.2 * inch, 1.4 * inch, 1.3 * inch, 0.8 * inch, 1.7 * inch],
+        )
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2F3A4A")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                    ("ALIGN", (0, 1), (1, -1), "LEFT"),
+                    ("ALIGN", (2, 1), (-1, -1), "CENTER"),
+                    ("FONTSIZE", (0, 1), (-1, -1), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8F9FA")]),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#BDC3C7")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ]
+            )
+        )
+
+        for row_idx in range(1, len(table_data)):
+            level = str(table_data[row_idx][4]).strip().lower()
+            badge_color, text_color = self._expiry_level_colors(level)
+            table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (4, row_idx), (4, row_idx), badge_color),
+                        ("TEXTCOLOR", (4, row_idx), (4, row_idx), text_color),
+                        ("FONTNAME", (4, row_idx), (4, row_idx), "Helvetica-Bold"),
+                    ]
+                )
+            )
+
+        elements.append(table)
     
     def _add_stock_details(self, elements, data):
         """Adiciona seção de detalhamento completo do estoque."""
@@ -391,3 +482,33 @@ class StockReport(BasePDFReport):
             return ('Crítico', 'MÉDIA', 'Reposição em 72h')
         else:
             return ('Baixo', 'BAIXA', 'Monitorar estoque')
+
+    @staticmethod
+    def _format_expiry_date(value):
+        if not value or (isinstance(value, float) and pd.isna(value)):
+            return "N/A"
+        raw = str(value)
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y"):
+            try:
+                return pd.to_datetime(raw, format=fmt, errors="raise").strftime("%d/%m/%Y")
+            except Exception:
+                continue
+        try:
+            return pd.to_datetime(raw).strftime("%d/%m/%Y")
+        except Exception:
+            return raw[:10]
+
+    @staticmethod
+    def _expiry_level_colors(level):
+        level = str(level or "").lower()
+        if level == "leve":
+            return colors.HexColor("#808080"), colors.white
+        if level == "medio":
+            return colors.HexColor("#EBC21A"), colors.black
+        if level == "alto":
+            return colors.HexColor("#F2861A"), colors.white
+        if level == "critico":
+            return colors.HexColor("#DB3833"), colors.white
+        if level == "vencido":
+            return colors.HexColor("#731212"), colors.white
+        return colors.HexColor("#73808C"), colors.white

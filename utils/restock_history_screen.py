@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from time import perf_counter
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -22,6 +23,8 @@ def _theme_color(name, fallback):
 
 
 class RestockHistoryScreen(MDScreen):
+    ENTER_CACHE_SECONDS = 5
+
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
         self.db = db or get_db()
@@ -31,10 +34,16 @@ class RestockHistoryScreen(MDScreen):
         self._display_rows = []
         self._page_size = 60
         self._current_page = 1
-        Clock.schedule_once(lambda dt: self.load_restock_table(), 0.1)
+        self._last_loaded_at = 0.0
 
     def on_enter(self):
-        Clock.schedule_once(lambda dt: self.load_restock_table(), 0.05)
+        self.request_enter_refresh()
+
+    def request_enter_refresh(self, force=False, delay=0.05):
+        stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
+        if not force and self._display_rows and not stale:
+            return
+        Clock.schedule_once(lambda dt: self.load_restock_table(), delay)
 
     def go_back(self):
         if self.manager:
@@ -47,6 +56,7 @@ class RestockHistoryScreen(MDScreen):
         start_dt = end_dt - timedelta(days=365)
         rows = self.db.get_restock_records(start_dt, end_dt, limit=300)
         self._populate_restock_list(rows)
+        self._last_loaded_at = perf_counter()
 
     def _populate_restock_list(self, rows):
         self.ids.restock_list.clear_widgets()

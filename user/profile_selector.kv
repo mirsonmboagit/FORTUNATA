@@ -1,0 +1,209 @@
+<AccessRoleCard@MDCard+ButtonBehavior>:
+    ripple_behavior: True
+    radius: [dp(22)]
+    elevation: 2
+    padding: [dp(22), dp(20), dp(22), dp(20)]
+    spacing: dp(12)
+    orientation: "vertical"
+
+<ProfileSelectorScreen>:
+    md_bg_color: app.theme_tokens['surface']
+
+    FloatLayout:
+        canvas.before:
+            Color:
+                rgba: app.theme_tokens['surface']
+            Rectangle:
+                pos: self.pos
+                size: self.size
+            Color:
+                rgba: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.07
+            Ellipse:
+                size: dp(320), dp(320)
+                pos: self.right - dp(250), self.top - dp(170)
+            Color:
+                rgba: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.06
+            Ellipse:
+                size: dp(260), dp(260)
+                pos: self.x - dp(70), self.y - dp(60)
+
+        MDBoxLayout:
+            orientation: "vertical"
+            padding: [dp(22), dp(22), dp(22), dp(22)]
+            spacing: dp(18)
+
+            MDCard:
+                size_hint_y: None
+                height: dp(122)
+                radius: [dp(24)]
+                elevation: 2
+                padding: [dp(24), dp(20), dp(24), dp(18)]
+                md_bg_color: app.theme_tokens['card']
+
+                canvas.before:
+                    Color:
+                        rgba: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.10
+                    RoundedRectangle:
+                        pos: self.pos
+                        size: self.size
+                        radius: [dp(24)]
+
+                MDBoxLayout:
+                    orientation: "vertical"
+                    spacing: dp(6)
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(24)
+
+                        MDLabel:
+                            text: "Acesso ao Sistema"
+                            bold: True
+                            font_style: "Subtitle1"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['primary']
+
+                        MDLabel:
+                            text: root.datetime_text
+                            halign: "right"
+                            font_style: "Caption"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_secondary']
+
+                    MDLabel:
+                        text: "Escolha o perfil para entrar na plataforma."
+                        font_name: "MainFont"
+                        font_size: sp(24)
+                        bold: True
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_primary']
+
+                    MDLabel:
+                        text: "Administrador para gestao estrategica. Gerente para operacao de vendas e atendimento."
+                        font_name: "LogoFont"
+                        font_size: sp(10)
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+
+            MDGridLayout:
+                id: profile_grid
+                cols: 2
+                spacing: dp(16)
+
+                AccessRoleCard:
+                    md_bg_color: app.theme_tokens['card']
+                    on_release: root.open_admin_login()
+
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.11
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [dp(22)]
+
+                    MDCard:
+                        size_hint: None, None
+                        size: dp(58), dp(58)
+                        radius: [dp(18)]
+                        elevation: 0
+                        md_bg_color: app.theme_tokens['primary']
+
+                        MDIcon:
+                            icon: "shield-account-outline"
+                            halign: "center"
+                            valign: "middle"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "Entrar como Administrador"
+                        font_name: "MainFont"
+                        font_size: sp(24)
+                        bold: True
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_primary']
+
+                    MDLabel:
+                        text: "Ideal para controlo do negocio, configuracoes, relatorios, usuarios e monitorizacao."
+                        font_name: "LogoFont"
+                        font_size: sp(12)
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+                        text_size: self.width, None
+
+                    MDLabel:
+                        text: "Produtos, dashboards, alertas, produtividade e definicoes."
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+                        text_size: self.width, None
+
+                    Widget:
+
+                    MDRaisedButton:
+                        text: "ABRIR ACESSO ADMIN"
+                        size_hint_x: 1
+                        md_bg_color: app.theme_tokens['primary']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        on_release: root.open_admin_login()
+
+                AccessRoleCard:
+                    md_bg_color: app.theme_tokens['card']
+                    on_release: root.open_manager_login()
+
+                    canvas.before:
+                        Color:
+                            rgba: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.12
+                        RoundedRectangle:
+                            pos: self.pos
+                            size: self.size
+                            radius: [dp(22)]
+
+                    MDCard:
+                        size_hint: None, None
+                        size: dp(58), dp(58)
+                        radius: [dp(18)]
+                        elevation: 0
+                        md_bg_color: app.theme_tokens['success']
+
+                        MDIcon:
+                            icon: "storefront-outline"
+                            halign: "center"
+                            valign: "middle"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "Entrar como Gerente"
+                        font_name: "MainFont"
+                        font_size: sp(20)
+                        bold: True
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_primary']
+
+                    MDLabel:
+                        text: "Fluxo mais direto para vendas, atendimento, historico de operacao e acompanhamento diario."
+                        font_name: "LogoFont"
+                        font_size: sp(10)
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+                        text_size: self.width, None
+
+                    MDLabel:
+                        text: "Caixa, perdas, historico e tema claro/escuro."
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+                        text_size: self.width, None
+
+                    Widget:
+
+                    MDRaisedButton:
+                        text: "ABRIR ACESSO GERENTE"
+                        size_hint_x: 1
+                        md_bg_color: app.theme_tokens['success']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        on_release: root.open_manager_login()

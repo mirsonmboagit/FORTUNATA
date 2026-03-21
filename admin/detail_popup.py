@@ -215,7 +215,7 @@ class DetailPopup(Popup):
                 return "0.00%"
 
         is_kg = self._get(15, 0)
-        unit = "kg" if is_kg else "un"
+        unit = "KG" if is_kg else "UN"
 
         existing_stock = self._get(2, 0)
         sold_stock = self._get(3, 0)
@@ -241,6 +241,9 @@ class DetailPopup(Popup):
             return f"{v:.2f} {unit}" if is_kg else f"{int(v)} {unit}"
 
         barcode_value = self._get(12, "NENHUM")
+        sku_value = self._get(22, "NENHUM")
+        pack_units = self._get(23, None)
+        allow_pack_sale = bool(self._get(24, 0))
         expiry_value = self._get(13, "")
         expiry_text = self._format_date(expiry_value) or "NENHUMA"
         expiry_level = None
@@ -266,8 +269,11 @@ class DetailPopup(Popup):
             ("ID", str(self._get(0, "")), None),
             ("Descricao", self._get(1, "NENHUMA"), None),
             ("Categoria", self._get(11, "NENHUMA"), "info"),
-            ("Quantidade/Conteudo", self._get(21, "NENHUMA"), None),
+            ("Unidade de Medida", self._get(21, "NENHUMA"), None),
+            ("Unidades por Embalagem", str(int(float(pack_units))) if pack_units not in (None, "") else "NENHUMA", None),
+            ("Venda por Embalagem", "ATIVA" if allow_pack_sale else "INATIVA", None),
             ("Codigo de Barras", barcode_value, "warning" if barcode_value == "NENHUM" else None),
+            ("SKU", sku_value, "warning" if sku_value == "NENHUM" else None),
             ("Data de Validade", expiry_text, expiry_level),
             ("Data de Cadastro", self._format_datetime(self._get(14, "")) or "NENHUMA", None),
             ("Tipo de Venda", "KG" if is_kg else "UNIDADE", None),

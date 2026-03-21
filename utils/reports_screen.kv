@@ -1,6 +1,3 @@
-<BadgeButton@MDCard+ButtonBehavior>:
-    ripple_behavior: True
-
 <ReportsScreen>:
     name: 'reports'
     date_label: date_label
@@ -224,6 +221,14 @@
                         size_hint_y: None
                         height: dp(10)
 
+                    MDBoxLayout:
+                        id: productivity_dashboard_host
+                        orientation: 'vertical'
+                        spacing: dp(0)
+                        size_hint_y: None
+                        height: self.minimum_height
+                        adaptive_height: True
+
                     # Título da seção de relatórios
                     MDLabel:
                         text: 'Selecione o Tipo de Relatório'
@@ -289,8 +294,8 @@
             pos: 0, 0
         MDFloatingActionButton:
             id: ai_button
-            icon: "icon/idea.ico"
-            elevation: 6
+            icon: "assets/icon/idea.ico"
+            elevation: 2
             pos_hint: {"right": 0.965, "y": 0.04}
             on_release: root.open_ai_menu(self)
 
@@ -301,7 +306,7 @@
             size: dp(24), dp(24)
             md_bg_color: app.theme_tokens['badge']
             radius: [dp(12)]
-            elevation: 8
+            elevation: 1
             pos_hint: {"right": 0.978, "y": 0.098}
             opacity: 0
 

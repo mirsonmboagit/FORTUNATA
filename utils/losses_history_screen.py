@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta
+from collections import deque
+from threading import Thread
+from time import perf_counter
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -10,10 +13,7 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
-
 from database.provider import get_db
-from pdfs.loss_report import LossReport
-from pdfs.pdf_viewer import PDFViewer
 from utils.reports_screen import DateRangeDialog
 
 
@@ -35,21 +35,44 @@ LOSS_LABELS = {
 
 
 class LossesHistoryScreen(MDScreen):
+    ENTER_CACHE_SECONDS = 5
+
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
         self.db = db or get_db()
-        self.loss_report = LossReport()
-        self.pdf_viewer = PDFViewer(error_callback=lambda msg: self._show_simple_dialog("Erro", msg))
+        self.loss_report = None
+        self.pdf_viewer = None
         self._render_ev = None
-        self._pending_rows = []
+        self._pending_rows = deque()
         self._render_index = 0
         self._display_rows = []
         self._page_size = 60
         self._current_page = 1
-        Clock.schedule_once(lambda dt: self.load_losses_table(), 0.1)
+        self._load_token = 0
+        self._render_token = 0
+        self._row_theme = {}
+        self._last_loaded_at = 0.0
+
+    def _ensure_loss_report(self):
+        if self.loss_report is None:
+            from pdfs.loss_report import LossReport
+            self.loss_report = LossReport()
+        return self.loss_report
+
+    def _ensure_pdf_viewer(self):
+        if self.pdf_viewer is None:
+            from pdfs.pdf_viewer import PDFViewer
+            self.pdf_viewer = PDFViewer(error_callback=lambda msg: self._show_simple_dialog("Erro", msg))
+        return self.pdf_viewer
 
     def on_enter(self):
-        Clock.schedule_once(lambda dt: self.load_losses_table(), 0.05)
+        self.request_enter_refresh()
+
+    def request_enter_refresh(self, force=False, delay=0.05):
+        stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
+        if not force and self._display_rows and not stale:
+            return
+        Clock.schedule_once(lambda dt: self.load_losses_table(), delay)
 
     def go_back(self):
         if self.manager:
@@ -58,24 +81,47 @@ class LossesHistoryScreen(MDScreen):
     def load_losses_table(self, *args):
         if not hasattr(self, "ids") or "losses_list" not in self.ids:
             return
+
+        self._load_token += 1
+        token = self._load_token
+
+        if "load_more_btn" in self.ids:
+            self.ids.load_more_btn.disabled = True
+
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
-        rows = self.db.get_loss_records(start_dt, end_dt, limit=300)
-        self._populate_losses_list(rows)
 
-    def _populate_losses_list(self, rows):
+        def worker():
+            try:
+                rows = self.db.get_loss_records(start_dt, end_dt, limit=300) or []
+                aggregated = self._aggregate_loss_rows(rows)
+            except Exception as exc:
+                print(f"Erro ao carregar perdas: {exc}")
+                aggregated = []
+            Clock.schedule_once(
+                lambda dt, data=aggregated, tok=token: self._apply_loaded_losses(data, tok),
+                0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_loaded_losses(self, rows, token):
+        if token != self._load_token:
+            return
+        self._last_loaded_at = perf_counter()
+        self._populate_losses_list(rows, already_aggregated=True)
+
+    def _populate_losses_list(self, rows, already_aggregated=False):
         self.ids.losses_list.clear_widgets()
         rows = rows or []
-        rows = self._aggregate_loss_rows(rows)
+        if not already_aggregated:
+            rows = self._aggregate_loss_rows(rows)
 
         if not rows:
             self.ids.losses_empty.opacity = 1
             self.ids.losses_empty.height = dp(80)
             self.ids.losses_empty.disabled = False
-            if self._render_ev:
-                Clock.unschedule(self._render_ev)
-                self._render_ev = None
-            self._pending_rows = []
+            self._stop_batch_render()
             if "load_more_btn" in self.ids:
                 self.ids.load_more_btn.opacity = 0
                 self.ids.load_more_btn.disabled = True
@@ -88,6 +134,13 @@ class LossesHistoryScreen(MDScreen):
         self._display_rows = rows
         self._current_page = 1
         self._render_page(reset=True)
+
+    def _stop_batch_render(self):
+        if self._render_ev:
+            Clock.unschedule(self._render_ev)
+            self._render_ev = None
+        self._render_token += 1
+        self._pending_rows = deque()
 
     def _render_page(self, reset=False):
         if not self._display_rows:
@@ -115,22 +168,30 @@ class LossesHistoryScreen(MDScreen):
         self._render_page(reset=False)
 
     def _start_batch_render(self, rows, reset=False):
-        if self._render_ev:
-            Clock.unschedule(self._render_ev)
-            self._render_ev = None
-        self._pending_rows = list(rows)
+        self._stop_batch_render()
+        self._pending_rows = deque(rows)
         if reset:
             self.ids.losses_list.clear_widgets()
             self._render_index = 0
         if not self._pending_rows:
             return
-        self._render_ev = Clock.schedule_interval(self._render_next_batch, 0)
+        self._row_theme = {
+            "bg_even": _theme_color("surface_alt", [0.98, 0.99, 1, 1]),
+            "bg_odd": _theme_color("card", [1, 1, 1, 1]),
+            "text_primary": _theme_color("text_primary", [0.2, 0.2, 0.2, 1]),
+            "text_secondary": _theme_color("text_secondary", [0.5, 0.5, 0.5, 1]),
+            "danger": _theme_color("danger", [0.85, 0.3, 0.3, 1]),
+        }
+        token = self._render_token
+        self._render_ev = Clock.schedule_interval(lambda dt, tok=token: self._render_next_batch(dt, tok), 0)
 
-    def _render_next_batch(self, dt):
-        batch_size = 30
+    def _render_next_batch(self, dt, token):
+        if token != self._render_token:
+            return False
+        batch_size = 35
         for _ in range(min(batch_size, len(self._pending_rows))):
-            row = self._pending_rows.pop(0)
-            self.ids.losses_list.add_widget(self._create_loss_row(row, self._render_index))
+            row = self._pending_rows.popleft()
+            self.ids.losses_list.add_widget(self._create_loss_row(row, self._render_index, self._row_theme))
             self._render_index += 1
         if not self._pending_rows:
             self._render_ev = None
@@ -198,12 +259,19 @@ class LossesHistoryScreen(MDScreen):
         except Exception:
             return None
 
-    def _create_loss_row(self, row, index):
+    def _create_loss_row(self, row, index, theme=None):
         created_at, product, movement_type, qty, unit, total_cost, total_price, reason, created_by = row
-        bg_even = _theme_color("surface_alt", [0.98, 0.99, 1, 1])
-        bg_odd = _theme_color("card", [1, 1, 1, 1])
-        text_primary = _theme_color("text_primary", [0.2, 0.2, 0.2, 1])
-        text_secondary = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
+        theme = theme or {
+            "bg_even": _theme_color("surface_alt", [0.98, 0.99, 1, 1]),
+            "bg_odd": _theme_color("card", [1, 1, 1, 1]),
+            "text_primary": _theme_color("text_primary", [0.2, 0.2, 0.2, 1]),
+            "text_secondary": _theme_color("text_secondary", [0.5, 0.5, 0.5, 1]),
+            "danger": _theme_color("danger", [0.85, 0.3, 0.3, 1]),
+        }
+        bg_even = theme["bg_even"]
+        bg_odd = theme["bg_odd"]
+        text_primary = theme["text_primary"]
+        text_secondary = theme["text_secondary"]
         bg = bg_even if index % 2 == 0 else bg_odd
 
         try:
@@ -271,7 +339,7 @@ class LossesHistoryScreen(MDScreen):
             halign="right",
             font_size=dp(11),
             theme_text_color="Custom",
-            text_color=_theme_color("danger", [0.85, 0.3, 0.3, 1]),
+            text_color=theme["danger"],
         ))
         line.add_widget(MDLabel(
             text=created_by or "N/A",
@@ -309,7 +377,7 @@ class LossesHistoryScreen(MDScreen):
                 "product": "Todos os Produtos",
                 "category": "Todas as Categorias",
             }
-            pdf_path = self.loss_report.generate(data, filters)
+            pdf_path = self._ensure_loss_report().generate(data, filters)
             self._show_pdf_success(pdf_path)
         except Exception as e:
             self._show_simple_dialog("Erro", f"Falha ao gerar PDF de perdas: {e}")
@@ -331,7 +399,7 @@ class LossesHistoryScreen(MDScreen):
 
     def _open_pdf(self, dialog, pdf_path):
         dialog.dismiss()
-        self.pdf_viewer.view_pdf(pdf_path)
+        self._ensure_pdf_viewer().view_pdf(pdf_path)
 
     def _show_simple_dialog(self, title, message):
         dialog = MDDialog(

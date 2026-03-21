@@ -1,4 +1,6 @@
-from kivy.uix.screenmanager import Screen
+﻿from kivy.uix.screenmanager import Screen
+import os
+import sys
 from kivy.properties import ObjectProperty, ListProperty, BooleanProperty
 from kivy.clock import Clock
 from kivy.lang import Builder
@@ -7,7 +9,9 @@ from kivy.metrics import dp, sp
 from kivy.app import App
 from kivy.graphics import Color, Line
 from kivy.animation import Animation
-from datetime import datetime
+from collections import deque
+from threading import Thread
+import time
 from datetime import datetime, timedelta
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDIconButton
@@ -15,6 +19,13 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import MDSnackbar
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from AI.controller import ProactiveIntelligenceController
 
 from database.provider import get_db
 from utils.ai_insights import build_admin_insights, build_admin_insights_ai
@@ -24,20 +35,36 @@ from utils.ai_popups import (
     build_positive_banner,
     render_auto_banners,
 )
-from .detail_popup import DetailPopup
-from .product_form import ProductForm
+from utils.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
 
 
-Builder.load_file('admin/admin_screen.kv')
+def _get_detail_popup_class():
+    try:
+        from .detail_popup import DetailPopup
+    except ImportError:
+        from admin.detail_popup import DetailPopup
+    return DetailPopup
+
+
+def _get_product_form_class():
+    try:
+        from .product_form import ProductForm
+    except ImportError:
+        from admin.product_form import ProductForm
+    return ProductForm
+
+
+Builder.load_file(os.path.join(CURRENT_DIR, 'admin_screen.kv'))
 
 
 # ---------------------------------------------------------------------------
-# Column proportions – ajustadas para melhor distribuição
+# Column proportions - ajustadas para melhor distribuicao
 # ---------------------------------------------------------------------------
 COL_HINTS = [0.06, 0.20, 0.09, 0.09, 0.07, 0.11, 0.11, 0.13, 0.14]
 
 
 class AdminScreen(Screen):
+    PRODUCTS_CACHE_SECONDS = 4
     product_table = ObjectProperty(None)
     search_input = ObjectProperty(None)
     category_spinner = ObjectProperty(None)
@@ -45,8 +72,9 @@ class AdminScreen(Screen):
     quick_actions_open = BooleanProperty(False)
 
     def __init__(self, **kwargs):
+        db = kwargs.pop("db", None)
         super(AdminScreen, self).__init__(**kwargs)
-        self.db = get_db()
+        self.db = db or get_db()
         self.category_menu = None
         self._manual_categories = set()
         self._filter_ev = None
@@ -57,6 +85,32 @@ class AdminScreen(Screen):
         self.swing_event = None
         self.notification_count = 0
         self._ai_poll_ev = None
+        self._products_load_token = 0
+        self._products_loading = False
+        self._pending_products_load = False
+        self._last_products_load_at = 0.0
+        self._table_render_ev = None
+        self._table_render_token = 0
+        self._pending_table_rows = deque()
+        self._table_row_height = dp(48)
+        self._table_palette = {}
+        self._alerts_refresh_token = 0
+        self._ai_popup_token = 0
+        self._fraud_check_token = 0
+        self._fraud_check_until = 0.0
+        self._cached_admin_insights = {}
+        self._expiry_alerts_by_id = {}
+        self._last_expiry_summary_at = 0.0
+        self._expiry_summary_cooldown = 120.0
+        self._intelligence = ProactiveIntelligenceController(
+            screen=self,
+            db=self.db,
+            history_title="Historico de monitorizacao",
+            banner_columns=1,
+            auto_batch_size=2,
+            auto_stagger_seconds=2.0,
+            auto_present_enabled=False,
+        )
         
         Window.bind(on_resize=self._on_window_resize)
 
@@ -69,12 +123,6 @@ class AdminScreen(Screen):
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
-    def on_enter(self):
-        self.load_products()
-        Clock.schedule_once(self._init_badge, 0.1)
-        Clock.schedule_once(self.update_ai_badge, 0.15)
-        Clock.schedule_once(self.show_auto_ai_popups, 0.2)
-
     def _on_window_resize(self, instance, width, height):
         """Rebuild table rows so every cell re-measures at the new size."""
         self._update_responsive_layout(width)
@@ -264,7 +312,27 @@ class AdminScreen(Screen):
     # ------------------------------------------------------------------
     # Navigation helpers
     # ------------------------------------------------------------------
+    def _set_back_target(self, screen_name, target):
+        if not self.manager:
+            return None
+        app = App.get_running_app()
+        ensure_screen = getattr(app, "ensure_screen", None)
+        if screen_name not in self.manager.screen_names and callable(ensure_screen):
+            ensure_screen(screen_name)
+        if screen_name not in self.manager.screen_names:
+            return None
+        screen = self.manager.get_screen(screen_name)
+        setattr(screen, "back_target", target)
+        return screen
+
+    def go_home(self):
+        if self.manager and "admin_home" in self.manager.screen_names:
+            self.manager.current = "admin_home"
+
     def go_to_definitions(self):
+        screen = self._set_back_target("settings", "admin")
+        if not screen:
+            return
         self.manager.current = 'settings'
 
     def logout(self):
@@ -343,16 +411,17 @@ class AdminScreen(Screen):
     # Search / filter
     # ------------------------------------------------------------------
     def filter_products(self, search_text):
-        category_text = self.category_spinner.text
+        category_text = self.category_spinner.text if self.category_spinner else "Todas as Categorias"
         category = category_text if category_text != "Todas as Categorias" else "Todas"
+        search_value = (search_text or "").strip().lower()
         filtered = []
 
         for product in self.products:
             search_match = (
-                search_text.lower() in str(product[0]).lower() or
-                search_text.lower() in product[1].lower() or
-                (len(product) > 11 and search_text.lower() in str(product[11]).lower()) or
-                (len(product) > 12 and product[12] and search_text.lower() in str(product[12]).lower())
+                search_value in str(product[0]).lower() or
+                (len(product) > 1 and search_value in str(product[1]).lower()) or
+                (len(product) > 11 and search_value in str(product[11]).lower()) or
+                (len(product) > 12 and product[12] and search_value in str(product[12]).lower())
             )
             category_match = (
                 category in ('Todas', 'Todas as Categorias') or
@@ -367,8 +436,36 @@ class AdminScreen(Screen):
     # Data loading
     # ------------------------------------------------------------------
     def load_products(self):
-        self.products = self.db.get_all_products()
-        self.update_product_table(self.products)
+        if self._products_loading:
+            self._pending_products_load = True
+            return
+
+        token = self._products_load_token + 1
+        self._products_load_token = token
+        self._products_loading = True
+
+        def worker():
+            try:
+                rows = self.db.get_all_products() or []
+            except Exception as e:
+                print(f"Erro ao carregar produtos: {e}")
+                rows = []
+            Clock.schedule_once(lambda dt, data=rows, tok=token: self._apply_loaded_products(data, tok), 0)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_loaded_products(self, rows, token):
+        if token != self._products_load_token:
+            return
+        self._products_loading = False
+        self._last_products_load_at = time.perf_counter()
+        self.products = list(rows or [])
+        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
+        self.filter_products(self.search_input.text if self.search_input else self._pending_search)
+        self._show_expiry_dashboard_summary()
+        if self._pending_products_load:
+            self._pending_products_load = False
+            Clock.schedule_once(lambda dt: self.load_products(), 0.05)
 
     # ------------------------------------------------------------------
     # Date formatting
@@ -395,6 +492,43 @@ class AdminScreen(Screen):
             print(f"Erro ao formatar data: {e}")
         return str(date_str)
 
+    def _build_expiry_alerts(self, rows):
+        alerts = {}
+        for row in rows or []:
+            if not row:
+                continue
+            product_id = row[0]
+            expiry_date = row[13] if len(row) > 13 else None
+            alerts[product_id] = evaluate_expiry_alert(expiry_date)
+        return alerts
+
+    def _get_expiry_alert(self, product):
+        if not product:
+            return evaluate_expiry_alert(None)
+        product_id = product[0]
+        alert = self._expiry_alerts_by_id.get(product_id)
+        if alert is None:
+            expiry_date = product[13] if len(product) > 13 else None
+            alert = evaluate_expiry_alert(expiry_date)
+            self._expiry_alerts_by_id[product_id] = alert
+        return alert
+
+    def _show_expiry_dashboard_summary(self):
+        if not self._expiry_alerts_by_id:
+            return
+        now = time.perf_counter()
+        if (now - self._last_expiry_summary_at) < self._expiry_summary_cooldown:
+            return
+        counts = get_expiry_level_counts(self._expiry_alerts_by_id.values())
+        if counts["total"] <= 0:
+            return
+        self._last_expiry_summary_at = now
+        self.show_snackbar(
+            "Vencimento: "
+            f"leve {counts['leve']} | medio {counts['medio']} | alto {counts['alto']} | "
+            f"critico {counts['critico']} | vencido {counts['vencido']}"
+        )
+
     # ------------------------------------------------------------------
     # Responsive sizing
     # ------------------------------------------------------------------
@@ -412,184 +546,238 @@ class AdminScreen(Screen):
     # ------------------------------------------------------------------
     def update_product_table(self, products_to_display=None):
         """Atualizar a tabela de produtos com separadores visuais pretos."""
-        self.product_table.clear_widgets()
+        if not self.product_table:
+            return
+
+        if self._table_render_ev:
+            Clock.unschedule(self._table_render_ev)
+            self._table_render_ev = None
+
+        self._table_render_token += 1
+        token = self._table_render_token
 
         if products_to_display is None:
             products_to_display = self.products
+        display_rows = list(products_to_display or [])
+        self._current_display = display_rows
+        self.product_table.clear_widgets()
 
-        self._current_display = products_to_display
+        if not display_rows:
+            self._pending_table_rows = deque()
+            return
+
         row_h = self._row_height()
-
         tokens = self._theme_tokens()
-        row_even = tokens.get("surface_alt", [0.97, 0.98, 0.99, 1])
-        row_odd = tokens.get("card", [1, 1, 1, 1])
-        border_color = tokens.get("divider", [0, 0, 0, 0.25])
-        text_primary = tokens.get("text_primary", [0.25, 0.30, 0.40, 1])
-        text_secondary = tokens.get("text_secondary", [0.2, 0.25, 0.35, 1])
-        text_muted = tokens.get("text_muted", [0.45, 0.50, 0.55, 1])
-        info_color = tokens.get("info", [0.1, 0.45, 0.75, 1])
-        success_color = tokens.get("success", [0.10, 0.55, 0.25, 1])
-        warning_color = tokens.get("warning", [0.75, 0.45, 0.10, 1])
-        danger_color = tokens.get("danger", [0.8, 0.2, 0.2, 1])
+        self._table_row_height = row_h
+        self._table_palette = {
+            "tokens": tokens,
+            "row_even": tokens.get("surface_alt", [0.97, 0.98, 0.99, 1]),
+            "row_odd": tokens.get("card", [1, 1, 1, 1]),
+            "border_color": tokens.get("divider", [0, 0, 0, 0.25]),
+            "text_primary": tokens.get("text_primary", [0.25, 0.30, 0.40, 1]),
+            "text_secondary": tokens.get("text_secondary", [0.2, 0.25, 0.35, 1]),
+            "text_muted": tokens.get("text_muted", [0.45, 0.50, 0.55, 1]),
+            "info_color": tokens.get("info", [0.1, 0.45, 0.75, 1]),
+            "success_color": tokens.get("success", [0.10, 0.55, 0.25, 1]),
+            "warning_color": tokens.get("warning", [0.75, 0.45, 0.10, 1]),
+            "danger_color": tokens.get("danger", [0.8, 0.2, 0.2, 1]),
+        }
+        self._pending_table_rows = deque(enumerate(display_rows))
+        self._table_render_ev = Clock.schedule_interval(
+            lambda dt, tok=token: self._render_table_batch(dt, tok),
+            0
+        )
+        return
 
-        for idx, product in enumerate(products_to_display):
-            # Cores alternadas com melhor contraste
-            row_bg_color = row_even if idx % 2 == 0 else row_odd
 
-            # Helper: criar célula com bordas PRETAS
-            def make_cell(col_idx, bg_color=row_bg_color, align='center'):
-                cell = MDBoxLayout(
-                    size_hint_x=COL_HINTS[col_idx],
-                    size_hint_y=None,
-                    height=row_h,
-                    md_bg_color=bg_color,
-                    padding=[dp(6), 0] if align == 'center' else [dp(10), 0]
+    def _render_table_batch(self, dt, token):
+        if token != self._table_render_token:
+            return False
+        if not self._pending_table_rows:
+            self._table_render_ev = None
+            return False
+
+        batch_size = 8
+        for _ in range(min(batch_size, len(self._pending_table_rows))):
+            idx, product = self._pending_table_rows.popleft()
+            self._append_product_row(product, idx, self._table_row_height, self._table_palette)
+
+        if not self._pending_table_rows:
+            self._table_render_ev = None
+            return False
+        return True
+
+    def _make_product_cell(self, col_idx, row_h, bg_color, border_color, align='center'):
+        cell = MDBoxLayout(
+            size_hint_x=COL_HINTS[col_idx],
+            size_hint_y=None,
+            height=row_h,
+            md_bg_color=bg_color,
+            padding=[dp(6), 0] if align == 'center' else [dp(10), 0]
+        )
+
+        def draw_borders(instance, *_):
+            instance.canvas.after.clear()
+            with instance.canvas.after:
+                Color(*border_color)
+                Line(
+                    points=[
+                        instance.x + instance.width,
+                        instance.y,
+                        instance.x + instance.width,
+                        instance.y + instance.height,
+                    ],
+                    width=1
                 )
-                
-                # Função para desenhar as bordas
-                def draw_borders(instance, value):
-                    instance.canvas.after.clear()
-                    with instance.canvas.after:
-                        Color(*border_color)  # COR PRETA
-                        # Borda direita
-                        Line(points=[instance.x + instance.width, instance.y, 
-                                   instance.x + instance.width, instance.y + instance.height], width=1)
-                        # Borda inferior
-                        Line(points=[instance.x, instance.y, 
-                                   instance.x + instance.width, instance.y], width=1)
-                
-                # Bind para redesenhar quando posição ou tamanho mudarem
-                cell.bind(pos=draw_borders, size=draw_borders)
-                # Desenhar inicialmente
-                Clock.schedule_once(lambda dt: draw_borders(cell, None), 0)
-                
-                return cell
+                Line(
+                    points=[instance.x, instance.y, instance.x + instance.width, instance.y],
+                    width=1
+                )
 
-            # Helper values
-            is_sold_by_weight = product[15] if len(product) > 15 else 0
-            unit_label = "KG" if is_sold_by_weight else ""
+        cell.bind(pos=draw_borders, size=draw_borders)
+        draw_borders(cell)
+        return cell
 
-            # ── 0 – ID ──────────────────────────────────────────────
-            cell = make_cell(0)
-            cell.add_widget(MDLabel(
-                text=str(product[0]),
-                theme_text_color="Custom",
-                text_color=text_primary,
-                halign='center',
-                bold=True,
-                font_style="Body1"
-            ))
-            self.product_table.add_widget(cell)
+    def _append_product_row(self, product, idx, row_h, palette):
+        row_bg_color = palette["row_even"] if idx % 2 == 0 else palette["row_odd"]
+        border_color = palette["border_color"]
+        text_primary = palette["text_primary"]
+        text_secondary = palette["text_secondary"]
+        text_muted = palette["text_muted"]
+        info_color = palette["info_color"]
+        success_color = palette["success_color"]
+        warning_color = palette["warning_color"]
+        danger_color = palette["danger_color"]
+        action_tokens = palette["tokens"]
+        expiry_alert = self._get_expiry_alert(product)
 
-            # ── 1 – Descrição ───────────────────────────────────────
-            cell = make_cell(1, align='left')
-            cell.add_widget(MDLabel(
-                text=product[1],
-                theme_text_color="Custom",
-                text_color=text_primary,
-                halign='left',
-                font_style="Body2",
-                shorten=True,
-                shorten_from="right"
-            ))
-            self.product_table.add_widget(cell)
+        is_sold_by_weight = product[15] if len(product) > 15 else 0
+        unit_label = "KG" if is_sold_by_weight else ""
 
-            # ── 2 – Estoque ─────────────────────────────────────────
-            stock_value = product[2]
-            stock_text = (f"{stock_value:.2f} {unit_label}" if is_sold_by_weight
-                          else f"{int(stock_value)} {unit_label}")
-            
-            # Cores baseadas no estoque
-            stock_color = danger_color if stock_value < 10 else text_secondary
-            
-            cell = make_cell(2)
-            cell.add_widget(MDLabel(
-                text=stock_text,
-                theme_text_color="Custom",
-                text_color=stock_color,
-                halign='center',
-                font_style="Body2",
-                bold=stock_value < 10
-            ))
-            self.product_table.add_widget(cell)
+        cell = self._make_product_cell(0, row_h, row_bg_color, border_color)
+        cell.add_widget(MDLabel(
+            text=str(product[0]),
+            theme_text_color="Custom",
+            text_color=text_primary,
+            halign='center',
+            bold=True,
+            font_style="Body1"
+        ))
+        self.product_table.add_widget(cell)
 
-            # ── 3 – Vendido ─────────────────────────────────────────
-            sold_value = product[3]
-            sold_text = (f"{sold_value:.2f} {unit_label}" if is_sold_by_weight
-                         else f"{int(sold_value)} {unit_label}")
-            cell = make_cell(3)
-            cell.add_widget(MDLabel(
-                text=sold_text,
-                theme_text_color="Custom",
-                text_color=text_secondary,
-                halign='center',
-                font_style="Body2"
-            ))
-            self.product_table.add_widget(cell)
+        cell = self._make_product_cell(1, row_h, row_bg_color, border_color, align='left')
+        cell.add_widget(MDLabel(
+            text=product[1],
+            theme_text_color="Custom",
+            text_color=text_primary,
+            halign='left',
+            font_style="Body2",
+            shorten=True,
+            shorten_from="right"
+        ))
+        self.product_table.add_widget(cell)
 
-            # ── 4 – Tipo de Venda ───────────────────────────────────
-            cell = make_cell(4)
-            sale_type_text = "KG" if is_sold_by_weight else "UN"
-            cell.add_widget(MDLabel(
-                text=sale_type_text,
-                theme_text_color="Custom",
-                text_color=warning_color if is_sold_by_weight else info_color,
-                halign='center',
-                bold=True,
-                font_style="Subtitle2"
-            ))
-            self.product_table.add_widget(cell)
+        stock_value = product[2]
+        stock_text = (
+            f"{stock_value:.2f} {unit_label}"
+            if is_sold_by_weight else f"{int(stock_value)} {unit_label}"
+        )
+        stock_color = danger_color if stock_value < 10 else text_secondary
+        cell = self._make_product_cell(2, row_h, row_bg_color, border_color)
+        cell.add_widget(MDLabel(
+            text=stock_text,
+            theme_text_color="Custom",
+            text_color=stock_color,
+            halign='center',
+            font_style="Body2",
+            bold=stock_value < 10
+        ))
+        self.product_table.add_widget(cell)
 
-            # ── 5 – Preço ───────────────────────────────────────────
-            cell = make_cell(5)
-            cell.add_widget(MDLabel(
-                text=f"{product[4]:.2f} MT",
-                theme_text_color="Custom",
-                text_color=success_color,
-                halign='center',
-                bold=True,
-                font_style="Body1"
-            ))
-            self.product_table.add_widget(cell)
+        sold_value = product[3]
+        sold_text = (
+            f"{sold_value:.2f} {unit_label}"
+            if is_sold_by_weight else f"{int(sold_value)} {unit_label}"
+        )
+        cell = self._make_product_cell(3, row_h, row_bg_color, border_color)
+        cell.add_widget(MDLabel(
+            text=sold_text,
+            theme_text_color="Custom",
+            text_color=text_secondary,
+            halign='center',
+            font_style="Body2"
+        ))
+        self.product_table.add_widget(cell)
 
-            # ── 6 – Lucro ───────────────────────────────────────────
-            cell = make_cell(6)
-            cell.add_widget(MDLabel(
-                text=f"{product[8]:.2f} MT",
-                theme_text_color="Custom",
-                text_color=info_color,
-                halign='center',
-                bold=True,
-                font_style="Body1"
-            ))
-            self.product_table.add_widget(cell)
+        cell = self._make_product_cell(4, row_h, row_bg_color, border_color)
+        sale_type_text = "KG" if is_sold_by_weight else "UN"
+        cell.add_widget(MDLabel(
+            text=sale_type_text,
+            theme_text_color="Custom",
+            text_color=warning_color if is_sold_by_weight else info_color,
+            halign='center',
+            bold=True,
+            font_style="Subtitle2"
+        ))
+        self.product_table.add_widget(cell)
 
-            # ── 7 – Data ────────────────────────────────────────────
-            date_added = str(product[14]) if len(product) > 14 and product[14] else "N/A"
-            cell = make_cell(7)
-            cell.add_widget(MDLabel(
-                text=self.format_datetime(date_added),
-                theme_text_color="Custom",
-                text_color=text_muted,
-                halign='center',
-                font_style="Caption"
-            ))
-            self.product_table.add_widget(cell)
+        cell = self._make_product_cell(5, row_h, row_bg_color, border_color)
+        cell.add_widget(MDLabel(
+            text=f"{product[4]:.2f} MT",
+            theme_text_color="Custom",
+            text_color=success_color,
+            halign='center',
+            bold=True,
+            font_style="Body1"
+        ))
+        self.product_table.add_widget(cell)
 
-            # ── 8 – Ações ───────────────────────────────────────────
-            cell = make_cell(8)
-            action_layout = MDBoxLayout(spacing=dp(4), padding=[dp(4), 0])
-            action_layout.add_widget(self.create_detail_button(product[0]))
-            action_layout.add_widget(self.create_edit_button(product))
-            action_layout.add_widget(self.create_delete_button(product[0]))
-            cell.add_widget(action_layout)
-            self.product_table.add_widget(cell)
+        cell = self._make_product_cell(6, row_h, row_bg_color, border_color)
+        cell.add_widget(MDLabel(
+            text=f"{product[8]:.2f} MT",
+            theme_text_color="Custom",
+            text_color=info_color,
+            halign='center',
+            bold=True,
+            font_style="Body1"
+        ))
+        self.product_table.add_widget(cell)
+
+        expiry_date = str(product[13]) if len(product) > 13 and product[13] else "N/A"
+        expiry_color = (
+            expiry_alert["color_rgba"]
+            if expiry_alert.get("is_alert")
+            else text_muted
+        )
+        expiry_label = expiry_alert.get("short_label", "--")
+        expiry_text = (
+            f"{self.format_date(expiry_date)} | {expiry_label}"
+            if expiry_date != "N/A"
+            else "Sem validade"
+        )
+        cell = self._make_product_cell(7, row_h, row_bg_color, border_color)
+        cell.add_widget(MDLabel(
+            text=expiry_text,
+            theme_text_color="Custom",
+            text_color=expiry_color,
+            halign='center',
+            font_style="Caption"
+        ))
+        self.product_table.add_widget(cell)
+
+        cell = self._make_product_cell(8, row_h, row_bg_color, border_color)
+        action_layout = MDBoxLayout(spacing=dp(4), padding=[dp(4), 0])
+        action_layout.add_widget(self.create_detail_button(product[0], tokens=action_tokens))
+        action_layout.add_widget(self.create_edit_button(product, tokens=action_tokens))
+        action_layout.add_widget(self.create_delete_button(product[0], tokens=action_tokens))
+        cell.add_widget(action_layout)
+        self.product_table.add_widget(cell)
 
     # ------------------------------------------------------------------
     # Action buttons com Material Design
     # ------------------------------------------------------------------
-    def create_detail_button(self, product_id):
-        tokens = self._theme_tokens()
+    def create_detail_button(self, product_id, tokens=None):
+        tokens = tokens or self._theme_tokens()
         btn = MDIconButton(
             icon="information",
             theme_text_color="Custom",
@@ -601,8 +789,8 @@ class AdminScreen(Screen):
         btn.bind(on_release=self.show_product_details)
         return btn
 
-    def create_edit_button(self, product):
-        tokens = self._theme_tokens()
+    def create_edit_button(self, product, tokens=None):
+        tokens = tokens or self._theme_tokens()
         btn = MDIconButton(
             icon="pencil",
             theme_text_color="Custom",
@@ -614,8 +802,8 @@ class AdminScreen(Screen):
         btn.bind(on_release=self.edit_product)
         return btn
 
-    def create_delete_button(self, product_id):
-        tokens = self._theme_tokens()
+    def create_delete_button(self, product_id, tokens=None):
+        tokens = tokens or self._theme_tokens()
         btn = MDIconButton(
             icon="delete",
             theme_text_color="Custom",
@@ -633,13 +821,13 @@ class AdminScreen(Screen):
     def show_product_details(self, instance):
         product = self.db.get_product(instance.product_id)
         if product:
-            DetailPopup(product).open()
+            _get_detail_popup_class()(product).open()
 
     def add_product(self):
-        ProductForm(self).open()
+        _get_product_form_class()(self).open()
 
     def edit_product(self, instance):
-        ProductForm(self, instance.product_id).open()
+        _get_product_form_class()(self, instance.product_id).open()
 
     def delete_product(self, instance):
         product_id = instance.product_id
@@ -649,7 +837,7 @@ class AdminScreen(Screen):
             text="Tem certeza que deseja eliminar este produto?",
             buttons=[
                 MDFlatButton(
-                    text="NÃO",
+                    text="NAO",
                     theme_text_color="Custom",
                     text_color=[0.3, 0.3, 0.3, 1],
                     on_release=lambda x: self.dialog.dismiss()
@@ -692,161 +880,164 @@ class AdminScreen(Screen):
 
     def _get_alert_key(self, insights):
         low_stock = sorted([item[0] for item in insights.get("low_stock", [])])
-        exp7 = sorted([item[0] for item in insights.get("expiring_7", [])])
-        exp15 = sorted([item[0] for item in insights.get("expiring_15", [])])
+        expiry_levels = insights.get("expiry_levels") or {}
+        exp_vencido = sorted([item[0] for item in expiry_levels.get("vencido", [])])
+        exp_critico = sorted([item[0] for item in expiry_levels.get("critico", [])])
+        exp_alto = sorted([item[0] for item in expiry_levels.get("alto", [])])
+        exp_medio = sorted([item[0] for item in expiry_levels.get("medio", [])])
+        exp_leve = sorted([item[0] for item in expiry_levels.get("leve", [])])
+        if not (exp_vencido or exp_critico or exp_alto or exp_medio or exp_leve):
+            exp_critico = sorted([item[0] for item in insights.get("expiring_7", [])])
+            exp_alto = sorted([item[0] for item in insights.get("expiring_15", [])])
 
         parts = []
         if low_stock:
             parts.append("ls:" + ",".join(low_stock))
-        if exp7:
-            parts.append("e7:" + ",".join(exp7))
-        if exp15:
-            parts.append("e15:" + ",".join(exp15))
+        if exp_vencido:
+            parts.append("ev:" + ",".join(exp_vencido))
+        if exp_critico:
+            parts.append("ec:" + ",".join(exp_critico))
+        if exp_alto:
+            parts.append("ea:" + ",".join(exp_alto))
+        if exp_medio:
+            parts.append("em:" + ",".join(exp_medio))
+        if exp_leve:
+            parts.append("el:" + ",".join(exp_leve))
         return "|".join(parts)
 
     def mark_notifications_seen(self, insights=None):
-        insights = insights or build_admin_insights(self.db)
-        key = self._get_alert_key(insights)
+        insights = insights or self._cached_admin_insights or {}
+        key = self._get_alert_key(insights) if insights else ""
         app = App.get_running_app()
         if app:
             app._ai_notifications_seen_key = key
         self.update_notification_badge(0)
 
-    def show_ai_insights(self, *args):
-        """Abrir notificacoes em formato de banner"""
+    def _refresh_alerts_async(self, show_popups=True):
+        token = self._alerts_refresh_token + 1
+        self._alerts_refresh_token = token
+
+        def worker():
+            try:
+                insights = build_admin_insights(self.db) or {}
+            except Exception as exc:
+                print(f"Erro ao atualizar alertas AI: {exc}")
+                insights = {}
+            Clock.schedule_once(
+                lambda dt, data=insights, tok=token, pop=show_popups: self._apply_alerts_refresh(data, tok, pop),
+                0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_alerts_refresh(self, insights, token, show_popups):
+        if token != self._alerts_refresh_token:
+            return
+        self._cached_admin_insights = insights or {}
+        self.update_ai_badge(insights=self._cached_admin_insights)
+        if show_popups:
+            self.show_auto_ai_popups(insights=self._cached_admin_insights)
+
+    def _load_ai_insights_async(self, target):
+        token = self._ai_popup_token + 1
+        self._ai_popup_token = token
+        self.show_snackbar("A preparar insights...")
+
+        def worker():
+            try:
+                insights = build_admin_insights_ai(self.db) or {}
+            except Exception as exc:
+                print(f"Erro ao carregar insights AI: {exc}")
+                insights = build_admin_insights(self.db) or {}
+            Clock.schedule_once(
+                lambda dt, kind=target, data=insights, tok=token: self._apply_ai_insights_result(kind, data, tok),
+                0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_ai_insights_result(self, kind, insights, token):
+        if token != self._ai_popup_token:
+            return
+        self._render_ai_insights(kind, insights or {})
+
+    def _render_ai_insights(self, kind, insights):
         if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
             return
-        insights = build_admin_insights_ai(self.db)
+
         banners = build_auto_banner_data(insights)
         low_stock = insights.get("low_stock") or []
-        exp7 = insights.get("expiring_7") or []
-        exp15 = insights.get("expiring_15") or []
+        expiry_levels = insights.get("expiry_levels") or {}
+        expiring_any = (
+            (expiry_levels.get("vencido") or [])
+            + (expiry_levels.get("critico") or [])
+            + (expiry_levels.get("alto") or [])
+            + (expiry_levels.get("medio") or [])
+            + (expiry_levels.get("leve") or [])
+        )
+        if not expiring_any:
+            expiring_any = (insights.get("expiring_7") or []) + (insights.get("expiring_15") or [])
         has_stock = bool(low_stock)
-        has_expiry = bool(exp7 or exp15)
-        if has_stock and not has_expiry:
-            banners.append(build_positive_banner("expiry"))
-        elif has_expiry and not has_stock:
-            banners.append(build_positive_banner("stock"))
-        if not banners:
-            return
+        has_expiry = bool(expiring_any)
+
+        if kind == "stock":
+            banners = [b for b in banners if b.get("kind") == "stock"]
+            if not banners:
+                banners = [build_positive_banner("stock")]
+        elif kind == "expiry":
+            banners = [b for b in banners if b.get("kind") == "expiry"]
+            if not banners:
+                banners = [build_positive_banner("expiry")]
+        else:
+            if has_stock and not has_expiry:
+                banners.append(build_positive_banner("expiry"))
+            elif has_expiry and not has_stock:
+                banners.append(build_positive_banner("stock"))
+            if not banners:
+                return
+
         for banner in banners:
             banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
+                insights,
+                banner.get("kind"),
+                max_lines=3,
+                expiry_level=banner.get("expiry_level"),
             )
         render_auto_banners(
             self.ids.ai_banner_container,
             banners,
+            insights=insights,
             auto_dismiss_seconds=None,
             show_timer=False,
         )
         self.mark_notifications_seen(insights)
 
+    def show_ai_insights(self, *args):
+        self._intelligence.open_history()
+
     def open_ai_menu(self, caller):
-        """Abre menu AI e marca notificações como vistas"""
-        app = App.get_running_app()
-        insights = build_admin_insights(self.db)
-        key = self._get_alert_key(insights)
-        badge_counts = insights.get("badge_counts") or {}
-        stock_count = badge_counts.get("stock", 0)
-        expiry_count = badge_counts.get("expiry_7", 0) + badge_counts.get("expiry_15", 0)
-        total_count = badge_counts.get("total", 0)
-
-        if app and getattr(app, "_ai_notifications_seen_key", None) == key:
-            stock_count = 0
-            expiry_count = 0
-            total_count = 0
-
-        def _label(base, count):
-            return f"{base} ({count})" if count > 0 else base
-
-        items = [
-            {"text": _label("Insights completos", total_count), "on_release": lambda x="full": self._open_ai_from_menu(x)},
-            {"text": _label("Reposicao de stock", stock_count), "on_release": lambda x="stock": self._open_ai_from_menu(x)},
-            {"text": _label("Avisos de vencimento", expiry_count), "on_release": lambda x="expiry": self._open_ai_from_menu(x)},
-        ]
-        if hasattr(self, "_ai_menu") and self._ai_menu:
-            self._ai_menu.dismiss()
-        self._ai_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
-        self._ai_menu.open()
-        self.mark_notifications_seen()
+        self._intelligence.open_history()
 
     def _open_ai_from_menu(self, key):
         if hasattr(self, "_ai_menu") and self._ai_menu:
             self._ai_menu.dismiss()
-        if key == "stock":
-            self.show_ai_stock_popup()
-        elif key == "expiry":
-            self.show_ai_expiry_popup()
-        else:
-            self.show_ai_insights()
+        self._intelligence.open_history()
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
-        """Mostrar apenas banner de stock baixo"""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = insights or build_admin_insights_ai(self.db)
-        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "stock"]
-        if not banners:
-            banners = [build_positive_banner("stock")]
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self._intelligence.refresh()
 
     def show_ai_expiry_popup(self, *args, insights=None, on_close=None):
-        """Mostrar apenas banner de vencimentos"""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
-        insights = insights or build_admin_insights_ai(self.db)
-        banners = [b for b in build_auto_banner_data(insights) if b.get("kind") == "expiry"]
-        if not banners:
-            banners = [build_positive_banner("expiry")]
-        for banner in banners:
-            banner["details_sections"] = build_banner_details_sections(
-                insights, banner.get("kind"), max_lines=3
-            )
-        render_auto_banners(
-            self.ids.ai_banner_container,
-            banners,
-            auto_dismiss_seconds=None,
-            show_timer=False,
-        )
-        self.mark_notifications_seen(insights)
+        self._intelligence.refresh()
 
-    def show_auto_ai_popups(self, *args):
-        """Mostra banners automaticos (stock e vencimentos)."""
-        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
-            return
+    def show_auto_ai_popups(self, *args, insights=None):
+        self._intelligence.refresh()
 
-        app = App.get_running_app()
-        insights = build_admin_insights_ai(self.db)
-        banners = build_auto_banner_data(insights)
-        key = self._get_alert_key(insights)
-
-        if not banners:
-            if app:
-                app._ai_banners_last_key = key
-            return
-
-        if app:
-            last_key = getattr(app, "_ai_banners_last_key", None)
-            if last_key == key:
-                return
-            app._ai_banners_last_key = key
-
-        container = self.ids.ai_banner_container
-        render_auto_banners(container, banners, auto_dismiss_seconds=10)
-
-    def update_ai_badge(self, *args):
+    def update_ai_badge(self, *args, insights=None):
         """Atualiza o badge do botão de insights com animação de abanar"""
-        insights = build_admin_insights(self.db)
+        insights = insights or self._cached_admin_insights or {}
+        if not insights:
+            self.update_notification_badge(0)
+            return
         key = self._get_alert_key(insights)
         badge_counts = insights.get("badge_counts") or {}
         count = badge_counts.get("total", 0)
@@ -861,27 +1052,27 @@ class AdminScreen(Screen):
         self.update_notification_badge(count)
 
     def _poll_ai_alerts(self, dt):
-        self.update_ai_badge()
-        self.show_auto_ai_popups()
+        self._intelligence.refresh()
 
     def _start_ai_polling(self):
-        if self._ai_poll_ev:
-            self._ai_poll_ev.cancel()
-        self._ai_poll_ev = Clock.schedule_interval(self._poll_ai_alerts, 30)
+        self._intelligence.start()
 
     def _stop_ai_polling(self):
-        if self._ai_poll_ev:
-            self._ai_poll_ev.cancel()
-            self._ai_poll_ev = None
+        self._intelligence.stop()
 
     # ------------------------------------------------------------------
     # Reports & filter toggle
     # ------------------------------------------------------------------
     def generate_report(self):
-        self.manager.current = 'reports'
-        if 'reports' in self.manager.screen_names:
-            reports_screen = self.manager.get_screen('reports')
-            Clock.schedule_once(lambda dt: reports_screen.select_date_range(), 0.1)
+        if not self.manager:
+            return
+        reports_screen = self._set_back_target("reports", "admin")
+        if not reports_screen:
+            return
+        self.manager.current = "reports"
+        if hasattr(reports_screen, "prepare_open_from_admin"):
+            Clock.schedule_once(lambda dt: reports_screen.prepare_open_from_admin(), 0.02)
+        Clock.schedule_once(lambda dt: reports_screen.select_date_range(), 0.12)
 
     def toggle_kg_products(self):
         if not hasattr(self, 'filter_mode'):
@@ -920,58 +1111,67 @@ class AdminScreen(Screen):
 
     def open_losses_screen(self, *args):
         """Abrir tela de perdas"""
-        if self.manager:
-            self.manager.current = 'losses'
-            if 'losses' in self.manager.screen_names:
-                screen = self.manager.get_screen('losses')
-                Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
+        if not self.manager:
+            return
+        screen = self._set_back_target("losses", "admin")
+        if not screen:
+            return
+        self.manager.current = "losses"
+        if hasattr(screen, "prepare_open_from_admin"):
+            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0.02)
+            return
+        if hasattr(screen, "request_enter_refresh"):
+            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.02), 0.02)
+            return
+        Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
 
     def open_restock_screen(self, *args):
         """Abrir tela de reposição de stock"""
-        if self.manager:
-            self.manager.current = 'restock'
-            if 'restock' in self.manager.screen_names:
-                screen = self.manager.get_screen('restock')
-                Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
+        if not self.manager:
+            return
+        screen = self._set_back_target("restock", "admin")
+        if not screen:
+            return
+        self.manager.current = "restock"
+        if hasattr(screen, "prepare_open_from_admin"):
+            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin("IN"), 0.02)
+            return
+        if hasattr(screen, "request_enter_refresh"):
+            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.02), 0.02)
+            return
+        Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
 
     def show_loss_metrics(self, *args):
-        """Mostrar métricas de perdas do último mês"""
+        """Mostrar metricas de perdas do ultimo mes"""
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=30)
-            
-            # Calcular métricas
             metrics = self.db.calculate_loss_metrics(start_date, end_date)
-            
+
             if not metrics:
                 self.show_snackbar("Erro ao calcular perdas")
                 return
-            
-            # Montar mensagem
-            message = f"""PERDAS - ÚLTIMOS 30 DIAS
 
-    📊 RESUMO:
-    • Eventos: {metrics['loss_count']} perdas
-    • Custo Total: {metrics['total_cost']:.2f} MZN
-    • Receita Perdida: {metrics['total_revenue_lost']:.2f} MZN
-    • Lucro Perdido: {metrics['total_profit_lost']:.2f} MZN
+            message = f"""PERDAS - ULTIMOS 30 DIAS
 
-    📈 PERFORMANCE:
-    • Total Vendas: {metrics['total_sales']:.2f} MZN
-    • % Perdas vs Vendas: {metrics['loss_percentage']:.2f}%
-    • Média por Perda: {metrics['avg_loss_value']:.2f} MZN
+    RESUMO:
+    - Eventos: {metrics['loss_count']} perdas
+    - Custo Total: {metrics['total_cost']:.2f} MZN
+    - Receita Perdida: {metrics['total_revenue_lost']:.2f} MZN
+    - Lucro Perdido: {metrics['total_profit_lost']:.2f} MZN
 
-    🔍 POR TIPO:"""
-            
+    PERFORMANCE:
+    - Total Vendas: {metrics['total_sales']:.2f} MZN
+    - % Perdas vs Vendas: {metrics['loss_percentage']:.2f}%
+    - Media por Perda: {metrics['avg_loss_value']:.2f} MZN
+
+    POR TIPO:"""
+
             for loss_type, data in metrics['by_type'].items():
-                message += f"\n• {loss_type}: {data['total_cost']:.2f} MZN ({data['count']}x)"
-            
-            # Mostrar dialog
-            from kivymd.uix.dialog import MDDialog
-            from kivymd.uix.button import MDFlatButton
-            
+                message += f"\n- {loss_type}: {data['total_cost']:.2f} MZN ({data['count']}x)"
+
             dialog = MDDialog(
-                title="📉 MÉTRICAS DE PERDAS",
+                title="METRICAS DE PERDAS",
                 text=message,
                 buttons=[
                     MDFlatButton(
@@ -985,29 +1185,26 @@ class AdminScreen(Screen):
                 ]
             )
             dialog.open()
-            
-        except Exception as e:
-            print(f"Erro ao mostrar métricas: {e}")
-            self.show_snackbar("Erro ao carregar métricas")
 
+        except Exception as e:
+            print(f"Erro ao mostrar metricas: {e}")
+            self.show_snackbar("Erro ao carregar metricas")
 
     def show_detailed_loss_report(self, *args):
-        """Mostrar relatório detalhado de perdas"""
+        """Mostrar relatorio detalhado de perdas"""
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=30)
-            
+
             metrics = self.db.calculate_loss_metrics(start_date, end_date)
-            
             if not metrics:
                 return
-            
-            # Criar conteúdo do relatório
+
             from kivymd.uix.boxlayout import MDBoxLayout
             from kivymd.uix.label import MDLabel
             from kivy.uix.scrollview import ScrollView
             from kivy.metrics import dp
-            
+
             content = MDBoxLayout(
                 orientation='vertical',
                 padding=dp(20),
@@ -1015,18 +1212,16 @@ class AdminScreen(Screen):
                 size_hint_y=None
             )
             content.bind(minimum_height=content.setter('height'))
-            
-            # Header
+
             header = MDLabel(
-                text=f"RELATÓRIO DE PERDAS\n{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
+                text=f"RELATORIO DE PERDAS\n{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
                 font_style="H6",
                 halign='center',
                 size_hint_y=None,
                 height=dp(60)
             )
             content.add_widget(header)
-            
-            # Resumo
+
             summary_text = f"""RESUMO GERAL:
     Eventos: {metrics['loss_count']}
     Custo Total: {metrics['total_cost']:.2f} MZN
@@ -1034,20 +1229,20 @@ class AdminScreen(Screen):
     % vs Vendas: {metrics['loss_percentage']:.2f}%
 
     POR TIPO:"""
-            
+
             for loss_type, data in metrics['by_type'].items():
                 summary_text += f"\n{loss_type}: {data['total_cost']:.2f} MZN ({data['count']}x)"
-            
+
             summary_text += "\n\nPOR UTILIZADOR:"
-            for user_data in metrics['by_user'][:5]:  # Top 5
+            for user_data in metrics['by_user'][:5]:
                 username, role, count, cost, revenue, avg = user_data
                 summary_text += f"\n{username}: {cost:.2f} MZN ({count}x)"
-            
+
             summary_text += "\n\nTOP 5 PRODUTOS:"
             for prod_data in metrics['by_product'][:5]:
                 product_id, description, count, cost = prod_data
                 summary_text += f"\n{description}: {cost:.2f} MZN ({count}x)"
-            
+
             summary_label = MDLabel(
                 text=summary_text,
                 size_hint_y=None,
@@ -1055,15 +1250,10 @@ class AdminScreen(Screen):
             )
             summary_label.bind(texture_size=summary_label.setter('size'))
             content.add_widget(summary_label)
-            
-            # ScrollView
+
             scroll = ScrollView(size_hint=(1, 1))
             scroll.add_widget(content)
-            
-            # Dialog
-            from kivymd.uix.dialog import MDDialog
-            from kivymd.uix.button import MDFlatButton
-            
+
             dialog = MDDialog(
                 title="",
                 type='custom',
@@ -1077,46 +1267,37 @@ class AdminScreen(Screen):
                 ]
             )
             dialog.open()
-            
-        except Exception as e:
-            print(f"Erro ao mostrar relatório: {e}")
 
+        except Exception as e:
+            print(f"Erro ao mostrar relatorio: {e}")
 
     def show_fraud_alerts(self, *args):
         """Mostrar alertas de fraude"""
         try:
-            # Detectar padrões (últimos 30 dias)
             alerts = self.db.detect_fraud_patterns(days_lookback=30)
-            
+
             if not alerts:
-                self.show_snackbar("✓ Nenhum alerta de fraude detectado!")
+                self.show_snackbar("Nenhum alerta de fraude detectado")
                 return
-            
-            # Filtrar por severidade
+
             high_alerts = [a for a in alerts if a['severity'] == 3]
             medium_alerts = [a for a in alerts if a['severity'] == 2]
             low_alerts = [a for a in alerts if a['severity'] == 1]
-            
-            # Montar mensagem
-            message = f"""ALERTAS DE SEGURANÇA
 
-    🔴 ALTA PRIORIDADE: {len(high_alerts)}
-    🟠 MÉDIA PRIORIDADE: {len(medium_alerts)}
-    🟡 BAIXA PRIORIDADE: {len(low_alerts)}
+            message = f"""ALERTAS DE SEGURANCA
+
+    ALTA PRIORIDADE: {len(high_alerts)}
+    MEDIA PRIORIDADE: {len(medium_alerts)}
+    BAIXA PRIORIDADE: {len(low_alerts)}
 
     PRINCIPAIS ALERTAS:"""
-            
-            # Mostrar top 5 alertas críticos
+
             for alert in (high_alerts + medium_alerts)[:5]:
-                severity_icon = {3: "🔴", 2: "🟠", 1: "🟡"}[alert['severity']]
+                severity_icon = {3: "[ALTO]", 2: "[MEDIO]", 1: "[BAIXO]"}[alert['severity']]
                 message += f"\n\n{severity_icon} {alert['title']}\n{alert['description']}"
-            
-            # Dialog
-            from kivymd.uix.dialog import MDDialog
-            from kivymd.uix.button import MDFlatButton
-            
+
             dialog = MDDialog(
-                title="⚠️ ALERTAS DE FRAUDE",
+                title="ALERTAS DE FRAUDE",
                 text=message,
                 buttons=[
                     MDFlatButton(
@@ -1130,10 +1311,9 @@ class AdminScreen(Screen):
                 ]
             )
             dialog.open()
-            
+
         except Exception as e:
             print(f"Erro ao mostrar alertas: {e}")
-
 
     def show_all_fraud_alerts(self, alerts):
         """Mostrar todos os alertas em detalhe"""
@@ -1142,7 +1322,7 @@ class AdminScreen(Screen):
             from kivymd.uix.label import MDLabel
             from kivy.uix.scrollview import ScrollView
             from kivy.metrics import dp
-            
+
             content = MDBoxLayout(
                 orientation='vertical',
                 padding=dp(20),
@@ -1150,10 +1330,10 @@ class AdminScreen(Screen):
                 size_hint_y=None
             )
             content.bind(minimum_height=content.setter('height'))
-            
+
             for alert in alerts:
-                severity_label = {3: "🔴 ALTO", 2: "🟠 MÉDIO", 1: "🟡 BAIXO"}[alert['severity']]
-                
+                severity_label = {3: "ALTO", 2: "MEDIO", 1: "BAIXO"}[alert['severity']]
+
                 alert_text = f"""{severity_label} - {alert['alert_type']}
 
     {alert['title']}
@@ -1162,9 +1342,9 @@ class AdminScreen(Screen):
     """
                 if alert['related_user']:
                     alert_text += f"Utilizador: {alert['related_user']}\n"
-                
-                alert_text += "─" * 50 + "\n"
-                
+
+                alert_text += "-" * 50 + "\n"
+
                 alert_label = MDLabel(
                     text=alert_text,
                     size_hint_y=None,
@@ -1172,15 +1352,12 @@ class AdminScreen(Screen):
                 )
                 alert_label.bind(texture_size=alert_label.setter('size'))
                 content.add_widget(alert_label)
-            
+
             scroll = ScrollView(size_hint=(1, 1))
             scroll.add_widget(content)
-            
-            from kivymd.uix.dialog import MDDialog
-            from kivymd.uix.button import MDFlatButton
-            
+
             dialog = MDDialog(
-                title="📋 TODOS OS ALERTAS",
+                title="TODOS OS ALERTAS",
                 type='custom',
                 content_cls=scroll,
                 size_hint=(0.9, 0.9),
@@ -1192,43 +1369,39 @@ class AdminScreen(Screen):
                 ]
             )
             dialog.open()
-            
+
         except Exception as e:
             print(f"Erro: {e}")
 
-
     def show_pending_approvals(self, *args):
-        """Mostrar aprovações pendentes"""
+        """Mostrar aprovacoes pendentes"""
         try:
             pending = self.db.get_pending_approvals()
-            
+
             if not pending:
-                self.show_snackbar("✓ Nenhuma aprovação pendente!")
+                self.show_snackbar("Nenhuma aprovacao pendente")
                 return
-            
-            message = f"APROVAÇÕES PENDENTES: {len(pending)}\n\n"
-            
-            for row in pending[:5]:  # Mostrar primeiras 5
+
+            message = f"APROVACOES PENDENTES: {len(pending)}\n\n"
+
+            for row in pending[:5]:
                 mov_id, prod_id, description, mov_type, qty, unit, cost, price, reason, note, evidence, created_at, user, role = row
-                
+
                 message += f"""ID #{mov_id} - {mov_type}
     Produto: {description}
     Quantidade: {qty} {unit}
     Custo: {cost:.2f} MZN
     Por: {user}
     Motivo: {reason[:50]}...
-    {"✓ Com evidência" if evidence else "⚠️ Sem evidência"}
+    {'Com evidencia' if evidence else 'Sem evidencia'}
 
     """
-            
+
             if len(pending) > 5:
-                message += f"\n... e mais {len(pending) - 5} aprovações"
-            
-            from kivymd.uix.dialog import MDDialog
-            from kivymd.uix.button import MDFlatButton, MDRaisedButton
-            
+                message += f"\n... e mais {len(pending) - 5} aprovacoes"
+
             dialog = MDDialog(
-                title="⏳ APROVAÇÕES PENDENTES",
+                title="APROVACOES PENDENTES",
                 text=message,
                 buttons=[
                     MDFlatButton(
@@ -1242,13 +1415,12 @@ class AdminScreen(Screen):
                 ]
             )
             dialog.open()
-            
+
         except Exception as e:
             print(f"Erro: {e}")
 
-
     def show_approval_details(self, pending_list):
-        """Mostrar detalhes das aprovações com opção de aprovar/rejeitar"""
+        """Mostrar detalhes das aprovacoes com opcao de aprovar/rejeitar"""
         try:
             from kivymd.uix.boxlayout import MDBoxLayout
             from kivymd.uix.label import MDLabel
@@ -1256,10 +1428,10 @@ class AdminScreen(Screen):
             from kivy.uix.scrollview import ScrollView
             from kivy.metrics import dp
             from kivy.app import App
-            
+
             app = App.get_running_app()
             current_user = getattr(app, "current_user", None)
-            
+
             content = MDBoxLayout(
                 orientation='vertical',
                 padding=dp(20),
@@ -1267,11 +1439,10 @@ class AdminScreen(Screen):
                 size_hint_y=None
             )
             content.bind(minimum_height=content.setter('height'))
-            
+
             for row in pending_list:
                 mov_id, prod_id, description, mov_type, qty, unit, cost, price, reason, note, evidence, created_at, user, role = row
-                
-                # Card para cada aprovação
+
                 card = MDBoxLayout(
                     orientation='vertical',
                     padding=dp(10),
@@ -1280,16 +1451,16 @@ class AdminScreen(Screen):
                     height=dp(200),
                     md_bg_color=[0.95, 0.95, 0.95, 1]
                 )
-                
+
                 info_text = f"""ID: {mov_id} | Tipo: {mov_type}
     Produto: {description}
     Quantidade: {qty} {unit} | Custo: {cost:.2f} MZN
     Registado por: {user} ({role})
     Data: {created_at}
     Motivo: {reason}
-    {f"Obs: {note}" if note else ""}
-    {"✓ Com evidência fotográfica" if evidence else "⚠️ Sem evidência"}"""
-                
+    {f'Obs: {note}' if note else ''}
+    {'Com evidencia fotografica' if evidence else 'Sem evidencia'}"""
+
                 info_label = MDLabel(
                     text=info_text,
                     size_hint_y=None,
@@ -1298,40 +1469,36 @@ class AdminScreen(Screen):
                 )
                 info_label.bind(texture_size=info_label.setter('size'))
                 card.add_widget(info_label)
-                
-                # Botões de aprovação
+
                 buttons = MDBoxLayout(
                     size_hint_y=None,
                     height=dp(40),
                     spacing=dp(10)
                 )
-                
+
                 approve_btn = MDRaisedButton(
-                    text="✓ APROVAR",
+                    text="APROVAR",
                     md_bg_color=[0.2, 0.7, 0.3, 1],
                     on_release=lambda x, mid=mov_id: self.approve_loss(mid, current_user)
                 )
-                
+
                 reject_btn = MDRaisedButton(
-                    text="✗ REJEITAR",
+                    text="REJEITAR",
                     md_bg_color=[0.9, 0.3, 0.3, 1],
                     on_release=lambda x, mid=mov_id: self.reject_loss(mid)
                 )
-                
+
                 buttons.add_widget(approve_btn)
                 buttons.add_widget(reject_btn)
                 card.add_widget(buttons)
-                
+
                 content.add_widget(card)
-            
+
             scroll = ScrollView(size_hint=(1, 1))
             scroll.add_widget(content)
-            
-            from kivymd.uix.dialog import MDDialog
-            from kivymd.uix.button import MDFlatButton
-            
+
             dialog = MDDialog(
-                title="📋 DETALHES DAS APROVAÇÕES",
+                title="DETALHES DAS APROVACOES",
                 type='custom',
                 content_cls=scroll,
                 size_hint=(0.95, 0.9),
@@ -1343,27 +1510,24 @@ class AdminScreen(Screen):
                 ]
             )
             dialog.open()
-            
+
         except Exception as e:
             print(f"Erro: {e}")
-
 
     def approve_loss(self, movement_id, approved_by):
         """Aprovar perda"""
         try:
             success = self.db.approve_stock_movement(movement_id, approved_by)
-            
+
             if success:
-                self.show_snackbar(f"✓ Perda #{movement_id} aprovada!")
+                self.show_snackbar(f"Perda #{movement_id} aprovada")
                 self.db.log_action(approved_by, "admin", "APPROVE_LOSS", f"Aprovada perda ID {movement_id}")
-                # Recarregar lista
                 self.show_pending_approvals()
             else:
-                self.show_snackbar("✗ Erro ao aprovar perda!")
+                self.show_snackbar("Erro ao aprovar perda")
         except Exception as e:
             print(f"Erro ao aprovar: {e}")
             self.show_snackbar("Erro ao aprovar")
-
 
     def reject_loss(self, movement_id):
         """Rejeitar perda (marcar como rejeitada)"""
@@ -1376,50 +1540,65 @@ class AdminScreen(Screen):
             print(f"Erro ao rejeitar: {e}")
 
 
-    # ==================== 3. MODIFICAR O MÉTODO on_enter ====================
+    # ==================== 3. MODIFICAR O METODO on_enter ====================
 
     # Modificar o método on_enter existente para adicionar verificação de alertas:
 
     def on_enter(self):
-        """Ao entrar na tela - VERSÃO MODIFICADA"""
-        self.load_products()
+        """Ao entrar na tela - VERSAO MODIFICADA"""
+        stale = (time.perf_counter() - self._last_products_load_at) >= self.PRODUCTS_CACHE_SECONDS
+        if (not self.products) or stale:
+            self.load_products()
         Clock.schedule_once(self._init_badge, 0.1)
-        Clock.schedule_once(self.update_ai_badge, 0.15)
-        Clock.schedule_once(self.show_auto_ai_popups, 0.2)
-        self._start_ai_polling()
+        Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.15)
         
         # NOVO: Verificar alertas de fraude
         Clock.schedule_once(self.check_fraud_alerts_on_enter, 0.3)
 
     def on_leave(self):
         self._stop_ai_polling()
+        self._alerts_refresh_token += 1
+        self._ai_popup_token += 1
 
 
     def check_fraud_alerts_on_enter(self, dt):
         """Verificar alertas de fraude ao entrar"""
-        try:
-            alerts = self.db.detect_fraud_patterns(days_lookback=7)
-            high_alerts = [a for a in alerts if a['severity'] == 3]
-            
-            if high_alerts:
-                # Mostrar badge no botão (se tiver)
-                print(f"⚠️ {len(high_alerts)} alertas críticos detectados!")
-                
-                # Opcional: Mostrar notificação automática
-                # self.show_fraud_notification_popup(len(high_alerts))
-                
-        except Exception as e:
-            print(f"Erro ao verificar alertas: {e}")
+        now = time.time()
+        if now < self._fraud_check_until:
+            return
 
+        self._fraud_check_until = now + 120
+        token = self._fraud_check_token + 1
+        self._fraud_check_token = token
+
+        def worker():
+            try:
+                alerts = self.db.detect_fraud_patterns(days_lookback=7) or []
+                high_count = sum(1 for alert in alerts if alert.get("severity") == 3)
+            except Exception as exc:
+                print(f"Erro ao verificar alertas: {exc}")
+                high_count = 0
+            Clock.schedule_once(
+                lambda _dt, count=high_count, tok=token: self._apply_fraud_check_result(count, tok),
+                0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_fraud_check_result(self, high_count, token):
+        if token != self._fraud_check_token:
+            return
+        if high_count > 0:
+            print(f"Alertas criticos detectados: {high_count}")
 
     def show_fraud_notification_popup(self, alert_count):
-        """Popup de notificação de alertas críticos"""
+        """Popup de notificacao de alertas criticos"""
         from kivymd.uix.dialog import MDDialog
         from kivymd.uix.button import MDFlatButton, MDRaisedButton
-        
+
         dialog = MDDialog(
-            title="⚠️ ALERTAS CRÍTICOS",
-            text=f"Detectados {alert_count} alertas de segurança de alta prioridade!\n\nRecomenda-se revisão imediata.",
+            title="ALERTAS CRITICOS",
+            text=f"Detectados {alert_count} alertas de seguranca de alta prioridade!\n\nRecomenda-se revisao imediata.",
             buttons=[
                 MDRaisedButton(
                     text="VER AGORA",
@@ -1434,5 +1613,11 @@ class AdminScreen(Screen):
         )
         dialog.open()
 
+if __name__ == "__main__":
+    from admin_app import AdminApp
+
+    AdminApp().run()
+
 
    
+

@@ -302,8 +302,8 @@ class PDFViewer:
         
         Args:
             pdf_path: Caminho do PDF
-            total_pages: Total de p?ginas
-            viewer_popup: Refer?ncia ao popup
+            total_pages: Total de páginas
+            viewer_popup: Referência ao popup
         
         Returns:
             MDCard com controles
@@ -339,7 +339,7 @@ class PDFViewer:
         info_box.add_widget(filename_label)
 
         self.page_label = MDLabel(
-            text=f'P?gina 1 de {total_pages}',
+            text=f'Página 1 de {total_pages}',
             font_style='Caption',
             halign='left',
             theme_text_color='Custom',

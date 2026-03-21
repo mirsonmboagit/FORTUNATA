@@ -1,9 +1,6 @@
 import json
 import os
 
-from database.database import Database
-from database.client import DatabaseClient
-
 
 def _load_config():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +18,9 @@ def get_db():
     cfg = _load_config()
     mode = (cfg.get("db_mode") or "local").lower()
     if mode == "remote":
+        from database.client import DatabaseClient
         return DatabaseClient(config=cfg)
+    from database.database import Database
     db_path = cfg.get("db_path")
     if db_path:
         return Database(db_path=db_path)

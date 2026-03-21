@@ -1,16 +1,47 @@
+import copy
 import json
 import os
-
-import requests
+import threading
+import time
+from datetime import date, datetime
 
 
 class DatabaseClient:
+    _CACHEABLE_RPC_TTL_SECONDS = {
+        "get_products_for_sale": 1.5,
+        "get_products_for_sale_page": 1.2,
+        "get_products_for_sale_ids": 1.2,
+        "get_all_products": 2.0,
+        "get_all_products_page": 1.2,
+        "get_products_for_losses": 2.0,
+        "get_products_for_restock": 2.0,
+        "get_products_for_stock_control": 2.0,
+        "get_products_for_filter": 10.0,
+        "get_categories": 30.0,
+        "get_productivity_report_data": 15.0,
+        "get_admin_home_snapshot": 20.0,
+    }
+    _MUTATING_RPC_PREFIXES = (
+        "add_",
+        "update_",
+        "delete_",
+        "record_",
+        "restock_",
+        "refund_",
+        "approve_",
+        "clear_",
+    )
+
     def __init__(self, base_url=None, api_key=None, timeout=None, config=None):
         config = config or self._load_config()
         self.base_url = base_url or config.get("api_base_url") or "http://127.0.0.1:8080"
         self.api_key = api_key or config.get("api_key") or ""
         self.timeout = timeout or config.get("timeout") or 10
         self._last_error = None
+        self._rpc_cache = {}
+        self._rpc_cache_lock = threading.Lock()
+        self._pool_size = int(config.get("http_pool_size") or 16)
+        self._session = None
 
     def _load_config(self):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,22 +55,127 @@ class DatabaseClient:
             return {}
 
     def _rpc(self, method, *args, **kwargs):
+        cached = self._get_cached_rpc_result(method, args, kwargs)
+        if cached is not None:
+            return cached
+
+        session = self._ensure_session()
+        if session is None:
+            return None
+
         url = f"{self.base_url.rstrip('/')}/rpc"
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["X-API-KEY"] = self.api_key
-        payload = {"method": method, "args": list(args), "kwargs": kwargs}
+        payload = {
+            "method": method,
+            "args": self._to_json_compatible(list(args)),
+            "kwargs": self._to_json_compatible(kwargs),
+        }
+        self._last_error = None
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
-            resp.raise_for_status()
-            data = resp.json()
+            resp = session.post(url, json=payload, headers=headers, timeout=self.timeout)
+            data = {}
+            try:
+                data = resp.json() or {}
+            except Exception:
+                data = {}
+
+            if resp.status_code >= 400:
+                err = data.get("error") if isinstance(data, dict) else None
+                if not err:
+                    err = (resp.text or "").strip() or f"HTTP {resp.status_code}"
+                raise RuntimeError(f"{resp.status_code} {err}")
+
             if not data.get("ok"):
                 raise RuntimeError(data.get("error") or "RPC error")
-            return self._normalize_result(data.get("result"))
+            result = self._normalize_result(data.get("result"))
+            self._set_cached_rpc_result(method, args, kwargs, result)
+            if self._is_mutating_method(method):
+                self._invalidate_rpc_cache()
+            return result
         except Exception as exc:
             self._last_error = str(exc)
             print(f"[DatabaseClient] RPC error ({method}): {exc}")
             return None
+
+    def _ensure_session(self):
+        if self._session is not None:
+            return self._session
+        try:
+            import requests
+            from requests.adapters import HTTPAdapter
+
+            session = requests.Session()
+            adapter = HTTPAdapter(
+                pool_connections=self._pool_size,
+                pool_maxsize=self._pool_size,
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            self._session = session
+            return self._session
+        except Exception as exc:
+            self._last_error = str(exc)
+            print(f"[DatabaseClient] Session init error: {exc}")
+            return None
+
+    def _freeze_for_cache(self, value):
+        if isinstance(value, dict):
+            return tuple(sorted((k, self._freeze_for_cache(v)) for k, v in value.items()))
+        if isinstance(value, (list, tuple)):
+            return tuple(self._freeze_for_cache(v) for v in value)
+        return value
+
+    def _cache_key(self, method, args, kwargs):
+        return (
+            str(method),
+            self._freeze_for_cache(args),
+            self._freeze_for_cache(kwargs),
+        )
+
+    def _get_cached_rpc_result(self, method, args, kwargs):
+        ttl = self._CACHEABLE_RPC_TTL_SECONDS.get(method)
+        if ttl is None:
+            return None
+        key = self._cache_key(method, args, kwargs)
+        now = time.perf_counter()
+        with self._rpc_cache_lock:
+            cached = self._rpc_cache.get(key)
+            if not cached:
+                return None
+            expires_at, value = cached
+            if now >= expires_at:
+                self._rpc_cache.pop(key, None)
+                return None
+            # Return a copy to prevent external mutation of cached lists/dicts.
+            return copy.deepcopy(value)
+
+    def _set_cached_rpc_result(self, method, args, kwargs, value):
+        ttl = self._CACHEABLE_RPC_TTL_SECONDS.get(method)
+        if ttl is None:
+            return
+        key = self._cache_key(method, args, kwargs)
+        expires_at = time.perf_counter() + float(ttl)
+        with self._rpc_cache_lock:
+            self._rpc_cache[key] = (expires_at, copy.deepcopy(value))
+
+    def _invalidate_rpc_cache(self):
+        with self._rpc_cache_lock:
+            self._rpc_cache.clear()
+
+    def _is_mutating_method(self, method):
+        method = str(method or "")
+        return method.startswith(self._MUTATING_RPC_PREFIXES)
+
+    def _to_json_compatible(self, value):
+        if isinstance(value, (datetime, date)):
+            return value.isoformat(sep=" ")
+        if isinstance(value, dict):
+            return {k: self._to_json_compatible(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._to_json_compatible(v) for v in value]
+        return value
 
     def _normalize_result(self, value):
         if isinstance(value, list):
@@ -52,6 +188,12 @@ class DatabaseClient:
         return self._last_error
 
     def close(self):
+        if self._session is not None:
+            try:
+                self._session.close()
+            except Exception:
+                pass
+            self._session = None
         return None
 
     def setup(self):
@@ -61,6 +203,7 @@ class DatabaseClient:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
         return False
 
     # ---------- Auth / Users ----------
@@ -149,11 +292,91 @@ class DatabaseClient:
     def get_products_for_sale(self):
         return self._rpc("get_products_for_sale") or []
 
+    def get_products_for_sale_page(self, search_text="", limit=200, offset=0, refresh_statuses=False):
+        result = self._rpc(
+            "get_products_for_sale_page",
+            search_text=search_text,
+            limit=limit,
+            offset=offset,
+            refresh_statuses=refresh_statuses,
+        )
+        if result is not None:
+            return result
+
+        rows = self.get_products_for_sale() or []
+        search = (search_text or "").strip().lower()
+        if search:
+            rows = [
+                p for p in rows
+                if (
+                    search in str(p[0]).lower()
+                    or search in str(p[1]).lower()
+                    or (len(p) > 4 and p[4] and search in str(p[4]).lower())
+                )
+            ]
+        off = max(0, int(offset or 0))
+        if limit:
+            return rows[off:off + int(limit)]
+        return rows[off:]
+
+    def get_products_for_sale_ids(self, product_ids):
+        result = self._rpc("get_products_for_sale_ids", product_ids)
+        if result is not None:
+            return result
+
+        ids = {int(pid) for pid in (product_ids or []) if pid is not None}
+        if not ids:
+            return []
+        rows = self.get_products_for_sale() or []
+        return [row for row in rows if int(row[0]) in ids]
+
     def get_product_by_barcode(self, barcode):
         return self._rpc("get_product_by_barcode", barcode)
 
     def get_all_products(self):
         return self._rpc("get_all_products") or []
+
+    def get_all_products_page(
+        self,
+        search_text="",
+        category=None,
+        sold_by_weight=None,
+        limit=120,
+        offset=0,
+    ):
+        result = self._rpc(
+            "get_all_products_page",
+            search_text=search_text,
+            category=category,
+            sold_by_weight=sold_by_weight,
+            limit=limit,
+            offset=offset,
+        )
+        if result is not None:
+            return result
+
+        rows = self.get_all_products() or []
+        search = (search_text or "").strip().lower()
+        if search:
+            rows = [
+                p for p in rows
+                if (
+                    search in str(p[0]).lower()
+                    or (len(p) > 1 and search in str(p[1]).lower())
+                    or (len(p) > 11 and p[11] and search in str(p[11]).lower())
+                    or (len(p) > 12 and p[12] and search in str(p[12]).lower())
+                    or (len(p) > 22 and p[22] and search in str(p[22]).lower())
+                )
+            ]
+        if category and category not in ("Todas", "Todas as Categorias"):
+            rows = [p for p in rows if len(p) > 11 and p[11] == category]
+        if sold_by_weight is not None:
+            rows = [p for p in rows if bool(len(p) > 15 and p[15]) == bool(sold_by_weight)]
+
+        off = max(0, int(offset or 0))
+        if limit:
+            return rows[off:off + int(limit)]
+        return rows[off:]
 
     def get_product(self, product_id):
         return self._rpc("get_product", product_id)
@@ -161,8 +384,16 @@ class DatabaseClient:
     def delete_product(self, product_id, username=None):
         return self._rpc("delete_product", product_id, username=username)
 
-    def add_sale(self, product_id, quantity, price, username, role):
-        return self._rpc("add_sale", product_id, quantity, price, username, role)
+    def add_sale(self, product_id, quantity, price, username, role, is_promotional=False):
+        return self._rpc(
+            "add_sale",
+            product_id,
+            quantity,
+            price,
+            username,
+            role,
+            is_promotional=is_promotional,
+        )
 
     def record_stock_movement(self, *args, **kwargs):
         return self._rpc("record_stock_movement", *args, **kwargs)
@@ -170,14 +401,55 @@ class DatabaseClient:
     def restock_product(self, *args, **kwargs):
         return self._rpc("restock_product", *args, **kwargs)
 
-    def get_sales_by_date(self, date):
-        return self._rpc("get_sales_by_date", date) or []
+    def get_sales_by_date(self, date, limit=None, offset=0):
+        result = self._rpc("get_sales_by_date", date, limit=limit, offset=offset)
+        if result is None:
+            result = self._rpc("get_sales_by_date", date)
+        rows = result or []
+        off = max(0, int(offset or 0))
+        if limit:
+            return rows[off:off + int(limit)]
+        return rows[off:]
 
-    def get_sales_by_date_range(self, start_date, end_date):
-        return self._rpc("get_sales_by_date_range", start_date, end_date) or []
+    def get_sales_by_date_range(self, start_date, end_date, limit=None, offset=0):
+        result = self._rpc(
+            "get_sales_by_date_range",
+            start_date,
+            end_date,
+            limit=limit,
+            offset=offset,
+        )
+        if result is None:
+            result = self._rpc("get_sales_by_date_range", start_date, end_date)
+        rows = result or []
+        off = max(0, int(offset or 0))
+        if limit:
+            return rows[off:off + int(limit)]
+        return rows[off:]
 
-    def get_all_sales(self):
-        return self._rpc("get_all_sales") or []
+    def get_all_sales(self, limit=None, offset=0):
+        result = self._rpc("get_all_sales", limit=limit, offset=offset)
+        if result is None:
+            result = self._rpc("get_all_sales")
+        rows = result or []
+        off = max(0, int(offset or 0))
+        if limit:
+            return rows[off:off + int(limit)]
+        return rows[off:]
+
+    def get_sale_details(self, sale_id):
+        return self._rpc("get_sale_details", sale_id)
+
+    def refund_sale_item(self, sale_id, quantity, reason="", username=None, role=None, terminal_id=None):
+        return self._rpc(
+            "refund_sale_item",
+            sale_id,
+            quantity,
+            reason=reason,
+            username=username,
+            role=role,
+            terminal_id=terminal_id,
+        ) or {"ok": False, "message": "rpc_error"}
 
     def get_loss_records(self, start_dt, end_dt, limit=200):
         return self._rpc("get_loss_records", start_dt, end_dt, limit=limit) or []
@@ -185,14 +457,53 @@ class DatabaseClient:
     def get_restock_records(self, start_dt, end_dt, limit=300):
         return self._rpc("get_restock_records", start_dt, end_dt, limit=limit) or []
 
+    def get_stock_movements(
+        self,
+        start_dt,
+        end_dt,
+        direction=None,
+        product_id=None,
+        include_sales=True,
+        limit=300,
+    ):
+        return (
+            self._rpc(
+                "get_stock_movements",
+                start_dt,
+                end_dt,
+                direction=direction,
+                product_id=product_id,
+                include_sales=include_sales,
+                limit=limit,
+            )
+            or []
+        )
+
     def get_products_with_barcodes(self):
         return self._rpc("get_products_with_barcodes") or []
 
     def get_products_for_losses(self):
         return self._rpc("get_products_for_losses") or []
 
-    def get_products_for_restock(self):
-        return self._rpc("get_products_for_restock") or []
+    def get_products_for_restock(self, include_velocity=False, velocity_days=14):
+        return (
+            self._rpc(
+                "get_products_for_restock",
+                include_velocity=include_velocity,
+                velocity_days=velocity_days,
+            )
+            or []
+        )
+
+    def get_products_for_stock_control(self, include_velocity=False, velocity_days=14):
+        return (
+            self._rpc(
+                "get_products_for_stock_control",
+                include_velocity=include_velocity,
+                velocity_days=velocity_days,
+            )
+            or []
+        )
 
     def get_products_for_filter(self):
         return self._rpc("get_products_for_filter") or []
@@ -208,6 +519,16 @@ class DatabaseClient:
             product_id=product_id,
             category=category,
         ) or []
+
+    def get_productivity_report_data(self, start_date, end_date):
+        return self._rpc(
+            "get_productivity_report_data",
+            start_date,
+            end_date,
+        ) or {}
+
+    def get_admin_home_snapshot(self, lookback_days=7):
+        return self._rpc("get_admin_home_snapshot", lookback_days=lookback_days) or {}
 
     def add_product(self, *args, **kwargs):
         return self._rpc("add_product", *args, **kwargs)
@@ -247,14 +568,28 @@ class DatabaseClient:
     def delete_manager(self, username):
         return self._rpc("delete_manager", username)
 
-    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100):
-        return self._rpc(
+    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100, offset=0):
+        result = self._rpc(
             "get_user_logs",
             user_filter,
             action_filter,
             role_filter,
             limit=limit,
-        ) or []
+            offset=offset,
+        )
+        if result is None:
+            result = self._rpc(
+                "get_user_logs",
+                user_filter,
+                action_filter,
+                role_filter,
+                limit=limit,
+            )
+        rows = result or []
+        off = max(0, int(offset or 0))
+        if limit:
+            return rows[off:off + int(limit)]
+        return rows[off:]
 
     def clear_user_logs(self):
         result = self._rpc("clear_user_logs")

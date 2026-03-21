@@ -13,11 +13,11 @@ from kivymd.uix.menu import MDDropdownMenu
 from kivy.properties import ObjectProperty
 from database.provider import get_db
 from datetime import date, datetime
+from threading import Thread
+from time import perf_counter
 import time
-import cv2
-from pyzbar.pyzbar import decode
-import numpy as np
 import os
+from utils.vision import get_vision_dependencies
 
 Builder.load_file("utils/losses_screen.kv")
 
@@ -37,11 +37,15 @@ LOSS_TYPES = [
 
 class LossesScreen(MDScreen):
     db = ObjectProperty(None)
+    PRODUCTS_CACHE_SECONDS = 5
+    ENTER_REFRESH_DELAY_SECONDS = 0.08
+    PRODUCT_RENDER_BATCH_SIZE = 40
     
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
         super().__init__(**kwargs)
         self.db = db or get_db()
+        self.back_target = "admin_home"
         self.products = []
         self.selected_product = None
         self.selected_loss_type = None
@@ -59,28 +63,93 @@ class LossesScreen(MDScreen):
         self.current_step = 1  # 1 = selecionar produto, 2 = preencher perda
         self._search_ev = None
         self._pending_search = ""
+        self._products_load_token = 0
+        self._products_loading = False
+        self._pending_products_load = False
+        self._last_products_load_at = 0.0
+        self._products_render_ev = None
+        self._products_render_rows = []
+        self._products_render_index = 0
+        self._enter_refresh_ev = None
+        self._saving_loss = False
         
         Clock.schedule_once(self.init_screen, 0.1)
 
     def init_screen(self, dt):
         """Inicializa a tela"""
         self.load_sounds()
-        self.load_products()
         self.set_scanner_status("Pronto para escanear", _theme_color("text_secondary", [0.5, 0.5, 0.5, 1]))
         self.update_ui_state()
+        self._update_responsive_layout()
 
     def on_enter(self):
         """Quando entra na tela"""
-        self.load_products()
+        self.request_enter_refresh(force=not bool(self.products))
         self.clear_form()
         self.update_ui_state()
+        self._update_responsive_layout()
 
     def on_leave(self):
         """Quando sai da tela"""
+        if self._enter_refresh_ev:
+            self._enter_refresh_ev.cancel()
+            self._enter_refresh_ev = None
+        self._stop_products_render()
         self.stop_scanner()
+
+    def on_size(self, *args):
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+
+    def prepare_open_from_admin(self):
+        self.request_enter_refresh(force=not bool(self.products), delay=0.02)
+
+    def _update_responsive_layout(self):
+        if not hasattr(self, "ids") or "loss_type_qty_row" not in self.ids:
+            return
+
+        width = self.width or dp(1200)
+        compact = width < dp(1120)
+
+        selected_meta = self.ids.selected_product_meta_row
+        scanner_preview = self.ids.scanner_preview_card
+        scanner_buttons = self.ids.scanner_buttons_row
+        loss_type_row = self.ids.loss_type_qty_row
+        loss_type_btn = self.ids.loss_type_btn
+        qty_input = self.ids.qty_input
+
+        selected_meta.orientation = "vertical" if compact else "horizontal"
+        selected_meta.height = dp(58) if compact else dp(20)
+        scanner_preview.size_hint_x = 0.9 if compact else 0.7
+        scanner_preview.height = dp(108) if compact else dp(120)
+        scanner_buttons.width = dp(78) if compact else dp(90)
+        loss_type_row.orientation = "vertical" if compact else "horizontal"
+        loss_type_row.height = dp(104) if compact else dp(52)
+        loss_type_btn.size_hint_x = 1 if compact else 0.55
+        qty_input.size_hint_x = 1 if compact else 0.45
+
+    def request_enter_refresh(self, force=False, delay=None):
+        delay = self.ENTER_REFRESH_DELAY_SECONDS if delay is None else max(0, float(delay))
+        if self._enter_refresh_ev:
+            self._enter_refresh_ev.cancel()
+            self._enter_refresh_ev = None
+
+        stale = (perf_counter() - self._last_products_load_at) >= self.PRODUCTS_CACHE_SECONDS
+        if not force and self.products and not stale:
+            return
+
+        self._enter_refresh_ev = Clock.schedule_once(lambda dt: self._run_scheduled_refresh(), delay)
+
+    def _run_scheduled_refresh(self):
+        self._enter_refresh_ev = None
+        self.load_products()
 
     def go_back(self):
         """Volta para tela anterior"""
+        if not self.manager:
+            return
+        if getattr(self, "back_target", None) in self.manager.screen_names:
+            self.manager.current = self.back_target
+            return
         app = App.get_running_app()
         role = getattr(app, "current_role", "manager")
         self.manager.current = "admin" if role == "admin" else "manager"
@@ -89,10 +158,13 @@ class LossesScreen(MDScreen):
         """Abre a tela de histórico de perdas"""
         if not self.manager:
             return
+        app = App.get_running_app()
+        ensure_screen = getattr(app, "ensure_screen", None)
+        if "losses_history" not in self.manager.screen_names and callable(ensure_screen):
+            ensure_screen("losses_history")
+        if "losses_history" not in self.manager.screen_names:
+            return
         self.manager.current = "losses_history"
-        if "losses_history" in self.manager.screen_names:
-            screen = self.manager.get_screen("losses_history")
-            Clock.schedule_once(lambda dt: screen.load_losses_table(), 0.1)
 
     # ========== UI STATE MANAGEMENT (NOVO) ==========
     def update_ui_state(self):
@@ -145,8 +217,8 @@ class LossesScreen(MDScreen):
     def load_sounds(self):
         """Carrega sons do scanner"""
         try:
-            self.sound_ok = SoundLoader.load("sounds/beep.wav")
-            self.sound_error = SoundLoader.load("sounds/beeperror.mp3")
+            self.sound_ok = SoundLoader.load("assets/sounds/beep.wav")
+            self.sound_error = SoundLoader.load("assets/sounds/beeperror.mp3")
         except:
             self.sound_ok = None
             self.sound_error = None
@@ -160,6 +232,9 @@ class LossesScreen(MDScreen):
                 self.sound_error.play()
         except:
             pass
+
+    def _load_vision_modules(self):
+        return get_vision_dependencies()
 
     # ========== SCANNER ==========
     def set_scanner_status(self, text, color):
@@ -195,6 +270,7 @@ class LossesScreen(MDScreen):
     def open_camera(self, dt):
         """Abre a câmera"""
         try:
+            cv2, _np, _decode = self._load_vision_modules()
             self.close_camera()
             self.camera = cv2.VideoCapture(self.current_camera_index)
             
@@ -230,6 +306,7 @@ class LossesScreen(MDScreen):
             return
 
         try:
+            cv2, _np, decode = self._load_vision_modules()
             ret, frame = self.camera.read()
             if not ret:
                 return
@@ -251,6 +328,7 @@ class LossesScreen(MDScreen):
     def process_barcode(self, code, frame):
         """Processa código de barras encontrado"""
         try:
+            cv2, np, _decode = self._load_vision_modules()
             # Decodificar
             barcode = code.data.decode("utf-8").strip()
             
@@ -289,6 +367,7 @@ class LossesScreen(MDScreen):
     def show_frame(self, frame):
         """Mostra frame na tela"""
         try:
+            cv2, _np, _decode = self._load_vision_modules()
             buf = cv2.flip(frame, 0).tobytes()
             texture = Texture.create(
                 size=(frame.shape[1], frame.shape[0]),
@@ -313,18 +392,51 @@ class LossesScreen(MDScreen):
     # ========== PRODUTOS ==========
     def load_products(self):
         """Carrega produtos do banco"""
-        try:
-            self.products = self.db.get_products_for_losses() or []
+        if self._products_loading:
+            self._pending_products_load = True
+            return
+
+        token = self._products_load_token + 1
+        self._products_load_token = token
+        self._products_loading = True
+
+        def worker():
+            try:
+                rows = self.db.get_products_for_losses() or []
+            except Exception as e:
+                print(f"Erro ao carregar produtos: {e}")
+                rows = []
+            Clock.schedule_once(
+                lambda dt, data=rows, tok=token: self._apply_loaded_products(data, tok),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_loaded_products(self, rows, token):
+        if token != self._products_load_token:
+            return
+
+        self._products_loading = False
+        self._last_products_load_at = perf_counter()
+        self.products = list(rows or [])
+
+        query = (self.ids.search_input.text if "search_input" in self.ids else self._pending_search).strip().lower()
+        if query:
+            self.show_products(self._filter_products(query))
+        else:
             self.show_products(self.products)
-        except Exception as e:
-            print(f"Erro ao carregar produtos: {e}")
-            self.products = []
+
+        if self._pending_products_load:
+            self._pending_products_load = False
+            Clock.schedule_once(lambda dt: self.load_products(), 0.05)
 
     def show_products(self, products):
         """Mostra produtos na lista"""
         if "products_list" not in self.ids:
             return
             
+        self._stop_products_render()
         self.ids.products_list.clear_widgets()
         
         if not products:
@@ -334,6 +446,15 @@ class LossesScreen(MDScreen):
             )
             self.ids.products_list.add_widget(empty)
             return
+
+        # Antes a lista completa era criada num unico frame; com muitos itens a
+        # interface ficava menos responsiva logo ao abrir a tela.
+        self._products_render_rows = list(products or [])
+        self._products_render_index = 0
+        self._render_next_products_batch(0)
+        if self._products_render_index < len(self._products_render_rows):
+            self._products_render_ev = Clock.schedule_interval(self._render_next_products_batch, 0)
+        return
         
         for p in products:
             pid, name, stock, price, cost, barcode, is_weight, exp, status = p
@@ -357,6 +478,47 @@ class LossesScreen(MDScreen):
             item.bind(on_release=on_item_click)
             
             self.ids.products_list.add_widget(item)
+
+    def _stop_products_render(self):
+        if self._products_render_ev:
+            self._products_render_ev.cancel()
+            self._products_render_ev = None
+
+    def _render_next_products_batch(self, _dt):
+        products_list = self.ids.get("products_list") if hasattr(self, "ids") else None
+        if products_list is None:
+            self._stop_products_render()
+            return False
+        if self._products_render_index >= len(self._products_render_rows):
+            self._stop_products_render()
+            return False
+
+        start = self._products_render_index
+        end = min(start + self.PRODUCT_RENDER_BATCH_SIZE, len(self._products_render_rows))
+        for product in self._products_render_rows[start:end]:
+            products_list.add_widget(self._build_product_list_item(product))
+        self._products_render_index = end
+
+        if self._products_render_index >= len(self._products_render_rows):
+            self._stop_products_render()
+            return False
+        return True
+
+    def _build_product_list_item(self, product):
+        _pid, name, stock, price, _cost, _barcode, is_weight, _exp, status = product
+        unit = "KG" if is_weight else "UN"
+        tag = ""
+        if status == "EXPIRADO":
+            tag = " • EXPIRADO"
+        elif status == "PERTO_DO_PRAZO":
+            tag = " • PERTO DO PRAZO"
+
+        item = TwoLineListItem(
+            text=name,
+            secondary_text=f"Stock: {stock:.1f} {unit} • {price:.2f} MZN{tag}"
+        )
+        item.bind(on_release=lambda instance, current=product: self.select_product(current))
+        return item
 
     def on_search(self, text):
         """Filtra produtos pela pesquisa (debounce)."""
@@ -429,9 +591,9 @@ class LossesScreen(MDScreen):
         if len(filtered) == 1:
             self.select_product(filtered[0])
         elif len(filtered) > 1:
-            self.show_dialog("ðŸ” Busca", f"Encontrados {len(filtered)} produtos. Clique em um ou refine a busca.")
+            self.show_dialog("?? Busca", f"Encontrados {len(filtered)} produtos. Clique em um ou refine a busca.")
         else:
-            self.show_dialog("ðŸ” Busca", "Nenhum produto encontrado.")
+            self.show_dialog("?? Busca", "Nenhum produto encontrado.")
         return
         
         # Buscar produtos filtrados
