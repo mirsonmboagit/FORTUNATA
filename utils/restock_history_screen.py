@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
+from collections import deque
+from threading import Thread
 from time import perf_counter
 
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
+from kivy.properties import BooleanProperty
 from kivy.uix.widget import Widget
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
@@ -24,20 +27,29 @@ def _theme_color(name, fallback):
 
 class RestockHistoryScreen(MDScreen):
     ENTER_CACHE_SECONDS = 5
+    compact_mode = BooleanProperty(False)
 
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
         self.db = db or get_db()
         self._render_ev = None
-        self._pending_rows = []
+        self._pending_rows = deque()
         self._render_index = 0
         self._display_rows = []
         self._page_size = 60
         self._current_page = 1
         self._last_loaded_at = 0.0
+        self._load_token = 0
+        self.back_target = "restock"
+
+    def on_kv_post(self, base_widget):
+        self._update_responsive_layout()
 
     def on_enter(self):
         self.request_enter_refresh()
+
+    def on_size(self, *args):
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
 
     def request_enter_refresh(self, force=False, delay=0.05):
         stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
@@ -47,21 +59,82 @@ class RestockHistoryScreen(MDScreen):
 
     def go_back(self):
         if self.manager:
-            self.manager.current = "restock"
+            target = self.back_target if getattr(self, "back_target", None) in self.manager.screen_names else "restock"
+            self.manager.current = target
+
+    def _set_header_state(self, widget, visible, size_hint_x):
+        if widget is None:
+            return
+        widget.opacity = 1 if visible else 0
+        widget.disabled = not visible
+        widget.size_hint_x = size_hint_x
+
+    def _update_responsive_layout(self):
+        if not hasattr(self, "ids") or "header_date" not in self.ids:
+            return
+        width = self.width or dp(1200)
+        compact = width < dp(1040)
+        if compact != self.compact_mode:
+            self.compact_mode = compact
+            if self._display_rows:
+                self._populate_restock_list(list(self._display_rows), already_aggregated=True)
+        self._apply_header_layout()
+
+    def _apply_header_layout(self):
+        if not hasattr(self, "ids") or "header_date" not in self.ids:
+            return
+        if self.compact_mode:
+            self.ids.header_date.size_hint_x = 0.18
+            self.ids.header_product.size_hint_x = 0.42
+            self.ids.header_qty.size_hint_x = 0.14
+            self._set_header_state(self.ids.header_unit_cost, False, 0)
+            self.ids.header_total.size_hint_x = 0.16
+            self.ids.header_user.size_hint_x = 0.10
+        else:
+            self.ids.header_date.size_hint_x = 0.16
+            self.ids.header_product.size_hint_x = 0.34
+            self.ids.header_qty.size_hint_x = 0.10
+            self._set_header_state(self.ids.header_unit_cost, True, 0.14)
+            self.ids.header_total.size_hint_x = 0.14
+            self.ids.header_user.size_hint_x = 0.12
 
     def load_restock_table(self, *args):
         if not hasattr(self, "ids") or "restock_list" not in self.ids:
             return
+
+        self._load_token += 1
+        token = self._load_token
+        if "load_more_btn" in self.ids:
+            self.ids.load_more_btn.disabled = True
+
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
-        rows = self.db.get_restock_records(start_dt, end_dt, limit=300)
-        self._populate_restock_list(rows)
-        self._last_loaded_at = perf_counter()
 
-    def _populate_restock_list(self, rows):
+        def worker():
+            try:
+                rows = self.db.get_restock_records(start_dt, end_dt, limit=300) or []
+                aggregated = self._aggregate_restock_rows(rows)
+            except Exception as exc:
+                print(f"Erro ao carregar reposicoes: {exc}")
+                aggregated = []
+            Clock.schedule_once(
+                lambda dt, data=aggregated, tok=token: self._apply_loaded_restock(data, tok),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_loaded_restock(self, rows, token):
+        if token != self._load_token:
+            return
+        self._last_loaded_at = perf_counter()
+        self._populate_restock_list(rows, already_aggregated=True)
+
+    def _populate_restock_list(self, rows, already_aggregated=False):
         self.ids.restock_list.clear_widgets()
         rows = rows or []
-        rows = self._aggregate_restock_rows(rows)
+        if not already_aggregated:
+            rows = self._aggregate_restock_rows(rows)
 
         if not rows:
             self.ids.restock_empty.opacity = 1
@@ -70,7 +143,7 @@ class RestockHistoryScreen(MDScreen):
             if self._render_ev:
                 Clock.unschedule(self._render_ev)
                 self._render_ev = None
-            self._pending_rows = []
+            self._pending_rows = deque()
             if "load_more_btn" in self.ids:
                 self.ids.load_more_btn.opacity = 0
                 self.ids.load_more_btn.disabled = True
@@ -113,7 +186,7 @@ class RestockHistoryScreen(MDScreen):
         if self._render_ev:
             Clock.unschedule(self._render_ev)
             self._render_ev = None
-        self._pending_rows = list(rows)
+        self._pending_rows = deque(rows or [])
         if reset:
             self.ids.restock_list.clear_widgets()
             self._render_index = 0
@@ -124,7 +197,7 @@ class RestockHistoryScreen(MDScreen):
     def _render_next_batch(self, dt):
         batch_size = 30
         for _ in range(min(batch_size, len(self._pending_rows))):
-            row = self._pending_rows.pop(0)
+            row = self._pending_rows.popleft()
             self.ids.restock_list.add_widget(self._create_restock_row(row, self._render_index))
             self._render_index += 1
         if not self._pending_rows:
@@ -216,6 +289,10 @@ class RestockHistoryScreen(MDScreen):
 
         unit_cost_str = f"{float(unit_cost or 0):.2f} MZN"
         total_cost_str = f"{float(total_cost or 0):.2f} MZN"
+        if self.compact_mode:
+            date_hint, product_hint, qty_hint, total_hint, user_hint = 0.18, 0.42, 0.14, 0.16, 0.10
+        else:
+            date_hint, product_hint, qty_hint, unit_hint, total_hint, user_hint = 0.16, 0.34, 0.10, 0.14, 0.14, 0.12
 
         line = MDBoxLayout(
             size_hint_y=None,
@@ -227,7 +304,7 @@ class RestockHistoryScreen(MDScreen):
 
         line.add_widget(MDLabel(
             text=date_str,
-            size_hint_x=0.16,
+            size_hint_x=date_hint,
             halign="left",
             font_size=dp(10),
             theme_text_color="Custom",
@@ -235,7 +312,7 @@ class RestockHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=str(product),
-            size_hint_x=0.34,
+            size_hint_x=product_hint,
             halign="left",
             font_size=dp(11),
             theme_text_color="Custom",
@@ -245,23 +322,24 @@ class RestockHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=qty_str,
-            size_hint_x=0.10,
+            size_hint_x=qty_hint,
             halign="center",
             font_size=dp(11),
             theme_text_color="Custom",
             text_color=text_secondary,
         ))
-        line.add_widget(MDLabel(
-            text=unit_cost_str,
-            size_hint_x=0.14,
-            halign="right",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=text_secondary,
-        ))
+        if not self.compact_mode:
+            line.add_widget(MDLabel(
+                text=unit_cost_str,
+                size_hint_x=unit_hint,
+                halign="right",
+                font_size=dp(11),
+                theme_text_color="Custom",
+                text_color=text_secondary,
+            ))
         line.add_widget(MDLabel(
             text=total_cost_str,
-            size_hint_x=0.14,
+            size_hint_x=total_hint,
             halign="right",
             font_size=dp(11),
             theme_text_color="Custom",
@@ -269,7 +347,7 @@ class RestockHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=created_by or "N/A",
-            size_hint_x=0.12,
+            size_hint_x=user_hint,
             halign="right",
             font_size=dp(11),
             theme_text_color="Custom",

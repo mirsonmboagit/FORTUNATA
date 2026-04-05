@@ -2,367 +2,419 @@
     name: "losses"
     md_bg_color: app.theme_tokens['surface']
 
-    MDBoxLayout:
-        orientation: "vertical"
+    FloatLayout:
+        MDBoxLayout:
+            orientation: "vertical"
+            size_hint: 1, 1
 
-        # ==================== HEADER ====================
-        MDTopAppBar:
-            title: "Registo de Perdas"
-            md_bg_color: app.theme_tokens['primary']
-            specific_text_color: app.theme_tokens['on_primary']
-            elevation: 4
-            left_action_items: [["arrow-left", lambda x: root.go_back()]]
-            right_action_items: [["format-list-bulleted", lambda x: root.open_losses_history()], ["barcode-scan", lambda x: root.toggle_scanner()]]
+            MDTopAppBar:
+                title: "Registo de Perdas"
+                md_bg_color: app.theme_tokens['primary']
+                specific_text_color: app.theme_tokens['on_primary']
+                elevation: 4
+                left_action_items: [["arrow-left", lambda x: root.go_back(), "Voltar"]]
+                right_action_items: [["format-list-bulleted", lambda x: root.open_losses_history(), "Historico de perdas"], ["barcode-scan", lambda x: root.toggle_scanner(), "Ativar scanner"]]
 
-        ScrollView:
-            do_scroll_x: False
-            do_scroll_y: True
+            ScrollView:
+                do_scroll_x: False
+                do_scroll_y: True
 
-            MDBoxLayout:
-                orientation: "vertical"
-                padding: dp(16)
-                spacing: dp(12)
-                adaptive_height: True
-
-                # ==================== STEP INDICATOR ====================
-                MDCard:
-                    orientation: "horizontal"
-                    padding: dp(12), dp(8)
-                    spacing: dp(8)
-                    elevation: 1
-                    radius: [dp(8)]
-                    size_hint_y: None
-                    height: dp(40)
-                    md_bg_color: app.theme_tokens['card']
-
-                    MDIconButton:
-                        id: step1_icon
-                        icon: "numeric-1-circle"
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['info']
-                        size_hint: None, None
-                        size: dp(24), dp(24)
-
-                    MDLabel:
-                        id: step1_label
-                        text: "Selecionar Produto"
-                        font_size: dp(12)
-                        bold: True
-                        theme_text_color: "Primary"
-
-                    MDIconButton:
-                        id: step2_icon
-                        icon: "numeric-2-circle-outline"
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['text_secondary']
-                        size_hint: None, None
-                        size: dp(24), dp(24)
-
-                    MDLabel:
-                        id: step2_label
-                        text: "Informacoes da Perda"
-                        font_size: dp(12)
-                        theme_text_color: "Hint"
-
-                # ==================== PRODUTO SELECIONADO (sempre visível quando selecionado) ====================
-                MDCard:
-                    id: selected_product_card
+                MDBoxLayout:
+                    id: content_column
                     orientation: "vertical"
-                    padding: dp(12)
-                    spacing: dp(6)
-                    elevation: 3
-                    radius: [dp(10)]
-                    md_bg_color: app.theme_tokens['card_alt']
-                    size_hint_y: None
-                    height: 0
-                    opacity: 0
+                    padding: dp(16), dp(16), dp(16), dp(240)
+                    spacing: dp(12)
+                    adaptive_height: True
 
-                    MDBoxLayout:
-                        size_hint_y: None
-                        height: dp(32)
+                    MDCard:
+                        orientation: "horizontal"
+                        padding: dp(12), dp(8)
                         spacing: dp(8)
+                        elevation: 1
+                        radius: [dp(8)]
+                        size_hint_y: None
+                        height: dp(40)
+                        md_bg_color: app.theme_tokens['card']
 
-                        MDIcon:
-                            icon: "package-variant"
+                        MDIconButton:
+                            id: step1_icon
+                            icon: "numeric-1-circle"
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['info']
                             size_hint: None, None
                             size: dp(24), dp(24)
-                            pos_hint: {"center_y": 0.5}
 
                         MDLabel:
-                            id: selected_name
-                            text: "Produto Selecionado"
-                            font_style: "Subtitle1"
+                            id: step1_label
+                            text: "Selecionar Produto"
+                            font_size: dp(12)
                             bold: True
                             theme_text_color: "Primary"
 
                         MDIconButton:
-                            icon: "close-circle"
+                            id: step2_icon
+                            icon: "numeric-2-circle-outline"
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['danger']
+                            text_color: app.theme_tokens['text_secondary']
                             size_hint: None, None
                             size: dp(24), dp(24)
-                            on_release: root.clear_selection()
-
-                    MDBoxLayout:
-                        id: selected_product_meta_row
-                        size_hint_y: None
-                        height: dp(20)
-                        spacing: dp(16)
 
                         MDLabel:
-                            id: selected_stock
-                            text: "Stock: --"
-                            font_size: dp(11)
-                            theme_text_color: "Secondary"
+                            id: step2_label
+                            text: "Informacoes da Perda"
+                            font_size: dp(12)
+                            theme_text_color: "Hint"
 
-                        MDLabel:
-                            id: selected_unit
-                            text: "Tipo: --"
-                            font_size: dp(11)
-                            theme_text_color: "Secondary"
-
-                        MDLabel:
-                            id: selected_price
-                            text: "Preco: --"
-                            font_size: dp(11)
-                            theme_text_color: "Secondary"
-
-                # ==================== SCANNER + PESQUISA (esconde quando produto selecionado) ====================
-                MDCard:
-                    id: search_card
-                    orientation: "vertical"
-                    padding: dp(12)
-                    spacing: dp(8)
-                    elevation: 2
-                    radius: [dp(10)]
-                    md_bg_color: app.theme_tokens['card']
-                    size_hint_y: None
-                    height: dp(360)
-
-                    MDLabel:
-                        text: "Encontre o Produto"
-                        font_style: "Subtitle1"
-                        bold: True
-                        size_hint_y: None
-                        height: dp(28)
-
-                    # Campo de pesquisa
-                    MDTextField:
-                        id: search_input
-                        hint_text: "Pesquisar por nome, ID ou codigo de barras"
-                        mode: "rectangle"
-                        size_hint_y: None
-                        height: dp(44)
-                        on_text: root.on_search(self.text)
-                        on_text_validate: root.on_search_enter()
-
-                    MDSeparator:
-                        height: dp(1)
-
-                    MDLabel:
-                        text: "ou use o scanner:"
-                        theme_text_color: "Hint"
-                        font_size: dp(10)
-                        size_hint_y: None
-                        height: dp(16)
-
-                    # Área do scanner
                     MDCard:
-                        id: scanner_preview_card
+                        id: selected_product_card
                         orientation: "vertical"
-                        size_hint_y: None
-                        height: dp(120)
-                        size_hint_x: 0.7
-                        pos_hint: {"center_x": 0.5}
+                        padding: dp(12)
+                        spacing: dp(6)
+                        elevation: 3
+                        radius: [dp(10)]
                         md_bg_color: app.theme_tokens['card_alt']
-                        radius: [dp(8)]
-                        elevation: 1
-                        padding: dp(4)
-
-                        Image:
-                            id: camera_image
-                            allow_stretch: True
-                            keep_ratio: True
-
-                    MDLabel:
-                        id: scanner_status
-                        text: "Scanner inativo"
-                        halign: "center"
-                        theme_text_color: "Secondary"
-                        font_size: dp(10)
                         size_hint_y: None
-                        height: dp(16)
-
-                    # Botões do scanner
-                    MDBoxLayout:
-                        id: scanner_buttons_row
-                        size_hint_y: None
-                        height: dp(40)
-                        spacing: dp(8)
-                        size_hint_x: None
-                        width: dp(90)
-                        pos_hint: {"center_x": 0.5}
-
-                        MDIconButton:
-                            id: scan_btn
-                            icon: "barcode-scan"
-                            md_bg_color: app.theme_tokens['success']
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
-                            size_hint: None, None
-                            size: dp(34), dp(34)
-                            on_release: root.toggle_scanner()
-
-                        MDIconButton:
-                            icon: "camera-switch"
-                            md_bg_color: app.theme_tokens['info']
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
-                            size_hint: None, None
-                            size: dp(34), dp(34)
-                            on_release: root.switch_camera()
-
-                    # Lista de produtos
-                    ScrollView:
-                        do_scroll_x: False
-
-                        MDList:
-                            id: products_list
-                            padding: 0
-                            spacing: dp(2)
-
-                # ==================== FORMULÁRIO DE PERDA (aparece quando produto selecionado) ====================
-                MDCard:
-                    id: loss_form_card
-                    orientation: "vertical"
-                    padding: dp(12)
-                    spacing: dp(10)
-                    elevation: 2
-                    radius: [dp(10)]
-                    md_bg_color: app.theme_tokens['card']
-                    size_hint_y: None
-                    height: 0
-                    opacity: 0
-
-                    MDLabel:
-                        text: "Detalhes da Perda"
-                        font_style: "Subtitle1"
-                        bold: True
-                        size_hint_y: None
-                        height: dp(28)
-
-                    # Tipo de perda + Quantidade
-                    MDBoxLayout:
-                        id: loss_type_qty_row
-                        size_hint_y: None
-                        height: dp(52)
-                        spacing: dp(10)
-
-                        MDRaisedButton:
-                            id: loss_type_btn
-                            text: "Selecionar Tipo"
-                            md_bg_color: app.theme_tokens['warning']
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
-                            on_release: root.open_loss_menu()
-                            size_hint_x: 0.55
-
-                        MDTextField:
-                            id: qty_input
-                            hint_text: "Qtd"
-                            input_filter: "int"
-                            mode: "rectangle"
-                            on_text: root.on_qty_change(self.text)
-                            size_hint_x: 0.45
-
-                    # Motivo (obrigatório)
-                    MDTextField:
-                        id: reason_input
-                        hint_text: "Motivo da perda (obrigatorio)"
-                        mode: "rectangle"
-                        size_hint_y: None
-                        height: dp(48)
-
-                    # Observação (opcional)
-                    MDTextField:
-                        id: note_input
-                        hint_text: "Observacao adicional (opcional)"
-                        mode: "rectangle"
-                        size_hint_y: None
-                        height: dp(48)
-
-                    # Evidência (opcional)
-                    MDTextField:
-                        id: evidence_input
-                        hint_text: "Caminho da evidencia (opcional)"
-                        mode: "rectangle"
-                        size_hint_y: None
-                        height: dp(48)
-
-                    MDSeparator:
-                        height: dp(1)
-
-                    # Resumo financeiro
-                    MDLabel:
-                        text: "Impacto Financeiro"
-                        font_size: dp(11)
-                        bold: True
-                        size_hint_y: None
-                        height: dp(20)
-
-                    MDBoxLayout:
-                        orientation: "vertical"
-                        size_hint_y: None
-                        height: dp(50)
-                        spacing: dp(4)
+                        height: 0
+                        opacity: 0
 
                         MDBoxLayout:
                             size_hint_y: None
-                            height: dp(22)
+                            height: dp(32)
                             spacing: dp(8)
 
-                            MDLabel:
-                                text: "Custo do produto:"
-                                font_size: dp(11)
-                                theme_text_color: "Secondary"
-                                size_hint_x: 0.5
-
-                            MDLabel:
-                                id: cost_label
-                                text: "0.00 MZN"
-                                font_size: dp(11)
-                                bold: True
+                            MDIcon:
+                                icon: "package-variant"
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['success']
-                                halign: "right"
-
-                        MDBoxLayout:
-                            size_hint_y: None
-                            height: dp(22)
-                            spacing: dp(8)
+                                text_color: app.theme_tokens['info']
+                                size_hint: None, None
+                                size: dp(24), dp(24)
+                                pos_hint: {"center_y": 0.5}
 
                             MDLabel:
-                                text: "Receita perdida:"
-                                font_size: dp(11)
-                                theme_text_color: "Secondary"
-                                size_hint_x: 0.5
-
-                            MDLabel:
-                                id: revenue_label
-                                text: "0.00 MZN"
-                                font_size: dp(11)
+                                id: selected_name
+                                text: "Produto Selecionado"
+                                font_style: "Subtitle1"
                                 bold: True
+                                theme_text_color: "Primary"
+
+                            TooltipIconButton:
+                                icon: "close-circle"
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens['danger']
-                                halign: "right"
+                                size_hint: None, None
+                                size: dp(24), dp(24)
+                                hint_text: "Limpar selecao"
+                                on_release: root.clear_selection()
 
-                    MDRaisedButton:
-                        text: "REGISTRAR PERDA"
-                        md_bg_color: app.theme_tokens['danger']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        on_release: root.submit_loss()
+                        MDBoxLayout:
+                            id: selected_product_meta_row
+                            size_hint_y: None
+                            height: dp(20)
+                            spacing: dp(16)
+
+                            MDLabel:
+                                id: selected_stock
+                                text: "Stock: --"
+                                font_size: dp(11)
+                                theme_text_color: "Secondary"
+
+                            MDLabel:
+                                id: selected_unit
+                                text: "Tipo: --"
+                                font_size: dp(11)
+                                theme_text_color: "Secondary"
+
+                            MDLabel:
+                                id: selected_price
+                                text: "Preco: --"
+                                font_size: dp(11)
+                                theme_text_color: "Secondary"
+
+                    MDCard:
+                        id: search_card
+                        orientation: "vertical"
+                        padding: dp(12)
+                        spacing: dp(8)
+                        elevation: 2
+                        radius: [dp(10)]
+                        md_bg_color: app.theme_tokens['card']
                         size_hint_y: None
-                        height: dp(48)
+                        height: dp(360)
+
+                        MDLabel:
+                            text: "Encontre o Produto"
+                            font_style: "Subtitle1"
+                            bold: True
+                            size_hint_y: None
+                            height: dp(28)
+
+                        MDTextField:
+                            id: search_input
+                            hint_text: "Pesquisar por nome, ID ou codigo de barras"
+                            mode: "rectangle"
+                            size_hint_y: None
+                            height: dp(44)
+                            on_text: root.on_search(self.text)
+                            on_text_validate: root.on_search_enter()
+
+                        MDSeparator:
+                            height: dp(1)
+
+                        MDLabel:
+                            text: "ou use o scanner:"
+                            theme_text_color: "Hint"
+                            font_size: dp(10)
+                            size_hint_y: None
+                            height: dp(16)
+
+                        MDCard:
+                            orientation: "horizontal"
+                            size_hint_y: None
+                            height: dp(46)
+                            radius: [dp(8)]
+                            elevation: 0
+                            md_bg_color: app.theme_tokens['card_alt']
+                            padding: dp(10), 0
+                            spacing: dp(10)
+
+                            MDIcon:
+                                icon: "camera-wireless"
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['info']
+                                size_hint: None, None
+                                size: dp(18), dp(18)
+                                pos_hint: {"center_y": 0.5}
+
+                            MDLabel:
+                                text: "Scanner flutuante ativa automaticamente ao abrir a tela."
+                                font_size: dp(10.5)
+                                theme_text_color: "Secondary"
+
+                        ScrollView:
+                            do_scroll_x: False
+
+                            MDList:
+                                id: products_list
+                                padding: 0
+                                spacing: dp(2)
+
+                    MDCard:
+                        id: loss_form_card
+                        orientation: "vertical"
+                        padding: dp(12)
+                        spacing: dp(10)
+                        elevation: 2
+                        radius: [dp(10)]
+                        md_bg_color: app.theme_tokens['card']
+                        size_hint_y: None
+                        height: 0
+                        opacity: 0
+
+                        MDLabel:
+                            text: "Detalhes da Perda"
+                            font_style: "Subtitle1"
+                            bold: True
+                            size_hint_y: None
+                            height: dp(28)
+
+                        MDBoxLayout:
+                            id: loss_type_qty_row
+                            size_hint_y: None
+                            height: dp(52)
+                            spacing: dp(10)
+
+                            MDRaisedButton:
+                                id: loss_type_btn
+                                text: "Selecionar Tipo"
+                                md_bg_color: app.theme_tokens['warning']
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['on_primary']
+                                on_release: root.open_loss_menu()
+                                size_hint_x: 0.55
+
+                            MDTextField:
+                                id: qty_input
+                                hint_text: "Qtd"
+                                input_filter: "int"
+                                mode: "rectangle"
+                                on_text: root.on_qty_change(self.text)
+                                size_hint_x: 0.45
+
+                        MDTextField:
+                            id: reason_input
+                            hint_text: "Motivo da perda (obrigatorio)"
+                            mode: "rectangle"
+                            size_hint_y: None
+                            height: dp(48)
+
+                        MDTextField:
+                            id: note_input
+                            hint_text: "Observacao adicional (opcional)"
+                            mode: "rectangle"
+                            size_hint_y: None
+                            height: dp(48)
+
+                        MDTextField:
+                            id: evidence_input
+                            hint_text: "Caminho da evidencia (opcional)"
+                            mode: "rectangle"
+                            size_hint_y: None
+                            height: dp(48)
+
+                        MDSeparator:
+                            height: dp(1)
+
+                        MDLabel:
+                            text: "Impacto Financeiro"
+                            font_size: dp(11)
+                            bold: True
+                            size_hint_y: None
+                            height: dp(20)
+
+                        MDBoxLayout:
+                            orientation: "vertical"
+                            size_hint_y: None
+                            height: dp(50)
+                            spacing: dp(4)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(22)
+                                spacing: dp(8)
+
+                                MDLabel:
+                                    text: "Custo do produto:"
+                                    font_size: dp(11)
+                                    theme_text_color: "Secondary"
+                                    size_hint_x: 0.5
+
+                                MDLabel:
+                                    id: cost_label
+                                    text: "0.00 MZN"
+                                    font_size: dp(11)
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['success']
+                                    halign: "right"
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(22)
+                                spacing: dp(8)
+
+                                MDLabel:
+                                    text: "Receita perdida:"
+                                    font_size: dp(11)
+                                    theme_text_color: "Secondary"
+                                    size_hint_x: 0.5
+
+                                MDLabel:
+                                    id: revenue_label
+                                    text: "0.00 MZN"
+                                    font_size: dp(11)
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['danger']
+                                    halign: "right"
+
+                        MDRaisedButton:
+                            id: submit_loss_btn
+                            text: "REGISTRAR PERDA"
+                            md_bg_color: app.theme_tokens['danger']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            on_release: root.submit_loss()
+                            size_hint_y: None
+                            height: dp(48)
+
+        LossesFloatingScannerPanel:
+            id: scanner_preview_card
+            orientation: "vertical"
+            size_hint: None, None
+            size: dp(280), dp(228)
+            pos: root.width - self.width - dp(16), dp(16)
+            md_bg_color: app.theme_tokens['card_alt']
+            radius: [dp(14)]
+            elevation: 4
+            padding: dp(10)
+            spacing: dp(8)
+            opacity: 0
+            disabled: True
+
+            MDBoxLayout:
+                size_hint_y: None
+                height: dp(28)
+                spacing: dp(8)
+
+                MDLabel:
+                    text: "Scanner flutuante"
+                    bold: True
+                    font_size: dp(12)
+                    theme_text_color: "Primary"
+
+                MDLabel:
+                    text: "Arraste no topo"
+                    halign: "right"
+                    font_size: dp(10)
+                    theme_text_color: "Hint"
+
+            MDCard:
+                size_hint_y: 1
+                radius: [dp(12)]
+                elevation: 0
+                md_bg_color: app.theme_tokens['card']
+                padding: dp(4)
+
+                Image:
+                    id: camera_image
+                    fit_mode: "fill"
+
+            MDLabel:
+                id: scanner_status
+                text: "A preparar o scanner..."
+                halign: "center"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_secondary']
+                font_size: dp(10)
+                size_hint_y: None
+                height: dp(16)
+
+            MDBoxLayout:
+                id: scanner_buttons_row
+                size_hint_y: None
+                height: dp(40)
+                spacing: dp(8)
+                size_hint_x: None
+                width: dp(132)
+                pos_hint: {"center_x": 0.5}
+
+                TooltipIconButton:
+                    id: scan_btn
+                    icon: "barcode-scan"
+                    md_bg_color: app.theme_tokens['success']
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['on_primary']
+                    size_hint: None, None
+                    size: dp(34), dp(34)
+                    hint_text: "Iniciar ou parar scanner"
+                    on_release: root.toggle_scanner()
+
+                TooltipIconButton:
+                    icon: "camera-switch"
+                    md_bg_color: app.theme_tokens['info']
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['on_primary']
+                    size_hint: None, None
+                    size: dp(34), dp(34)
+                    hint_text: "Trocar camera"
+                    on_release: root.switch_camera()
+
+                TooltipIconButton:
+                    icon: "close"
+                    md_bg_color: app.theme_tokens['danger']
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['on_primary']
+                    size_hint: None, None
+                    size: dp(34), dp(34)
+                    hint_text: "Fechar scanner"
+                    on_release: root.close_scanner_panel()

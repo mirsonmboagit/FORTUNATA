@@ -1,17 +1,42 @@
+import builtins
 import os
 import sqlite3
+import sys
 import tempfile
 from datetime import datetime, timedelta, date
 from time import perf_counter
 import bcrypt
 
 from utils.perf_utils import perf_log, should_log_debug
+from utils.vat import (
+    DEFAULT_VAT_RULE_CODE,
+    VAT_RULES,
+    compute_vat_breakdown,
+    normalize_reference_date,
+)
 
 NEAR_EXPIRY_DAYS = 15
 LOSS_QTY_LIMIT_UN = 10
 LOSS_QTY_LIMIT_KG = 5.0
 LOSS_VALUE_LIMIT_MZN = 5000
 LOSS_TYPES = {"DAMAGE", "EXPIRED", "THEFT", "ADJUSTMENT"}
+
+
+def _safe_print(*args, **kwargs):
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        stream = kwargs.get("file") or sys.stdout
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        flush = kwargs.get("flush", False)
+        text = sep.join(str(arg) for arg in args)
+        sanitized = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        builtins.print(sanitized, end=end, file=stream, flush=flush)
+
+
+print = _safe_print
 
 def _safe_float(value, default=0.0):
     try:
@@ -240,6 +265,158 @@ class Database:
                 "UPDATE products_archive SET sku = ? WHERE id = ?",
                 (sku, product_id),
             )
+
+    @staticmethod
+    def _normalize_vat_rule_code(vat_rule_code):
+        code = str(vat_rule_code or DEFAULT_VAT_RULE_CODE).strip().upper()
+        if not code:
+            code = DEFAULT_VAT_RULE_CODE
+        return code
+
+    def _seed_vat_rules(self):
+        for rule in VAT_RULES:
+            self.cursor.execute(
+                """
+                INSERT OR IGNORE INTO vat_rules (
+                    code,
+                    label,
+                    short_label,
+                    rate_percent,
+                    taxable_ratio,
+                    effective_from,
+                    effective_to,
+                    legal_reference,
+                    description,
+                    price_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rule["code"],
+                    rule.get("label"),
+                    rule.get("short_label"),
+                    float(rule.get("rate_percent") or 0.0),
+                    float(rule.get("taxable_ratio") or 0.0),
+                    rule.get("effective_from"),
+                    rule.get("effective_to"),
+                    rule.get("legal_reference"),
+                    rule.get("description"),
+                    rule.get("price_mode"),
+                ),
+            )
+
+    def get_vat_rules(self):
+        try:
+            self.cursor.execute(
+                """
+                SELECT
+                    code,
+                    label,
+                    short_label,
+                    rate_percent,
+                    taxable_ratio,
+                    effective_from,
+                    effective_to,
+                    legal_reference,
+                    description,
+                    price_mode
+                FROM vat_rules
+                ORDER BY code ASC, effective_from DESC
+                """
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter regras de IVA: {e}")
+            return []
+
+    def replace_vat_rules(self, rules):
+        try:
+            normalized_rows = []
+            for raw_rule in list(rules or []):
+                code = self._normalize_vat_rule_code(raw_rule.get("code"))
+                label = str(raw_rule.get("label") or code).strip()
+                short_label = str(raw_rule.get("short_label") or label).strip()
+                rate_percent = float(raw_rule.get("rate_percent") or 0.0)
+                effective_from = normalize_reference_date(raw_rule.get("effective_from")).isoformat()
+                effective_to_raw = str(raw_rule.get("effective_to") or "").strip()
+                effective_to = normalize_reference_date(effective_to_raw).isoformat() if effective_to_raw else None
+                if effective_to and effective_to < effective_from:
+                    raise ValueError(f"Vigencia invalida para {code}: fim antes do inicio")
+                price_mode = str(raw_rule.get("price_mode") or "INCLUSIVE").strip().upper()
+                if price_mode not in {"INCLUSIVE", "EXCLUSIVE"}:
+                    price_mode = "INCLUSIVE"
+                taxable_ratio = raw_rule.get("taxable_ratio")
+                if taxable_ratio in (None, ""):
+                    taxable_ratio = 0.0 if rate_percent <= 0 else 1.0
+                taxable_ratio = float(taxable_ratio)
+                legal_reference = str(raw_rule.get("legal_reference") or "").strip() or None
+                description = str(raw_rule.get("description") or "").strip() or None
+                normalized_rows.append(
+                    (
+                        code,
+                        label,
+                        short_label,
+                        rate_percent,
+                        taxable_ratio,
+                        effective_from,
+                        effective_to,
+                        legal_reference,
+                        description,
+                        price_mode,
+                    )
+                )
+
+            if not normalized_rows:
+                raise ValueError("Informe pelo menos uma regra de IVA")
+
+            unique_keys = {(row[0], row[5]) for row in normalized_rows}
+            if len(unique_keys) != len(normalized_rows):
+                raise ValueError("Existem regras duplicadas com o mesmo criterio e data inicial")
+
+            self.cursor.execute("DELETE FROM vat_rules")
+            self.cursor.executemany(
+                """
+                INSERT INTO vat_rules (
+                    code,
+                    label,
+                    short_label,
+                    rate_percent,
+                    taxable_ratio,
+                    effective_from,
+                    effective_to,
+                    legal_reference,
+                    description,
+                    price_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                normalized_rows,
+            )
+            self.conn.commit()
+            return True
+        except (sqlite3.Error, ValueError) as e:
+            print(f"Erro ao substituir regras de IVA: {e}")
+            self.conn.rollback()
+            return False
+
+    def reset_vat_rules(self):
+        try:
+            self.cursor.execute("DELETE FROM vat_rules")
+            self._seed_vat_rules()
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao restaurar regras de IVA: {e}")
+            self.conn.rollback()
+            return False
+
+    def calculate_vat_breakdown(self, unit_price, quantity=1.0, vat_rule_code=None, reference_date=None):
+        rules = self.get_vat_rules()
+        return compute_vat_breakdown(
+            unit_price,
+            quantity=quantity,
+            rule_code=self._normalize_vat_rule_code(vat_rule_code),
+            reference_date=reference_date,
+            rules=rules,
+        )
     
     def setup(self):
         """Configurar tabelas do banco de dados"""
@@ -291,6 +468,24 @@ class Database:
                 updated_at TEXT,
                 FOREIGN KEY (username) REFERENCES users(username)
             )''')
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS vat_rules (
+                    code TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    short_label TEXT,
+                    rate_percent REAL NOT NULL DEFAULT 0,
+                    taxable_ratio REAL NOT NULL DEFAULT 1,
+                    effective_from TEXT NOT NULL,
+                    effective_to TEXT,
+                    legal_reference TEXT,
+                    description TEXT,
+                    price_mode TEXT DEFAULT 'INCLUSIVE',
+                    PRIMARY KEY (code, effective_from)
+                )
+                '''
+            )
+            self._seed_vat_rules()
             # Nao criar usuario padrao automaticamente
             # Tabela de produtos (atualizada com barcode, expiry_date, status e is_sold_by_weight)
             self.cursor.execute(''' 
@@ -316,7 +511,8 @@ class Database:
                 status_updated_by TEXT,
                 sku TEXT,
                 units_per_package INTEGER,
-                allow_pack_sale INTEGER DEFAULT 0
+                allow_pack_sale INTEGER DEFAULT 0,
+                vat_rule_code TEXT DEFAULT 'STANDARD'
             )''')
 
             # Tabela de produtos arquivados (excluÃƒÂ­dos)
@@ -344,6 +540,7 @@ class Database:
                 sku TEXT,
                 units_per_package INTEGER,
                 allow_pack_sale INTEGER DEFAULT 0,
+                vat_rule_code TEXT DEFAULT 'STANDARD',
                 deleted_at TEXT,
                 deleted_by TEXT
             )''')
@@ -386,6 +583,7 @@ class Database:
             ensure_column("products", "sku", "TEXT")
             ensure_column("products", "units_per_package", "INTEGER")
             ensure_column("products", "allow_pack_sale", "INTEGER DEFAULT 0")
+            ensure_column("products", "vat_rule_code", "TEXT DEFAULT 'STANDARD'")
             ensure_column("products_archive", "package_quantity", "TEXT")
             ensure_column("products_archive", "status", "TEXT")
             ensure_column("products_archive", "status_source", "TEXT")
@@ -395,6 +593,7 @@ class Database:
             ensure_column("products_archive", "sku", "TEXT")
             ensure_column("products_archive", "units_per_package", "INTEGER")
             ensure_column("products_archive", "allow_pack_sale", "INTEGER DEFAULT 0")
+            ensure_column("products_archive", "vat_rule_code", "TEXT DEFAULT 'STANDARD'")
             ensure_column("products_archive", "deleted_at", "TEXT")
             ensure_column("products_archive", "deleted_by", "TEXT")
 
@@ -440,7 +639,8 @@ class Database:
                     status_updated_by TEXT,
                     sku TEXT,
                     units_per_package INTEGER,
-                    allow_pack_sale INTEGER DEFAULT 0
+                    allow_pack_sale INTEGER DEFAULT 0,
+                    vat_rule_code TEXT DEFAULT 'STANDARD'
                 )''')
                 
                 # Copiar dados para tabela temporÃƒÂ¡ria
@@ -452,7 +652,7 @@ class Database:
                        date_added, is_sold_by_weight,
                        package_quantity,
                        status, status_source, status_reason, status_updated_at, status_updated_by,
-                       sku, units_per_package, allow_pack_sale
+                       sku, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 ''')
                 
@@ -477,6 +677,13 @@ class Database:
                 created_by TEXT,
                 created_role TEXT,
                 terminal_id TEXT,
+                vat_rule_code TEXT DEFAULT 'STANDARD',
+                vat_label TEXT,
+                vat_rate_percent REAL DEFAULT 0,
+                vat_taxable_ratio REAL DEFAULT 0,
+                net_total REAL DEFAULT 0,
+                vat_amount REAL DEFAULT 0,
+                gross_total REAL DEFAULT 0,
                 FOREIGN KEY (product_id) REFERENCES products (id)
             )''')
 
@@ -485,6 +692,13 @@ class Database:
             ensure_column("sales", "created_role", "TEXT")
             ensure_column("sales", "terminal_id", "TEXT")
             ensure_column("sales", "is_promotional", "INTEGER DEFAULT 0")
+            ensure_column("sales", "vat_rule_code", "TEXT DEFAULT 'STANDARD'")
+            ensure_column("sales", "vat_label", "TEXT")
+            ensure_column("sales", "vat_rate_percent", "REAL DEFAULT 0")
+            ensure_column("sales", "vat_taxable_ratio", "REAL DEFAULT 0")
+            ensure_column("sales", "net_total", "REAL DEFAULT 0")
+            ensure_column("sales", "vat_amount", "REAL DEFAULT 0")
+            ensure_column("sales", "gross_total", "REAL DEFAULT 0")
 
             # Tabela de devolucoes/estornos de venda
             self.cursor.execute(
@@ -517,6 +731,29 @@ class Database:
             self.cursor.execute(
                 "UPDATE products SET status_source = 'MANUAL' "
                 "WHERE status_source IS NULL OR status_source = ''"
+            )
+            self.cursor.execute(
+                "UPDATE products SET vat_rule_code = ? "
+                "WHERE vat_rule_code IS NULL OR TRIM(vat_rule_code) = ''",
+                (DEFAULT_VAT_RULE_CODE,),
+            )
+            self.cursor.execute(
+                "UPDATE products_archive SET vat_rule_code = ? "
+                "WHERE vat_rule_code IS NULL OR TRIM(vat_rule_code) = ''",
+                (DEFAULT_VAT_RULE_CODE,),
+            )
+            self.cursor.execute(
+                "UPDATE sales SET gross_total = COALESCE(NULLIF(gross_total, 0), total_price) "
+                "WHERE gross_total IS NULL OR gross_total = 0"
+            )
+            self.cursor.execute(
+                "UPDATE sales SET net_total = COALESCE(NULLIF(net_total, 0), total_price - COALESCE(vat_amount, 0)) "
+                "WHERE net_total IS NULL OR net_total = 0"
+            )
+            self.cursor.execute(
+                "UPDATE sales SET vat_rule_code = ? "
+                "WHERE vat_rule_code IS NULL OR TRIM(vat_rule_code) = ''",
+                (DEFAULT_VAT_RULE_CODE,),
             )
             # Regerar SKU no formato MANUAL-PREFIXO-000001
             self._rebuild_all_skus()
@@ -906,15 +1143,23 @@ class Database:
     def set_security_questions(self, username, answers):
         """Configurar perguntas de seguranca para um usuario"""
         try:
-            from utils.security_questions import hash_answer
-            hashes = [hash_answer(ans) for ans in answers]
+            from utils.security_questions import REQUIRED_QUESTION_COUNT, hash_answer
+            normalized_answers = [str(answer or "").strip() for answer in list(answers or [])]
+            if len(normalized_answers) < REQUIRED_QUESTION_COUNT or len(normalized_answers) > 4:
+                return False
+            if any(not answer for answer in normalized_answers):
+                return False
+
+            hashes = [hash_answer(ans) for ans in normalized_answers]
             placeholder = hash_answer("__unused__")
+            while len(hashes) < 4:
+                hashes.append(placeholder)
             now = datetime.now().isoformat()
             self.cursor.execute(
                 'INSERT OR REPLACE INTO user_security_questions '
                 '(username, q1_hash, q2_hash, q3_hash, q4_hash, attempts, lock_until, updated_at) '
                 'VALUES (?, ?, ?, ?, ?, 0, NULL, ?)',
-                (username, hashes[0], hashes[1], hashes[2], placeholder, now),
+                (username, hashes[0], hashes[1], hashes[2], hashes[3], now),
             )
             self.conn.commit()
             return True
@@ -934,7 +1179,7 @@ class Database:
             row = self.cursor.fetchone()
             if not row:
                 return None
-            q1, q2, q3, _q4, attempts, lock_until = row
+            q1, q2, q3, q4, attempts, lock_until = row
             lock_value = None
             if lock_until:
                 try:
@@ -942,7 +1187,7 @@ class Database:
                 except Exception:
                     lock_value = lock_until
             return {
-                "hashes": [q1, q2, q3],
+                "hashes": [q1, q2, q3, q4],
                 "attempts": attempts or 0,
                 "lock_until": lock_value,
             }
@@ -971,7 +1216,12 @@ class Database:
     def verify_security_answers(self, username, answers, max_attempts=5, lock_minutes=15):
         """Verifica respostas de seguranca e gerencia tentativas/lock"""
         try:
-            from utils.security_questions import check_answer
+            from utils.security_questions import REQUIRED_QUESTION_COUNT, check_answer
+            normalized_answers = [str(answer or "").strip() for answer in list(answers or [])]
+            if len(normalized_answers) < REQUIRED_QUESTION_COUNT or len(normalized_answers) > 4:
+                return {"ok": False, "reason": "not_configured"}
+            if any(not answer for answer in normalized_answers):
+                return {"ok": False, "reason": "not_configured"}
             record = self.get_security_record(username)
             if not record:
                 return {"ok": False, "reason": "not_configured"}
@@ -997,12 +1247,12 @@ class Database:
                 record["attempts"] = 0
                 record["lock_until"] = None
 
-            hashes = record.get("hashes", [])[: len(answers)]
-            if len(hashes) < len(answers):
+            hashes = list(record.get("hashes", []) or [])[: len(normalized_answers)]
+            if len(hashes) < len(normalized_answers):
                 return {"ok": False, "reason": "not_configured"}
 
             all_ok = True
-            for ans, hashed in zip(answers, hashes):
+            for ans, hashed in zip(normalized_answers, hashes):
                 if not check_answer(ans, hashed):
                     all_ok = False
                     break
@@ -2530,11 +2780,13 @@ class Database:
         package_quantity=None,
         units_per_package=None,
         allow_pack_sale=False,
+        vat_rule_code=DEFAULT_VAT_RULE_CODE,
     ):
         """Adicionar um novo produto ao banco de dados"""
         try:
             profit_per_unit = sale_price - unit_purchase_price
             date_added = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            normalized_vat_rule = self._normalize_vat_rule_code(vat_rule_code)
             normalized_units, normalized_allow = self._normalize_pack_sale_fields(
                 is_sold_by_weight,
                 units_per_package,
@@ -2547,9 +2799,9 @@ class Database:
                     description, category, existing_stock, sold_stock, sale_price,
                     total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                     expiry_date, date_added, is_sold_by_weight, package_quantity,
-                    units_per_package, allow_pack_sale
+                    units_per_package, allow_pack_sale, vat_rule_code
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     description,
@@ -2567,6 +2819,7 @@ class Database:
                     package_quantity,
                     normalized_units,
                     normalized_allow,
+                    normalized_vat_rule,
                 ),
             )
             product_id = self.cursor.lastrowid
@@ -2604,10 +2857,12 @@ class Database:
         package_quantity=None,
         units_per_package=None,
         allow_pack_sale=False,
+        vat_rule_code=DEFAULT_VAT_RULE_CODE,
     ):
         """Atualizar produto existente"""
         try:
             profit_per_unit = sale_price - unit_purchase_price
+            normalized_vat_rule = self._normalize_vat_rule_code(vat_rule_code)
             normalized_units, normalized_allow = self._normalize_pack_sale_fields(
                 is_sold_by_weight,
                 units_per_package,
@@ -2618,11 +2873,11 @@ class Database:
                    description = ?, category = ?, existing_stock = ?, sold_stock = ?, 
                    sale_price = ?, total_purchase_price = ?, unit_purchase_price = ?, 
                    profit_per_unit = ?, barcode = ?, expiry_date = ?, is_sold_by_weight = ?, package_quantity = ?,
-                   units_per_package = ?, allow_pack_sale = ?
+                   units_per_package = ?, allow_pack_sale = ?, vat_rule_code = ?
                    WHERE id = ?""", 
                 (description, category, float(existing_stock), float(sold_stock), sale_price, 
                  total_purchase_price, unit_purchase_price, profit_per_unit, barcode, expiry_date,
-                 1 if is_sold_by_weight else 0, package_quantity, normalized_units, normalized_allow, id)
+                 1 if is_sold_by_weight else 0, package_quantity, normalized_units, normalized_allow, normalized_vat_rule, id)
             )
             self.conn.commit()
             
@@ -2645,7 +2900,7 @@ class Database:
                        total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                        expiry_date, date_added, is_sold_by_weight, package_quantity,
                        status, status_source, status_reason, status_updated_at, status_updated_by,
-                       sku, units_per_package, allow_pack_sale
+                       sku, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products WHERE id = ?
                 """,
                 (id,),
@@ -2662,9 +2917,9 @@ class Database:
                     total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                     expiry_date, date_added, is_sold_by_weight, package_quantity,
                     status, status_source, status_reason, status_updated_at, status_updated_by,
-                    sku, units_per_package, allow_pack_sale,
+                    sku, units_per_package, allow_pack_sale, vat_rule_code,
                     deleted_at, deleted_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (*row, deleted_at, user),
             )
@@ -2728,7 +2983,8 @@ class Database:
                     p.package_quantity,
                     p.sku,
                     p.units_per_package,
-                    p.allow_pack_sale
+                    p.allow_pack_sale,
+                    p.vat_rule_code
                 FROM products p
                 WHERE 1=1
             """
@@ -2798,7 +3054,8 @@ class Database:
                     p.package_quantity,
                     p.sku,
                     p.units_per_package,
-                    p.allow_pack_sale
+                    p.allow_pack_sale,
+                    p.vat_rule_code
                 FROM products p
                 WHERE p.id = ?""", (id,))
             return self.cursor.fetchone()
@@ -2825,7 +3082,7 @@ class Database:
 
             query = """
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 WHERE existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
@@ -2869,7 +3126,7 @@ class Database:
             placeholders = ",".join(["?"] * len(ids))
             query = f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 WHERE id IN ({placeholders})
             """
@@ -2905,7 +3162,8 @@ class Database:
                     p.package_quantity,
                     p.sku,
                     p.units_per_package,
-                    p.allow_pack_sale
+                    p.allow_pack_sale,
+                    p.vat_rule_code
                 FROM products p
                 WHERE p.is_sold_by_weight = 1
                 ORDER BY p.description ASC
@@ -2934,7 +3192,8 @@ class Database:
             
             # ESTRATÃƒâ€°GIA 1: Busca EXATA
             self.cursor.execute(""" 
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 WHERE barcode = ? AND existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
@@ -2951,7 +3210,8 @@ class Database:
             
             # ESTRATÃƒâ€°GIA 2: Busca com TRIM
             self.cursor.execute(""" 
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 WHERE TRIM(barcode) = ? AND existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
@@ -2968,7 +3228,8 @@ class Database:
             
             # ESTRATÃƒâ€°GIA 3: Busca case-insensitive
             self.cursor.execute(""" 
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 WHERE LOWER(TRIM(barcode)) = LOWER(?) AND existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
@@ -3017,7 +3278,8 @@ class Database:
 
             rows = self._readonly_fetchall(
                 """
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
                 WHERE barcode IS NOT NULL
                   AND TRIM(barcode) != ''
@@ -3044,18 +3306,27 @@ class Database:
             print(f"Erro geral ao buscar codigo de barras: {e}")
             return None
 
-    def add_sale(self, product_id, quantity, sale_price, username=None, role=None, terminal_id=None, is_promotional=False):
+    def add_sale(
+        self,
+        product_id,
+        quantity,
+        sale_price,
+        username=None,
+        role=None,
+        terminal_id=None,
+        is_promotional=False,
+        vat_rule_code=None,
+    ):
         """Adicionar nova venda - SUPORTA QUANTIDADES DECIMAIS (KG) - ATUALIZA ESTOQUE"""
         try:
             quantity = float(quantity)
-            total_price = quantity * sale_price
             promo_flag = 1 if is_promotional else 0
             sale_date = self._now_str()
             created_by = username or "SYSTEM"
             created_role = role or "manager"
 
             self.cursor.execute("""
-                SELECT description, existing_stock, sold_stock, is_sold_by_weight, unit_purchase_price
+                SELECT description, existing_stock, sold_stock, is_sold_by_weight, unit_purchase_price, vat_rule_code
                 FROM products
                 WHERE id = ?
             """, (product_id,))
@@ -3071,6 +3342,15 @@ class Database:
             sold_before = product_info[2]
             is_weight = product_info[3]
             unit_purchase_price = product_info[4] or 0
+            product_vat_rule = self._normalize_vat_rule_code(product_info[5])
+            normalized_vat_rule = self._normalize_vat_rule_code(vat_rule_code or product_vat_rule)
+            vat_data = self.calculate_vat_breakdown(
+                sale_price,
+                quantity=quantity,
+                vat_rule_code=normalized_vat_rule,
+                reference_date=sale_date,
+            )
+            total_price = float(vat_data["gross_total"])
 
             if stock_before < quantity:
                 print(f"Erro: Estoque insuficiente! Disponivel: {stock_before:.2f}, Solicitado: {quantity:.2f}")
@@ -3110,9 +3390,16 @@ class Database:
                     sale_date,
                     created_by,
                     created_role,
-                    terminal_id
+                    terminal_id,
+                    vat_rule_code,
+                    vat_label,
+                    vat_rate_percent,
+                    vat_taxable_ratio,
+                    net_total,
+                    vat_amount,
+                    gross_total
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 product_id,
                 quantity,
@@ -3123,6 +3410,13 @@ class Database:
                 created_by,
                 created_role,
                 terminal_id,
+                normalized_vat_rule,
+                vat_data["rule_label"],
+                vat_data["rate_percent"],
+                vat_data["taxable_ratio"],
+                vat_data["net_total"],
+                vat_data["vat_amount"],
+                vat_data["gross_total"],
             ))
             sale_id = self.cursor.lastrowid
 
@@ -3142,6 +3436,10 @@ class Database:
                 print(f"   Quantidade: {quantity:.2f} {tipo}")
                 print(f"   Preco unitario: {sale_price:.2f} MZN")
                 print(f"   Total: {total_price:.2f} MZN")
+                print(
+                    f"   IVA: {vat_data['short_label']} | Base liquida: "
+                    f"{vat_data['net_total']:.2f} MZN | Imposto: {vat_data['vat_amount']:.2f} MZN"
+                )
                 print(f"   Base de preco: {'PROMOCIONAL' if promo_flag else 'NORMAL'}")
                 print("   ---")
                 print(f"   Estoque ANTES: {stock_before:.2f} {tipo}")
@@ -3524,6 +3822,32 @@ class Database:
             print(f"Erro ao obter produtos com barcode: {e}")
             return []
 
+    def get_known_barcodes(self):
+        """Obter todos os codigos de barras conhecidos, incluindo arquivados."""
+        try:
+            self.cursor.execute(
+                """
+                SELECT DISTINCT barcode
+                FROM (
+                    SELECT TRIM(barcode) AS barcode
+                    FROM products
+                    WHERE barcode IS NOT NULL AND TRIM(barcode) != ''
+
+                    UNION ALL
+
+                    SELECT TRIM(barcode) AS barcode
+                    FROM products_archive
+                    WHERE barcode IS NOT NULL AND TRIM(barcode) != ''
+                )
+                WHERE barcode IS NOT NULL AND barcode != ''
+                ORDER BY barcode
+                """
+            )
+            return [row[0] for row in self.cursor.fetchall() if row and row[0]]
+        except sqlite3.Error as e:
+            print(f"Erro ao obter codigos conhecidos: {e}")
+            return []
+
     def get_products_for_losses(self):
         """Obter produtos para tela de perdas"""
         try:
@@ -3531,7 +3855,7 @@ class Database:
                 """
                 SELECT id, description, existing_stock, sale_price,
                        unit_purchase_price, barcode, is_sold_by_weight,
-                       expiry_date, status
+                       expiry_date, status, vat_rule_code
                 FROM products
                 WHERE existing_stock > 0
                 """
@@ -3548,7 +3872,7 @@ class Database:
                 """
                 SELECT id, description, existing_stock, sale_price,
                        unit_purchase_price, barcode, is_sold_by_weight,
-                       expiry_date, status
+                       expiry_date, status, vat_rule_code
                 FROM products
                 """
             )
@@ -3559,7 +3883,7 @@ class Database:
             velocity = _fetch_sales_velocity(self, days=velocity_days)
             enriched = []
             for row in rows:
-                pid, name, stock, price, cost, barcode, is_weight, exp, status = row
+                pid, name, stock, price, cost, barcode, is_weight, exp, status, vat_rule_code = row
                 stock_val = _safe_float(stock, 0.0)
                 avg_daily = _safe_float(velocity.get(pid, 0.0), 0.0)
                 days_left = (stock_val / avg_daily) if avg_daily > 0 else None
@@ -3574,6 +3898,7 @@ class Database:
                         is_weight,
                         exp,
                         status,
+                        vat_rule_code,
                         avg_daily,
                         days_left,
                     )

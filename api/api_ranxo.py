@@ -1,8 +1,9 @@
 import re
 import json
 import requests
-from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+
+from api.optional_deps import BeautifulSoup, has_beautifulsoup, strip_html_text
 
 
 class RanxoAPI:
@@ -87,6 +88,8 @@ class RanxoAPI:
         return suggestions[0]
 
     def _fetch_category(self, product_url: str) -> str | None:
+        if not has_beautifulsoup():
+            return None
         try:
             response = self._session.get(product_url, timeout=self.REQUEST_TIMEOUT, allow_redirects=True)
             if response.status_code != 200:
@@ -108,8 +111,7 @@ class RanxoAPI:
     def _extract_price_text(price_html: str) -> str:
         if not price_html:
             return ""
-        soup = BeautifulSoup(price_html, "html.parser")
-        return soup.get_text(" ", strip=True)
+        return strip_html_text(price_html)
 
     @staticmethod
     def normalize_price(price_text: str) -> str:

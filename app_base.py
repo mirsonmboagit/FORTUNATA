@@ -1,5 +1,4 @@
 import json
-import json
 import os
 import sys
 from threading import Thread
@@ -13,8 +12,11 @@ from kivy.config import Config
 
 Config.set('kivy', 'window_icon', 'assets/icon/icon4.ico')
 Config.set('kivy', 'exit_on_escape', '0')
-Config.set('graphics', 'minimum_width', '1000')
-Config.set('graphics', 'minimum_height', '580')
+# Forca modo janela: fullscreen estava a causar cliques desalinhados
+# e quebra de layout em varias telas no ambiente atual.
+Config.set('graphics', 'fullscreen', '0')
+Config.set('graphics', 'minimum_width', '640')
+Config.set('graphics', 'minimum_height', '420')
 
 from kivy.core.window import Window
 from kivy.metrics import dp
@@ -53,14 +55,85 @@ if os.path.exists(joe_font_path):
     LabelBase.register(name='JoeFont', fn_regular=joe_font_path)
 
 
-screen_w, screen_h = Window.system_size
-ideal_width = int(screen_w * 0.82)
-ideal_height = int(screen_h * 0.82)
+DEFAULT_WINDOW_MIN_WIDTH = int(dp(920))
+DEFAULT_WINDOW_MIN_HEIGHT = int(dp(560))
+WINDOW_IDEAL_WIDTH = int(dp(1280))
+WINDOW_IDEAL_HEIGHT = int(dp(800))
+WINDOW_FLOOR_WIDTH = int(dp(680))
+WINDOW_FLOOR_HEIGHT = int(dp(460))
+WINDOW_MARGIN_X = int(dp(48))
+WINDOW_MARGIN_Y = int(dp(56))
+WINDOW_TARGET_MAX_WIDTH = int(dp(1500))
+WINDOW_TARGET_MAX_HEIGHT = int(dp(920))
+
+
+def _coerce_int(value, fallback):
+    try:
+        return int(float(value))
+    except Exception:
+        return int(fallback)
+
+
+def _get_display_size():
+    fallback = getattr(Window, "system_size", None) or Window.size or (
+        DEFAULT_WINDOW_MIN_WIDTH,
+        DEFAULT_WINDOW_MIN_HEIGHT,
+    )
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            width = _coerce_int(user32.GetSystemMetrics(0), fallback[0])
+            height = _coerce_int(user32.GetSystemMetrics(1), fallback[1])
+            if width > 0 and height > 0:
+                return width, height
+        except Exception:
+            pass
+    return (
+        max(1, _coerce_int(fallback[0], DEFAULT_WINDOW_MIN_WIDTH)),
+        max(1, _coerce_int(fallback[1], DEFAULT_WINDOW_MIN_HEIGHT)),
+    )
+
+
+def _resolve_window_constraints():
+    screen_w, screen_h = _get_display_size()
+
+    usable_w = screen_w - WINDOW_MARGIN_X
+    usable_h = screen_h - WINDOW_MARGIN_Y
+    max_w = min(screen_w, max(WINDOW_FLOOR_WIDTH, usable_w))
+    max_h = min(screen_h, max(WINDOW_FLOOR_HEIGHT, usable_h))
+    min_w = min(DEFAULT_WINDOW_MIN_WIDTH, max_w)
+    min_h = min(DEFAULT_WINDOW_MIN_HEIGHT, max_h)
+
+    initial_w = max(min_w, min(WINDOW_IDEAL_WIDTH, WINDOW_TARGET_MAX_WIDTH, max_w))
+    initial_h = max(min_h, min(WINDOW_IDEAL_HEIGHT, WINDOW_TARGET_MAX_HEIGHT, max_h))
+    return {
+        "screen_w": screen_w,
+        "screen_h": screen_h,
+        "min_w": int(min_w),
+        "min_h": int(min_h),
+        "max_w": int(max_w),
+        "max_h": int(max_h),
+        "initial_w": int(initial_w),
+        "initial_h": int(initial_h),
+    }
+
+
+_WINDOW_CONSTRAINTS = _resolve_window_constraints()
 
 Window.size = (
-    max(dp(1150), min(ideal_width, dp(1500))),
-    max(dp(680), min(ideal_height, dp(920)))
+    _WINDOW_CONSTRAINTS["initial_w"],
+    _WINDOW_CONSTRAINTS["initial_h"],
 )
+Window.minimum_width = _WINDOW_CONSTRAINTS["min_w"]
+Window.minimum_height = _WINDOW_CONSTRAINTS["min_h"]
+Window.fullscreen = False
+try:
+    Window.left = max(0, int((_WINDOW_CONSTRAINTS["screen_w"] - _WINDOW_CONSTRAINTS["initial_w"]) / 2))
+    Window.top = max(0, int((_WINDOW_CONSTRAINTS["screen_h"] - _WINDOW_CONSTRAINTS["initial_h"]) / 2))
+except Exception:
+    pass
 
 
 class BaseApp(MDApp):
@@ -79,6 +152,7 @@ class BaseApp(MDApp):
         self._app_settings_path = os.path.join(self.base_dir, "app_settings.json")
         self.ai_enabled = True
         self.smart_monitor_enabled = True
+        self.auto_banners_enabled = True
         self.theme_style = "Light"
         self._automation_ev = None
         self._automation_running = False
@@ -102,6 +176,7 @@ class BaseApp(MDApp):
                     data = json.load(f)
                 self.ai_enabled = bool(data.get("ai_enabled", True))
                 self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
+                self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
                 theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
                 theme_style = data.get(theme_key, data.get("theme_style", self.theme_style))
                 if theme_style in ("Light", "Dark"):
@@ -109,6 +184,7 @@ class BaseApp(MDApp):
         except Exception:
             self.ai_enabled = True
             self.smart_monitor_enabled = True
+            self.auto_banners_enabled = True
             self.theme_style = "Light"
 
     def apply_theme(self, style, persist=True):
@@ -132,6 +208,7 @@ class BaseApp(MDApp):
             data.update({
                 "ai_enabled": bool(self.ai_enabled),
                 "smart_monitor_enabled": bool(self.smart_monitor_enabled),
+                "auto_banners_enabled": bool(self.auto_banners_enabled),
                 theme_key: self.theme_style,
             })
             with open(self._app_settings_path, "w", encoding="utf-8") as f:
@@ -243,14 +320,18 @@ class BaseApp(MDApp):
             self._schedule_screen_warmup(delay)
 
     def change_screen_size(self, width, height):
-        min_w, min_h = dp(1000), dp(580)
+        constraints = _resolve_window_constraints()
+        min_w = constraints["min_w"]
+        min_h = constraints["min_h"]
+        max_w = constraints["max_w"]
+        max_h = constraints["max_h"]
 
         if width < min_w or height < min_h:
             raise ValueError(
                 f"Tamanho minimo permitido e {int(min_w)}x{int(min_h)}"
             )
 
-        Window.size = (int(width), int(height))
+        Window.size = (int(min(width, max_w)), int(min(height, max_h)))
         Window.minimum_width = min_w
         Window.minimum_height = min_h
         return True

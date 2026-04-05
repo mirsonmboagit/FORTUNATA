@@ -47,6 +47,8 @@ class StockReport(BasePDFReport):
         
         elements.append(Spacer(1, 14))
         self._add_stock_summary(elements, data)
+        elements.append(Spacer(1, 16))
+        self._add_stock_status_chart(elements, data)
         elements.append(Spacer(1, 20))
         self._add_critical_stock_alert(elements, data)
         elements.append(Spacer(1, 16))
@@ -151,6 +153,45 @@ class StockReport(BasePDFReport):
         
         elements.append(summary_table)
     
+    def _add_stock_status_chart(self, elements, data):
+        chart_items = [
+            {
+                'label': 'Esgotado',
+                'value': len(data[data['remanescente'] == 0]),
+                'color': '#e74c3c',
+            },
+            {
+                'label': 'Critico',
+                'value': len(data[(data['remanescente'] > 0) & (data['remanescente'] < data['entrada'] * 0.15)]),
+                'color': '#e67e22',
+            },
+            {
+                'label': 'Baixo',
+                'value': len(data[(data['remanescente'] >= data['entrada'] * 0.15) & (data['remanescente'] < data['entrada'] * 0.30)]),
+                'color': '#f39c12',
+            },
+            {
+                'label': 'Medio',
+                'value': len(data[(data['remanescente'] >= data['entrada'] * 0.30) & (data['remanescente'] < data['entrada'] * 0.60)]),
+                'color': '#3498db',
+            },
+            {
+                'label': 'Alto',
+                'value': len(data[data['remanescente'] >= data['entrada'] * 0.60]),
+                'color': '#27ae60',
+            },
+        ]
+        elements.append(
+            self._build_bar_chart(
+                "Grafico de Barras: Distribuicao do Estado do Estoque",
+                chart_items,
+                value_formatter=lambda value: f"{int(round(value))} produtos",
+                accent_color="#27ae60",
+                sort_items=False,
+                max_items=None,
+            )
+        )
+
     def _add_critical_stock_alert(self, elements, data):
         """Adiciona alerta de produtos com estoque crítico ou esgotado."""
         styles = getSampleStyleSheet()

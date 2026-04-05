@@ -10,10 +10,10 @@
             spacing: 0
             md_bg_color: app.theme_tokens['surface']
 
-            # Cabeçalho Moderno com MDCard
             MDCard:
+                id: header_card
                 size_hint_y: None
-                height: dp(70)
+                height: dp(74)
                 padding: [dp(25), dp(12), dp(25), dp(12)]
                 spacing: dp(20)
                 elevation: 2
@@ -21,9 +21,9 @@
                 radius: [0, 0, 0, 0]
 
                 MDBoxLayout:
+                    id: header_content
                     spacing: dp(20)
 
-                    # Lado esquerdo - Título e subtítulo
                     MDBoxLayout:
                         orientation: 'vertical'
                         size_hint_x: 0.7
@@ -31,7 +31,7 @@
                         adaptive_height: True
 
                         MDLabel:
-                            text: 'Relatórios'
+                            text: 'Relatorios'
                             font_style: 'H5'
                             bold: True
                             halign: 'left'
@@ -41,7 +41,7 @@
                             height: dp(30)
 
                         MDLabel:
-                            text: 'Análise e exportação de dados'
+                            text: 'Analise e exportacao de dados'
                             font_style: 'Caption'
                             halign: 'left'
                             theme_text_color: 'Custom'
@@ -49,18 +49,16 @@
                             size_hint_y: None
                             height: dp(20)
 
-                    # Lado direito - Botões de ação
                     MDBoxLayout:
+                        id: header_actions
                         size_hint_x: 0.3
                         spacing: dp(10)
                         adaptive_height: True
 
-                        Widget:
-                            size_hint_x: 0.1
-
                         MDRaisedButton:
-                            text: 'Ver PDFs'
-                            size_hint_x: 0.45
+                            id: hero_pdf_button
+                            text: 'Todos PDFs'
+                            size_hint_x: 0.36
                             md_bg_color: app.theme_tokens['card']
                             text_color: app.theme_tokens['primary']
                             elevation: 0
@@ -69,8 +67,20 @@
                             on_release: root.show_pdf_viewer()
 
                         MDRaisedButton:
+                            id: hero_refresh_button
+                            text: 'Atualizar'
+                            size_hint_x: 0.32
+                            md_bg_color: app.theme_tokens['card']
+                            text_color: app.theme_tokens['info']
+                            elevation: 0
+                            line_color: 0.28, 0.47, 0.84, 1
+                            line_width: 1.5
+                            on_release: root.refresh_screen_data()
+
+                        MDRaisedButton:
+                            id: hero_back_button
                             text: 'Voltar'
-                            size_hint_x: 0.45
+                            size_hint_x: 0.26
                             md_bg_color: app.theme_tokens['card']
                             text_color: app.theme_tokens['danger']
                             elevation: 0
@@ -78,11 +88,10 @@
                             line_width: 1.5
                             on_release: root.go_back()
 
-            # Área de conteúdo com scroll
             ScrollView:
                 do_scroll_x: False
                 do_scroll_y: True
-            
+
                 MDBoxLayout:
                     orientation: 'vertical'
                     spacing: dp(20)
@@ -90,18 +99,17 @@
                     size_hint_y: None
                     height: self.minimum_height
 
-                    # Card de Filtros
                     MDCard:
+                        id: filters_card
                         orientation: 'vertical'
                         size_hint_y: None
-                        height: dp(260)
+                        height: self.minimum_height
                         spacing: dp(0)
                         padding: [dp(25), dp(20), dp(25), dp(20)]
                         elevation: 1
                         md_bg_color: app.theme_tokens['card']
                         radius: [dp(8)]
 
-                        # Título do card
                         MDLabel:
                             text: 'Configurar Filtros'
                             font_style: 'H6'
@@ -112,11 +120,60 @@
                             size_hint_y: None
                             height: dp(34)
 
+                        MDLabel:
+                            text: 'Mantenha a tela familiar e encontre o relatorio certo mais rapido.'
+                            font_style: 'Caption'
+                            halign: 'left'
+                            theme_text_color: 'Custom'
+                            text_color: app.theme_tokens['text_secondary']
+                            size_hint_y: None
+                            height: dp(20)
+
                         Widget:
                             size_hint_y: None
-                            height: dp(5)
+                            height: dp(10)
 
-                        # Filtro de Período
+                        MDBoxLayout:
+                            id: search_row
+                            size_hint_y: None
+                            height: self.minimum_height
+                            adaptive_height: True
+                            spacing: dp(12)
+
+                            MDTextField:
+                                id: report_search_input
+                                hint_text: 'Pesquisar relatorio, produto ou categoria'
+                                mode: 'rectangle'
+                                icon_left: 'magnify'
+                                on_text: root.on_search(self.text)
+                                on_text_validate: root.on_search_enter()
+
+                            MDRaisedButton:
+                                id: search_clear_button
+                                text: 'Limpar'
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['text_primary']
+                                elevation: 0
+                                on_release: root.clear_search()
+
+                        Widget:
+                            size_hint_y: None
+                            height: dp(4)
+
+                        MDLabel:
+                            text: root.search_status_text
+                            font_style: 'Caption'
+                            halign: 'left'
+                            theme_text_color: 'Custom'
+                            text_color: app.theme_tokens['text_secondary']
+                            text_size: self.width, None
+                            size_hint_y: None
+                            height: self.texture_size[1]
+
+                        Widget:
+                            size_hint_y: None
+                            height: dp(12)
+
                         MDBoxLayout:
                             size_hint_y: None
                             height: dp(60)
@@ -130,7 +187,7 @@
                                 adaptive_height: True
 
                                 MDLabel:
-                                    text: 'Período do Relatório'
+                                    text: 'Periodo do Relatorio'
                                     font_style: 'Subtitle2'
                                     bold: True
                                     halign: 'left'
@@ -141,7 +198,7 @@
 
                                 MDLabel:
                                     id: date_label
-                                    text: 'Nenhum período selecionado'
+                                    text: 'Nenhum periodo selecionado'
                                     font_style: 'Body2'
                                     halign: 'left'
                                     theme_text_color: 'Custom'
@@ -150,7 +207,7 @@
                                     height: dp(25)
 
                             MDRaisedButton:
-                                text: 'Selecionar'
+                                text: 'Selecionar Periodo'
                                 size_hint_x: 0.35
                                 md_bg_color: app.theme_tokens['warning']
                                 text_color: app.theme_tokens['on_primary']
@@ -161,65 +218,154 @@
                             size_hint_y: None
                             height: dp(10)
 
-                        # Filtro de Produto
-                        MDBoxLayout:
+                        MDGridLayout:
+                            id: quick_range_grid
+                            cols: 4
+                            spacing: dp(10)
                             size_hint_y: None
-                            height: dp(65)
-                            spacing: dp(0)
-                            orientation: 'vertical'
+                            height: self.minimum_height
                             adaptive_height: True
 
-                            MDLabel:
-                                text: 'Produto'
-                                font_style: 'Subtitle2'
-                                bold: True
-                                halign: 'left'
-                                theme_text_color: 'Custom'
-                                text_color: app.theme_tokens['text_secondary']
-                                size_hint_y: None
-                                height: dp(20)
+                            MDRaisedButton:
+                                text: 'Hoje'
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['warning']
+                                elevation: 0
+                                on_release: root.apply_today_range()
 
                             MDRaisedButton:
-                                id: product_spinner
-                                text: 'Todos os Produtos'
+                                text: '7 Dias'
                                 md_bg_color: app.theme_tokens['card_alt']
-                                text_color: app.theme_tokens['text_primary']
+                                text_color: app.theme_tokens['primary']
                                 elevation: 0
-                                on_release: root.open_product_menu(self)
+                                on_release: root.apply_last_days_range(7)
+
+                            MDRaisedButton:
+                                text: '30 Dias'
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['success']
+                                elevation: 0
+                                on_release: root.apply_last_days_range(30)
+
+                            MDRaisedButton:
+                                text: 'Este Mes'
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['info']
+                                elevation: 0
+                                on_release: root.apply_current_month_range()
 
                         Widget:
                             size_hint_y: None
-                            height: dp(10)
+                            height: dp(12)
 
-                        # Filtro de Categoria
-                        MDBoxLayout:
+                        MDGridLayout:
+                            id: filters_grid
+                            cols: 2
+                            spacing: dp(12)
                             size_hint_y: None
-                            height: dp(65)
-                            spacing: dp(0)
-                            orientation: 'vertical'
+                            height: self.minimum_height
                             adaptive_height: True
 
-                            MDLabel:
-                                text: 'Categoria'
-                                font_style: 'Subtitle2'
-                                bold: True
-                                halign: 'left'
-                                theme_text_color: 'Custom'
-                                text_color: app.theme_tokens['text_secondary']
+                            MDBoxLayout:
                                 size_hint_y: None
-                                height: dp(20)
+                                height: dp(65)
+                                spacing: dp(0)
+                                orientation: 'vertical'
+                                adaptive_height: True
+
+                                MDLabel:
+                                    text: 'Produto'
+                                    font_style: 'Subtitle2'
+                                    bold: True
+                                    halign: 'left'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    size_hint_y: None
+                                    height: dp(20)
+
+                                MDRaisedButton:
+                                    id: product_spinner
+                                    text: 'Todos os Produtos'
+                                    md_bg_color: app.theme_tokens['card_alt']
+                                    text_color: app.theme_tokens['text_primary']
+                                    elevation: 0
+                                    on_release: root.open_product_menu(self)
+
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(65)
+                                spacing: dp(0)
+                                orientation: 'vertical'
+                                adaptive_height: True
+
+                                MDLabel:
+                                    text: 'Categoria'
+                                    font_style: 'Subtitle2'
+                                    bold: True
+                                    halign: 'left'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    size_hint_y: None
+                                    height: dp(20)
+
+                                MDRaisedButton:
+                                    id: category_spinner
+                                    text: 'Todas as Categorias'
+                                    md_bg_color: app.theme_tokens['card_alt']
+                                    text_color: app.theme_tokens['text_primary']
+                                    elevation: 0
+                                    on_release: root.open_category_menu(self)
+
+                        Widget:
+                            size_hint_y: None
+                            height: dp(12)
+
+                        MDBoxLayout:
+                            id: filter_actions
+                            size_hint_y: None
+                            height: dp(40)
+                            spacing: dp(10)
 
                             MDRaisedButton:
-                                id: category_spinner
-                                text: 'Todas as Categorias'
+                                id: filter_reset_button
+                                text: 'Limpar Filtros'
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['text_primary']
                                 elevation: 0
-                                on_release: root.open_category_menu(self)
+                                on_release: root.reset_filters()
+
+                            MDRaisedButton:
+                                id: filter_refresh_button
+                                text: 'Atualizar Dados'
+                                md_bg_color: app.theme_tokens['info']
+                                text_color: app.theme_tokens['on_primary']
+                                elevation: 1
+                                on_release: root.refresh_screen_data()
 
                     Widget:
                         size_hint_y: None
                         height: dp(10)
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        spacing: dp(10)
+
+                        MDRaisedButton:
+                            id: print_charts_button
+                            text: 'Imprimir Graficos'
+                            md_bg_color: app.theme_tokens['success']
+                            text_color: app.theme_tokens['on_primary']
+                            elevation: 1
+                            size_hint_x: None
+                            width: dp(190)
+                            on_release: root.print_productivity_charts()
+
+                        Widget:
+
+                    Widget:
+                        size_hint_y: None
+                        height: dp(6)
 
                     MDBoxLayout:
                         id: productivity_dashboard_host
@@ -229,9 +375,8 @@
                         height: self.minimum_height
                         adaptive_height: True
 
-                    # Título da seção de relatórios
                     MDLabel:
-                        text: 'Selecione o Tipo de Relatório'
+                        text: 'Selecione o Tipo de Relatorio'
                         font_style: 'Subtitle1'
                         bold: True
                         halign: 'left'
@@ -240,58 +385,93 @@
                         size_hint_y: None
                         height: dp(35)
 
-                    # Grid de botões de relatórios
+                    MDLabel:
+                        text: root.search_summary_text
+                        font_style: 'Caption'
+                        halign: 'left'
+                        theme_text_color: 'Custom'
+                        text_color: app.theme_tokens['text_secondary']
+                        size_hint_y: None
+                        height: dp(20)
+
                     MDGridLayout:
+                        id: reports_grid
                         cols: 2
                         spacing: dp(15)
                         size_hint_y: None
-                        height: dp(210)
+                        height: self.minimum_height
                         adaptive_height: True
 
-                        # Relatório de Vendas
                         MDRaisedButton:
-                            text: 'Relatório de Vendas'
+                            id: sales_report_card
+                            text: 'Relatorio de Vendas'
+                            size_hint_y: None
+                            height: dp(92)
                             md_bg_color: app.theme_tokens['primary']
                             text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_sales_report()
 
-                        # Relatório de Estoque
                         MDRaisedButton:
-                            text: 'Relatório de Estoque'
+                            id: stock_report_card
+                            text: 'Relatorio de Estoque'
+                            size_hint_y: None
+                            height: dp(92)
                             md_bg_color: app.theme_tokens['success']
                             text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_stock_report()
 
-                        # Relatório de Lucro
                         MDRaisedButton:
-                            text: 'Relatório de Lucro'
+                            id: profit_report_card
+                            text: 'Relatorio de Lucro'
+                            size_hint_y: None
+                            height: dp(92)
                             md_bg_color: app.theme_tokens['warning']
                             text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_profit_report()
 
-                        # Relatório Completo
                         MDRaisedButton:
-                            text: 'Relatório Completo'
+                            id: complete_report_card
+                            text: 'Relatorio Completo'
+                            size_hint_y: None
+                            height: dp(92)
                             md_bg_color: app.theme_tokens['info']
                             text_color: app.theme_tokens['on_primary']
                             font_size: sp(15)
                             elevation: 3
                             on_release: root.generate_complete_report()
 
-                        # Espaçador final
+                    MDCard:
+                        id: reports_empty_state
+                        size_hint_y: None
+                        height: 0
+                        opacity: 0
+                        disabled: True
+                        padding: [dp(16), dp(16), dp(16), dp(16)]
+                        elevation: 0
+                        md_bg_color: app.theme_tokens['card_alt']
+                        radius: [dp(8)]
+
+                        MDLabel:
+                            text: 'Nenhum relatorio combina com a pesquisa atual.'
+                            halign: 'center'
+                            theme_text_color: 'Custom'
+                            text_color: app.theme_tokens['text_primary']
+
                     Widget:
                         size_hint_y: None
                         height: dp(20)
+
         FloatLayout:
             id: ai_banner_container
             size_hint: 1, 1
             pos: 0, 0
+
         MDFloatingActionButton:
             id: ai_button
             icon: "assets/icon/idea.ico"
@@ -299,7 +479,6 @@
             pos_hint: {"right": 0.965, "y": 0.04}
             on_release: root.open_ai_menu(self)
 
-        # Badge com numero de notificacoes (so aparece quando > 0)
         MDCard:
             id: ai_badge
             size_hint: None, None

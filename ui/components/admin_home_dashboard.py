@@ -155,6 +155,9 @@ class SalesTrendChart(_BaseChartCard):
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
         primary = tokens.get("primary", (0.10, 0.35, 0.65, 1))
         success = tokens.get("success", (0.2, 0.65, 0.3, 1))
+        info = tokens.get("info", (0.18, 0.58, 0.86, 1))
+        warning = tokens.get("warning", (0.92, 0.68, 0.18, 1))
+        danger = tokens.get("danger", (0.88, 0.34, 0.30, 1))
         divider = tokens.get("divider", (0.82, 0.85, 0.9, 1))
         label_color = tokens.get("text_secondary", (0.42, 0.46, 0.5, 1))
         bg_color = tokens.get("card", (1, 1, 1, 1))
@@ -168,24 +171,23 @@ class SalesTrendChart(_BaseChartCard):
         figure.patch.set_facecolor(bg_color)
         ax = figure.add_subplot(111)
         ax.set_facecolor(bg_color)
-        ax.plot(
-            x_values,
-            values,
-            color=primary,
-            linewidth=2.5,
-            marker="o",
-            markersize=4.8,
-            markerfacecolor=primary,
-            markeredgewidth=0,
-        )
-        ax.fill_between(x_values, values, color=(*primary[:3], 0.16))
+        palette = [
+            primary,
+            info,
+            warning,
+            danger,
+            (*primary[:3], 0.78),
+            (*success[:3], 0.78),
+        ]
+        bar_colors = [palette[index % len(palette)] for index in range(len(values))]
+        bars = ax.bar(x_values, values, color=bar_colors, width=0.62)
         ax.grid(axis="y", color=(*divider[:3], 0.55), linewidth=0.9)
         ax.set_axisbelow(True)
 
         if len(x_values) == 1:
             ax.set_xlim(-0.5, 0.5)
         else:
-            ax.set_xlim(-0.2, len(x_values) - 0.8)
+            ax.set_xlim(-0.6, len(x_values) - 0.4)
 
         tick_step = max(1, len(labels) // 7)
         tick_positions = list(range(0, len(labels), tick_step))
@@ -202,7 +204,7 @@ class SalesTrendChart(_BaseChartCard):
         ax.spines["bottom"].set_color((*divider[:3], 0.8))
 
         last_index = len(values) - 1
-        ax.scatter([last_index], [values[last_index]], color=success, s=34, zorder=5)
+        bars[last_index].set_color(success)
         ax.annotate(
             "Hoje",
             xy=(last_index, values[last_index]),
@@ -216,6 +218,17 @@ class SalesTrendChart(_BaseChartCard):
 
         max_value = max(values) if values else 0
         ax.set_ylim(0, max(max_value * 1.2, 4))
+        for index, bar in enumerate(bars):
+            ax.text(
+                bar.get_x() + (bar.get_width() / 2.0),
+                bar.get_height() + max(max_value * 0.02, 0.15),
+                f"{values[index]:.0f}",
+                ha="center",
+                va="bottom",
+                color=label_color,
+                fontsize=8,
+                fontweight="bold",
+            )
         self.subtitle_label.text = (
             f"{sum(counts)} vendas | Receita acumulada {_format_mzn(sum(values))}"
         )

@@ -12,7 +12,7 @@
                 md_bg_color: app.theme_tokens["primary"]
                 specific_text_color: app.theme_tokens["on_primary"]
                 elevation: 4
-                right_action_items: [["refresh", lambda x: root.refresh_home()], ["chart-bar", lambda x: root.open_reports()], ["cog", lambda x: root.go_to_settings()], ["logout", lambda x: root.logout()]]
+                right_action_items: [["refresh", lambda x: root.refresh_home(), "Atualizar home"], ["chart-bar", lambda x: root.open_reports(), "Relatorios"], ["cog", lambda x: root.go_to_settings(), "Definicoes"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
 
             MDBoxLayout:
                 orientation: "vertical"
@@ -20,6 +20,7 @@
                 padding: [dp(12), dp(12), dp(12), dp(12)]
 
                 MDCard:
+                    id: hero_card
                     size_hint_y: None
                     height: min(max(dp(94), root.height * 0.15), dp(106))
                     padding: [dp(18), dp(14), dp(18), dp(14)]
@@ -63,8 +64,10 @@
                                 font_style: "Caption"
                                 theme_text_color: "Custom"
                                 text_color: 1, 1, 1, 0.92
+                                text_size: self.width, None
 
                         MDBoxLayout:
+                            id: hero_side
                             orientation: "vertical"
                             spacing: dp(8)
                             size_hint_x: None
@@ -86,14 +89,16 @@
                                 height: dp(36)
 
                                 MDRaisedButton:
+                                    id: hero_add_button
                                     text: "Adicionar"
                                     md_bg_color: app.theme_tokens["on_primary"]
                                     text_color: app.theme_tokens["primary"]
                                     size_hint_x: None
-                                    width: dp(112)
+                                    width: dp(96)
                                     on_release: root.add_product()
 
                                 MDRaisedButton:
+                                    id: hero_reports_button
                                     text: "Relatorios"
                                     md_bg_color: 1, 1, 1, 0.12
                                     text_color: app.theme_tokens["on_primary"]
@@ -101,8 +106,20 @@
                                     line_color: 1, 1, 1, 0.35
                                     line_width: 1
                                     size_hint_x: None
-                                    width: dp(112)
+                                    width: dp(96)
                                     on_release: root.open_reports()
+
+                                MDRaisedButton:
+                                    id: hero_pdfs_button
+                                    text: "PDFs"
+                                    md_bg_color: 1, 1, 1, 0.12
+                                    text_color: app.theme_tokens["on_primary"]
+                                    elevation: 0
+                                    line_color: 1, 1, 1, 0.35
+                                    line_width: 1
+                                    size_hint_x: None
+                                    width: dp(84)
+                                    on_release: root.show_all_pdfs()
 
                 MDBoxLayout:
                     id: main_shell
@@ -117,6 +134,7 @@
                         size_hint_x: 0.64
 
                         MDCard:
+                            id: summary_card
                             orientation: "vertical"
                             spacing: dp(8)
                             size_hint_y: None
@@ -153,6 +171,7 @@
                         size_hint_x: 0.36
 
                         MDCard:
+                            id: alerts_card
                             orientation: "vertical"
                             spacing: dp(8)
                             size_hint_y: 0.34
@@ -187,6 +206,7 @@
                                 size_hint_y: 1
 
                         MDCard:
+                            id: quick_actions_card
                             orientation: "vertical"
                             spacing: dp(8)
                             size_hint_y: 0.40
@@ -211,6 +231,7 @@
                                 size_hint_y: 1
 
                         MDCard:
+                            id: insights_card
                             orientation: "vertical"
                             spacing: dp(8)
                             size_hint_y: 0.26
@@ -249,11 +270,12 @@
             size_hint: 1, 1
             pos: 0, 0
 
-        MDFloatingActionButton:
+        DraggableTooltipFloatingActionButton:
             id: ai_button
             icon: "assets/icon/idea.ico"
             elevation: 2
             pos_hint: {"right": 0.972, "y": 0.03}
+            hint_text: "Assistente IA"
             on_release: root.open_ai_menu(self)
 
         MDCard:
@@ -263,7 +285,7 @@
             md_bg_color: app.theme_tokens["badge"]
             radius: [dp(12)]
             elevation: 1
-            pos_hint: {"right": 0.984, "y": 0.088}
+            pos: ai_button.right - (self.width * 0.55), ai_button.top - (self.height * 0.45)
             opacity: 0
 
             MDLabel:

@@ -3,7 +3,8 @@ import requests
 import requests
 
 class OpenFoodFactsAPI:
-    BASE_URL = "https://world.openfoodfacts.org/api/v2"
+    SITE_URL = "https://world.openfoodfacts.org"
+    BASE_URL = f"{SITE_URL}/api/v2"
 
     HEADERS = {
         "User-Agent": "ProductScanner/2.0"
@@ -13,11 +14,11 @@ class OpenFoodFactsAPI:
 
     def fetch(self, barcode: str) -> dict | None:
         """
-        Busca um produto pelo código de barras na API do Open Food Facts.
+        Busca um produto pelo código de barras na API oficial do Open Food Facts.
         Retorna um dicionário normalizado ou None.
         """
         try:
-            url      = f"{self.BASE_URL}/product/{barcode}"
+            url = self.build_api_url(barcode)
             response = requests.get(url, headers=self.HEADERS, timeout=10)
 
             if response.status_code != 200:
@@ -28,7 +29,11 @@ class OpenFoodFactsAPI:
             if data.get("status") != 1 or "product" not in data:
                 return None
 
-            return self._parse_product(data["product"])
+            parsed = self._parse_product(data["product"])
+            parsed["barcode"] = barcode
+            parsed["source_url"] = self.build_product_url(barcode)
+            parsed["source_api_url"] = url
+            return parsed
 
         except requests.exceptions.Timeout:
             print(f"[OpenFoodFacts] Timeout ao buscar barcode {barcode}")
@@ -36,6 +41,12 @@ class OpenFoodFactsAPI:
         except Exception as e:
             print(f"[OpenFoodFacts] Erro: {e}")
             return None
+
+    def build_api_url(self, barcode: str) -> str:
+        return f"{self.BASE_URL}/product/{barcode}"
+
+    def build_product_url(self, barcode: str) -> str:
+        return f"{self.SITE_URL}/product/{barcode}"
 
     def _parse_product(self, raw: dict) -> dict:
         name = (

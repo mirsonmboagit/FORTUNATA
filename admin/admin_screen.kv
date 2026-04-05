@@ -21,8 +21,8 @@
                 elevation: 4
                 size_hint_y: None
                 height: max(dp(56), root.height * 0.07)
-                left_action_items: [["view-dashboard-outline", lambda x: root.go_home()]]
-                right_action_items: [["package-variant-plus", lambda x: root.open_restock_screen()], ["alert-circle", lambda x: root.open_losses_screen()], ["chart-bar", lambda x: root.generate_report()], ["cog", lambda x: root.go_to_definitions()], ["logout", lambda x: root.logout()]]
+                left_action_items: [["view-dashboard-outline", lambda x: root.go_home(), "Pagina inicial"]]
+                right_action_items: [["package-variant-plus", lambda x: root.open_restock_screen(), "Reposicao"], ["alert-circle", lambda x: root.open_losses_screen(), "Perdas"], ["chart-bar", lambda x: root.generate_report(), "Relatorios"], ["cog", lambda x: root.go_to_definitions(), "Definicoes"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
 
             # =====================================================
             # BARRA DE FERRAMENTAS COMPACTA
@@ -139,7 +139,7 @@
                                         rectangle: self.x, self.y, self.width, self.height
 
                                 MDLabel:
-                                    text: "ID"
+                                    text: "SEQ."
                                     bold: True
                                     size_hint_x: 0.06
                                     halign: "center"
@@ -252,11 +252,12 @@
             pos: 0, 0
         
         # Botão da Lâmpada (AI) com animação
-        MDFloatingActionButton:
+        DraggableTooltipFloatingActionButton:
             id: ai_button
             icon: "assets/icon/idea.ico"
             elevation: 2
             pos_hint: {"right": 0.965, "y": 0.04}
+            hint_text: "Assistente IA"
             on_release: root.open_ai_menu(self)
 
         # Badge com número de notificações (só aparece quando > 0)
@@ -267,7 +268,7 @@
             md_bg_color: app.theme_tokens['badge']
             radius: [dp(12)]
             elevation: 1
-            pos_hint: {"right": 0.978, "y": 0.098}
+            pos: ai_button.right - (self.width * 0.55), ai_button.top - (self.height * 0.45)
             opacity: 0  # Começa invisível
 
             MDLabel:
@@ -281,9 +282,12 @@
                 bold: True
 
         # Ações rápidas ao lado da lâmpada (toggle + scroll)
-        MDIconButton:
+        TooltipIconButton:
+            id: ai_toggle_button
             icon: "chevron-left" if root.quick_actions_open else "chevron-right"
-            pos_hint: {"right": 0.90, "y": 0.04}
+            size_hint: None, None
+            size: dp(38), dp(38)
+            pos: max(dp(8), ai_button.x - self.width - dp(10)), ai_button.y
             on_release: root.toggle_quick_actions()
             md_bg_color: [0.15, 0.35, 0.6, 1]
             theme_text_color: "Custom"
@@ -291,12 +295,13 @@
             hint_text: "Mostrar/Ocultar Ações"
 
         ScrollView:
+            id: ai_quick_actions_scroll
             size_hint: None, None
             width: min(root.width * 0.35, dp(220)) if root.quick_actions_open else 0
             height: dp(48) if root.quick_actions_open else 0
             opacity: 1 if root.quick_actions_open else 0
             disabled: not root.quick_actions_open
-            pos_hint: {"right": 0.86, "y": 0.035}
+            pos: max(dp(8), ai_toggle_button.x - self.width - dp(10)), max(dp(8), ai_button.y - dp(2))
             do_scroll_x: True
             do_scroll_y: False
             bar_width: dp(4)
@@ -312,7 +317,7 @@
                 padding: [dp(4), 0, dp(4), 0]
                 spacing: dp(8)
 
-                MDIconButton:
+                TooltipIconButton:
                     icon: "alert-circle"
                     on_release: root.show_fraud_alerts()
                     md_bg_color: [0.9, 0.3, 0.3, 1]
@@ -320,7 +325,7 @@
                     text_color: [1, 1, 1, 1]
                     hint_text: "Alertas de Fraude"
 
-                MDIconButton:
+                TooltipIconButton:
                     icon: "chart-line"
                     on_release: root.show_loss_metrics()
                     md_bg_color: [0.2, 0.5, 0.8, 1]
@@ -328,7 +333,7 @@
                     text_color: [1, 1, 1, 1]
                     hint_text: "Métricas de Perdas"
 
-                MDIconButton:
+                TooltipIconButton:
                     icon: "check-circle"
                     on_release: root.show_pending_approvals()
                     md_bg_color: [0.9, 0.7, 0.1, 1]

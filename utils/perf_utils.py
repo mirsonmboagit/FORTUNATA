@@ -1,4 +1,5 @@
 import os
+import sys
 from time import perf_counter
 
 
@@ -7,9 +8,28 @@ def _env_flag(name):
     return value in {"1", "true", "yes", "on"}
 
 
+def _is_server_process():
+    if _env_flag("MERCEARIA_SERVER_MODE"):
+        return True
+    argv = " ".join(str(arg).strip().lower() for arg in sys.argv[1:] if arg)
+    if not argv:
+        return False
+    markers = (
+        "waitress",
+        "uvicorn",
+        "gunicorn",
+        "--listen",
+        "--port",
+        "server.app:app",
+    )
+    return any(marker in argv for marker in markers)
+
+
 def should_log_perf():
     if _env_flag("MERCEARIA_PERF_LOGS"):
         return True
+    if _is_server_process():
+        return False
     try:
         from kivy.app import App
 

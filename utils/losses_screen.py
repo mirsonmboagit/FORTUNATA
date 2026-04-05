@@ -1,25 +1,27 @@
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.factory import Factory
+from kivy.graphics import Color, Line
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.core.audio import SoundLoader
 from kivy.animation import Animation
+from kivymd.uix.card import MDCard
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.list import TwoLineListItem
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.menu import MDDropdownMenu
-from kivy.properties import ObjectProperty
+from kivy.properties import NumericProperty, ObjectProperty
 from database.provider import get_db
 from datetime import date, datetime
 from threading import Thread
 from time import perf_counter
 import time
 import os
+from ui.components.tooltip_widgets import TooltipIconButton
 from utils.vision import get_vision_dependencies
-
-Builder.load_file("utils/losses_screen.kv")
 
 def _theme_color(name, fallback):
     app = App.get_running_app()
@@ -34,12 +36,130 @@ LOSS_TYPES = [
 ]
 
 
+class LossesFloatingScannerPanel(MDCard):
+    min_panel_width = NumericProperty(dp(220))
+    min_panel_height = NumericProperty(dp(190))
+    drag_bar_height = NumericProperty(dp(34))
+    resize_handle_size = NumericProperty(dp(24))
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._active_mode = None
+        self._drag_offset = (0.0, 0.0)
+        self._start_touch = (0.0, 0.0)
+        self._start_size = (0.0, 0.0)
+
+        with self.canvas.after:
+            self._handle_color_instruction = Color(rgba=[0.56, 0.90, 0.54, 0.85])
+            self._handle_line_one = Line(points=[], width=1.1)
+            self._handle_line_two = Line(points=[], width=1.1)
+            self._handle_line_three = Line(points=[], width=1.1)
+
+        self.bind(pos=self._sync_handle, size=self._sync_handle, opacity=self._sync_handle)
+
+    def _sync_handle(self, *_args):
+        if self.opacity <= 0.01:
+            self._handle_line_one.points = []
+            self._handle_line_two.points = []
+            self._handle_line_three.points = []
+            return
+
+        inset = dp(8)
+        span = dp(9)
+        step = dp(5)
+        right = self.right - inset
+        bottom = self.y + inset
+
+        self._handle_line_one.points = [right - span, bottom, right, bottom + span]
+        self._handle_line_two.points = [right - span - step, bottom, right, bottom + span + step]
+        self._handle_line_three.points = [right - span - (step * 2), bottom, right, bottom + span + (step * 2)]
+
+    def clamp_to_parent(self):
+        parent = self.parent
+        if parent is None:
+            return
+
+        max_width = max(dp(160), parent.width - dp(16))
+        max_height = max(dp(170), parent.height - dp(16))
+        min_width = min(self.min_panel_width, max_width)
+        min_height = min(self.min_panel_height, max_height)
+        self.width = min(max(self.width, min_width), max_width)
+        self.height = min(max(self.height, min_height), max_height)
+        self.x = min(max(self.x, dp(8)), max(dp(8), parent.width - self.width - dp(8)))
+        self.y = min(max(self.y, dp(8)), max(dp(8), parent.height - self.height - dp(8)))
+
+    def _touch_in_resize_zone(self, touch):
+        return touch.x >= (self.right - self.resize_handle_size) and touch.y <= (self.y + self.resize_handle_size)
+
+    def _touch_in_drag_zone(self, touch):
+        return touch.y >= (self.top - self.drag_bar_height)
+
+    def on_touch_down(self, touch):
+        if self.disabled or self.opacity <= 0.01 or not self.collide_point(*touch.pos):
+            return super().on_touch_down(touch)
+
+        if self._touch_in_resize_zone(touch):
+            touch.grab(self)
+            self._active_mode = "resize"
+            self._start_touch = tuple(touch.pos)
+            self._start_size = tuple(self.size)
+            return True
+
+        if self._touch_in_drag_zone(touch):
+            touch.grab(self)
+            self._active_mode = "move"
+            self._drag_offset = (touch.x - self.x, touch.y - self.y)
+            return True
+
+        return super().on_touch_down(touch)
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is not self:
+            return super().on_touch_move(touch)
+
+        parent = self.parent
+        if parent is None:
+            return True
+
+        if self._active_mode == "move":
+            self.pos = (touch.x - self._drag_offset[0], touch.y - self._drag_offset[1])
+            self.clamp_to_parent()
+            return True
+
+        if self._active_mode == "resize":
+            delta_x = touch.x - self._start_touch[0]
+            delta_y = touch.y - self._start_touch[1]
+            max_width = max(dp(160), parent.width - self.x - dp(8))
+            max_height = max(dp(170), parent.height - self.y - dp(8))
+            min_width = min(self.min_panel_width, max_width)
+            min_height = min(self.min_panel_height, max_height)
+            self.width = min(max(min_width, self._start_size[0] + delta_x), max_width)
+            self.height = min(max(min_height, self._start_size[1] + delta_y), max_height)
+            self.clamp_to_parent()
+            return True
+
+        return super().on_touch_move(touch)
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            touch.ungrab(self)
+            self._active_mode = None
+            self.clamp_to_parent()
+            return True
+        return super().on_touch_up(touch)
+
+
+Factory.register("LossesFloatingScannerPanel", cls=LossesFloatingScannerPanel)
+Builder.load_file("utils/losses_screen.kv")
+
+
 
 class LossesScreen(MDScreen):
     db = ObjectProperty(None)
     PRODUCTS_CACHE_SECONDS = 5
     ENTER_REFRESH_DELAY_SECONDS = 0.08
     PRODUCT_RENDER_BATCH_SIZE = 40
+    SCANNER_AUTO_START_DELAY_SECONDS = 0.18
     
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
@@ -71,9 +191,35 @@ class LossesScreen(MDScreen):
         self._products_render_rows = []
         self._products_render_index = 0
         self._enter_refresh_ev = None
+        self._scanner_auto_start_ev = None
+        self._scanner_panel_initialized = False
         self._saving_loss = False
         
         Clock.schedule_once(self.init_screen, 0.1)
+
+    @staticmethod
+    def _normalize_product_row(product):
+        """Normaliza produtos para a estrutura usada pela tela."""
+        if isinstance(product, dict):
+            return (
+                product.get("id"),
+                product.get("description") or product.get("name"),
+                product.get("existing_stock", product.get("stock", 0)),
+                product.get("sale_price", product.get("price", 0)),
+                product.get("unit_purchase_price", product.get("cost", 0)),
+                product.get("barcode"),
+                product.get("is_sold_by_weight", product.get("is_weight", False)),
+                product.get("expiry_date"),
+                product.get("status"),
+                product.get("vat_rule_code"),
+            )
+
+        row = list(product or [])
+        if len(row) < 9:
+            return None
+        if len(row) < 10:
+            row.append(None)
+        return tuple(row[:10])
 
     def init_screen(self, dt):
         """Inicializa a tela"""
@@ -88,20 +234,102 @@ class LossesScreen(MDScreen):
         self.clear_form()
         self.update_ui_state()
         self._update_responsive_layout()
+        self._schedule_scanner_auto_start()
+        app = App.get_running_app()
+        warmup = getattr(app, "warmup_screens", None) if app else None
+        if callable(warmup):
+            Clock.schedule_once(lambda dt: warmup(("losses_history",), delay=0.1), 0.16)
 
     def on_leave(self):
         """Quando sai da tela"""
         if self._enter_refresh_ev:
             self._enter_refresh_ev.cancel()
             self._enter_refresh_ev = None
+        self._cancel_scanner_auto_start()
         self._stop_products_render()
-        self.stop_scanner()
+        self.stop_scanner(hide_panel=True)
 
     def on_size(self, *args):
         Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
 
     def prepare_open_from_admin(self):
         self.request_enter_refresh(force=not bool(self.products), delay=0.02)
+
+    def _cancel_scanner_auto_start(self):
+        if self._scanner_auto_start_ev:
+            self._scanner_auto_start_ev.cancel()
+            self._scanner_auto_start_ev = None
+
+    def _schedule_scanner_auto_start(self, delay=None):
+        self._cancel_scanner_auto_start()
+        if self.scanning:
+            return
+        delay = self.SCANNER_AUTO_START_DELAY_SECONDS if delay is None else max(0, float(delay))
+        self._scanner_auto_start_ev = Clock.schedule_once(self._auto_start_scanner, delay)
+
+    def _auto_start_scanner(self, _dt):
+        self._scanner_auto_start_ev = None
+        if self.manager and self.manager.current != self.name:
+            return
+        if self.scanning:
+            return
+        self.start_scanner()
+
+    def _ensure_scanner_panel_geometry(self, reset=False):
+        if not hasattr(self, "ids") or "scanner_preview_card" not in self.ids:
+            return
+
+        panel = self.ids.scanner_preview_card
+        width = self.width or dp(1200)
+        height = self.height or dp(760)
+        compact = width < dp(1120)
+        max_width = max(dp(180), width - dp(20))
+        max_height = max(dp(170), height - dp(20))
+        min_width = min(panel.min_panel_width, max_width)
+        min_height = min(panel.min_panel_height, max_height)
+
+        if reset or not self._scanner_panel_initialized:
+            if width < dp(760):
+                default_width = min(max_width, max(min_width, width - dp(20)))
+                default_height = min(max_height, max(min_height, dp(184)))
+                default_x = max(dp(10), (width - default_width) / 2)
+                default_y = dp(10)
+            elif compact:
+                default_width = min(max_width, max(min_width, dp(236)))
+                default_height = min(max_height, max(min_height, dp(204)))
+                default_x = max(dp(14), width - default_width - dp(14))
+                default_y = dp(14)
+            else:
+                default_width = min(max_width, max(min_width, dp(280)))
+                default_height = min(max_height, max(min_height, dp(228)))
+                default_x = max(dp(18), width - default_width - dp(18))
+                default_y = dp(18)
+
+            panel.size = (default_width, default_height)
+            panel.pos = (default_x, default_y)
+            self._scanner_panel_initialized = True
+
+        if hasattr(panel, "clamp_to_parent"):
+            panel.clamp_to_parent()
+
+    def _set_scanner_preview_visible(self, visible, reset_geometry=False):
+        if not hasattr(self, "ids") or "scanner_preview_card" not in self.ids:
+            return
+
+        panel = self.ids.scanner_preview_card
+        if visible:
+            panel.opacity = 1
+            panel.disabled = False
+            self._ensure_scanner_panel_geometry(reset=reset_geometry)
+        else:
+            panel.opacity = 0
+            panel.disabled = True
+
+        Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
+
+    def close_scanner_panel(self):
+        self._cancel_scanner_auto_start()
+        self.stop_scanner(status_text="Scanner fechado", hide_panel=True)
 
     def _update_responsive_layout(self):
         if not hasattr(self, "ids") or "loss_type_qty_row" not in self.ids:
@@ -110,6 +338,7 @@ class LossesScreen(MDScreen):
         width = self.width or dp(1200)
         compact = width < dp(1120)
 
+        content_column = self.ids.content_column
         selected_meta = self.ids.selected_product_meta_row
         scanner_preview = self.ids.scanner_preview_card
         scanner_buttons = self.ids.scanner_buttons_row
@@ -119,9 +348,10 @@ class LossesScreen(MDScreen):
 
         selected_meta.orientation = "vertical" if compact else "horizontal"
         selected_meta.height = dp(58) if compact else dp(20)
-        scanner_preview.size_hint_x = 0.9 if compact else 0.7
-        scanner_preview.height = dp(108) if compact else dp(120)
-        scanner_buttons.width = dp(78) if compact else dp(90)
+        self._ensure_scanner_panel_geometry()
+        scanner_buttons.width = dp(116) if compact else dp(132)
+        bottom_padding = scanner_preview.height + dp(34) if scanner_preview.opacity > 0.01 else dp(16)
+        content_column.padding = [dp(16), dp(16), dp(16), bottom_padding]
         loss_type_row.orientation = "vertical" if compact else "horizontal"
         loss_type_row.height = dp(104) if compact else dp(52)
         loss_type_btn.size_hint_x = 1 if compact else 0.55
@@ -245,6 +475,7 @@ class LossesScreen(MDScreen):
 
     def toggle_scanner(self):
         """Liga/desliga o scanner"""
+        self._cancel_scanner_auto_start()
         if self.scanning:
             self.stop_scanner()
         else:
@@ -252,23 +483,36 @@ class LossesScreen(MDScreen):
 
     def start_scanner(self):
         """Inicia o scanner"""
+        self._cancel_scanner_auto_start()
+        if self.scanning and self.camera:
+            return
+        self._set_scanner_preview_visible(True)
         self.scanning = True
         self.ids.scan_btn.icon = "barcode-off"
         self.ids.scan_btn.md_bg_color = _theme_color("danger", [0.9, 0.3, 0.3, 1])
         self.set_scanner_status("Iniciando...", _theme_color("warning", [0.9, 0.7, 0.1, 1]))
+        Clock.unschedule(self.open_camera)
+        Clock.unschedule(self.scan_frame)
         Clock.schedule_once(self.open_camera, 0.1)
 
-    def stop_scanner(self):
+    def stop_scanner(self, status_text="Scanner parado", status_color=None, hide_panel=False):
         """Para o scanner"""
+        self._cancel_scanner_auto_start()
         self.scanning = False
+        status_color = status_color or _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
         self.ids.scan_btn.icon = "barcode-scan"
         self.ids.scan_btn.md_bg_color = _theme_color("success", [0.2, 0.65, 0.3, 1])
-        self.set_scanner_status("Scanner parado", _theme_color("text_secondary", [0.5, 0.5, 0.5, 1]))
+        self.set_scanner_status(status_text, status_color)
+        Clock.unschedule(self.open_camera)
         Clock.unschedule(self.scan_frame)
         self.close_camera()
+        if hide_panel:
+            self._set_scanner_preview_visible(False)
 
     def open_camera(self, dt):
         """Abre a câmera"""
+        if not self.scanning:
+            return
         try:
             cv2, _np, _decode = self._load_vision_modules()
             self.close_camera()
@@ -282,12 +526,16 @@ class LossesScreen(MDScreen):
                 self.last_scan_time = 0
                 Clock.schedule_interval(self.scan_frame, 1/20)
             else:
-                self.set_scanner_status("✗ Câmera não encontrada", _theme_color("danger", [0.9, 0.2, 0.2, 1]))
-                self.stop_scanner()
+                self.stop_scanner(
+                    "Camera nao encontrada",
+                    _theme_color("danger", [0.9, 0.2, 0.2, 1]),
+                )
         except Exception as e:
             print(f"Erro ao abrir câmera: {e}")
-            self.set_scanner_status("✗ Erro na câmera", _theme_color("danger", [0.9, 0.2, 0.2, 1]))
-            self.stop_scanner()
+            self.stop_scanner(
+                "Erro na camera",
+                _theme_color("danger", [0.9, 0.2, 0.2, 1]),
+            )
 
     def close_camera(self):
         """Fecha a câmera"""
@@ -419,7 +667,11 @@ class LossesScreen(MDScreen):
 
         self._products_loading = False
         self._last_products_load_at = perf_counter()
-        self.products = list(rows or [])
+        self.products = [
+            normalized
+            for normalized in (self._normalize_product_row(row) for row in (rows or []))
+            if normalized is not None
+        ]
 
         query = (self.ids.search_input.text if "search_input" in self.ids else self._pending_search).strip().lower()
         if query:
@@ -457,7 +709,7 @@ class LossesScreen(MDScreen):
         return
         
         for p in products:
-            pid, name, stock, price, cost, barcode, is_weight, exp, status = p
+            pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = p
             unit = "KG" if is_weight else "UN"
             
             # Status tag
@@ -505,7 +757,7 @@ class LossesScreen(MDScreen):
         return True
 
     def _build_product_list_item(self, product):
-        _pid, name, stock, price, _cost, _barcode, is_weight, _exp, status = product
+        _pid, name, stock, price, _cost, _barcode, is_weight, _exp, status, _vat_rule_code = product
         unit = "KG" if is_weight else "UN"
         tag = ""
         if status == "EXPIRADO":
@@ -537,10 +789,11 @@ class LossesScreen(MDScreen):
         # Filtrar produtos
         filtered = []
         for p in self.products:
-            if len(p) < 9:
+            product = self._normalize_product_row(p)
+            if product is None:
                 continue
-                
-            pid, name, stock, price, cost, barcode, is_weight, exp, status = p
+            
+            pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = product
             
             # Buscar em: ID, nome ou código de barras
             search_in_id = str(pid).lower()
@@ -550,7 +803,7 @@ class LossesScreen(MDScreen):
             if (query in search_in_id or 
                 query in search_in_name or 
                 query in search_in_barcode):
-                filtered.append(p)
+                filtered.append(product)
         
         self.show_products(filtered)
 
@@ -566,14 +819,15 @@ class LossesScreen(MDScreen):
     def _filter_products(self, query):
         filtered = []
         for p in self.products:
-            if len(p) < 9:
+            product = self._normalize_product_row(p)
+            if product is None:
                 continue
-            pid, name, stock, price, cost, barcode, is_weight, exp, status = p
+            pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = product
             search_in_id = str(pid).lower()
             search_in_name = (name or "").lower()
             search_in_barcode = str(barcode).lower() if barcode else ""
             if (query in search_in_id or query in search_in_name or query in search_in_barcode):
-                filtered.append(p)
+                filtered.append(product)
         return filtered
 
     def on_search_enter(self):
@@ -599,10 +853,11 @@ class LossesScreen(MDScreen):
         # Buscar produtos filtrados
         filtered = []
         for p in self.products:
-            if len(p) < 9:
+            product = self._normalize_product_row(p)
+            if product is None:
                 continue
-                
-            pid, name, stock, price, cost, barcode, is_weight, exp, status = p
+            
+            pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = product
             search_in_id = str(pid).lower()
             search_in_name = (name or "").lower()
             search_in_barcode = str(barcode).lower() if barcode else ""
@@ -610,7 +865,7 @@ class LossesScreen(MDScreen):
             if (query in search_in_id or 
                 query in search_in_name or 
                 query in search_in_barcode):
-                filtered.append(p)
+                filtered.append(product)
         
         # Se encontrou exatamente 1, selecionar automaticamente
         if len(filtered) == 1:
@@ -630,8 +885,12 @@ class LossesScreen(MDScreen):
 
     def select_product(self, product):
         """Seleciona um produto e avança para step 2"""
-        self.selected_product = product
-        pid, name, stock, price, cost, barcode, is_weight, exp, status = product
+        normalized_product = self._normalize_product_row(product)
+        if normalized_product is None:
+            self.show_dialog("Erro", "Produto invalido para selecao.")
+            return
+        self.selected_product = normalized_product
+        pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = normalized_product
         unit = "KG" if is_weight else "UN"
         
         # Atualizar UI do produto selecionado
@@ -739,62 +998,84 @@ class LossesScreen(MDScreen):
         except:
             return None
 
+    def _set_loss_busy(self, busy):
+        self._saving_loss = bool(busy)
+        submit_btn = self.ids.get("submit_loss_btn") if self.ids else None
+        if submit_btn is None:
+            return
+        submit_btn.disabled = self._saving_loss
+        submit_btn.text = "A PROCESSAR..." if self._saving_loss else "REGISTRAR PERDA"
+
     # ========== REGISTRO ==========
+    def submit_loss(self):
+        """Mantem compatibilidade com callbacks antigos do KV."""
+        self.register_loss()
+
     def register_loss(self):
         """Registra a perda"""
-        # Validações
+        if self._saving_loss:
+            return
+
+        # Valida??es
         if not self.selected_product:
-            self.show_dialog("❌ Erro", "Nenhum produto selecionado")
+            self.show_dialog("Erro", "Nenhum produto selecionado")
             return
-        
+
         if not self.selected_loss_type:
-            self.show_dialog("❌ Erro", "Selecione o tipo de perda")
+            self.show_dialog("Erro", "Selecione o tipo de perda")
             return
-        
+
         qty = self.get_qty()
         if not qty or qty <= 0:
-            self.show_dialog("❌ Erro", "Quantidade inválida ou vazia")
+            self.show_dialog("Erro", "Quantidade invalida ou vazia")
             return
-        
-        pid, name, stock, price, cost, barcode, is_weight, exp, status = self.selected_product
-        
+
+        pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = self.selected_product
+
         # Validar quantidade inteira para unidades
         if not is_weight and not float(qty).is_integer():
-            self.show_dialog("❌ Erro", "Quantidade deve ser um número inteiro para produtos por unidade")
+            self.show_dialog("Erro", "Quantidade deve ser um numero inteiro para produtos por unidade")
             return
-        
+
         # Validar stock
         if qty > float(stock):
-            self.show_dialog("❌ Erro", f"Quantidade maior que stock disponível ({stock:.1f})")
+            self.show_dialog("Erro", f"Quantidade maior que stock disponivel ({stock:.1f})")
             return
-        
-        # Motivo obrigatório
+
+        # Motivo obrigat??rio
         reason = self.ids.reason_input.text.strip()
         if not reason:
-            self.show_dialog("❌ Erro", "Motivo é obrigatório")
+            self.show_dialog("Erro", "Motivo e obrigatorio")
             return
-        
-        # Registrar no banco
-        try:
-            note = self.ids.note_input.text.strip()
-            evidence = self.ids.evidence_input.text.strip() or None
-            
-            app = App.get_running_app()
-            user = getattr(app, "current_user", None)
-            role = getattr(app, "current_role", "manager")
-            
-            movement_id = self.db.record_stock_movement(
-                pid, self.selected_loss_type, qty, "OUT",
-                reason=reason,
-                note=note,
-                evidence_path=evidence,
-                created_by=user,
-                created_role=role,
-                unit_cost=cost,
-                unit_price=price,
-            )
-            
-            if movement_id:
+
+        note = self.ids.note_input.text.strip()
+        evidence = self.ids.evidence_input.text.strip() or None
+
+        app = App.get_running_app()
+        user = getattr(app, "current_user", None)
+        role = getattr(app, "current_role", "manager")
+        loss_type = self.selected_loss_type
+
+        self._set_loss_busy(True)
+
+        def worker():
+            try:
+                movement_id = self.db.record_stock_movement(
+                    pid,
+                    loss_type,
+                    qty,
+                    "OUT",
+                    reason=reason,
+                    note=note,
+                    evidence_path=evidence,
+                    created_by=user,
+                    created_role=role,
+                    unit_cost=cost,
+                    unit_price=price,
+                )
+                if not movement_id:
+                    return {"ok": False, "message": "Erro ao registrar perda no banco de dados"}
+
                 stock_before = float(stock)
                 stock_after = stock_before - float(qty)
                 self._append_loss_log({
@@ -803,7 +1084,7 @@ class LossesScreen(MDScreen):
                     "product_id": pid,
                     "product_name": name,
                     "barcode": barcode,
-                    "loss_type": self.selected_loss_type,
+                    "loss_type": loss_type,
                     "qty": float(qty),
                     "unit": "KG" if is_weight else "UN",
                     "reason": reason,
@@ -818,22 +1099,32 @@ class LossesScreen(MDScreen):
                     "stock_before": stock_before,
                     "stock_after": stock_after,
                 })
-                self.show_dialog("✅ Sucesso", "Perda registrada com sucesso!")
                 if user:
-                    self.db.log_action(user, role, "REGISTER_LOSS", 
-                                      f"{self.selected_loss_type} | {name} | {qty}")
-                self.clear_form()
-                self.load_products()
-                
-                # Voltar para step 1
-                self.current_step = 1
-                self.update_ui_state()
-            else:
-                self.show_dialog("❌ Erro", "Erro ao registrar perda no banco de dados")
-                
-        except Exception as e:
-            print(f"Erro: {e}")
-            self.show_dialog("❌ Erro", f"Erro ao registrar perda: {str(e)}")
+                    try:
+                        self.db.log_action(user, role, "REGISTER_LOSS", f"{loss_type} | {name} | {qty}")
+                    except Exception:
+                        pass
+                return {"ok": True}
+            except Exception as exc:
+                print(f"Erro: {exc}")
+                return {"ok": False, "message": f"Erro ao registrar perda: {exc}"}
+
+        def apply_result(result):
+            self._set_loss_busy(False)
+            if not result.get("ok"):
+                self.show_dialog("Erro", result.get("message") or "Erro ao registrar perda.")
+                return
+            self.show_dialog("Sucesso", "Perda registrada com sucesso!")
+            self.clear_form()
+            self.load_products()
+            self.current_step = 1
+            self.update_ui_state()
+
+        def finish_worker():
+            result = worker()
+            Clock.schedule_once(lambda dt, payload=result: apply_result(payload), 0)
+
+        Thread(target=finish_worker, daemon=True).start()
 
     # ========== HELPERS ==========
     def _append_loss_log(self, entry):

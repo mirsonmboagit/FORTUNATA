@@ -11,6 +11,7 @@ from reportlab.platypus import (
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 import pandas as pd
+from xml.sax.saxutils import escape
 
 from .base_report import BasePDFReport
 
@@ -51,6 +52,8 @@ class CompleteReport(BasePDFReport):
 
         # 2️⃣ RESUMO ANALÍTICO
         self._add_general_summary(elements, data)
+        elements.append(Spacer(1, 16))
+        self._add_overview_chart(elements, data)
 
         # 3️⃣ ANÁLISES COMPLEMENTARES
         self._add_performance_analysis(elements, data)
@@ -60,11 +63,38 @@ class CompleteReport(BasePDFReport):
         doc.build(elements)
         return pdf_path
 
+    def _build_table_cell(self, value, style, fallback="-", max_len=None):
+        if pd.isna(value):
+            text = fallback
+        else:
+            text = str(value).strip() or fallback
+
+        if max_len:
+            text = self._truncate_text(text, max_len)
+
+        safe_text = escape(text).replace("\n", "<br/>")
+        return Paragraph(safe_text, style)
+
     # ─────────────────────────────────────────────
     # 🔹 TABELA-MÃE SEGURA (SAFE AREA)
     # ─────────────────────────────────────────────
     def _add_master_table(self, elements, data):
         styles = getSampleStyleSheet()
+        text_cell_style = ParagraphStyle(
+            "MasterTableText",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=7.2,
+            leading=8.4,
+            textColor=colors.HexColor("#1f1f1f"),
+            wordWrap="LTR",
+            splitLongWords=True,
+        )
+        status_cell_style = ParagraphStyle(
+            "MasterTableStatus",
+            parent=text_cell_style,
+            alignment=1,
+        )
 
         elements.append(Paragraph(
             "TABELA-MÃE: Visão Consolidada de Produtos",
@@ -117,8 +147,8 @@ class CompleteReport(BasePDFReport):
                 status = "Alto"
 
             rows.append([
-                str(r["description"])[:30],
-                str(r["category"])[:12] if pd.notna(r["category"]) else "-",
+                self._build_table_cell(r["description"], text_cell_style, max_len=42),
+                self._build_table_cell(r["category"], text_cell_style, max_len=24),
                 int(r["entrada"]),
                 int(r["saida"]),
                 int(r["sold_stock"]),
@@ -130,16 +160,16 @@ class CompleteReport(BasePDFReport):
                 f"{receita:,.2f}",
                 f"{r['lucro_total']:,.2f}",
                 f"{r['percentual_lucro']:.1f}",
-                status,
+                self._build_table_cell(status, status_cell_style, max_len=12),
             ])
 
         # 🔒 SAFE WIDTH (nunca encosta no A4)
-        SAFE_TABLE_WIDTH = 10.2 * inch
+        SAFE_TABLE_WIDTH = 10.35 * inch
 
         colWidths = [
-            2.0, 0.9, 0.6, 0.6, 0.6, 0.7,
-            0.6, 0.7, 0.7, 0.6,
-            0.9, 0.9, 0.6, 0.7
+            2.35, 1.30, 0.62, 0.62, 0.62, 0.70,
+            0.62, 0.74, 0.74, 0.66,
+            0.98, 0.98, 0.70, 0.80
         ]
 
         scale = SAFE_TABLE_WIDTH / sum(colWidths)
@@ -162,8 +192,11 @@ class CompleteReport(BasePDFReport):
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bdc3c7")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1),
              [colors.white, colors.HexColor("#f8f9fa")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ]))
 
         elements.append(table)
@@ -308,6 +341,21 @@ class CompleteReport(BasePDFReport):
     # ─────────────────────────────────────────────
     # 🔹 ANÁLISES COMPLEMENTARES
     # ─────────────────────────────────────────────
+    def _add_overview_chart(self, elements, data):
+        top_revenue = data.nlargest(7, "valor_total_vendas")
+        chart_items = [
+            (row["description"], row["valor_total_vendas"])
+            for _, row in top_revenue.iterrows()
+        ]
+        elements.append(
+            self._build_bar_chart(
+                "Grafico de Barras: Produtos com Maior Receita",
+                chart_items,
+                value_formatter=lambda value: f"MZN {value:,.2f}",
+                accent_color="#34495e",
+            )
+        )
+
     def _add_performance_analysis(self, elements, data):
         """
         Análises adicionais: Top performers e produtos que requerem atenção.
@@ -323,6 +371,16 @@ class CompleteReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
+        table_text_style = ParagraphStyle(
+            "AnalysisTableText",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=8,
+            leading=9.2,
+            textColor=colors.HexColor("#1f1f1f"),
+            wordWrap="LTR",
+            splitLongWords=True,
+        )
         
         # Top 5 produtos por lucro
         title = Paragraph("Top 5 Produtos Mais Lucrativos", title_style)
@@ -335,7 +393,7 @@ class CompleteReport(BasePDFReport):
             receita = row["sold_stock"] * row["sale_price"]
             top_data.append([
                 str(idx),
-                str(row["description"])[:40],
+                self._build_table_cell(row["description"], table_text_style, max_len=54),
                 f"{receita:,.2f}",
                 f"{row['lucro_total']:,.2f}",
                 f"{row['percentual_lucro']:.1f}%"
@@ -351,6 +409,7 @@ class CompleteReport(BasePDFReport):
             ("ALIGN", (1, 1), (1, -1), "LEFT"),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f9fa")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 8),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
@@ -379,11 +438,11 @@ class CompleteReport(BasePDFReport):
                     acao = "Reposição urgente"
                 
                 critical_data.append([
-                    str(row["description"])[:35],
-                    str(row["category"])[:15] if pd.notna(row["category"]) else "-",
+                    self._build_table_cell(row["description"], table_text_style, max_len=46),
+                    self._build_table_cell(row["category"], table_text_style, max_len=24),
                     str(int(row["remanescente"])),
-                    status,
-                    acao
+                    self._build_table_cell(status, table_text_style, max_len=12),
+                    self._build_table_cell(acao, table_text_style, max_len=32),
                 ])
             
             critical_table = Table(critical_data, colWidths=[3.5*inch, 1.5*inch, 1.3*inch, 1.2*inch, 2.7*inch])
@@ -397,6 +456,7 @@ class CompleteReport(BasePDFReport):
                 ("ALIGN", (4, 1), (4, -1), "LEFT"),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f9fa")]),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("TOPPADDING", (0, 0), (-1, -1), 8),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
             ]))

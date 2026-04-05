@@ -67,6 +67,8 @@ from AI.alert_manager import AlertManager
 from AI.engine import executar_analise
 from database.client import DatabaseClient
 from database.database import Database
+from database.provider import HybridDatabase, uses_remote_backend
+from utils.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
 from utils.security_questions import check_answer, hash_answer, normalize_answer
 
 try:
@@ -158,6 +160,19 @@ class BaseProjectTestCase(unittest.TestCase):
             limit_seconds,
             f"Tempo acima do limite em {label}: {elapsed_seconds:.4f}s > {limit_seconds:.4f}s",
         )
+
+
+class TestesPoliticaRecibo(BaseProjectTestCase):
+    def test_recibo_exige_venda_concluida(self):
+        self.assertFalse(can_emit_receipt(None))
+        self.assertFalse(can_emit_receipt({}))
+        self.assertIsNone(resolve_receipt_data_for_emission(None))
+        self.assertIsNone(resolve_receipt_data_for_emission({}))
+
+    def test_recibo_pode_ser_emitido_apos_venda(self):
+        receipt_data = {"receipt_code": "20260404123000", "items": [{"name": "Arroz"}]}
+        self.assertTrue(can_emit_receipt(receipt_data))
+        self.assertIs(resolve_receipt_data_for_emission(receipt_data), receipt_data)
 
 
 class TemporaryDatabaseTestCase(BaseProjectTestCase):
@@ -523,14 +538,14 @@ class TestesBaseDeDados(TemporaryDatabaseTestCase):
         saved = self.quiet(
             self.db.set_security_questions,
             "gestor",
-            [" Jose Silva ", "Sao Paulo", "Escola Central"],
+            [" Jose Silva ", "Sao Paulo"],
         )
         self.assertTrue(saved)
 
         security_ok = self.quiet(
             self.db.verify_security_answers,
             "gestor",
-            ["jose silva", "sao paulo", "escola central"],
+            ["jose silva", "sao paulo"],
         )
         self.assertEqual(security_ok, {"ok": True})
 
@@ -581,6 +596,53 @@ class TestesBaseDeDados(TemporaryDatabaseTestCase):
         sale_details_after = self.quiet(self.db.get_sale_details, sale_id)
         self.assertAlmostEqual(sale_details_after[6], 1.0)
         self.assertAlmostEqual(sale_details_after[7], 2.0)
+
+    def test_relatorio_pdf_de_perdas_e_gerado(self):
+        from datetime import timedelta
+        from pdfs.loss_report import LossReport
+
+        product_id = self.add_sample_product(
+            description="Iogurte Natural",
+            category="Laticinios",
+            stock=12,
+            sale_price=18.0,
+            unit_purchase_price=11.0,
+            barcode="LOSSPDF001",
+        )
+
+        movement_id = self.quiet(
+            self.db.record_stock_movement,
+            product_id,
+            "DAMAGE",
+            2,
+            "OUT",
+            reason="Frasco partido",
+            created_by="gestor",
+            created_role="admin",
+            unit_cost=11.0,
+            unit_price=18.0,
+        )
+        self.assertIsNotNone(movement_id)
+
+        start_dt = datetime.now() - timedelta(days=1)
+        end_dt = datetime.now() + timedelta(days=1)
+        metrics = self.quiet(self.db.calculate_loss_metrics, start_dt, end_dt) or {}
+        records = self.quiet(self.db.get_loss_records, start_dt, end_dt, limit=50) or []
+
+        report = LossReport(output_dir=str(self.temp_dir / "reports"))
+        pdf_path = report.generate(
+            {"metrics": metrics, "records": records},
+            {
+                "start_date": start_dt,
+                "end_date": end_dt,
+                "product": "Todos os Produtos",
+                "category": "Todas as Categorias",
+            },
+        )
+
+        pdf_file = Path(pdf_path)
+        self.assertTrue(pdf_file.exists())
+        self.assertGreater(pdf_file.stat().st_size, 0)
 
 
 class TestesFuncoesPrincipais(BaseProjectTestCase):
@@ -815,6 +877,161 @@ class TestesInterfaceSimulada(BaseProjectTestCase):
                 self.assertEqual(len(banner_center.show_alerts_calls), 2)
 
 
+class TestesModeloHibrido(BaseProjectTestCase):
+    def test_hibrido_usa_remoto_quando_api_esta_saudavel(self):
+        class RemoteStub:
+            def __init__(self):
+                self.calls = 0
+
+            def is_available(self, force=False):
+                return True
+
+            def last_error(self):
+                return ""
+
+            def get_categories(self):
+                self.calls += 1
+                return ["Remoto"]
+
+        class LocalStub:
+            def __init__(self):
+                self.calls = 0
+                self.db_path = "local.sqlite"
+
+            def get_categories(self):
+                self.calls += 1
+                return ["Local"]
+
+        remote = RemoteStub()
+        local = LocalStub()
+        db = HybridDatabase(config={"db_mode": "hybrid"}, remote_db=remote, local_db=local)
+
+        self.assertEqual(db.get_categories(), ["Remoto"])
+        self.assertEqual(remote.calls, 1)
+        self.assertEqual(local.calls, 0)
+        self.assertEqual(db.get_connection_label(), "Hibrido")
+
+    def test_hibrido_cai_para_local_quando_api_esta_indisponivel(self):
+        class RemoteStub:
+            def __init__(self):
+                self.calls = 0
+
+            def is_available(self, force=False):
+                return False
+
+            def last_error(self):
+                return "API offline"
+
+            def get_categories(self):
+                self.calls += 1
+                return ["Remoto"]
+
+        class LocalStub:
+            def __init__(self):
+                self.calls = 0
+                self.db_path = "fallback.sqlite"
+
+            def get_categories(self):
+                self.calls += 1
+                return ["Local"]
+
+        remote = RemoteStub()
+        local = LocalStub()
+        db = HybridDatabase(config={"db_mode": "hybrid"}, remote_db=remote, local_db=local)
+
+        self.assertEqual(db.get_categories(), ["Local"])
+        self.assertEqual(remote.calls, 0)
+        self.assertEqual(local.calls, 1)
+        self.assertEqual(db.db_path, "fallback.sqlite")
+        self.assertEqual(db.get_connection_label(), "Local")
+
+    def test_helper_reconhece_hibrido_com_remoto_ativo(self):
+        class RemoteStub:
+            def is_available(self, force=False):
+                return True
+
+            def last_error(self):
+                return ""
+
+        class LocalStub:
+            db_path = "local.sqlite"
+
+        db = HybridDatabase(config={"db_mode": "hybrid"}, remote_db=RemoteStub(), local_db=LocalStub())
+
+        self.assertTrue(uses_remote_backend(db))
+
+    def test_helper_reconhece_hibrido_em_fallback_local(self):
+        class RemoteStub:
+            def is_available(self, force=False):
+                return False
+
+            def last_error(self):
+                return "API offline"
+
+        class LocalStub:
+            db_path = "fallback.sqlite"
+
+        db = HybridDatabase(config={"db_mode": "hybrid"}, remote_db=RemoteStub(), local_db=LocalStub())
+
+        self.assertFalse(uses_remote_backend(db))
+
+    def test_hibrido_limpa_erro_remoto_apos_fallback_local_bem_sucedido(self):
+        class RemoteStub:
+            def is_available(self, force=False):
+                return False
+
+            def last_error(self):
+                return "API offline"
+
+            def validate_user(self, username, password):
+                return "admin"
+
+        class LocalStub:
+            db_path = "fallback.sqlite"
+
+            def validate_user(self, username, password):
+                return "admin"
+
+        db = HybridDatabase(config={"db_mode": "hybrid"}, remote_db=RemoteStub(), local_db=LocalStub())
+
+        self.assertEqual(db.validate_user("admin", "123"), "admin")
+        self.assertEqual(db.last_error(), "")
+
+    def test_database_client_healthcheck_entra_em_cooldown(self):
+        class HealthSession:
+            def __init__(self):
+                self.get_calls = 0
+                self.closed = False
+
+            def get(self, url, headers=None, timeout=None):
+                self.get_calls += 1
+                raise RuntimeError("offline")
+
+            def close(self):
+                self.closed = True
+
+        client = DatabaseClient(
+            config={
+                "api_base_url": "http://fake.local",
+                "timeout": 1,
+                "health_timeout": 0.05,
+                "availability_cooldown": 30,
+                "availability_ttl": 0,
+            }
+        )
+        client._session = HealthSession()
+
+        self.assertFalse(client.is_available(force=True))
+        first_calls = client._session.get_calls
+        self.assertEqual(first_calls, 1)
+        self.assertFalse(client.is_available())
+        self.assertEqual(
+            client._session.get_calls,
+            first_calls,
+            "Durante o cooldown nao deveria repetir healthcheck",
+        )
+
+
 class TestesErrosEExcecoes(TemporaryDatabaseTestCase):
     def test_produto_invalido_nao_corrompe_base(self):
         result = self.quiet(
@@ -981,16 +1198,7 @@ class TestesPerformanceBasica(TemporaryDatabaseTestCase):
 
 def build_suite():
     loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    for case in (
-        TestesBaseDeDados,
-        TestesFuncoesPrincipais,
-        TestesInterfaceSimulada,
-        TestesErrosEExcecoes,
-        TestesPerformanceBasica,
-    ):
-        suite.addTests(loader.loadTestsFromTestCase(case))
-    return suite
+    return loader.loadTestsFromModule(sys.modules[__name__])
 
 
 def print_summary(result, elapsed):

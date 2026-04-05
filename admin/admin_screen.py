@@ -14,7 +14,7 @@ from threading import Thread
 import time
 from datetime import datetime, timedelta
 from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDIconButton
+from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.label import MDLabel
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.menu import MDDropdownMenu
@@ -35,6 +35,7 @@ from utils.ai_popups import (
     build_positive_banner,
     render_auto_banners,
 )
+from ui.components.tooltip_widgets import TooltipFloatingActionButton, TooltipIconButton
 from utils.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
 
 
@@ -46,12 +47,47 @@ def _get_detail_popup_class():
     return DetailPopup
 
 
+def _describe_loader_error(exc, prefix):
+    missing_name = getattr(exc, "name", "")
+    if missing_name:
+        return f"{prefix}: dependencia em falta ({missing_name})"
+    text = str(exc or "").strip()
+    if not text:
+        text = exc.__class__.__name__
+    return f"{prefix}: {text}"
+
+
+def _build_unavailable_product_form_class(error):
+    message = _describe_loader_error(error, "Formulario de produto indisponivel")
+
+    class UnavailableProductForm:
+        def __init__(self, admin_screen, *args, **kwargs):
+            self._dialog = MDDialog(
+                title="Erro ao abrir produto",
+                text=message,
+                buttons=[MDFlatButton(text="Fechar")],
+            )
+            if self._dialog.buttons:
+                self._dialog.buttons[0].bind(on_release=lambda *_: self._dialog.dismiss())
+
+        def open(self):
+            self._dialog.open()
+
+    return UnavailableProductForm
+
+
 def _get_product_form_class():
     try:
         from .product_form import ProductForm
+        return ProductForm
     except ImportError:
-        from admin.product_form import ProductForm
-    return ProductForm
+        try:
+            from admin.product_form import ProductForm
+            return ProductForm
+        except Exception as exc:
+            return _build_unavailable_product_form_class(exc)
+    except Exception as exc:
+        return _build_unavailable_product_form_class(exc)
 
 
 Builder.load_file(os.path.join(CURRENT_DIR, 'admin_screen.kv'))
@@ -61,10 +97,17 @@ Builder.load_file(os.path.join(CURRENT_DIR, 'admin_screen.kv'))
 # Column proportions - ajustadas para melhor distribuicao
 # ---------------------------------------------------------------------------
 COL_HINTS = [0.06, 0.20, 0.09, 0.09, 0.07, 0.11, 0.11, 0.13, 0.14]
+LOSS_LABELS = {
+    "DAMAGE": "Danificado",
+    "EXPIRED": "Expirado",
+    "THEFT": "Roubo",
+    "ADJUSTMENT": "Ajuste",
+}
 
 
 class AdminScreen(Screen):
     PRODUCTS_CACHE_SECONDS = 4
+    LOSS_METRICS_LOOKBACK_DAYS = 365
     product_table = ObjectProperty(None)
     search_input = ObjectProperty(None)
     category_spinner = ObjectProperty(None)
@@ -94,14 +137,22 @@ class AdminScreen(Screen):
         self._pending_table_rows = deque()
         self._table_row_height = dp(48)
         self._table_palette = {}
+        self._display_ids_by_product_id = {}
         self._alerts_refresh_token = 0
         self._ai_popup_token = 0
         self._fraud_check_token = 0
         self._fraud_check_until = 0.0
+        self._last_fraud_log_count = 0
+        self._async_actions = set()
         self._cached_admin_insights = {}
         self._expiry_alerts_by_id = {}
         self._last_expiry_summary_at = 0.0
         self._expiry_summary_cooldown = 120.0
+        self.loss_report = None
+        self.pdf_viewer = None
+        self._loss_metrics_dialog = None
+        self._loss_details_dialog = None
+        self._ai_button_rest_pos = None
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
             db=self.db,
@@ -119,6 +170,47 @@ class AdminScreen(Screen):
 
     def toggle_quick_actions(self, *args):
         self.quick_actions_open = not self.quick_actions_open
+
+    def _run_async_action(self, key, task, on_success=None, busy_message=None, error_message=None):
+        action_key = str(key or "")
+        if action_key and action_key in self._async_actions:
+            return False
+        if action_key:
+            self._async_actions.add(action_key)
+        if busy_message:
+            self.show_snackbar(busy_message)
+
+        def worker():
+            result = None
+            error = None
+            try:
+                result = task()
+            except Exception as exc:
+                error = exc
+            Clock.schedule_once(
+                lambda dt, res=result, err=error, action=action_key: self._finish_async_action(
+                    action,
+                    res,
+                    err,
+                    on_success,
+                    error_message,
+                ),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+        return True
+
+    def _finish_async_action(self, key, result, error, on_success, error_message):
+        if key:
+            self._async_actions.discard(key)
+        if error is not None:
+            print(f"Erro em acao assincrona ({key}): {error}")
+            if error_message:
+                self.show_snackbar(error_message)
+            return
+        if callable(on_success):
+            on_success(result)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -264,33 +356,24 @@ class AdminScreen(Screen):
         def swing_cycle(dt):
             if self.notification_count <= 0:
                 return False
-            
-            # Usar pos_hint para criar efeito de balanço (movimento lateral e vertical)
-            original_pos = {"right": 0.965, "y": 0.04}
-            
-            # Sequência de balanço simulando oscilação
+            button = self.ids.ai_button
+            base_pos = tuple(button.pos)
+            self._ai_button_rest_pos = base_pos
+
             swing = (
-                # Balanço para direita-cima
-                Animation(pos_hint={"right": 0.970, "y": 0.045}, duration=0.15, transition='out_sine') +
-                # Balanço para esquerda-baixo
-                Animation(pos_hint={"right": 0.960, "y": 0.035}, duration=0.3, transition='in_out_sine') +
-                # Balanço direita-meio
-                Animation(pos_hint={"right": 0.968, "y": 0.042}, duration=0.25, transition='in_out_sine') +
-                # Balanço esquerda-meio
-                Animation(pos_hint={"right": 0.962, "y": 0.038}, duration=0.25, transition='in_out_sine') +
-                # Balanço direita-pequeno
-                Animation(pos_hint={"right": 0.967, "y": 0.041}, duration=0.2, transition='in_out_sine') +
-                # Balanço esquerda-pequeno
-                Animation(pos_hint={"right": 0.963, "y": 0.039}, duration=0.2, transition='in_out_sine') +
-                # Volta ao centro
-                Animation(pos_hint=original_pos, duration=0.15, transition='out_sine')
+                Animation(pos=(base_pos[0] + dp(4), base_pos[1] + dp(4)), duration=0.15, transition='out_sine') +
+                Animation(pos=(base_pos[0] - dp(4), base_pos[1] - dp(3)), duration=0.3, transition='in_out_sine') +
+                Animation(pos=(base_pos[0] + dp(3), base_pos[1] + dp(2)), duration=0.25, transition='in_out_sine') +
+                Animation(pos=(base_pos[0] - dp(3), base_pos[1] - dp(2)), duration=0.25, transition='in_out_sine') +
+                Animation(pos=(base_pos[0] + dp(2), base_pos[1] + dp(1)), duration=0.2, transition='in_out_sine') +
+                Animation(pos=(base_pos[0] - dp(2), base_pos[1] - dp(1)), duration=0.2, transition='in_out_sine') +
+                Animation(pos=base_pos, duration=0.15, transition='out_sine')
             )
-            swing.start(self.ids.ai_button)
+            swing.start(button)
             return True
         
-        # Executar balanço a cada 2.5 segundos
         self.swing_event = Clock.schedule_interval(swing_cycle, 2.5)
-        swing_cycle(0)  # Executar imediatamente
+        swing_cycle(0)
     
     def _stop_swing_animation(self):
         """Para a animação de abanar"""
@@ -299,15 +382,392 @@ class AdminScreen(Screen):
             self.swing_event = None
         
         if hasattr(self.ids, 'ai_button'):
-            Animation.cancel_all(self.ids.ai_button)
-            
-            # Retornar à posição original
-            anim = Animation(
-                pos_hint={"right": 0.965, "y": 0.04},
-                duration=0.2,
-                transition='out_sine'
+            button = self.ids.ai_button
+            Animation.cancel_all(button)
+            if self._ai_button_rest_pos:
+                Animation(
+                    pos=self._ai_button_rest_pos,
+                    duration=0.2,
+                    transition='out_sine'
+                ).start(button)
+
+    def _format_money(self, value):
+        try:
+            return f"{float(value or 0):,.2f} MZN".replace(",", " ")
+        except Exception:
+            return "0.00 MZN"
+
+    def _loss_type_label(self, code):
+        return LOSS_LABELS.get(str(code or "").upper(), str(code or "Sem tipo"))
+
+    def _ensure_loss_report(self):
+        if self.loss_report is None:
+            from pdfs.loss_report import LossReport
+            self.loss_report = LossReport()
+        return self.loss_report
+
+    def _ensure_pdf_viewer(self):
+        if self.pdf_viewer is None:
+            from pdfs.pdf_viewer import PDFViewer
+            self.pdf_viewer = PDFViewer(
+                error_callback=lambda msg: self.show_snackbar(str(msg))
             )
-            anim.start(self.ids.ai_button)
+        return self.pdf_viewer
+
+    def _get_default_loss_metrics_period(self, end_date=None):
+        end_date = end_date or datetime.now()
+        start_date = end_date - timedelta(days=self.LOSS_METRICS_LOOKBACK_DAYS)
+        return start_date, end_date
+
+    def _build_loss_metric_card(self, title, value, subtitle, icon_name, tone):
+        from kivymd.uix.card import MDCard
+        from kivymd.uix.label import MDIcon
+
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        tone_color = tokens.get(
+            tone,
+            tokens.get("info", [0.15, 0.45, 0.75, 1]),
+        )
+
+        card = MDCard(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(120),
+            padding=dp(14),
+            spacing=dp(8),
+            radius=[dp(18)],
+            elevation=0,
+            md_bg_color=tokens.get("card_alt", [0.96, 0.97, 0.99, 1]),
+        )
+
+        header = MDBoxLayout(
+            size_hint_y=None,
+            height=dp(22),
+            spacing=dp(8),
+        )
+        header.add_widget(
+            MDIcon(
+                icon=icon_name,
+                theme_text_color="Custom",
+                text_color=tone_color,
+                size_hint=(None, None),
+                size=(dp(18), dp(18)),
+            )
+        )
+        header.add_widget(
+            MDLabel(
+                text=title,
+                font_style="Caption",
+                theme_text_color="Secondary",
+                shorten=True,
+                shorten_from="right",
+            )
+        )
+        card.add_widget(header)
+        card.add_widget(
+            MDLabel(
+                text=value,
+                font_style="H6",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=tokens.get("text_primary", [0.12, 0.18, 0.26, 1]),
+            )
+        )
+        card.add_widget(
+            MDLabel(
+                text=subtitle,
+                font_size=dp(10.5),
+                theme_text_color="Secondary",
+            )
+        )
+        return card
+
+    def _build_loss_section_card(self, title, lines, icon_name="text-box-outline", tone="info"):
+        from kivymd.uix.card import MDCard
+        from kivymd.uix.label import MDIcon
+
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        tone_color = tokens.get(
+            tone,
+            tokens.get("info", [0.15, 0.45, 0.75, 1]),
+        )
+
+        card = MDCard(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=dp(14),
+            spacing=dp(8),
+            radius=[dp(18)],
+            elevation=0,
+            md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+        )
+        card.bind(minimum_height=card.setter("height"))
+
+        header = MDBoxLayout(
+            size_hint_y=None,
+            height=dp(24),
+            spacing=dp(8),
+        )
+        header.add_widget(
+            MDIcon(
+                icon=icon_name,
+                theme_text_color="Custom",
+                text_color=tone_color,
+                size_hint=(None, None),
+                size=(dp(18), dp(18)),
+            )
+        )
+        header.add_widget(
+            MDLabel(
+                text=title,
+                bold=True,
+                font_style="Subtitle1",
+                theme_text_color="Primary",
+            )
+        )
+        card.add_widget(header)
+
+        section_lines = list(lines or []) or ["Sem dados suficientes para apresentar nesta secao."]
+        for line in section_lines:
+            item = MDLabel(
+                text=str(line),
+                size_hint_y=None,
+                font_size=dp(11.5),
+                theme_text_color="Secondary",
+            )
+            item.bind(
+                texture_size=lambda inst, value: setattr(
+                    inst,
+                    "height",
+                    max(dp(18), value[1]),
+                )
+            )
+            card.add_widget(item)
+
+        return card
+
+    def _build_loss_metrics_content(self, metrics, start_date, end_date, detailed=False):
+        from kivy.uix.scrollview import ScrollView
+        from kivymd.uix.gridlayout import MDGridLayout
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            padding=dp(6),
+            spacing=dp(12),
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        header_lines = [
+            f"Periodo analisado: {start_date.strftime('%d/%m/%Y')} ate {end_date.strftime('%d/%m/%Y')}",
+            f"{int(metrics.get('loss_count') or 0)} perdas registadas com impacto total de {self._format_money(metrics.get('total_cost'))}.",
+        ]
+        if metrics.get("total_sales", 0):
+            header_lines.append(
+                f"As perdas representam {float(metrics.get('loss_percentage') or 0):.2f}% das vendas do periodo."
+            )
+        content.add_widget(
+            self._build_loss_section_card(
+                "Resumo Executivo",
+                header_lines,
+                icon_name="chart-areaspline",
+                tone="info",
+            )
+        )
+
+        metrics_grid = MDGridLayout(
+            cols=1 if Window.width < dp(1180) else 2,
+            spacing=dp(10),
+            size_hint_y=None,
+        )
+        metrics_grid.bind(minimum_height=metrics_grid.setter("height"))
+
+        metrics_grid.add_widget(
+            self._build_loss_metric_card(
+                "Eventos de perda",
+                str(int(metrics.get("loss_count") or 0)),
+                "Ocorrencias aprovadas no periodo",
+                "package-variant-closed-remove",
+                "warning",
+            )
+        )
+        metrics_grid.add_widget(
+            self._build_loss_metric_card(
+                "Custo total",
+                self._format_money(metrics.get("total_cost")),
+                "Valor de custo absorvido pelas perdas",
+                "cash-remove",
+                "danger",
+            )
+        )
+        metrics_grid.add_widget(
+            self._build_loss_metric_card(
+                "Receita perdida",
+                self._format_money(metrics.get("total_revenue_lost")),
+                "Quanto deixamos de faturar",
+                "trending-down",
+                "warning",
+            )
+        )
+        metrics_grid.add_widget(
+            self._build_loss_metric_card(
+                "Lucro perdido",
+                self._format_money(metrics.get("total_profit_lost")),
+                "Impacto estimado na margem",
+                "chart-waterfall",
+                "danger",
+            )
+        )
+        metrics_grid.add_widget(
+            self._build_loss_metric_card(
+                "Perdas vs vendas",
+                f"{float(metrics.get('loss_percentage') or 0):.2f}%",
+                f"Sobre {self._format_money(metrics.get('total_sales'))} em vendas",
+                "percent-outline",
+                "info",
+            )
+        )
+        metrics_grid.add_widget(
+            self._build_loss_metric_card(
+                "Media por evento",
+                self._format_money(metrics.get("avg_loss_value")),
+                "Valor medio por registo de perda",
+                "calculator-variant-outline",
+                "success",
+            )
+        )
+        content.add_widget(metrics_grid)
+
+        by_type = metrics.get("by_type") or {}
+        type_lines = [
+            f"{self._loss_type_label(loss_type)}: {self._format_money(data.get('total_cost'))} em {int(data.get('count') or 0)} registos"
+            for loss_type, data in by_type.items()
+        ]
+        content.add_widget(
+            self._build_loss_section_card(
+                "Distribuicao por tipo",
+                type_lines,
+                icon_name="shape-outline",
+                tone="warning",
+            )
+        )
+
+        limit = 8 if detailed else 5
+        by_user = metrics.get("by_user") or []
+        user_lines = []
+        for user_data in by_user[:limit]:
+            username = user_data[0] if len(user_data) > 0 else "Sistema"
+            cost = float(user_data[1] or 0) if len(user_data) > 1 else 0.0
+            revenue = float(user_data[2] or 0) if len(user_data) > 2 else 0.0
+            events = int(user_data[3] or 0) if len(user_data) > 3 else 0
+            user_lines.append(
+                f"{username or 'Sistema'}: {self._format_money(cost)} de custo, {self._format_money(revenue)} de receita perdida, {events} eventos"
+            )
+        content.add_widget(
+            self._build_loss_section_card(
+                "Utilizadores com maior impacto",
+                user_lines,
+                icon_name="account-alert-outline",
+                tone="info",
+            )
+        )
+
+        by_product = metrics.get("by_product") or []
+        product_lines = []
+        for product_data in by_product[:limit]:
+            name = product_data[1] if len(product_data) > 1 else "Produto"
+            count = int(product_data[2] or 0) if len(product_data) > 2 else 0
+            cost = float(product_data[3] or 0) if len(product_data) > 3 else 0.0
+            product_lines.append(
+                f"{name}: {self._format_money(cost)} em {count} ocorrencias"
+            )
+        content.add_widget(
+            self._build_loss_section_card(
+                "Produtos mais afetados",
+                product_lines,
+                icon_name="package-variant",
+                tone="danger",
+            )
+        )
+
+        if detailed:
+            content.add_widget(
+                self._build_loss_section_card(
+                    "Leitura rapida",
+                    [
+                        "Use o botao PDF para guardar uma versao imprimivel deste painel.",
+                        "A secao por utilizador ajuda a identificar concentracao de perdas por operador.",
+                        "A secao por produto ajuda a decidir reposicao, promocao ou revisao de manuseio.",
+                    ],
+                    icon_name="lightbulb-on-outline",
+                    tone="success",
+                )
+            )
+
+        scroll = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(6),
+            size_hint=(1, 1),
+        )
+        scroll.add_widget(content)
+        return scroll
+
+    def _show_pdf_success(self, pdf_path):
+        dialog = MDDialog(
+            title="PDF Gerado",
+            text=f"Arquivo criado em:\n{pdf_path}",
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                MDRaisedButton(
+                    text="ABRIR PDF",
+                    on_release=lambda _x: self._open_pdf(dialog, pdf_path),
+                ),
+            ],
+        )
+        dialog.open()
+
+    def _open_pdf(self, dialog, pdf_path):
+        dialog.dismiss()
+        self._ensure_pdf_viewer().view_pdf(pdf_path)
+
+    def _generate_loss_metrics_pdf(self, start_date, end_date, metrics=None):
+        snapshot_metrics = dict(metrics or {})
+
+        def task():
+            export_metrics = snapshot_metrics or (self.db.calculate_loss_metrics(start_date, end_date) or {})
+            records = self.db.get_loss_records(start_date, end_date, limit=300) or []
+            data = {
+                "metrics": export_metrics,
+                "records": records,
+            }
+            filters = {
+                "start_date": start_date,
+                "end_date": end_date,
+                "product": "Todos os Produtos",
+                "category": "Todas as Categorias",
+            }
+            return self._ensure_loss_report().generate(data, filters)
+
+        def on_success(pdf_path):
+            if not pdf_path:
+                self.show_snackbar("Falha ao gerar PDF de perdas")
+                return
+            self._show_pdf_success(pdf_path)
+
+        self._run_async_action(
+            "loss-metrics-pdf",
+            task,
+            on_success=on_success,
+            busy_message="A gerar PDF das metricas de perdas...",
+            error_message="Erro ao gerar PDF das metricas de perdas",
+        )
+
+    def _open_loss_details_from_metrics(self, dialog, metrics, start_date, end_date):
+        if dialog is not None:
+            dialog.dismiss()
+        self.show_detailed_loss_report(metrics=metrics, start_date=start_date, end_date=end_date)
 
     # ------------------------------------------------------------------
     # Navigation helpers
@@ -338,7 +798,6 @@ class AdminScreen(Screen):
     def logout(self):
         app = App.get_running_app()
         if app and app.current_user:
-            get_db().log_action(app.current_user, app.current_role or "admin", "LOGOUT", "Logout admin")
             app.current_user = None
             app.current_role = None
         if app:
@@ -407,6 +866,38 @@ class AdminScreen(Screen):
         self._filter_ev = None
         self.filter_products(self._pending_search)
 
+    @staticmethod
+    def _normalize_product_id(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _rebuild_display_ids(self, rows=None):
+        ordered_ids = []
+        seen = set()
+        for row in list(rows or []):
+            if not row:
+                continue
+            product_id = self._normalize_product_id(row[0] if len(row) > 0 else None)
+            if product_id is None or product_id in seen:
+                continue
+            seen.add(product_id)
+            ordered_ids.append(product_id)
+        ordered_ids.sort()
+        self._display_ids_by_product_id = {
+            product_id: idx for idx, product_id in enumerate(ordered_ids, start=1)
+        }
+
+    def _get_display_id(self, product_or_id):
+        product_id = product_or_id
+        if isinstance(product_or_id, (list, tuple)):
+            product_id = product_or_id[0] if product_or_id else None
+        normalized = self._normalize_product_id(product_id)
+        if normalized is None:
+            return ""
+        return self._display_ids_by_product_id.get(normalized, normalized)
+
     # ------------------------------------------------------------------
     # Search / filter
     # ------------------------------------------------------------------
@@ -417,7 +908,9 @@ class AdminScreen(Screen):
         filtered = []
 
         for product in self.products:
+            display_id = self._get_display_id(product)
             search_match = (
+                search_value in str(display_id).lower() or
                 search_value in str(product[0]).lower() or
                 (len(product) > 1 and search_value in str(product[1]).lower()) or
                 (len(product) > 11 and search_value in str(product[11]).lower()) or
@@ -460,6 +953,7 @@ class AdminScreen(Screen):
         self._products_loading = False
         self._last_products_load_at = time.perf_counter()
         self.products = list(rows or [])
+        self._rebuild_display_ids(self.products)
         self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
         self.filter_products(self.search_input.text if self.search_input else self._pending_search)
         self._show_expiry_dashboard_summary()
@@ -650,13 +1144,14 @@ class AdminScreen(Screen):
         danger_color = palette["danger_color"]
         action_tokens = palette["tokens"]
         expiry_alert = self._get_expiry_alert(product)
+        display_id = self._get_display_id(product)
 
         is_sold_by_weight = product[15] if len(product) > 15 else 0
         unit_label = "KG" if is_sold_by_weight else ""
 
         cell = self._make_product_cell(0, row_h, row_bg_color, border_color)
         cell.add_widget(MDLabel(
-            text=str(product[0]),
+            text=str(display_id),
             theme_text_color="Custom",
             text_color=text_primary,
             halign='center',
@@ -778,12 +1273,13 @@ class AdminScreen(Screen):
     # ------------------------------------------------------------------
     def create_detail_button(self, product_id, tokens=None):
         tokens = tokens or self._theme_tokens()
-        btn = MDIconButton(
+        btn = TooltipIconButton(
             icon="information",
             theme_text_color="Custom",
             text_color=tokens.get("info", [0.1, 0.3, 0.9, 1]),
             md_bg_color=tokens.get("card_alt", [0.92, 0.95, 1, 1]),
-            icon_size=sp(20)
+            icon_size=sp(20),
+            hint_text="Ver detalhes",
         )
         btn.product_id = product_id
         btn.bind(on_release=self.show_product_details)
@@ -791,12 +1287,13 @@ class AdminScreen(Screen):
 
     def create_edit_button(self, product, tokens=None):
         tokens = tokens or self._theme_tokens()
-        btn = MDIconButton(
+        btn = TooltipIconButton(
             icon="pencil",
             theme_text_color="Custom",
             text_color=tokens.get("success", [0.1, 0.65, 0.2, 1]),
             md_bg_color=tokens.get("card_alt", [0.92, 1, 0.92, 1]),
-            icon_size=sp(20)
+            icon_size=sp(20),
+            hint_text="Editar produto",
         )
         btn.product_id = product
         btn.bind(on_release=self.edit_product)
@@ -804,12 +1301,13 @@ class AdminScreen(Screen):
 
     def create_delete_button(self, product_id, tokens=None):
         tokens = tokens or self._theme_tokens()
-        btn = MDIconButton(
+        btn = TooltipIconButton(
             icon="delete",
             theme_text_color="Custom",
             text_color=tokens.get("danger", [0.9, 0.2, 0.2, 1]),
             md_bg_color=tokens.get("card_alt", [1, 0.92, 0.92, 1]),
-            icon_size=sp(20)
+            icon_size=sp(20),
+            hint_text="Eliminar produto",
         )
         btn.product_id = product_id
         btn.bind(on_release=self.delete_product)
@@ -819,15 +1317,31 @@ class AdminScreen(Screen):
     # Product actions
     # ------------------------------------------------------------------
     def show_product_details(self, instance):
-        product = self.db.get_product(instance.product_id)
-        if product:
-            _get_detail_popup_class()(product).open()
+        product_id = instance.product_id
+
+        def task():
+            return self.db.get_product(product_id)
+
+        def on_success(product):
+            if product:
+                _get_detail_popup_class()(product).open()
+                return
+            self.show_snackbar("Produto nao encontrado")
+
+        self._run_async_action(
+            f"detail:{product_id}",
+            task,
+            on_success=on_success,
+            busy_message="A abrir detalhes do produto...",
+            error_message="Erro ao abrir detalhes do produto",
+        )
 
     def add_product(self):
-        _get_product_form_class()(self).open()
+        Clock.schedule_once(lambda dt: _get_product_form_class()(self).open(), 0)
 
     def edit_product(self, instance):
-        _get_product_form_class()(self, instance.product_id).open()
+        product = instance.product_id
+        Clock.schedule_once(lambda dt, current=product: _get_product_form_class()(self, current).open(), 0)
 
     def delete_product(self, instance):
         product_id = instance.product_id
@@ -854,15 +1368,33 @@ class AdminScreen(Screen):
     def confirm_delete(self, product_id):
         app = App.get_running_app()
         username = getattr(app, "current_user", None)
-        ok = self.db.delete_product(product_id, username=username)
-        self.dialog.dismiss()
-        if ok:
-            if username:
-                self.db.log_action(username, app.current_role or "admin", "DELETE_PRODUCT", f"Produto eliminado ID {product_id}")
-            self.load_products()
-            self.show_snackbar("Produto eliminado com sucesso!")
-        else:
+        role = getattr(app, "current_role", "admin") if app else "admin"
+        if getattr(self, "dialog", None):
+            self.dialog.dismiss()
+
+        def task():
+            ok = self.db.delete_product(product_id, username=username)
+            if ok and username:
+                try:
+                    self.db.log_action(username, role, "DELETE_PRODUCT", f"Produto eliminado ID {product_id}")
+                except Exception:
+                    pass
+            return ok
+
+        def on_success(ok):
+            if ok:
+                self.load_products()
+                self.show_snackbar("Produto eliminado com sucesso!")
+                return
             self.show_snackbar("Erro ao eliminar produto!")
+
+        self._run_async_action(
+            f"delete:{product_id}",
+            task,
+            on_success=on_success,
+            busy_message="A eliminar produto...",
+            error_message="Erro ao eliminar produto!",
+        )
 
     # ------------------------------------------------------------------
     # Snackbar for notifications
@@ -1003,8 +1535,15 @@ class AdminScreen(Screen):
                 max_lines=3,
                 expiry_level=banner.get("expiry_level"),
             )
+        target_container = self.ids.ai_banner_container
+        ensure_center = getattr(self._intelligence, "_ensure_banner_center", None)
+        if callable(ensure_center):
+            try:
+                target_container = ensure_center()
+            except Exception:
+                target_container = self.ids.ai_banner_container
         render_auto_banners(
-            self.ids.ai_banner_container,
+            target_container,
             banners,
             insights=insights,
             auto_dismiss_seconds=None,
@@ -1013,15 +1552,19 @@ class AdminScreen(Screen):
         self.mark_notifications_seen(insights)
 
     def show_ai_insights(self, *args):
-        self._intelligence.open_history()
+        caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
+        self._intelligence.open_history(caller=caller)
 
     def open_ai_menu(self, caller):
-        self._intelligence.open_history()
+        if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
+            caller = self.ids.ai_button
+        self._intelligence.open_history(caller=caller)
 
     def _open_ai_from_menu(self, key):
         if hasattr(self, "_ai_menu") and self._ai_menu:
             self._ai_menu.dismiss()
-        self._intelligence.open_history()
+        caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
+        self._intelligence.open_history(caller=caller)
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
         self._intelligence.refresh()
@@ -1075,26 +1618,39 @@ class AdminScreen(Screen):
         Clock.schedule_once(lambda dt: reports_screen.select_date_range(), 0.12)
 
     def toggle_kg_products(self):
+        if "kg-filter" in self._async_actions:
+            return
         if not hasattr(self, 'filter_mode'):
             self.filter_mode = 0
 
         self.filter_mode = (self.filter_mode + 1) % 3
 
         if self.filter_mode == 1:
-            kg_products = self.db.get_products_by_weight()
-            if kg_products:
-                self.update_product_table(kg_products)
-                self.show_snackbar("Mostrando apenas produtos vendidos por KG")
-            else:
+            def task():
+                return self.db.get_products_by_weight() or []
+
+            def on_success(kg_products):
+                if kg_products:
+                    self.update_product_table(kg_products)
+                    self.show_snackbar("Mostrando apenas produtos vendidos por KG")
+                    return
                 self.filter_mode = 2
                 unit_products = [p for p in self.products if not (len(p) > 15 and p[15])]
                 if unit_products:
                     self.update_product_table(unit_products)
                     self.show_snackbar("Mostrando apenas produtos vendidos por unidade")
-                else:
-                    self.filter_mode = 0
-                    self.update_product_table(self.products)
-                    self.show_snackbar("Mostrando todos os produtos")
+                    return
+                self.filter_mode = 0
+                self.update_product_table(self.products)
+                self.show_snackbar("Mostrando todos os produtos")
+
+            self._run_async_action(
+                "kg-filter",
+                task,
+                on_success=on_success,
+                busy_message="A carregar produtos por KG...",
+                error_message="Erro ao carregar filtro por KG",
+            )
         elif self.filter_mode == 2:
             unit_products = [p for p in self.products if not (len(p) > 15 and p[15])]
             if unit_products:
@@ -1142,130 +1698,134 @@ class AdminScreen(Screen):
         Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
 
     def show_loss_metrics(self, *args):
-        """Mostrar metricas de perdas do ultimo mes"""
-        try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=30)
+        """Mostrar metricas de perdas no periodo padrao do historico."""
+        def task():
+            start_date, end_date = self._get_default_loss_metrics_period()
             metrics = self.db.calculate_loss_metrics(start_date, end_date)
+            return {
+                "metrics": metrics or {},
+                "start_date": start_date,
+                "end_date": end_date,
+            }
 
+        def on_success(payload):
+            payload = payload or {}
+            metrics = payload.get("metrics") or {}
+            default_start, default_end = self._get_default_loss_metrics_period()
+            start_date = payload.get("start_date") or default_start
+            end_date = payload.get("end_date") or default_end
             if not metrics:
                 self.show_snackbar("Erro ao calcular perdas")
                 return
 
-            message = f"""PERDAS - ULTIMOS 30 DIAS
+            if self._loss_metrics_dialog is not None:
+                try:
+                    self._loss_metrics_dialog.dismiss()
+                except Exception:
+                    pass
+                self._loss_metrics_dialog = None
 
-    RESUMO:
-    - Eventos: {metrics['loss_count']} perdas
-    - Custo Total: {metrics['total_cost']:.2f} MZN
-    - Receita Perdida: {metrics['total_revenue_lost']:.2f} MZN
-    - Lucro Perdido: {metrics['total_profit_lost']:.2f} MZN
+            content = self._build_loss_metrics_content(
+                metrics,
+                start_date,
+                end_date,
+                detailed=False,
+            )
+            dialog = None
 
-    PERFORMANCE:
-    - Total Vendas: {metrics['total_sales']:.2f} MZN
-    - % Perdas vs Vendas: {metrics['loss_percentage']:.2f}%
-    - Media por Perda: {metrics['avg_loss_value']:.2f} MZN
+            def open_details(_instance):
+                self._open_loss_details_from_metrics(
+                    dialog,
+                    metrics,
+                    start_date,
+                    end_date,
+                )
 
-    POR TIPO:"""
-
-            for loss_type, data in metrics['by_type'].items():
-                message += f"\n- {loss_type}: {data['total_cost']:.2f} MZN ({data['count']}x)"
+            def close_dialog(_instance):
+                if dialog is not None:
+                    dialog.dismiss()
 
             dialog = MDDialog(
                 title="METRICAS DE PERDAS",
-                text=message,
+                type="custom",
+                content_cls=content,
+                size_hint=(0.92, 0.9),
                 buttons=[
+                    MDRaisedButton(
+                        text="PDF",
+                        on_release=lambda _x, start=start_date, end=end_date, data=metrics: self._generate_loss_metrics_pdf(
+                            start,
+                            end,
+                            metrics=data,
+                        ),
+                    ),
                     MDFlatButton(
-                        text="VER DETALHES",
-                        on_release=lambda x: self.show_detailed_loss_report()
+                        text="DETALHES",
+                        on_release=open_details,
                     ),
                     MDFlatButton(
                         text="FECHAR",
-                        on_release=lambda x: dialog.dismiss()
-                    )
-                ]
+                        on_release=close_dialog,
+                    ),
+                ],
             )
+            dialog.bind(on_dismiss=lambda *_: setattr(self, "_loss_metrics_dialog", None))
+            self._loss_metrics_dialog = dialog
             dialog.open()
 
-        except Exception as e:
-            print(f"Erro ao mostrar metricas: {e}")
-            self.show_snackbar("Erro ao carregar metricas")
+        self._run_async_action(
+            "loss-metrics",
+            task,
+            on_success=on_success,
+            busy_message="A carregar metricas de perdas...",
+            error_message="Erro ao carregar metricas",
+        )
 
-    def show_detailed_loss_report(self, *args):
+    def show_detailed_loss_report(self, metrics=None, start_date=None, end_date=None, *args):
         """Mostrar relatorio detalhado de perdas"""
         try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=30)
-
-            metrics = self.db.calculate_loss_metrics(start_date, end_date)
+            if start_date is None or end_date is None:
+                start_date, end_date = self._get_default_loss_metrics_period(end_date)
+            if metrics is None:
+                metrics = self.db.calculate_loss_metrics(start_date, end_date)
             if not metrics:
                 return
 
-            from kivymd.uix.boxlayout import MDBoxLayout
-            from kivymd.uix.label import MDLabel
-            from kivy.uix.scrollview import ScrollView
-            from kivy.metrics import dp
+            if self._loss_details_dialog is not None:
+                try:
+                    self._loss_details_dialog.dismiss()
+                except Exception:
+                    pass
+                self._loss_details_dialog = None
 
-            content = MDBoxLayout(
-                orientation='vertical',
-                padding=dp(20),
-                spacing=dp(15),
-                size_hint_y=None
+            content = self._build_loss_metrics_content(
+                metrics,
+                start_date,
+                end_date,
+                detailed=True,
             )
-            content.bind(minimum_height=content.setter('height'))
-
-            header = MDLabel(
-                text=f"RELATORIO DE PERDAS\n{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}",
-                font_style="H6",
-                halign='center',
-                size_hint_y=None,
-                height=dp(60)
-            )
-            content.add_widget(header)
-
-            summary_text = f"""RESUMO GERAL:
-    Eventos: {metrics['loss_count']}
-    Custo Total: {metrics['total_cost']:.2f} MZN
-    Receita Perdida: {metrics['total_revenue_lost']:.2f} MZN
-    % vs Vendas: {metrics['loss_percentage']:.2f}%
-
-    POR TIPO:"""
-
-            for loss_type, data in metrics['by_type'].items():
-                summary_text += f"\n{loss_type}: {data['total_cost']:.2f} MZN ({data['count']}x)"
-
-            summary_text += "\n\nPOR UTILIZADOR:"
-            for user_data in metrics['by_user'][:5]:
-                username, role, count, cost, revenue, avg = user_data
-                summary_text += f"\n{username}: {cost:.2f} MZN ({count}x)"
-
-            summary_text += "\n\nTOP 5 PRODUTOS:"
-            for prod_data in metrics['by_product'][:5]:
-                product_id, description, count, cost = prod_data
-                summary_text += f"\n{description}: {cost:.2f} MZN ({count}x)"
-
-            summary_label = MDLabel(
-                text=summary_text,
-                size_hint_y=None,
-                halign='left'
-            )
-            summary_label.bind(texture_size=summary_label.setter('size'))
-            content.add_widget(summary_label)
-
-            scroll = ScrollView(size_hint=(1, 1))
-            scroll.add_widget(content)
-
             dialog = MDDialog(
-                title="",
+                title="DETALHES DAS PERDAS",
                 type='custom',
-                content_cls=scroll,
-                size_hint=(0.9, 0.9),
+                content_cls=content,
+                size_hint=(0.93, 0.92),
                 buttons=[
+                    MDRaisedButton(
+                        text="PDF",
+                        on_release=lambda _x, start=start_date, end=end_date, data=metrics: self._generate_loss_metrics_pdf(
+                            start,
+                            end,
+                            metrics=data,
+                        ),
+                    ),
                     MDFlatButton(
                         text="FECHAR",
-                        on_release=lambda x: dialog.dismiss()
-                    )
+                        on_release=lambda _x: dialog.dismiss()
+                    ),
                 ]
             )
+            dialog.bind(on_dismiss=lambda *_: setattr(self, "_loss_details_dialog", None))
+            self._loss_details_dialog = dialog
             dialog.open()
 
         except Exception as e:
@@ -1273,9 +1833,10 @@ class AdminScreen(Screen):
 
     def show_fraud_alerts(self, *args):
         """Mostrar alertas de fraude"""
-        try:
-            alerts = self.db.detect_fraud_patterns(days_lookback=30)
+        def task():
+            return self.db.detect_fraud_patterns(days_lookback=30)
 
+        def on_success(alerts):
             if not alerts:
                 self.show_snackbar("Nenhum alerta de fraude detectado")
                 return
@@ -1312,8 +1873,13 @@ class AdminScreen(Screen):
             )
             dialog.open()
 
-        except Exception as e:
-            print(f"Erro ao mostrar alertas: {e}")
+        self._run_async_action(
+            "fraud-alerts",
+            task,
+            on_success=on_success,
+            busy_message="A carregar alertas de fraude...",
+            error_message="Erro ao carregar alertas",
+        )
 
     def show_all_fraud_alerts(self, alerts):
         """Mostrar todos os alertas em detalhe"""
@@ -1375,9 +1941,10 @@ class AdminScreen(Screen):
 
     def show_pending_approvals(self, *args):
         """Mostrar aprovacoes pendentes"""
-        try:
-            pending = self.db.get_pending_approvals()
+        def task():
+            return self.db.get_pending_approvals()
 
+        def on_success(pending):
             if not pending:
                 self.show_snackbar("Nenhuma aprovacao pendente")
                 return
@@ -1416,8 +1983,13 @@ class AdminScreen(Screen):
             )
             dialog.open()
 
-        except Exception as e:
-            print(f"Erro: {e}")
+        self._run_async_action(
+            "pending-approvals",
+            task,
+            on_success=on_success,
+            busy_message="A carregar aprovacoes pendentes...",
+            error_message="Erro ao carregar aprovacoes",
+        )
 
     def show_approval_details(self, pending_list):
         """Mostrar detalhes das aprovacoes com opcao de aprovar/rejeitar"""
@@ -1559,6 +2131,14 @@ class AdminScreen(Screen):
         self._stop_ai_polling()
         self._alerts_refresh_token += 1
         self._ai_popup_token += 1
+        for attr_name in ("_loss_metrics_dialog", "_loss_details_dialog"):
+            dialog = getattr(self, attr_name, None)
+            if dialog is not None:
+                try:
+                    dialog.dismiss()
+                except Exception:
+                    pass
+                setattr(self, attr_name, None)
 
 
     def check_fraud_alerts_on_enter(self, dt):
@@ -1589,7 +2169,23 @@ class AdminScreen(Screen):
         if token != self._fraud_check_token:
             return
         if high_count > 0:
+            if high_count != self._last_fraud_log_count:
+                app = App.get_running_app()
+                actor = getattr(app, "current_user", None) or "sistema"
+                role = getattr(app, "current_role", None) or "admin"
+                try:
+                    self.db.log_action(
+                        actor,
+                        role,
+                        "FRAUD_ALERT",
+                        f"{high_count} alerta(s) critico(s) de fraude detetado(s) automaticamente",
+                    )
+                except Exception:
+                    pass
+            self._last_fraud_log_count = high_count
             print(f"Alertas criticos detectados: {high_count}")
+            return
+        self._last_fraud_log_count = 0
 
     def show_fraud_notification_popup(self, alert_count):
         """Popup de notificacao de alertas criticos"""

@@ -46,6 +46,8 @@ class ProfitReport(BasePDFReport):
         
         elements.append(Spacer(1, 14))
         self._add_financial_summary(elements, data)
+        elements.append(Spacer(1, 16))
+        self._add_profit_chart(elements, data)
         elements.append(Spacer(1, 20))
         self._add_top_profitable_products(elements, data)
         elements.append(Spacer(1, 18))
@@ -129,6 +131,21 @@ class ProfitReport(BasePDFReport):
         
         elements.append(summary_table)
     
+    def _add_profit_chart(self, elements, data):
+        top_profit = data.nlargest(7, 'lucro_total')
+        chart_items = [
+            (row['description'], row['lucro_total'])
+            for _, row in top_profit.iterrows()
+        ]
+        elements.append(
+            self._build_bar_chart(
+                "Grafico de Barras: Produtos com Maior Lucro Total",
+                chart_items,
+                value_formatter=lambda value: f"MZN {value:,.2f}",
+                accent_color="#e67e22",
+            )
+        )
+
     def _add_top_profitable_products(self, elements, data):
         """Adiciona seção de top 15 produtos mais lucrativos com dados expandidos."""
         styles = getSampleStyleSheet()
@@ -243,6 +260,25 @@ class ProfitReport(BasePDFReport):
             ['≤ 0%', str(prejuizo), f"{(prejuizo/len(data)*100):.1f}%", 'Prejuízo'],
         ]
         
+        chart_items = [
+            {'label': 'Excelente', 'value': excelente, 'color': '#27ae60'},
+            {'label': 'Otima', 'value': otima, 'color': '#2ecc71'},
+            {'label': 'Boa', 'value': boa, 'color': '#f39c12'},
+            {'label': 'Regular', 'value': regular, 'color': '#e67e22'},
+            {'label': 'Prejuizo', 'value': prejuizo, 'color': '#e74c3c'},
+        ]
+        elements.append(
+            self._build_bar_chart(
+                "Grafico de Barras: Distribuicao das Margens",
+                chart_items,
+                value_formatter=lambda value: f"{int(round(value))} produtos",
+                accent_color="#8e44ad",
+                sort_items=False,
+                max_items=None,
+            )
+        )
+        elements.append(Spacer(1, 12))
+
         margin_table = Table(margin_data, colWidths=[2.5*inch, 2.5*inch, 2.0*inch, 2.0*inch])
         
         margin_table.setStyle(TableStyle([

@@ -11,13 +11,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
-from bs4 import BeautifulSoup
 
 from api.api_bazara import BazaraAPI
 from api.api_openfoodfacts import OpenFoodFactsAPI
+from api.optional_deps import BeautifulSoup, has_beautifulsoup
 from api.api_ranxo import RanxoAPI
-from api.api_upcitemdb import UPCitemdbAPI
-from api.api_sixty60 import Sixty60API
 
 
 class APIManager:
@@ -45,11 +43,8 @@ class APIManager:
 
     # APIs externas
     EXTERNAL_SOURCES = [
-        ("Bazara",         BazaraAPI()),
-        ("Ranxo",          RanxoAPI()),
         ("Open Food Facts", OpenFoodFactsAPI()),
-        ("UPCitemdb",      UPCitemdbAPI()),
-        ("Sixty60",        Sixty60API()),
+        ("Bazara",         BazaraAPI()),
     ]
 
     def __init__(self, database, on_success: callable, on_failure: callable, on_status: callable = None):
@@ -248,6 +243,29 @@ class APIManager:
                     Clock.schedule_once(lambda dt: self.on_success(offline_result['source'], offline_result['data']), 0)
                     return
 
+                openfoodfacts_result = self._get_from_openfoodfacts_cache(barcode)
+                if openfoodfacts_result:
+                    self.stats['offline_hits'] += 1
+                    self._notify_status("Cache Open Food Facts")
+                    self._save_to_memory_cache(
+                        barcode,
+                        openfoodfacts_result['source'],
+                        openfoodfacts_result['data'],
+                    )
+                    self._save_to_offline_cache(
+                        barcode,
+                        openfoodfacts_result['source'],
+                        openfoodfacts_result['data'],
+                    )
+                    Clock.schedule_once(
+                        lambda dt: self.on_success(
+                            openfoodfacts_result['source'],
+                            openfoodfacts_result['data'],
+                        ),
+                        0,
+                    )
+                    return
+
             # NÍVEL 2: Banco de dados local
             if not force_external:
                 self._notify_status("🔍 Buscando no banco local...")
@@ -359,7 +377,22 @@ class APIManager:
                     self.stats['offline_hits'] += 1
                     _merge_data(offline_result.get('source', 'Cache (offline)'), offline_result.get('data', {}))
                     _emit_partial(offline_result.get('source', 'Cache (offline)'))
-    
+
+            if not force_external and _missing_fields():
+                openfoodfacts_result = self._get_from_openfoodfacts_cache(barcode)
+                if openfoodfacts_result:
+                    self.stats['offline_hits'] += 1
+                    _merge_data(
+                        openfoodfacts_result.get('source', 'Open Food Facts'),
+                        openfoodfacts_result.get('data', {}),
+                    )
+                    _emit_partial(openfoodfacts_result.get('source', 'Open Food Facts'))
+                    self._save_to_offline_cache(
+                        barcode,
+                        openfoodfacts_result.get('source', 'Open Food Facts'),
+                        openfoodfacts_result.get('data', {}),
+                    )
+
             # NÍVEL 2: Banco local
             if not force_external and _missing_fields():
                 local_result = self._search_local(barcode)
@@ -591,6 +624,23 @@ class APIManager:
                 pass
         return None
 
+    def _get_from_openfoodfacts_cache(self, barcode: str):
+        """Recupera do cache separado do Open Food Facts."""
+        if barcode in self.openfoodfacts_cache:
+            entry = self.openfoodfacts_cache[barcode]
+            try:
+                timestamp = datetime.fromisoformat(entry.get('timestamp', ''))
+                if datetime.now() - timestamp < self.offline_cache_duration:
+                    return {
+                        'source': entry.get('source') or 'Open Food Facts',
+                        'data': entry.get('data'),
+                    }
+                del self.openfoodfacts_cache[barcode]
+                self._save_openfoodfacts_cache()
+            except Exception:
+                pass
+        return None
+
     @staticmethod
     def _is_openfoodfacts_source(source: str, data: dict | None) -> bool:
         if source and "open food facts" in source.lower():
@@ -786,6 +836,14 @@ class APIManager:
             "no_sku": 0,
             "errors": 0,
         }
+        if not has_beautifulsoup():
+            stats["errors"] = 1
+            self._emit_prefill_progress(
+                on_progress,
+                stats,
+                "BeautifulSoup indisponivel. Instale beautifulsoup4 para o prefill Ranxo.",
+            )
+            return stats
         original_max = self.max_offline_entries
         session = requests.Session()
         session.headers.update(getattr(RanxoAPI, "HEADERS", {}))
@@ -1094,11 +1152,11 @@ class APIManager:
             "updated": 0,
             "errors": 0,
         }
-        barcodes = list(self.offline_cache.keys())
+        barcodes = self._get_refresh_barcodes()
         stats["total"] = len(barcodes)
 
         if not barcodes:
-            self._emit_prefill_progress(on_progress, stats, "Cache offline vazio.")
+            self._emit_prefill_progress(on_progress, stats, "Sem barcodes no cache ou banco local.")
             return stats
 
         if source_names:
@@ -1150,6 +1208,82 @@ class APIManager:
         self._emit_prefill_progress(on_progress, stats, "Atualizacao concluida.")
         return stats
 
+    def prefill_openfoodfacts_cache(self, on_progress=None, delay: float = 0.2):
+        """
+        Busca barcodes conhecidos no Open Food Facts e armazena os dados
+        tanto no cache dedicado quanto no cache offline principal.
+        A consulta e feita diretamente no endpoint oficial do Open Food Facts.
+        """
+        stats = {
+            "total": 0,
+            "processed": 0,
+            "found": 0,
+            "success": 0,
+            "new": 0,
+            "updated": 0,
+            "missing": 0,
+            "errors": 0,
+        }
+        barcodes = self._get_refresh_barcodes()
+        stats["total"] = len(barcodes)
+
+        if not barcodes:
+            self._emit_prefill_progress(on_progress, stats, "Sem barcodes no cache ou banco local.")
+            return stats
+
+        source_name = "Open Food Facts"
+        api = OpenFoodFactsAPI()
+
+        offline_changed = False
+        openfoodfacts_changed = False
+        self._emit_prefill_progress(on_progress, stats, "Iniciando prefill Open Food Facts...")
+
+        for idx, barcode in enumerate(barcodes, 1):
+            stats["processed"] = idx
+            try:
+                self._emit_prefill_progress(
+                    on_progress,
+                    stats,
+                    f"Buscando {barcode} em {source_name}...",
+                )
+                result = self._fetch_with_timeout(api, barcode, self.timeout_per_api)
+                if not result:
+                    stats["missing"] += 1
+                    continue
+
+                payload = dict(result) if isinstance(result, dict) else {}
+                if not payload.get("barcode"):
+                    payload["barcode"] = barcode
+
+                stats["found"] += 1
+                updated, created = self._merge_offline_entry(barcode, payload, source_name)
+                if created:
+                    stats["new"] += 1
+                    offline_changed = True
+                elif updated:
+                    stats["updated"] += 1
+                    offline_changed = True
+
+                self._upsert_openfoodfacts_cache(barcode, payload)
+                openfoodfacts_changed = True
+                stats["success"] += 1
+            except Exception:
+                stats["errors"] += 1
+
+            if idx % 5 == 0 or idx == stats["total"]:
+                self._emit_prefill_progress(on_progress, stats)
+
+            if delay:
+                time.sleep(delay)
+
+        if offline_changed:
+            self._save_offline_cache()
+        if openfoodfacts_changed:
+            self._save_openfoodfacts_cache()
+
+        self._emit_prefill_progress(on_progress, stats, "Prefill Open Food Facts concluido.")
+        return stats
+
     def _emit_prefill_progress(self, on_progress, stats: dict, message: str | None = None):
         if not on_progress:
             return
@@ -1157,6 +1291,50 @@ class APIManager:
         if message:
             payload["message"] = message
         on_progress(payload)
+
+    def _get_refresh_barcodes(self):
+        """Reune barcodes do cache e do banco local para prefill online."""
+        barcodes = []
+        seen = set()
+
+        def _add_barcode(value):
+            barcode = self._normalize_barcode(value)
+            if not barcode or barcode in seen:
+                return
+            seen.add(barcode)
+            barcodes.append(barcode)
+
+        for barcode in list(self.offline_cache.keys()) + list(self.openfoodfacts_cache.keys()):
+            _add_barcode(barcode)
+
+        local_barcodes = []
+        try:
+            if self.db and hasattr(self.db, "get_known_barcodes"):
+                local_barcodes = self.db.get_known_barcodes() or []
+        except Exception:
+            local_barcodes = []
+
+        if not local_barcodes:
+            try:
+                local_rows = self.db.get_products_with_barcodes() if self.db else []
+            except Exception:
+                local_rows = []
+
+            for row in local_rows or []:
+                barcode = None
+                if isinstance(row, dict):
+                    barcode = row.get("barcode")
+                elif isinstance(row, (list, tuple)):
+                    if len(row) >= 3:
+                        barcode = row[2]
+                    elif row:
+                        barcode = row[-1]
+                _add_barcode(barcode)
+        else:
+            for barcode in local_barcodes:
+                _add_barcode(barcode)
+
+        return barcodes
 
     def _ranxo_get_sitemap_urls(self, session, timeout: int):
         index_url = "https://www.ranxo.co.mz/wp-sitemap.xml"
@@ -1211,6 +1389,8 @@ class APIManager:
         return urls
 
     def _ranxo_fetch_product_data(self, session, product_url: str, timeout: int):
+        if not has_beautifulsoup():
+            return None
         response = session.get(product_url, timeout=timeout, allow_redirects=True)
         if response.status_code != 200:
             return None

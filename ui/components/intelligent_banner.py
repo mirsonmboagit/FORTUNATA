@@ -13,6 +13,7 @@ from kivy.uix.floatlayout import FloatLayout
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.dialog import MDDialog
+from kivymd.uix.dropdownitem import MDDropDownItem
 from kivymd.uix.label import MDLabel
 from kivymd.uix.menu import MDDropdownMenu
 
@@ -180,6 +181,64 @@ def _banner_signature(items: list[dict[str, Any]]) -> tuple[Any, ...]:
     )
 
 
+def _alert_fingerprint(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("tipo") or "").strip().lower(),
+        str(item.get("categoria") or "").strip().lower(),
+        str(item.get("mensagem") or "").strip().lower(),
+    )
+
+
+def _merge_alert_items(
+    active_items: list[dict[str, Any]] | None = None,
+    history_items: list[dict[str, Any]] | None = None,
+    limit: int = 24,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in (list(active_items or []), list(history_items or [])):
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            fingerprint = _alert_fingerprint(item)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            merged.append(dict(item))
+            if len(merged) >= max(1, int(limit or 1)):
+                return merged
+    return merged
+
+
+def build_history_banner_data(
+    active_items: list[dict[str, Any]] | None = None,
+    history_items: list[dict[str, Any]] | None = None,
+    insights: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    banner_data = _insights_to_banner_data(insights or {}, include_positive=True)
+    merged_alerts = _merge_alert_items(active_items=active_items, history_items=history_items, limit=24)
+    banner_data.extend(_alerts_to_banner_data(merged_alerts[:12]))
+    banner_data.sort(key=_banner_sort_key)
+    return banner_data
+
+
+def get_banner_notification_total(banner_data: list[dict[str, Any]] | None = None) -> int:
+    total = 0
+    for item in list(banner_data or []):
+        try:
+            count = int(item.get("count") or 0)
+        except Exception:
+            count = 0
+        if count > 0:
+            total += count
+    return total
+
+
+def get_banner_notification_key(banner_data: list[dict[str, Any]] | None = None) -> str:
+    signature = _banner_signature(list(banner_data or []))
+    return repr(signature) if signature else ""
+
+
 class IntelligentBannerCenter(FloatLayout):
     """Usa o renderer original de banners para os novos alertas proativos."""
 
@@ -188,7 +247,7 @@ class IntelligentBannerCenter(FloatLayout):
         history_title: str = "Historico de alertas",
         columns: int = 1,
         auto_batch_size: int | None = None,
-        auto_stagger_seconds: float = 0.2,
+        auto_stagger_seconds: float = 2.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -203,9 +262,10 @@ class IntelligentBannerCenter(FloatLayout):
         self._last_positive_at = 0.0
         self._history_picker_dialog: MDDialog | None = None
         self._history_picker_menu: MDDropdownMenu | None = None
-        self._history_picker_button: MDRaisedButton | None = None
+        self._history_picker_button: MDDropDownItem | None = None
         self._history_picker_selected = ""
         self._history_picker_options: dict[str, list[dict[str, Any]]] = {}
+        self._history_picker_caller: Any = None
         self._manual_view_active = False
 
     def set_history(self, history_items: list[dict[str, Any]]) -> None:
@@ -291,6 +351,7 @@ class IntelligentBannerCenter(FloatLayout):
 
     def _build_history_banner_data(
         self,
+        active_items: list[dict[str, Any]] | None = None,
         history_items: list[dict[str, Any]] | None = None,
         insights: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
@@ -298,10 +359,11 @@ class IntelligentBannerCenter(FloatLayout):
             self.history_items = list(history_items)
         if insights is not None:
             self.current_insights = dict(insights)
-        banner_data = _insights_to_banner_data(self.current_insights, include_positive=True)
-        banner_data.extend(_alerts_to_banner_data(self.history_items[:12]))
-        banner_data.sort(key=_banner_sort_key)
-        return banner_data
+        return build_history_banner_data(
+            active_items=active_items,
+            history_items=self.history_items,
+            insights=self.current_insights,
+        )
 
     def _dismiss_history_picker(self, *_args: Any) -> None:
         menu = self._history_picker_menu
@@ -317,6 +379,7 @@ class IntelligentBannerCenter(FloatLayout):
         self._history_picker_button = None
         self._history_picker_selected = ""
         self._history_picker_options = {}
+        self._history_picker_caller = None
         if dialog is not None:
             try:
                 dialog.dismiss()
@@ -329,6 +392,7 @@ class IntelligentBannerCenter(FloatLayout):
         self._history_picker_button = None
         self._history_picker_selected = ""
         self._history_picker_options = {}
+        self._history_picker_caller = None
 
     def _dismiss_history_picker_menu(self, *_args: Any) -> None:
         menu = self._history_picker_menu
@@ -338,38 +402,50 @@ class IntelligentBannerCenter(FloatLayout):
                 menu.dismiss()
             except Exception:
                 pass
+        self._history_picker_caller = None
 
     def _select_history_picker_option(self, label: str) -> None:
         self._history_picker_selected = str(label or "").strip()
         button = self._history_picker_button
         if button is not None:
-            button.text = self._history_picker_selected or "Selecionar banner"
+            button.set_item(self._history_picker_selected or "Selecionar banner")
         self._dismiss_history_picker_menu()
 
     def _show_selected_history_banner(self, *_args: Any) -> None:
         selected = self._history_picker_selected
         banner_data = list(self._history_picker_options.get(selected) or [])
+        self._show_history_banners(banner_data)
+
+    def _show_history_banners(self, banner_data: list[dict[str, Any]]) -> None:
         self._dismiss_history_picker()
         if not banner_data:
             self.clear_visible()
             return
+        self._manual_view_active = True
         render_auto_banners(
             self,
             banner_data,
             insights=self.current_insights or None,
             auto_dismiss_seconds=None,
             show_timer=False,
-            stagger_seconds=0.08,
+            stagger_seconds=self.auto_stagger_seconds,
             columns=self.columns,
         )
 
-    def _open_history_picker(self, banner_data: list[dict[str, Any]]) -> None:
-        self._dismiss_history_picker()
+    def _show_history_option_from_menu(self, label: str) -> None:
+        self._history_picker_selected = str(label or "").strip()
+        self._show_selected_history_banner()
 
-        dialog_width = min(max(dp(320), Window.width * 0.40), dp(420))
-        has_choices = bool(banner_data)
+    def _build_history_picker_options(
+        self,
+        banner_data: list[dict[str, Any]],
+    ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
         options_map: dict[str, list[dict[str, Any]]] = {}
         option_labels: list[str] = []
+
+        if len(banner_data) > 1:
+            option_labels.append("Todos os banners")
+            options_map["Todos os banners"] = list(banner_data)
 
         for index, item in enumerate(banner_data, start=1):
             title = str(item.get("title") or "Banner inteligente").strip()
@@ -380,13 +456,59 @@ class IntelligentBannerCenter(FloatLayout):
             options_map[label] = [item]
             option_labels.append(label)
 
-        if len(banner_data) > 1:
-            option_labels.append("Todos os banners")
-            options_map["Todos os banners"] = list(banner_data)
-
         if not option_labels:
             option_labels = ["Nenhum banner disponivel"]
             options_map["Nenhum banner disponivel"] = []
+
+        return options_map, option_labels
+
+    def _open_history_dropdown(
+        self,
+        caller: Any,
+        banner_data: list[dict[str, Any]],
+    ) -> bool:
+        if caller is None:
+            return False
+
+        self._dismiss_history_picker()
+        options_map, option_labels = self._build_history_picker_options(banner_data)
+        if not option_labels:
+            return False
+
+        menu_items = [
+            {
+                "viewclass": "OneLineListItem",
+                "text": label,
+                "height": dp(44),
+                "on_release": lambda selected=label: self._show_history_option_from_menu(selected),
+            }
+            for label in option_labels
+        ]
+
+        try:
+            menu = MDDropdownMenu(
+                caller=caller,
+                items=menu_items,
+                width_mult=5,
+                max_height=dp(320),
+                position="bottom",
+            )
+            self._history_picker_menu = menu
+            self._history_picker_options = options_map
+            self._history_picker_selected = ""
+            self._history_picker_caller = caller
+            menu.open()
+            return True
+        except Exception:
+            self._dismiss_history_picker_menu()
+            return False
+
+    def _open_history_picker(self, banner_data: list[dict[str, Any]]) -> None:
+        self._dismiss_history_picker()
+
+        dialog_width = min(max(dp(320), Window.width * 0.40), dp(420))
+        has_choices = bool(banner_data)
+        options_map, option_labels = self._build_history_picker_options(banner_data)
 
         content = MDBoxLayout(
             orientation="vertical",
@@ -408,12 +530,17 @@ class IntelligentBannerCenter(FloatLayout):
         )
         helper_label.text_size = (dialog_width - dp(96), None)
 
-        picker_button = MDRaisedButton(
-            text=option_labels[0],
+        default_label = option_labels[0]
+        if len(banner_data) > 1 and "Todos os banners" in options_map:
+            default_label = "Todos os banners"
+
+        picker_button = MDDropDownItem(
+            size_hint_x=1,
             size_hint_y=None,
-            height=dp(44),
+            height=dp(52),
         )
         picker_button.disabled = not has_choices
+        picker_button.set_item(default_label if has_choices else "Nenhum banner disponivel")
 
         content.add_widget(helper_label)
         content.add_widget(picker_button)
@@ -460,20 +587,28 @@ class IntelligentBannerCenter(FloatLayout):
         self._history_picker_dialog = dialog
         self._history_picker_menu = menu
         self._history_picker_button = picker_button
-        self._history_picker_selected = option_labels[0] if has_choices else ""
+        self._history_picker_selected = default_label if has_choices else ""
         self._history_picker_options = options_map
         dialog.open()
 
     def open_history(
         self,
+        caller: Any = None,
+        active_items: list[dict[str, Any]] | None = None,
         history_items: list[dict[str, Any]] | None = None,
         insights: dict[str, Any] | None = None,
     ) -> None:
-        banner_data = self._build_history_banner_data(history_items=history_items, insights=insights)
-        self._dismiss_history_picker()
-        self._manual_view_active = True
-        self._render_inline_banners(
-            banner_data,
-            auto_dismiss_seconds=None,
-            show_timer=False,
+        banner_data = self._build_history_banner_data(
+            active_items=active_items,
+            history_items=history_items,
+            insights=insights,
         )
+        self._dismiss_history_picker()
+        if not banner_data:
+            self._manual_view_active = False
+            self.clear_visible()
+            return
+        self._manual_view_active = False
+        if self._open_history_dropdown(caller, banner_data):
+            return
+        self._open_history_picker(banner_data)

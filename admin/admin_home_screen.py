@@ -12,7 +12,9 @@ from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.card import MDCard
+from kivymd.uix.dialog import MDDialog
 from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.screen import MDScreen
 
@@ -24,6 +26,8 @@ if PROJECT_ROOT not in sys.path:
 from AI.controller import ProactiveIntelligenceController
 from database.provider import get_db
 from ui.components.admin_home_dashboard import SalesTrendChart
+from ui.components.tooltip_widgets import TooltipFloatingActionButton
+from utils.ai_popups import build_positive_banner, render_auto_banners
 
 
 Builder.load_file(os.path.join(CURRENT_DIR, "admin_home_screen.kv"))
@@ -51,6 +55,16 @@ def _format_value(value):
         return str(value)
 
 
+def _format_compact_qty(value):
+    try:
+        amount = float(value or 0)
+    except Exception:
+        return "0"
+    if abs(amount - round(amount)) < 0.01:
+        return str(int(round(amount)))
+    return f"{amount:.2f}".rstrip("0").rstrip(".")
+
+
 class AdminHomeScreen(MDScreen):
     HOME_CACHE_SECONDS = 20
     home_title = StringProperty("Painel do Administrador")
@@ -72,6 +86,8 @@ class AdminHomeScreen(MDScreen):
         self._summary_render_signature = None
         self._alerts_render_signature = None
         self._insights_render_signature = None
+        self._today_sales_dialog = None
+        self._today_sales_loading = False
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
             db=self.db,
@@ -177,40 +193,113 @@ class AdminHomeScreen(MDScreen):
     def _update_datetime_text(self):
         self.datetime_text = datetime.now().strftime("%d/%m/%Y | %H:%M")
 
+    def _apply_hero_button_layout(self, fill_width):
+        button_specs = (
+            ("hero_add_button", dp(96)),
+            ("hero_reports_button", dp(96)),
+            ("hero_pdfs_button", dp(84)),
+        )
+        for button_id, default_width in button_specs:
+            button = self.ids.get(button_id)
+            if button is None:
+                continue
+            if fill_width:
+                button.size_hint_x = 1
+                button.width = 0
+            else:
+                button.size_hint_x = None
+                button.width = default_width
+
     def _update_responsive_layout(self):
         if not self.ids:
             return
         width = self.width or dp(1200)
 
+        hero_card = self.ids.get("hero_card")
         summary_grid = self.ids.get("summary_grid")
+        summary_card = self.ids.get("summary_card")
         alerts_grid = self.ids.get("alerts_grid")
+        alerts_card = self.ids.get("alerts_card")
         quick_actions_grid = self.ids.get("quick_actions_grid")
+        quick_actions_card = self.ids.get("quick_actions_card")
         insights_grid = self.ids.get("insights_grid")
+        insights_card = self.ids.get("insights_card")
         hero_content = self.ids.get("hero_content")
         hero_actions = self.ids.get("hero_actions")
+        hero_side = self.ids.get("hero_side")
         left_col = self.ids.get("left_col")
         right_col = self.ids.get("right_col")
 
+        if width >= dp(1280):
+            summary_cols = 4
+            side_cols = 2
+            hero_orientation = "horizontal"
+            hero_side_fill = False
+            hero_height = dp(106)
+            summary_height = dp(148)
+            left_ratio, right_ratio = 0.67, 0.33
+            card_ratios = (0.34, 0.40, 0.26)
+            hero_buttons_fill = False
+        elif width >= dp(1060):
+            summary_cols = 2
+            side_cols = 2
+            hero_orientation = "horizontal"
+            hero_side_fill = False
+            hero_height = dp(120)
+            summary_height = dp(242)
+            left_ratio, right_ratio = 0.61, 0.39
+            card_ratios = (0.34, 0.40, 0.26)
+            hero_buttons_fill = False
+        else:
+            summary_cols = 2
+            side_cols = 1
+            hero_orientation = "vertical"
+            hero_side_fill = True
+            hero_height = dp(168)
+            summary_height = dp(242)
+            left_ratio, right_ratio = 0.57, 0.43
+            card_ratios = (0.34, 0.34, 0.32)
+            hero_buttons_fill = True
+
         if summary_grid:
-            summary_grid.cols = 4
+            summary_grid.cols = summary_cols
         if alerts_grid:
-            alerts_grid.cols = 2
+            alerts_grid.cols = side_cols
         if quick_actions_grid:
-            quick_actions_grid.cols = 2
+            quick_actions_grid.cols = side_cols
         if insights_grid:
-            insights_grid.cols = 2
+            insights_grid.cols = side_cols
+
+        if hero_card is not None:
+            hero_card.height = hero_height
+        if summary_card is not None:
+            summary_card.height = summary_height
+        if alerts_card is not None:
+            alerts_card.size_hint_y = card_ratios[0]
+        if quick_actions_card is not None:
+            quick_actions_card.size_hint_y = card_ratios[1]
+        if insights_card is not None:
+            insights_card.size_hint_y = card_ratios[2]
+
         if hero_content:
-            hero_content.orientation = "horizontal"
+            hero_content.orientation = hero_orientation
+            hero_content.spacing = dp(14)
+        if hero_side:
+            if hero_side_fill:
+                hero_side.size_hint_x = 1
+                hero_side.width = 0
+            else:
+                hero_side.size_hint_x = None
+                hero_side.width = dp(300)
         if hero_actions:
             hero_actions.orientation = "horizontal"
             hero_actions.spacing = dp(8)
+            hero_actions.height = dp(36)
+        self._apply_hero_button_layout(hero_buttons_fill)
+
         if left_col and right_col:
-            if width >= dp(1220):
-                left_col.size_hint_x = 0.67
-                right_col.size_hint_x = 0.33
-            else:
-                left_col.size_hint_x = 0.63
-                right_col.size_hint_x = 0.37
+            left_col.size_hint_x = left_ratio
+            right_col.size_hint_x = right_ratio
 
     def _ensure_chart_widgets(self):
         sales_host = self.ids.get("sales_chart_host") if hasattr(self, "ids") else None
@@ -352,8 +441,8 @@ class AdminHomeScreen(MDScreen):
 
         specs = [
             ("Faturacao Hoje", _format_mzn(summary.get("revenue_today") or 0.0), "Receita atual do dia", "cash-multiple", "primary", self.open_reports),
-            ("Vendas Hoje", _format_value(summary.get("sales_today_count") or 0), "Movimento do dia", "cash-register", "success", self.open_sales_history),
-            ("Stock Critico", _format_value(critical_stock), "Reposicao prioritaria", "alert-outline", "danger" if critical_stock > 0 else "success", self.go_to_products),
+            ("Vendas Hoje", _format_value(summary.get("sales_today_count") or 0), "Resumo do dia", "cash-register", "success", self.open_today_sales),
+            ("Stock Critico", _format_value(critical_stock), "Reposicao prioritaria", "alert-outline", "danger" if critical_stock > 0 else "success", self.open_stock_module),
             ("Produtos", _format_value(summary.get("total_products") or 0), "Catalogo ativo", "package-variant-closed", "info", self.go_to_products),
         ]
 
@@ -494,10 +583,10 @@ class AdminHomeScreen(MDScreen):
 
         if int(counts.get("expired") or 0) > 0:
             first = expired_items[0] if expired_items else {}
-            cards.append(("Produtos vencidos", int(counts.get("expired") or 0), "danger", "calendar-remove-outline", f"{first.get('name', 'Itens expirados')} exigem retirada imediata.", self.go_to_products))
+            cards.append(("Produtos vencidos", int(counts.get("expired") or 0), "danger", "calendar-remove-outline", f"{first.get('name', 'Itens expirados')} exigem retirada imediata.", self.show_expired_products_banner))
         if int(counts.get("critical_stock") or 0) > 0:
             first = low_stock_items[0] if low_stock_items else {}
-            cards.append(("Stock critico", int(counts.get("critical_stock") or 0), "warning", "alert-decagram-outline", f"{first.get('name', 'Reposicao')} esta com cobertura curta de stock.", self.go_to_products))
+            cards.append(("Stock critico", int(counts.get("critical_stock") or 0), "warning", "alert-decagram-outline", f"{first.get('name', 'Reposicao')} esta com cobertura curta de stock.", self.open_stock_module))
         if int(counts.get("out_of_stock") or 0) > 0:
             first = out_of_stock_items[0] if out_of_stock_items else {}
             cards.append(("Produtos esgotados", int(counts.get("out_of_stock") or 0), "danger", "close-octagon-outline", f"{first.get('name', 'Ha produtos')} ja estao sem disponibilidade.", self.go_to_products))
@@ -666,6 +755,219 @@ class AdminHomeScreen(MDScreen):
         card.add_widget(text_label)
         return card
 
+    def _dismiss_today_sales_dialog(self):
+        dialog = getattr(self, "_today_sales_dialog", None)
+        if dialog is None:
+            return
+        self._today_sales_dialog = None
+        try:
+            dialog.dismiss()
+        except Exception:
+            pass
+
+    def _parse_sale_datetime(self, raw_value):
+        text = str(raw_value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text)
+        except Exception:
+            pass
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%d/%m/%Y %H:%M:%S",
+            "%d/%m/%Y %H:%M",
+            "%Y-%m-%d",
+            "%d/%m/%Y",
+        ):
+            try:
+                return datetime.strptime(text, fmt)
+            except Exception:
+                continue
+        return None
+
+    def _build_today_sales_summary(self, rows):
+        rows = list(rows or [])
+        gross_total = 0.0
+        refunded_total = 0.0
+        total_qty = 0.0
+        promo_sales = 0
+        products = {}
+        hours = {}
+        recent_sales = []
+
+        for row in rows:
+            product_name = str(row[1] if len(row) > 1 and row[1] is not None else "Produto").strip() or "Produto"
+            qty = float(row[2] or 0) if len(row) > 2 else 0.0
+            unit_price = float(row[3] or 0) if len(row) > 3 else 0.0
+            total = float(row[4] or 0) if len(row) > 4 else 0.0
+            sale_raw = row[5] if len(row) > 5 else ""
+            returned_qty = float(row[6] or 0) if len(row) > 6 else 0.0
+            is_promotional = bool(row[10]) if len(row) > 10 else False
+            sale_dt = self._parse_sale_datetime(sale_raw)
+            refund_amount = returned_qty * unit_price
+            net_total = max(0.0, total - refund_amount)
+            net_qty = max(0.0, qty - returned_qty)
+
+            gross_total += total
+            refunded_total += refund_amount
+            total_qty += net_qty
+            if is_promotional:
+                promo_sales += 1
+
+            product_bucket = products.setdefault(product_name, {"count": 0, "net_total": 0.0})
+            product_bucket["count"] += 1
+            product_bucket["net_total"] += net_total
+
+            if sale_dt is not None:
+                hour_key = sale_dt.strftime("%H:00")
+                hours[hour_key] = hours.get(hour_key, 0) + 1
+                time_text = sale_dt.strftime("%H:%M")
+            else:
+                time_text = "--:--"
+
+            recent_sales.append(
+                {
+                    "time": time_text,
+                    "product": product_name,
+                    "qty": net_qty,
+                    "net_total": net_total,
+                }
+            )
+
+        top_product = None
+        if products:
+            name, payload = max(
+                products.items(),
+                key=lambda item: (float(item[1].get("net_total") or 0.0), int(item[1].get("count") or 0)),
+            )
+            top_product = {
+                "name": name,
+                "count": int(payload.get("count") or 0),
+                "net_total": float(payload.get("net_total") or 0.0),
+            }
+
+        peak_hour = None
+        if hours:
+            peak_hour = max(hours.items(), key=lambda item: (int(item[1]), item[0]))[0]
+
+        return {
+            "total_sales": len(rows),
+            "gross_total": gross_total,
+            "refunded_total": refunded_total,
+            "net_total": max(0.0, gross_total - refunded_total),
+            "total_qty": total_qty,
+            "promo_sales": promo_sales,
+            "top_product": top_product,
+            "peak_hour": peak_hour,
+            "recent_sales": recent_sales[:6],
+            "remaining_sales": max(0, len(recent_sales) - 6),
+        }
+
+    def _build_today_sales_dialog_text(self, day_label, summary):
+        total_sales = int(summary.get("total_sales") or 0)
+        if total_sales <= 0:
+            return "\n".join(
+                [
+                    f"Data: {day_label}",
+                    "",
+                    "Ainda nao ha vendas registadas hoje.",
+                    "Quando a primeira venda entrar, este resumo aparece aqui.",
+                ]
+            )
+
+        lines = [
+            f"Data: {day_label}",
+            f"Total de vendas: {total_sales}",
+            f"Receita liquida: {_format_mzn(summary.get('net_total') or 0.0)}",
+            f"Itens vendidos: {_format_compact_qty(summary.get('total_qty') or 0.0)}",
+        ]
+
+        refunded_total = float(summary.get("refunded_total") or 0.0)
+        if refunded_total > 0:
+            lines.append(f"Estornos no dia: {_format_mzn(refunded_total)}")
+
+        promo_sales = int(summary.get("promo_sales") or 0)
+        if promo_sales > 0:
+            lines.append(f"Vendas promocionais: {promo_sales}")
+
+        top_product = summary.get("top_product") or {}
+        if top_product:
+            lines.append(
+                f"Destaque: {top_product.get('name')} com {_format_mzn(top_product.get('net_total') or 0.0)}"
+            )
+
+        peak_hour = summary.get("peak_hour")
+        if peak_hour:
+            lines.append(f"Pico operacional: {peak_hour}")
+
+        lines.append("")
+        lines.append("Ultimas vendas:")
+
+        for sale in summary.get("recent_sales") or []:
+            lines.append(
+                f"{sale.get('time')} | {sale.get('product')} | Qtd {_format_compact_qty(sale.get('qty') or 0.0)} | {_format_mzn(sale.get('net_total') or 0.0)}"
+            )
+
+        remaining_sales = int(summary.get("remaining_sales") or 0)
+        if remaining_sales > 0:
+            lines.append(f"+ {remaining_sales} venda(s) adicional(is) no historico de hoje.")
+
+        return "\n".join(lines)
+
+    def _open_today_sales_history(self, dialog=None):
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
+        if not self.manager:
+            return
+        screen = self._set_back_target("sales_history", "admin_home")
+        if not screen:
+            return
+        if hasattr(screen, "queue_enter_filter"):
+            screen.queue_enter_filter("today")
+        self.manager.current = "sales_history"
+        if screen and not hasattr(screen, "queue_enter_filter") and hasattr(screen, "filter_today"):
+            Clock.schedule_once(lambda dt: screen.filter_today(), 0.06)
+        elif screen and hasattr(screen, "request_enter_refresh"):
+            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.04), 0.04)
+
+    def _finish_today_sales_loading(self, day_label, rows, error=None):
+        self._today_sales_loading = False
+        self._dismiss_today_sales_dialog()
+
+        if error:
+            dialog = MDDialog(
+                title="Vendas de Hoje",
+                text=f"Falha ao carregar o resumo do dia.\n{error}",
+                buttons=[
+                    MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                ],
+            )
+            self._today_sales_dialog = dialog
+            dialog.bind(on_dismiss=lambda *_: setattr(self, "_today_sales_dialog", None))
+            dialog.open()
+            return
+
+        summary = self._build_today_sales_summary(rows)
+        dialog = MDDialog(
+            title="Resumo das Vendas de Hoje",
+            text=self._build_today_sales_dialog_text(day_label, summary),
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                MDRaisedButton(
+                    text="VER HISTORICO",
+                    on_release=lambda _x: self._open_today_sales_history(dialog),
+                ),
+            ],
+        )
+        self._today_sales_dialog = dialog
+        dialog.bind(on_dismiss=lambda *_: setattr(self, "_today_sales_dialog", None))
+        dialog.open()
+
     def _set_back_target(self, screen_name, target):
         if not self.manager:
             return None
@@ -679,22 +981,99 @@ class AdminHomeScreen(MDScreen):
         setattr(screen, "back_target", target)
         return screen
 
+    def _get_home_alerts(self):
+        return (self._snapshot or {}).get("alerts") or {}
+
+    def _format_banner_quantity(self, stock, unit="un"):
+        try:
+            amount = float(stock or 0)
+        except Exception:
+            amount = 0.0
+        unit_text = str(unit or "un").strip() or "un"
+        if unit_text.lower() == "kg":
+            return f"{amount:.2f} kg"
+        if abs(amount - round(amount)) < 0.05:
+            return f"{int(round(amount))} {unit_text}"
+        return f"{amount:.1f} {unit_text}"
+
+    def _build_expired_products_banner(self):
+        items = list(self._get_home_alerts().get("expired_items") or [])
+        if not items:
+            banner = build_positive_banner("expiry")
+            banner["details_sections"] = [("Estado atual", ["Nenhum produto vencido na leitura atual da HOME."])]
+            return banner
+
+        messages = []
+        detail_lines = []
+        for item in items:
+            name = str(item.get("name") or "Produto")
+            expiry_date = str(item.get("date") or "data nao informada")
+            qty = self._format_banner_quantity(item.get("stock"), item.get("unit") or "un")
+            messages.append(f"{name} venceu em {expiry_date}.")
+            detail_lines.append(f"{name}: {qty} ainda em stock, validade {expiry_date}.")
+
+        return {
+            "kind": "expiry",
+            "expiry_level": "vencido",
+            "variant": "danger",
+            "icon": "alert-octagon",
+            "bg_color": (0.93, 0.34, 0.34, 1),
+            "title": "Produtos vencidos",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(items),
+            "urgency": 0,
+            "details_sections": [
+                ("Produtos vencidos", detail_lines),
+                ("Acao imediata", [
+                    "Retire os itens vencidos da area de venda.",
+                    "Registe a perda ou trate a devolucao assim que possivel.",
+                ]),
+            ],
+        }
+
+    def _show_single_home_banner(self, banner_data):
+        if not banner_data or not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
+            return
+
+        target = self.ids.ai_banner_container
+        ensure_center = getattr(self._intelligence, "_ensure_banner_center", None)
+        if callable(ensure_center):
+            try:
+                target = ensure_center()
+            except Exception:
+                target = self.ids.ai_banner_container
+
+        show_history = getattr(target, "_show_history_banners", None)
+        if callable(show_history):
+            target.current_insights = {}
+            show_history([banner_data])
+            return
+
+        render_auto_banners(
+            target,
+            [banner_data],
+            insights=None,
+            auto_dismiss_seconds=None,
+            show_timer=False,
+        )
+
+    def show_expired_products_banner(self, *args):
+        self._show_single_home_banner(self._build_expired_products_banner())
+
     def go_to_products(self, *args, open_form=False):
-        if not self.manager:
+        screen = self._set_back_target("admin", "admin_home")
+        if not screen or not self.manager:
             return
-        app = App.get_running_app()
-        ensure_screen = getattr(app, "ensure_screen", None)
-        if "admin" not in self.manager.screen_names and callable(ensure_screen):
-            ensure_screen("admin")
-        if "admin" not in self.manager.screen_names:
-            return
-        screen = self.manager.get_screen("admin")
         self.manager.current = "admin"
         if open_form and hasattr(screen, "add_product"):
             Clock.schedule_once(lambda dt: screen.add_product(), 0.12)
 
     def add_product(self, *args):
-        self.go_to_products(open_form=True)
+        screen = self._set_back_target("admin", "admin_home")
+        if not screen or not hasattr(screen, "add_product"):
+            return
+        Clock.schedule_once(lambda dt: screen.add_product(), 0)
 
     def open_reports(self, *args):
         if not self.manager:
@@ -706,6 +1085,14 @@ class AdminHomeScreen(MDScreen):
         if screen and hasattr(screen, "prepare_open_from_admin"):
             Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0.04)
 
+    def show_all_pdfs(self, *args):
+        screen = self._set_back_target("reports", "admin_home")
+        if not screen or not hasattr(screen, "show_pdf_viewer"):
+            return
+        if hasattr(screen, "prepare_open_from_admin"):
+            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0)
+        Clock.schedule_once(lambda dt: screen.show_pdf_viewer(), 0.05)
+
     def open_sales_history(self, *args):
         if not self.manager:
             return
@@ -715,6 +1102,38 @@ class AdminHomeScreen(MDScreen):
         self.manager.current = "sales_history"
         if screen and hasattr(screen, "request_enter_refresh"):
             Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.04), 0.04)
+
+    def open_today_sales(self, *args):
+        if self._today_sales_loading:
+            return
+        self._dismiss_today_sales_dialog()
+        self._today_sales_loading = True
+        today_label = datetime.now().strftime("%d/%m/%Y")
+
+        loading_dialog = MDDialog(
+            title="Vendas de Hoje",
+            text=f"A carregar resumo de {today_label}...",
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda _x: loading_dialog.dismiss()),
+            ],
+        )
+        self._today_sales_dialog = loading_dialog
+        loading_dialog.bind(on_dismiss=lambda *_: setattr(self, "_today_sales_dialog", None))
+        loading_dialog.open()
+
+        def worker():
+            rows = []
+            error = None
+            try:
+                rows = list(self.db.get_sales_by_date(today_label) or [])
+            except Exception as exc:
+                error = str(exc)
+            Clock.schedule_once(
+                lambda dt, day=today_label, data=rows, err=error: self._finish_today_sales_loading(day, data, err),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
 
     def open_stock_module(self, *args):
         if not self.manager:
@@ -747,7 +1166,9 @@ class AdminHomeScreen(MDScreen):
             Clock.schedule_once(lambda dt: screen.add_user(), 0.08)
 
     def open_ai_menu(self, caller=None):
-        self._intelligence.open_history()
+        if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
+            caller = self.ids.ai_button
+        self._intelligence.open_history(caller=caller)
 
     def go_to_settings(self, *args):
         if not self.manager:
@@ -761,12 +1182,6 @@ class AdminHomeScreen(MDScreen):
         app = App.get_running_app()
         if app:
             username = getattr(app, "current_user", None)
-            role = getattr(app, "current_role", None) or "admin"
-            if username:
-                try:
-                    self.db.log_action(username, role, "LOGOUT", "Logout admin")
-                except Exception:
-                    pass
             app.current_user = None
             app.current_role = None
             app._ai_banners_shown = False

@@ -19,6 +19,7 @@
             spacing: dp(12)
 
             MDCard:
+                id: losses_table_card
                 orientation: "vertical"
                 padding: dp(0)
                 spacing: dp(0)
@@ -28,6 +29,7 @@
                 size_hint_y: 1
 
                 MDBoxLayout:
+                    id: header_row
                     size_hint_y: None
                     height: dp(44)
                     padding: [dp(16), 0]
@@ -36,6 +38,7 @@
                     radius: [dp(10), dp(10), 0, 0]
 
                     MDLabel:
+                        id: header_date
                         text: "Data"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
@@ -45,6 +48,7 @@
                         font_size: dp(12)
 
                     MDLabel:
+                        id: header_product
                         text: "Produto"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
@@ -54,6 +58,7 @@
                         font_size: dp(12)
 
                     MDLabel:
+                        id: header_type
                         text: "Tipo"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
@@ -63,6 +68,7 @@
                         font_size: dp(12)
 
                     MDLabel:
+                        id: header_qty
                         text: "Qtd"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
@@ -72,6 +78,7 @@
                         font_size: dp(12)
 
                     MDLabel:
+                        id: header_cost
                         text: "Custo"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
@@ -81,6 +88,7 @@
                         font_size: dp(12)
 
                     MDLabel:
+                        id: header_user
                         text: "Usuario"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']

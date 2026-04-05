@@ -181,6 +181,37 @@ def _bind_auto_height(label, min_height=dp(18)):
     Clock.schedule_once(lambda _dt: _update(), 0)
 
 
+def _bind_texture_size(label, min_height=dp(18), horizontal_padding=dp(4)):
+    label.size_hint = (None, None)
+
+    def _update(*_args):
+        label.text_size = (None, None)
+        try:
+            label.texture_update()
+        except Exception:
+            pass
+        label.width = max(float(label.texture_size[0] or 0) + float(horizontal_padding), float(dp(24)))
+        label.height = max(float(label.texture_size[1] or 0), float(min_height))
+
+    label.bind(text=_update)
+    _update()
+    Clock.schedule_once(lambda _dt: _update(), 0)
+
+
+def _fit_scroll_content(scroll, content, max_height, min_height=0):
+    viewport_width = max(float(scroll.width or 0), 1.0)
+    content_width = max(float(getattr(content, "minimum_width", 0) or 0), viewport_width)
+    content_height = max(float(getattr(content, "minimum_height", 0) or 0), float(min_height))
+    content.width = content_width
+    content.height = content_height
+    viewport_height = min(max(content_height, float(min_height)), float(max_height))
+    scroll.height = viewport_height
+    scroll.do_scroll_y = content_height > viewport_height + 1
+    scroll.do_scroll_x = content_width > viewport_width + 1
+    scroll.bar_width = dp(3) if (scroll.do_scroll_x or scroll.do_scroll_y) else 0
+    return viewport_height
+
+
 def _sync_box_height(box, *_args):
     box.height = box.minimum_height
 
@@ -202,6 +233,18 @@ def _cancel_event(event):
         return
     try:
         event.cancel()
+    except Exception:
+        pass
+
+
+def _detach_widget(widget):
+    if not widget:
+        return
+    parent = getattr(widget, "parent", None)
+    if parent is None:
+        return
+    try:
+        parent.remove_widget(widget)
     except Exception:
         pass
 
@@ -785,7 +828,7 @@ class ModernBannerCard(MDCard):
 
     def _build_action_button(self):
         button = MDFlatButton(
-            text="Ler mais",
+            text="Ver mais",
             theme_text_color="Custom",
             text_color=self.palette["button_text"],
             size_hint=(None, None),
@@ -846,7 +889,7 @@ class ModernBannerCard(MDCard):
         self._apply_action_button_state()
 
     def _apply_action_button_state(self):
-        label = "Ler menos" if self._expanded else "Ler mais"
+        label = "Ver menos" if self._expanded else "Ver mais"
         self._inline_toggle_btn.text = label
         self._bottom_toggle_btn.text = label
 
@@ -890,15 +933,20 @@ class ModernBannerCard(MDCard):
         target_height = self._details_target_height() if self._expanded else 0
 
         Animation.cancel_all(self._details_scroll)
+        if self._expanded:
+            self._details_scroll.opacity = 1
+            self._details_scroll.height = max(float(target_height or 0), float(dp(72)))
         Animation(
             height=target_height,
             opacity=1 if self._expanded else 0,
-            d=0.24,
+            d=0.18,
             t="out_cubic",
         ).start(self._details_scroll)
 
         if self._expanded:
             self._pause_auto_dismiss()
+            Clock.schedule_once(self._stabilize_expanded_details, 0)
+            Clock.schedule_once(self._stabilize_expanded_details, 0.08)
             container = getattr(self._wrapper, "_banner_container", None)
             if container is not None and self._wrapper is not None:
                 Clock.schedule_once(
@@ -908,6 +956,16 @@ class ModernBannerCard(MDCard):
         else:
             self._resume_auto_dismiss()
         self._apply_action_button_state()
+
+    def _stabilize_expanded_details(self, *_args):
+        if not self._expanded:
+            return
+        target_height = self._details_target_height()
+        if target_height <= 0:
+            return
+        self._details_scroll.opacity = 1
+        self._details_scroll.height = target_height
+        self._sync_card_height()
 
     def _pause_auto_dismiss(self):
         wrapper = self._wrapper
@@ -1027,6 +1085,13 @@ def _cancel_batch_events(container):
     container._ai_batch_events = []
 
 
+def _cancel_render_event(container):
+    if not container:
+        return
+    _cancel_event(getattr(container, "_ai_render_ev", None))
+    container._ai_render_ev = None
+
+
 def _cancel_banner_widget(widget):
     if not widget:
         return
@@ -1034,6 +1099,7 @@ def _cancel_banner_widget(widget):
     widget._auto_dismiss_ev = None
     card = getattr(widget, "_banner_card", None)
     if card is not None:
+        Animation.cancel_all(widget)
         Animation.cancel_all(card)
         if getattr(card, "_progress", None) is not None:
             Animation.cancel_all(card._progress)
@@ -1046,6 +1112,7 @@ def _cancel_banner_widget(widget):
 def clear_banner_container(container):
     if not container:
         return
+    _cancel_render_event(container)
     _cancel_batch_events(container)
     for widget in list(getattr(container, "_ai_banner_widgets", []) or []):
         _cancel_banner_widget(widget)
@@ -1057,7 +1124,51 @@ def clear_banner_container(container):
     container._ai_banner_stack = None
 
 
-def create_auto_banner(banner_data, show_timer=True, insights=None):
+def _ensure_banner_surface(container):
+    if not container:
+        return None, None, None
+
+    shell = getattr(container, "_ai_banner_shell", None)
+    scroll = getattr(container, "_ai_banner_scroll", None)
+    host = getattr(container, "_ai_banner_host", None)
+    if (
+        shell is not None
+        and scroll is not None
+        and host is not None
+        and getattr(shell, "parent", None) is container
+        and getattr(scroll, "parent", None) is shell
+        and getattr(host, "parent", None) is scroll
+    ):
+        return shell, scroll, host
+
+    shell = AnchorLayout(
+        anchor_x="left",
+        anchor_y="top",
+        size_hint=(1, 1),
+    )
+    scroll = ScrollView(
+        size_hint=(1, 1),
+        do_scroll_x=True,
+        do_scroll_y=True,
+        bar_width=dp(4),
+    )
+    _apply_scroll_style(scroll)
+    host = FloatLayout(
+        size_hint=(None, None),
+        width=max(float(container.width or 0), 1.0),
+        height=max(float(container.height or 0), 1.0),
+    )
+    scroll.add_widget(host)
+    shell.add_widget(scroll)
+    container.add_widget(shell)
+    container._ai_banner_shell = shell
+    container._ai_banner_scroll = scroll
+    container._ai_banner_host = host
+    container._ai_banner_stack = host
+    return shell, scroll, host
+
+
+def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
     card = MDCard(
         orientation="vertical",
         padding=0,
@@ -1143,31 +1254,39 @@ def create_auto_banner(banner_data, show_timer=True, insights=None):
     header.add_widget(close_btn)
 
     messages = banner_data.get("messages", [])
-    body = MDBoxLayout(
+    body_wrapper = MDBoxLayout(
         orientation="vertical",
         padding=[dp(16), 0, dp(16), dp(10)],
-        spacing=dp(5),
         size_hint_y=None,
     )
+    body_scroll = ScrollView(
+        size_hint=(1, None),
+        do_scroll_x=False,
+        do_scroll_y=False,
+        bar_width=0,
+    )
+    _apply_scroll_style(body_scroll)
+    body = MDBoxLayout(
+        orientation="vertical",
+        spacing=dp(5),
+        size_hint=(None, None),
+    )
+    body.bind(minimum_height=lambda inst, value: setattr(inst, "height", value))
+    body.bind(minimum_width=lambda inst, value: setattr(inst, "width", value))
+    body_scroll.add_widget(body)
+    body_wrapper.add_widget(body_scroll)
 
-    body_height = 0
     for msg in messages:
         bullet = MDLabel(
             text=f"• {msg}",
             theme_text_color="Custom",
             text_color=(0.25, 0.25, 0.25, 1),
             font_size=dp(13),
-            size_hint_y=None,
-            height=dp(20),
-            shorten=True,
-            shorten_from="right",
+            halign="left",
+            valign="middle",
         )
-        bullet.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        _bind_texture_size(bullet, min_height=dp(20), horizontal_padding=dp(2))
         body.add_widget(bullet)
-        body_height += dp(19)
-
-    body_height += dp(10) + max((len(messages) - 1) * dp(5), 0)
-    body.height = body_height
 
     details_sections = banner_data.get("details_sections") or []
     if not details_sections and insights:
@@ -1259,8 +1378,21 @@ def create_auto_banner(banner_data, show_timer=True, insights=None):
         toggle_btn_widget._icon = btn_icon
         toggle_btn_widget._text = btn_text
 
+    def _sync_body_scroll(*_args):
+        body_height = _fit_scroll_content(
+            body_scroll,
+            body,
+            max_height=dp(118),
+            min_height=dp(20 if messages else 0),
+        )
+        body_wrapper.height = body_height + dp(10)
+
+    body_scroll.bind(width=_sync_body_scroll)
+    body.bind(minimum_height=_sync_body_scroll, minimum_width=_sync_body_scroll)
+    _sync_body_scroll()
+
     card.add_widget(header)
-    card.add_widget(body)
+    card.add_widget(body_wrapper)
     if toggle_container:
         card.add_widget(toggle_container)
 
@@ -1275,7 +1407,7 @@ def create_auto_banner(banner_data, show_timer=True, insights=None):
         )
         card.add_widget(progress)
 
-    total_height = dp(48) + body_height
+    total_height = dp(48) + body_wrapper.height
     if toggle_container:
         total_height += dp(44)
     if progress:
@@ -1283,7 +1415,7 @@ def create_auto_banner(banner_data, show_timer=True, insights=None):
 
     card.height = total_height
     card._base_height = total_height
-    card._body = body
+    card._body = body_wrapper
     card._progress = progress
     card._toggle_btn = toggle_btn_widget
     card._toggle_container = toggle_container
@@ -1296,19 +1428,44 @@ def create_auto_banner(banner_data, show_timer=True, insights=None):
     return card
 
 
+def create_auto_banner(banner_data, show_timer=True, insights=None):
+    return _create_auto_banner_legacy(
+        banner_data,
+        show_timer=show_timer,
+        insights=insights,
+    )
+
+
 def animate_banner_in(widget):
     if not widget:
         return
     target_x = getattr(widget, "_target_x", widget.x)
-    start_x = -max(float(widget.width or 0) * 1.15, float(dp(220)))
-    pass_x = target_x + dp(10)
+    target_y = getattr(widget, "_target_y", widget.y)
+    target_opacity = getattr(widget, "_target_opacity", 1)
+    start_x = getattr(widget, "_entry_x", target_x - max(float(widget.width or 0) * 0.42, float(dp(180))))
+    start_y = getattr(widget, "_entry_y", target_y + dp(10))
+    pass_x = getattr(widget, "_pass_x", target_x + dp(12))
+    pass_y = getattr(widget, "_pass_y", target_y - dp(4))
     Animation.cancel_all(widget)
     widget.x = start_x
+    widget.y = start_y
     widget.opacity = 0
     (
-        Animation(x=pass_x, opacity=1, d=0.28, t="out_cubic")
-        + Animation(x=target_x, d=0.12, t="out_quad")
+        Animation(
+            x=pass_x,
+            y=pass_y,
+            opacity=min(1.0, float(target_opacity) + 0.08),
+            d=0.16,
+            t="out_cubic",
+        )
+        + Animation(x=target_x, y=target_y, opacity=target_opacity, d=0.10, t="out_quad")
     ).start(widget)
+    card = getattr(widget, "_banner_card", None)
+    if card is not None and hasattr(card, "_animate_icon_intro"):
+        try:
+            card._animate_icon_intro()
+        except Exception:
+            pass
 
 
 def animate_banner_out(widget):
@@ -1322,6 +1479,24 @@ def animate_banner_out(widget):
         parent = widget.parent
         if parent:
             parent.remove_widget(widget)
+        container = getattr(widget, "_banner_container", None)
+        if container is None:
+            return
+        remaining = _visible_widgets(container)
+        container._ai_banner_widgets = [item for item in remaining if item is not widget]
+        if remaining:
+            Clock.schedule_once(
+                lambda _dt, current=container, visible=remaining: position_banners_center(
+                    current,
+                    visible,
+                    reset_x=False,
+                ),
+                0,
+            )
+            return
+        if getattr(container, "_ai_render_ev", None) is not None:
+            return
+        clear_banner_container(container)
 
     parent = widget.parent
     exit_x = getattr(widget, "_exit_x", None)
@@ -1329,11 +1504,12 @@ def animate_banner_out(widget):
         exit_x = parent.width + widget.width
     if exit_x is None:
         exit_x = widget.x + widget.width
+    target_y = getattr(widget, "_target_y", widget.y)
 
     Animation.cancel_all(widget)
     anim = (
-        Animation(x=widget.x + dp(18), opacity=0.92, d=0.08, t="out_quad")
-        + Animation(x=exit_x, opacity=0, d=0.22, t="in_cubic")
+        Animation(x=widget.x + dp(14), opacity=0.94, d=0.05, t="out_quad")
+        + Animation(x=exit_x, y=target_y, opacity=0, d=0.12, t="in_cubic")
     )
     anim.bind(on_complete=_finish)
     anim.start(widget)
@@ -1341,6 +1517,7 @@ def animate_banner_out(widget):
 def _set_banner_hidden(widget, hidden):
     if not widget:
         return
+    Animation.cancel_all(widget)
     widget._is_hidden = bool(hidden)
     if hidden:
         widget.opacity = 0
@@ -1406,42 +1583,69 @@ def _resume_auto_dismiss(widget):
 def _build_details_box(sections):
     details_box = MDBoxLayout(
         orientation="vertical",
-        spacing=dp(6),
         padding=[dp(16), dp(8), dp(16), dp(12)],
         size_hint_y=None,
         height=0,
         opacity=0,
     )
+    details_scroll = ScrollView(
+        size_hint=(1, None),
+        do_scroll_x=False,
+        do_scroll_y=False,
+        bar_width=0,
+    )
+    _apply_scroll_style(details_scroll)
+    details_content = MDBoxLayout(
+        orientation="vertical",
+        spacing=dp(6),
+        size_hint=(None, None),
+    )
+    details_content.bind(minimum_height=lambda inst, value: setattr(inst, "height", value))
+    details_content.bind(minimum_width=lambda inst, value: setattr(inst, "width", value))
+    details_scroll.add_widget(details_content)
+    details_box.add_widget(details_scroll)
 
     for title, items in sections:
-        details_box.add_widget(
-            MDLabel(
-                text=f"[b]{title}[/b]",
-                markup=True,
-                theme_text_color="Custom",
-                text_color=(0.15, 0.15, 0.15, 1),
-                font_size=dp(13),
-                size_hint_y=None,
-                height=dp(20),
-            )
+        title_label = MDLabel(
+            text=f"[b]{title}[/b]",
+            markup=True,
+            theme_text_color="Custom",
+            text_color=(0.15, 0.15, 0.15, 1),
+            font_size=dp(13),
+            halign="left",
+            valign="middle",
         )
+        _bind_texture_size(title_label, min_height=dp(20), horizontal_padding=dp(2))
+        details_content.add_widget(title_label)
         for item in items:
-            details_box.add_widget(
-                MDLabel(
-                    text=f"  • {item}",
-                    theme_text_color="Custom",
-                    text_color=(0.3, 0.3, 0.3, 1),
-                    font_size=dp(12),
-                    size_hint_y=None,
-                    height=dp(18),
-                    shorten=True,
-                    shorten_from="right",
-                )
+            item_label = MDLabel(
+                text=f"  • {item}",
+                theme_text_color="Custom",
+                text_color=(0.3, 0.3, 0.3, 1),
+                font_size=dp(12),
+                halign="left",
+                valign="middle",
             )
+            _bind_texture_size(item_label, min_height=dp(18), horizontal_padding=dp(2))
+            details_content.add_widget(item_label)
         if sections.index((title, items)) < len(sections) - 1:
-            details_box.add_widget(MDLabel(size_hint_y=None, height=dp(4)))
+            details_content.add_widget(MDLabel(size_hint=(None, None), width=dp(4), height=dp(4)))
 
-    details_box._target_height = _calc_details_height(details_box)
+    def _sync_details_scroll(*_args):
+        details_height = _fit_scroll_content(
+            details_scroll,
+            details_content,
+            max_height=dp(168),
+            min_height=dp(40),
+        )
+        details_box._target_height = details_height + dp(20)
+
+    details_scroll.bind(width=_sync_details_scroll)
+    details_content.bind(minimum_height=_sync_details_scroll, minimum_width=_sync_details_scroll)
+    _sync_details_scroll()
+    details_box._details_scroll = details_scroll
+    details_box._details_content = details_content
+    details_box._sync_scroll = _sync_details_scroll
     return details_box
 
 
@@ -1488,6 +1692,8 @@ def _setup_details_toggle(card, toggle_btn, details_sections):
 
     def _toggle(*args):
         if card._details_expanded:
+            card._details_expanded = False
+            _toggle_siblings(True)
             anim = Animation(height=0, opacity=0, d=0.2, t="in_out_cubic")
             anim.start(details_box)
             Animation(height=card._base_height, d=0.2, t="in_out_cubic").start(card)
@@ -1498,8 +1704,6 @@ def _setup_details_toggle(card, toggle_btn, details_sections):
             def _finish(*_):
                 if details_box.parent:
                     details_box.parent.remove_widget(details_box)
-                card._details_expanded = False
-                _toggle_siblings(True)
                 Clock.schedule_once(lambda dt: _recenter(), 0.05)
 
             anim.bind(on_complete=_finish)
@@ -1510,6 +1714,9 @@ def _setup_details_toggle(card, toggle_btn, details_sections):
             else:
                 card.add_widget(details_box)
 
+            sync_scroll = getattr(details_box, "_sync_scroll", None)
+            if callable(sync_scroll):
+                sync_scroll()
             target_h = details_box._target_height
             card_target = card._base_height + target_h
             Animation(height=target_h, opacity=1, d=0.25, t="out_cubic").start(details_box)
@@ -1541,19 +1748,57 @@ def position_banners_center(container, widgets, spacing=dp(14), reset_x=True, co
         )
         return
 
+    use_staircase = 1 < len(widgets) <= 4
+    if use_staircase:
+        max_height = max(float(w.height or 0) for w in widgets)
+        x_step = min(max(container.width * 0.026, float(dp(18))), float(dp(34)))
+        y_step = min(max(max_height * 0.26, float(dp(26))), float(dp(42)))
+        banner_width = min(container.width * 0.84, dp(720))
+        footprint_width = banner_width + x_step * (len(widgets) - 1)
+        footprint_height = max_height + y_step * (len(widgets) - 1)
+        start_x = max((container.width - footprint_width) / 2.0, dp(12))
+        start_y = max((container.height - footprint_height) / 2.0, dp(18))
+
+        for idx, widget in enumerate(widgets):
+            widget.width = banner_width
+            widget._target_x = start_x + idx * x_step
+            widget._target_y = start_y + (len(widgets) - 1 - idx) * y_step
+            widget._target_opacity = max(0.82, 1.0 - (idx * 0.06))
+            widget._entry_x = -banner_width - min(max(banner_width * 0.18, dp(96)), dp(180))
+            widget._entry_y = widget._target_y + dp(12) + idx * dp(3)
+            widget._pass_x = widget._target_x + min(max(banner_width * 0.02, dp(10)), dp(16))
+            widget._pass_y = widget._target_y - dp(4)
+            widget._exit_x = container.width + min(max(banner_width * 0.08, dp(70)), dp(120))
+            y = widget._target_y
+            if reset_x:
+                widget.pos = (widget._entry_x, widget._entry_y)
+                widget.opacity = 0
+            else:
+                widget.pos = (getattr(widget, "_target_x", widget.x), y)
+                widget.opacity = getattr(widget, "_target_opacity", widget.opacity)
+        return
+
     total_height = sum(w.height for w in widgets) + spacing * (len(widgets) - 1)
     start_y = (container.height - total_height) / 2.0
 
-    banner_width = min(container.width * 0.96, dp(720))
+    banner_width = min(container.width * 0.92, dp(760))
     for idx, widget in enumerate(widgets):
         widget.width = banner_width
         widget._target_x = (container.width - banner_width) / 2.0
-        widget._exit_x = container.width + banner_width
-        y = start_y + (len(widgets) - 1 - idx) * (widget.height + spacing)
+        widget._target_y = start_y + (len(widgets) - 1 - idx) * (widget.height + spacing)
+        widget._target_opacity = 1
+        widget._entry_x = -banner_width - min(max(banner_width * 0.22, dp(120)), dp(220))
+        widget._entry_y = widget._target_y + dp(8)
+        widget._pass_x = widget._target_x + min(max(banner_width * 0.03, dp(12)), dp(20))
+        widget._pass_y = widget._target_y - dp(4)
+        widget._exit_x = container.width + min(max(banner_width * 0.10, dp(80)), dp(140))
+        y = widget._target_y
         if reset_x:
-            widget.pos = (-widget.width, y)
+            widget.pos = (widget._entry_x, widget._entry_y)
+            widget.opacity = 0
         else:
             widget.pos = (getattr(widget, "_target_x", widget.x), y)
+            widget.opacity = getattr(widget, "_target_opacity", widget.opacity)
 
 
 def render_auto_banners(
@@ -1562,43 +1807,68 @@ def render_auto_banners(
     insights=None,
     auto_dismiss_seconds=15,
     show_timer=True,
-    stagger_seconds=2.0,
+    stagger_seconds=0.05,
     columns=1,
     batch_size=None,
     batch_interval_seconds=None,
 ):
     del columns, batch_size, batch_interval_seconds
-    clear_banner_container(container)
-    if not banner_data_list:
+    if not container:
         return
 
-    widgets = []
-    for data in banner_data_list:
-        widget = create_auto_banner(data, show_timer=show_timer, insights=insights)
-        widget._banner_container = container
-        widget._auto_dismiss_seconds = auto_dismiss_seconds
-        widget._auto_show_timer = bool(show_timer)
-        widget._auto_paused = False
-        container.add_widget(widget)
-        widgets.append(widget)
+    _cancel_render_event(container)
+    _cancel_batch_events(container)
+    old_widgets = list(getattr(container, "_ai_banner_widgets", []) or [])
+    if not banner_data_list:
+        clear_banner_container(container)
+        return
 
-    container._ai_banner_widgets = widgets
-    position_banners_center(container, widgets)
+    for widget in old_widgets:
+        _cancel_event(getattr(widget, "_auto_dismiss_ev", None))
+        widget._auto_dismiss_ev = None
+        card = getattr(widget, "_banner_card", None)
+        Animation.cancel_all(widget)
+        if card is not None:
+            Animation.cancel_all(card)
+            if getattr(card, "_progress", None) is not None:
+                Animation.cancel_all(card._progress)
+        animate_banner_out(widget)
 
-    separation_seconds = max(float(stagger_seconds or 0.0), 0.0)
-    for idx, widget in enumerate(widgets):
-        delay = idx * separation_seconds
+    def _mount(_dt):
+        widgets = []
+        container._ai_render_ev = None
+        container._ai_banner_widgets = []
+        for data in banner_data_list:
+            widget = create_auto_banner(data, show_timer=show_timer, insights=insights)
+            widget._banner_container = container
+            widget._auto_dismiss_seconds = auto_dismiss_seconds
+            widget._auto_show_timer = bool(show_timer)
+            widget._auto_paused = False
+            widgets.append(widget)
 
-        def _start(dt, w=widget):
-            animate_banner_in(w)
-            progress = getattr(w, "_progress", None)
-            if progress and show_timer and auto_dismiss_seconds:
-                progress.value = 100
-                Animation(value=0, d=auto_dismiss_seconds, t="linear").start(progress)
-            if auto_dismiss_seconds:
-                w._auto_dismiss_ev = Clock.schedule_once(
-                    lambda dt2, ww=w: animate_banner_out(ww),
-                    auto_dismiss_seconds,
-                )
+        draw_widgets = list(reversed(widgets)) if 1 < len(widgets) <= 4 else list(widgets)
+        for widget in draw_widgets:
+            container.add_widget(widget)
 
-        Clock.schedule_once(_start, delay)
+        container._ai_banner_widgets = widgets
+        position_banners_center(container, widgets)
+
+        separation_seconds = max(float(stagger_seconds or 0.0), 0.0)
+        for idx, widget in enumerate(widgets):
+            delay = idx * separation_seconds
+
+            def _start(_inner_dt, w=widget):
+                animate_banner_in(w)
+                progress = getattr(w, "_progress", None)
+                if progress and show_timer and auto_dismiss_seconds:
+                    progress.value = 100
+                    Animation(value=0, d=auto_dismiss_seconds, t="linear").start(progress)
+                if auto_dismiss_seconds:
+                    w._auto_dismiss_ev = Clock.schedule_once(
+                        lambda dt2, ww=w: animate_banner_out(ww),
+                        auto_dismiss_seconds,
+                    )
+
+            Clock.schedule_once(_start, delay)
+
+    container._ai_render_ev = Clock.schedule_once(_mount, 0.01 if old_widgets else 0)

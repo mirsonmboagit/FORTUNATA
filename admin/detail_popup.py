@@ -101,12 +101,18 @@ class DetailPopup(Popup):
             elevation=0,
         )
 
+        icon_size = dp(28) if self._compact else dp(32)
         icon = MDIcon(
             icon="package-variant",
+            size_hint=(None, None),
+            size=(icon_size, icon_size),
+            halign="center",
+            valign="middle",
             theme_text_color="Custom",
             text_color=self._tokens["primary"],
             font_size=dp(24) if self._compact else dp(28),
         )
+        icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         header.add_widget(icon)
 
         labels = MDBoxLayout(orientation="vertical", spacing=dp(2))

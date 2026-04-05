@@ -18,19 +18,20 @@ from kivy.animation import Animation
 from kivy.metrics import dp, sp
 from kivy.app import App
 
-from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDIconButton
+from kivymd.uix.button import MDRaisedButton, MDFlatButton
 from kivymd.uix.textfield import MDTextField
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.selectioncontrol import MDSwitch
 from kivymd.uix.card import MDCard
 from kivymd.uix.pickers import MDDatePicker
+from ui.components.tooltip_widgets import TooltipIconButton
 
-from api.api_manager import APIManager
-from api.api_openfoodfacts import OpenFoodFactsAPI
-from api.api_bazara import BazaraAPI
-from api.api_ranxo import RanxoAPI
-from api.api_upcitemdb import UPCitemdbAPI
-from api.api_sixty60 import Sixty60API
+from utils.vat import (
+    DEFAULT_VAT_RULE_CODE,
+    VAT_RULE_CHOICES,
+    describe_vat_choice,
+    get_vat_choice_label,
+)
 from utils.vision import get_vision_dependencies
 
 
@@ -49,6 +50,75 @@ def _row(*widgets, spacing=dp(10), height=dp(44)):
         w.size_hint_x = 1
         row.add_widget(w)
     return row
+
+
+def _describe_dependency_error(exc, prefix):
+    missing_name = getattr(exc, "name", "")
+    if missing_name:
+        return f"{prefix}: dependencia em falta ({missing_name})"
+    text = str(exc or "").strip()
+    if not text:
+        text = exc.__class__.__name__
+    return f"{prefix}: {text}"
+
+
+class _UnavailableAPIManager:
+    def __init__(self, reason, on_status=None):
+        self.is_loading = False
+        self._reason = reason
+        self._on_status = on_status
+        self._notified = False
+
+    def _notify(self):
+        if self._notified or not callable(self._on_status):
+            return
+        self._notified = True
+        Clock.schedule_once(lambda dt, msg=self._reason: self._on_status(msg), 0)
+
+    def search(self, barcode, force_external=False):
+        self._notify()
+
+    def search_enriched(
+        self,
+        barcode,
+        required_fields=None,
+        on_partial=None,
+        on_complete=None,
+        force_external=False,
+    ):
+        self._notify()
+
+
+def _build_api_manager(database, on_success, on_failure, on_status):
+    try:
+        from api.api_manager import APIManager
+
+        return APIManager(
+            database=database,
+            on_success=on_success,
+            on_failure=on_failure,
+            on_status=on_status,
+        )
+    except Exception as exc:
+        print(f"[ProductForm] APIManager indisponivel: {exc}")
+        reason = _describe_dependency_error(exc, "Auto preenchimento indisponivel")
+        return _UnavailableAPIManager(reason, on_status=on_status)
+
+
+def _build_category_sources():
+    source_defs = (
+        ("Open Food Facts", "api.api_openfoodfacts", "OpenFoodFactsAPI"),
+        ("Bazara", "api.api_bazara", "BazaraAPI"),
+    )
+    sources = []
+    for label, module_name, class_name in source_defs:
+        try:
+            module = __import__(module_name, fromlist=[class_name])
+            source_class = getattr(module, class_name)
+            sources.append((label, source_class()))
+        except Exception as exc:
+            print(f"[ProductForm] Fonte {label} indisponivel: {exc}")
+    return sources
 
 
 class ProductForm(Popup):
@@ -77,27 +147,27 @@ class ProductForm(Popup):
         self.current_camera    = 0
         self.last_barcode      = None
         self.last_barcode_time = 0
+        self._scanner_auto_start_ev = None
         self.beep_sound        = self._load_beep_sound()
         self._vision_modules   = None
 
-        self.api_manager = APIManager(
-            database   = admin_screen.db,
-            on_success = self._on_api_success,
-            on_failure = self._on_api_failure,
-            on_status  = self._on_api_status,
+        self.api_manager = _build_api_manager(
+            database=admin_screen.db,
+            on_success=self._on_api_success,
+            on_failure=self._on_api_failure,
+            on_status=self._on_api_status,
         )
         self._apply_theme_tokens()
 
-        self._category_sources = [
-            ("Bazara",          BazaraAPI()),
-            ("Ranxo",           RanxoAPI()),
-            ("Open Food Facts", OpenFoodFactsAPI()),
-            ("UPCitemdb",       UPCitemdbAPI()),
-            ("Sixty60",         Sixty60API()),
-        ]
+        self._category_sources = _build_category_sources()
         self._category_lookup_inflight = False
         self._category_lookup_barcode  = None
         self._category_lookup_token    = 0
+        self._selected_vat_rule_code  = DEFAULT_VAT_RULE_CODE
+        self._vat_menu                = None
+        self._barcode_context         = None
+        self._barcode_request_id      = 0
+        self._queued_barcode_request  = None
 
         self._calculating           = False
         self._auto_calc_done        = False
@@ -233,10 +303,11 @@ class ProductForm(Popup):
             size_hint_x = 0.9,
         )
         title_label.bind(size=title_label.setter("text_size"))
-        close_btn = MDIconButton(
+        close_btn = TooltipIconButton(
             icon             = "close",
             theme_text_color = "Custom",
             text_color       = self.COLOR_TEXT,
+            hint_text        = "Fechar",
             on_release       = self.dismiss,
             pos_hint         = {"center_y": 0.5},
         )
@@ -287,14 +358,16 @@ class ProductForm(Popup):
         outer.add_widget(self.scanner_status)
 
         btn_row = BoxLayout(size_hint=(None, None), height=dp(40), width=dp(92), spacing=dp(12))
-        self.scan_btn = MDIconButton(
+        self.scan_btn = TooltipIconButton(
             icon="barcode-scan", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(40), dp(40)),
+            hint_text="Iniciar ou parar scanner",
             on_release=self._toggle_scanner,
         )
-        switch_btn = MDIconButton(
+        switch_btn = TooltipIconButton(
             icon="camera-switch", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_GRAY, size_hint=(None, None), size=(dp(40), dp(40)),
+            hint_text="Trocar camera",
             on_release=self._switch_camera,
         )
         btn_row.add_widget(self.scan_btn)
@@ -341,31 +414,37 @@ class ProductForm(Popup):
             self.category_layout,
         ))
 
-        # â”€â”€ Fila 3: Unidade de medida | Validade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â”€â”€ Fila 3: IVA | Preco fiscal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        sec.add_widget(_row(
+            self.vat_rule_layout,
+            self.vat_mode_layout,
+        ))
+
+        # â”€â”€ Fila 4: Unidade de medida | Validade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sec.add_widget(_row(
             self.package_quantity,
             self.expiry_date_layout,
         ))
 
-        # â”€â”€ Fila 4: Unidades por embalagem | Venda por embalagem â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â”€â”€ Fila 5: Unidades por embalagem | Venda por embalagem â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sec.add_widget(_row(
             self.units_per_package_input,
             self.pack_sale_layout,
         ))
 
-        # â”€â”€ Fila 5: Estoque Atual | Estoque Vendido â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â”€â”€ Fila 6: Estoque Atual | Estoque Vendido â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sec.add_widget(_row(
             self.existing_stock,
             self.sold_stock,
         ))
 
-        # â”€â”€ Fila 6: Preco Unitario | Preco Total â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â”€â”€ Fila 7: Preco Unitario | Preco Total â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sec.add_widget(_row(
             self.unit_purchase_price,
             self.total_purchase_price,
         ))
 
-        # â”€â”€ Fila 7: Preco de Venda | Peso â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â”€â”€ Fila 8: Preco de Venda | Peso â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         sec.add_widget(_row(
             self.sale_price,
             self.weight_switch_layout,
@@ -421,14 +500,16 @@ class ProductForm(Popup):
             orientation="horizontal", size_hint=(1, None), height=h, spacing=dp(4),
         )
         self.category_field = _f("Categoria *")
-        dropdown_btn = MDIconButton(
+        dropdown_btn = TooltipIconButton(
             icon="menu-down", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(36), dp(36)),
+            hint_text="Selecionar categoria",
             pos_hint={"center_y": 0.5}, on_release=self._open_category_menu,
         )
-        add_cat_btn = MDIconButton(
+        add_cat_btn = TooltipIconButton(
             icon="plus", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(36), dp(36)),
+            hint_text="Adicionar categoria",
             pos_hint={"center_y": 0.5}, on_release=self._show_category_form,
         )
         categories = [c for c in self._get_admin_categories() if c != "Todas"]
@@ -440,6 +521,41 @@ class ProductForm(Popup):
         self.category_layout.add_widget(self.category_field)
         self.category_layout.add_widget(dropdown_btn)
         self.category_layout.add_widget(add_cat_btn)
+
+        self.vat_rule_layout = BoxLayout(
+            orientation="horizontal", size_hint=(1, None), height=h, spacing=dp(4),
+        )
+        self.vat_rule_field = _f("Criterio de IVA", readonly=True)
+        self.vat_rule_field.text = get_vat_choice_label(self._selected_vat_rule_code)
+        vat_dropdown_btn = TooltipIconButton(
+            icon="menu-down", theme_text_color="Custom", text_color=(1, 1, 1, 1),
+            md_bg_color=self.COLOR_PRIMARY,
+            size_hint=(None, None), size=(dp(36), dp(36)),
+            hint_text="Selecionar criterio de IVA",
+            pos_hint={"center_y": 0.5}, on_release=self._open_vat_menu,
+        )
+        self._vat_menu = MDDropdownMenu(
+            caller=vat_dropdown_btn,
+            items=[
+                {
+                    "text": choice["label"],
+                    "on_release": (lambda code=choice["code"]: self._set_vat_rule(code)),
+                }
+                for choice in VAT_RULE_CHOICES
+            ],
+            width_mult=4.2,
+            max_height=dp(250),
+            position="bottom",
+        )
+        self.vat_rule_layout.add_widget(self.vat_rule_field)
+        self.vat_rule_layout.add_widget(vat_dropdown_btn)
+
+        self.vat_mode_layout = BoxLayout(
+            orientation="horizontal", size_hint=(1, None), height=h, spacing=dp(4),
+        )
+        self.vat_mode_field = _f("Preco fiscal", readonly=True)
+        self.vat_mode_field.text = describe_vat_choice(self._selected_vat_rule_code)
+        self.vat_mode_layout.add_widget(self.vat_mode_field)
 
         # â”€â”€ Fila 3 â”€â”€
         self.existing_stock = _f("Estoque atual *", inp_filter="float")
@@ -453,9 +569,10 @@ class ProductForm(Popup):
             orientation="horizontal", size_hint_y=None, height=h, spacing=dp(4),
         )
         self.expiry_date = _f("Validade DD/MM/AAAA")
-        cal_btn = MDIconButton(
+        cal_btn = TooltipIconButton(
             icon="calendar", theme_text_color="Custom", text_color=self.COLOR_PRIMARY,
             size_hint=(None, None), size=(dp(36), dp(36)),
+            hint_text="Escolher validade",
             pos_hint={"center_y": 0.5}, on_release=self._show_date_picker,
         )
         self.expiry_date_layout.add_widget(self.expiry_date)
@@ -643,27 +760,98 @@ class ProductForm(Popup):
         self._apply_popup_size()
 
     # â”€â”€ API callbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    def _on_api_success(self, source, data):
+    @staticmethod
+    def _sanitize_barcode(value):
+        if value is None:
+            return ""
+        return "".join(c for c in str(value) if c.isprintable()).strip()
+
+    def _barcode_request_is_current(self, request_id, barcode):
+        return request_id == self._barcode_request_id and barcode == self._barcode_context
+
+    def _prepare_form_for_barcode(self, barcode):
+        if barcode == self._barcode_context:
+            return
+        self._barcode_context = barcode
+        if self.product is None:
+            self._clear_fields(preserve_barcode=True, barcode_value=barcode)
+        else:
+            self.barcode_input.text = barcode
+
+    def _run_barcode_search(self, barcode, request_id):
+        self._queued_barcode_request = None
+        self._set_status("Buscando...", self.COLOR_PRIMARY)
+        self.api_manager.search_enriched(
+            barcode,
+            required_fields=["name", "brand", "category", "quantity", "price"],
+            on_partial=lambda source, data, rid=request_id, code=barcode: self._on_api_partial(source, data, rid, code),
+            on_complete=lambda data, rid=request_id, code=barcode: self._on_api_complete(data, rid, code),
+        )
+
+    def _queue_or_start_barcode_search(self, raw_barcode):
+        barcode = self._sanitize_barcode(raw_barcode)
+        if len(barcode) < 8:
+            return
+        self._barcode_request_id += 1
+        request_id = self._barcode_request_id
+        self._prepare_form_for_barcode(barcode)
+        if self.api_manager.is_loading:
+            self._queued_barcode_request = (request_id, barcode)
+            self._set_status("A trocar de codigo...", self.COLOR_WARNING)
+            return
+        self._run_barcode_search(barcode, request_id)
+
+    def _start_pending_barcode_search(self, *_args):
+        if not self._queued_barcode_request:
+            return
+        if self.api_manager.is_loading:
+            Clock.schedule_once(self._start_pending_barcode_search, 0.05)
+            return
+        request_id, barcode = self._queued_barcode_request
+        if not self._barcode_request_is_current(request_id, barcode):
+            self._queued_barcode_request = None
+            return
+        self._queued_barcode_request = None
+        self._run_barcode_search(barcode, request_id)
+
+    def _on_api_success(self, source, data, request_id=None, barcode=None):
+        if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
+            return
         self._set_status(f"OK: {source}", self.COLOR_PRIMARY)
         self._fill_fields(data)
         self._show_snackbar(f"Dados de {source}", self.COLOR_SUCCESS)
 
-    def _on_api_partial(self, source, data):
+    def _on_api_partial(self, source, data, request_id=None, barcode=None):
+        if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
+            return
         self._set_status(f"{source}...", self.COLOR_PRIMARY)
         if data: self._fill_fields(data)
 
-    def _on_api_complete(self, data):
-        if not data or not data.get("source_chain"):
-            self._on_api_failure(); return
-        self._fill_fields(data)
-        self._set_status("OK", self.COLOR_SUCCESS)
-        self._show_snackbar("Dados atualizados", self.COLOR_SUCCESS)
+    def _on_api_complete(self, data, request_id=None, barcode=None):
+        try:
+            if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
+                return
+            if not data or not data.get("source_chain"):
+                self._on_api_failure(request_id=request_id, barcode=barcode)
+                return
+            self._fill_fields(data)
+            self._set_status("OK", self.COLOR_SUCCESS)
+            self._show_snackbar("Dados atualizados", self.COLOR_SUCCESS)
+        finally:
+            if request_id is not None:
+                Clock.schedule_once(self._start_pending_barcode_search, 0)
 
-    def _on_api_failure(self):
+    def _on_api_failure(self, request_id=None, barcode=None):
+        if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
+            return
+        target_barcode = self._sanitize_barcode(barcode or self.barcode_input.text)
         self._set_status("Nao encontrado", self.COLOR_ERROR)
-        self._show_snackbar(f"'{self.barcode_input.text.strip()}' nao encontrado", self.COLOR_ERROR)
+        self._show_snackbar(f"'{target_barcode}' nao encontrado", self.COLOR_ERROR)
 
     def _on_api_status(self, message):
+        if self._queued_barcode_request:
+            self._set_status("A trocar de codigo...", self.COLOR_WARNING)
+            return
         self._set_status(message, self.COLOR_PRIMARY)
 
     # â”€â”€ Fill fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -721,6 +909,27 @@ class ProductForm(Popup):
             {"text": c, "on_release": lambda x=c: self._set_category_menu(x)} for c in categories
         ]
         self.category_menu.open()
+
+    def _set_vat_rule(self, code):
+        self._selected_vat_rule_code = str(code or DEFAULT_VAT_RULE_CODE).strip().upper() or DEFAULT_VAT_RULE_CODE
+        if hasattr(self, "vat_rule_field"):
+            self.vat_rule_field.text = get_vat_choice_label(self._selected_vat_rule_code)
+        if hasattr(self, "vat_mode_field"):
+            self.vat_mode_field.text = describe_vat_choice(self._selected_vat_rule_code)
+        if self._vat_menu:
+            self._vat_menu.dismiss()
+
+    def _open_vat_menu(self, _instance):
+        if not self._vat_menu:
+            return
+        self._vat_menu.items = [
+            {
+                "text": f"{choice['label']} - {choice['hint']}",
+                "on_release": (lambda code=choice["code"]: self._set_vat_rule(code)),
+            }
+            for choice in VAT_RULE_CHOICES
+        ]
+        self._vat_menu.open()
 
     @staticmethod
     def _normalize_text(text):
@@ -968,19 +1177,44 @@ class ProductForm(Popup):
             )
 
     # â”€â”€ Scanner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    def _cancel_scanner_auto_start(self):
+        if self._scanner_auto_start_ev:
+            self._scanner_auto_start_ev.cancel()
+            self._scanner_auto_start_ev = None
+
+    def _schedule_scanner_auto_start(self, delay=0.18):
+        self._cancel_scanner_auto_start()
+        if self.product is not None or self.scanning:
+            return
+        self._scanner_auto_start_ev = Clock.schedule_once(self._auto_start_scanner, delay)
+
+    def _auto_start_scanner(self, _dt):
+        self._scanner_auto_start_ev = None
+        self._start_scanner()
+
+    def _start_scanner(self):
+        self._cancel_scanner_auto_start()
+        if self.scanning:
+            return True
+        if not self._ensure_scanner_dependencies():
+            return False
+        self.scanning = True
+        self.scan_btn.icon        = "barcode-off"
+        self.scan_btn.md_bg_color = self.COLOR_ERROR
+        self._set_status("Scanner Ativo", self.COLOR_PRIMARY)
+        Clock.unschedule(self._update_camera)
+        Clock.schedule_interval(self._update_camera, 1.0 / 15.0)
+        return True
+
     def _toggle_scanner(self, instance):
+        self._cancel_scanner_auto_start()
         if not self.scanning:
-            if not self._ensure_scanner_dependencies():
-                return
-            self.scanning = True
-            self.scan_btn.icon        = "barcode-off"
-            self.scan_btn.md_bg_color = self.COLOR_ERROR
-            self._set_status("Scanner Ativo", self.COLOR_PRIMARY)
-            Clock.schedule_interval(self._update_camera, 1.0 / 15.0)
+            self._start_scanner()
         else:
             self._stop_scanner()
 
     def _stop_scanner(self):
+        self._cancel_scanner_auto_start()
         self.scanning = False
         self.scan_btn.icon        = "barcode-scan"
         self.scan_btn.md_bg_color = self.COLOR_PRIMARY
@@ -1043,8 +1277,7 @@ class ProductForm(Popup):
                 self.barcode_input.text = val
                 self._play_beep()
                 self._set_status("Detectado!", self.COLOR_SUCCESS)
-                if not self.api_manager.is_loading:
-                    self.api_manager.search_enriched(val, on_partial=self._on_api_partial, on_complete=self._on_api_complete)
+                self._queue_or_start_barcode_search(val)
                 if len(code.polygon) == 4:
                     pts = np.array([(p.x, p.y) for p in code.polygon], dtype=np.int32)
                     cv2.polylines(frame, [pts], True, (0, 255, 0), 3)
@@ -1071,16 +1304,10 @@ class ProductForm(Popup):
         if was: Clock.schedule_once(lambda dt: self._restart_scanner(), 0.3)
 
     def _restart_scanner(self):
-        self.scanning = True
-        self.scan_btn.icon        = "barcode-off"
-        self.scan_btn.md_bg_color = self.COLOR_ERROR
-        self._set_status("Scanner Ativo", self.COLOR_PRIMARY)
-        Clock.schedule_interval(self._update_camera, 1.0 / 15.0)
+        self._start_scanner()
 
     def _on_barcode_manual_entry(self, instance):
-        barcode = instance.text.strip()
-        if barcode and len(barcode) >= 8:
-            self.api_manager.search_enriched(barcode, on_partial=self._on_api_partial, on_complete=self._on_api_complete)
+        self._queue_or_start_barcode_search(instance.text)
 
     # â”€â”€ Category lookup thread â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _search_category_if_missing(self, barcode):
@@ -1168,6 +1395,7 @@ class ProductForm(Popup):
         db = get_db()
         package_quantity = self.package_quantity.text.strip() or None
         allow_pack_sale = bool(getattr(self.allow_pack_sale_switch, "active", False))
+        vat_rule_code = self._selected_vat_rule_code or DEFAULT_VAT_RULE_CODE
         units_raw = self.units_per_package_input.text.strip()
         units_per_package = int(units_raw) if units_raw.isdigit() else None
         if not allow_pack_sale:
@@ -1192,7 +1420,7 @@ class ProductForm(Popup):
             )
 
         def _do_update(include_pack_fields=True):
-            kwargs = {"package_quantity": package_quantity}
+            kwargs = {"package_quantity": package_quantity, "vat_rule_code": vat_rule_code}
             if include_pack_fields:
                 kwargs["units_per_package"] = units_per_package
                 kwargs["allow_pack_sale"] = allow_pack_sale
@@ -1204,7 +1432,7 @@ class ProductForm(Popup):
             )
 
         def _do_add(include_pack_fields=True):
-            kwargs = {"package_quantity": package_quantity}
+            kwargs = {"package_quantity": package_quantity, "vat_rule_code": vat_rule_code}
             if include_pack_fields:
                 kwargs["units_per_package"] = units_per_package
                 kwargs["allow_pack_sale"] = allow_pack_sale
@@ -1252,12 +1480,22 @@ class ProductForm(Popup):
             self._show_snackbar(f"Erro ao salvar produto: {e}", self.COLOR_ERROR)
         finally: db.close()
 
-    def _clear_fields(self):
-        for f in (self.barcode_input, self.sku_input, self.expiry_date, self.description,
+    def _clear_fields(self, preserve_barcode=False, barcode_value=None):
+        fields = [self.sku_input, self.expiry_date, self.description,
                   self.existing_stock, self.sale_price, self.total_purchase_price,
                   self.unit_purchase_price, self.category_field, self.package_quantity,
-                  self.units_per_package_input):
+                  self.units_per_package_input]
+        if not preserve_barcode:
+            fields.insert(0, self.barcode_input)
+        for f in fields:
             f.text = ""
+        if preserve_barcode:
+            self.barcode_input.text = self._sanitize_barcode(barcode_value or self.barcode_input.text)
+            self._barcode_context = self.barcode_input.text or None
+        else:
+            self.barcode_input.text = ""
+            self._barcode_context = None
+            self._queued_barcode_request = None
         self.sold_stock.text = "0"
         self._set_weight_state(False)
         self._set_pack_sale_state(False)
@@ -1268,6 +1506,7 @@ class ProductForm(Popup):
         self._discount_base_price      = None
         self._applying_price_action    = False
         self._update_price_actions_state()
+        self._set_vat_rule(DEFAULT_VAT_RULE_CODE)
         self.barcode_input.focus = True
 
     def _populate_fields(self):
@@ -1289,9 +1528,11 @@ class ProductForm(Popup):
         if len(p) > 13 and p[13]:
             try: self.expiry_date.text = datetime.strptime(str(p[13]), "%Y-%m-%d").strftime("%d/%m/%Y")
             except ValueError: self.expiry_date.text = str(p[13])
+        self._barcode_context = self._sanitize_barcode(self.barcode_input.text) or None
         is_weight = bool(p[15]) if len(p) > 15 else False
         self._set_weight_state(is_weight)
         self._set_pack_sale_state(bool(p[24]) if (len(p) > 24 and not is_weight) else False)
+        self._set_vat_rule(str(p[25]) if len(p) > 25 and p[25] else DEFAULT_VAT_RULE_CODE)
         self._update_price_actions_state()
 
     # â”€â”€ Beep â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1334,7 +1575,11 @@ class ProductForm(Popup):
         self.scanner_status.text  = text
         self.scanner_status.color = color
 
+    def on_open(self):
+        self._schedule_scanner_auto_start()
+
     def on_dismiss(self):
+        self._cancel_scanner_auto_start()
         if self.scanning: self._stop_scanner()
         Window.unbind(on_resize=self._on_window_resize)
 

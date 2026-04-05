@@ -3,10 +3,11 @@ import unicodedata
 import bcrypt
 
 
+REQUIRED_QUESTION_COUNT = 2
+
 QUESTIONS = [
     "Qual foi o nome do seu primeiro professor?",
     "Em que cidade voce nasceu?",
-    "Qual e o nome da sua primeira escola?",
 ]
 
 

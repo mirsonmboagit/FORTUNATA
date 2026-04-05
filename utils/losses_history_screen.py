@@ -7,6 +7,7 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
+from kivy.properties import BooleanProperty
 from kivy.uix.widget import Widget
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
@@ -36,6 +37,7 @@ LOSS_LABELS = {
 
 class LossesHistoryScreen(MDScreen):
     ENTER_CACHE_SECONDS = 5
+    compact_mode = BooleanProperty(False)
 
     def __init__(self, db=None, **kwargs):
         super().__init__(**kwargs)
@@ -52,6 +54,7 @@ class LossesHistoryScreen(MDScreen):
         self._render_token = 0
         self._row_theme = {}
         self._last_loaded_at = 0.0
+        self.back_target = "losses"
 
     def _ensure_loss_report(self):
         if self.loss_report is None:
@@ -68,6 +71,12 @@ class LossesHistoryScreen(MDScreen):
     def on_enter(self):
         self.request_enter_refresh()
 
+    def on_kv_post(self, base_widget):
+        self._update_responsive_layout()
+
+    def on_size(self, *args):
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+
     def request_enter_refresh(self, force=False, delay=0.05):
         stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
         if not force and self._display_rows and not stale:
@@ -76,7 +85,44 @@ class LossesHistoryScreen(MDScreen):
 
     def go_back(self):
         if self.manager:
-            self.manager.current = "losses"
+            target = self.back_target if getattr(self, "back_target", None) in self.manager.screen_names else "losses"
+            self.manager.current = target
+
+    def _set_header_state(self, widget, visible, size_hint_x):
+        if widget is None:
+            return
+        widget.opacity = 1 if visible else 0
+        widget.disabled = not visible
+        widget.size_hint_x = size_hint_x
+
+    def _update_responsive_layout(self):
+        if not hasattr(self, "ids") or "header_date" not in self.ids:
+            return
+        width = self.width or dp(1200)
+        compact = width < dp(1040)
+        if compact != self.compact_mode:
+            self.compact_mode = compact
+            if self._display_rows:
+                self._populate_losses_list(list(self._display_rows), already_aggregated=True)
+        self._apply_header_layout()
+
+    def _apply_header_layout(self):
+        if not hasattr(self, "ids") or "header_date" not in self.ids:
+            return
+        if self.compact_mode:
+            self.ids.header_date.size_hint_x = 0.18
+            self.ids.header_product.size_hint_x = 0.42
+            self.ids.header_type.size_hint_x = 0.16
+            self.ids.header_qty.size_hint_x = 0.12
+            self.ids.header_cost.size_hint_x = 0.12
+            self._set_header_state(self.ids.header_user, False, 0)
+        else:
+            self.ids.header_date.size_hint_x = 0.16
+            self.ids.header_product.size_hint_x = 0.36
+            self.ids.header_type.size_hint_x = 0.14
+            self.ids.header_qty.size_hint_x = 0.10
+            self.ids.header_cost.size_hint_x = 0.12
+            self._set_header_state(self.ids.header_user, True, 0.12)
 
     def load_losses_table(self, *args):
         if not hasattr(self, "ids") or "losses_list" not in self.ids:
@@ -290,6 +336,10 @@ class LossesHistoryScreen(MDScreen):
         except Exception:
             qty_str = f"{qty} {unit}"
         cost_str = f"{float(total_cost or 0):.2f} MZN"
+        if self.compact_mode:
+            date_hint, product_hint, type_hint, qty_hint, cost_hint = 0.18, 0.42, 0.16, 0.12, 0.12
+        else:
+            date_hint, product_hint, type_hint, qty_hint, cost_hint, user_hint = 0.16, 0.36, 0.14, 0.10, 0.12, 0.12
 
         line = MDBoxLayout(
             size_hint_y=None,
@@ -301,7 +351,7 @@ class LossesHistoryScreen(MDScreen):
 
         line.add_widget(MDLabel(
             text=date_str,
-            size_hint_x=0.16,
+            size_hint_x=date_hint,
             halign="left",
             font_size=dp(10),
             theme_text_color="Custom",
@@ -309,7 +359,7 @@ class LossesHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=str(product),
-            size_hint_x=0.36,
+            size_hint_x=product_hint,
             halign="left",
             font_size=dp(11),
             theme_text_color="Custom",
@@ -319,7 +369,7 @@ class LossesHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=label,
-            size_hint_x=0.14,
+            size_hint_x=type_hint,
             halign="center",
             font_size=dp(11),
             theme_text_color="Custom",
@@ -327,7 +377,7 @@ class LossesHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=qty_str,
-            size_hint_x=0.10,
+            size_hint_x=qty_hint,
             halign="center",
             font_size=dp(11),
             theme_text_color="Custom",
@@ -335,22 +385,23 @@ class LossesHistoryScreen(MDScreen):
         ))
         line.add_widget(MDLabel(
             text=cost_str,
-            size_hint_x=0.12,
+            size_hint_x=cost_hint,
             halign="right",
             font_size=dp(11),
             theme_text_color="Custom",
             text_color=theme["danger"],
         ))
-        line.add_widget(MDLabel(
-            text=created_by or "N/A",
-            size_hint_x=0.12,
-            halign="right",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=text_secondary,
-            shorten=True,
-            shorten_from="right",
-        ))
+        if not self.compact_mode:
+            line.add_widget(MDLabel(
+                text=created_by or "N/A",
+                size_hint_x=user_hint,
+                halign="right",
+                font_size=dp(11),
+                theme_text_color="Custom",
+                text_color=text_secondary,
+                shorten=True,
+                shorten_from="right",
+            ))
 
         container = MDBoxLayout(
             orientation="vertical",

@@ -3,6 +3,7 @@ loja/
 .venv/
 venv/
 env/
+.tmp_testes/
 
 # Python
 __pycache__/

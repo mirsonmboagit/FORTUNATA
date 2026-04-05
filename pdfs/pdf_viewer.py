@@ -1,6 +1,10 @@
+import importlib
+import io
 import os
 import platform
 import subprocess
+import sys
+from threading import Thread
 from kivy.uix.popup import Popup
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
@@ -21,13 +25,35 @@ from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.app import App
 from PIL import Image as PILImage
-import io
 
 
 def _theme_color(name, fallback):
     app = App.get_running_app()
     tokens = getattr(app, "theme_tokens", {}) if app else {}
     return tokens.get(name, fallback)
+
+
+def open_pdf_with_system_default(pdf_path, error_callback=None):
+    if not os.path.exists(pdf_path):
+        if error_callback:
+            error_callback(f"Arquivo nao encontrado:\n{pdf_path}")
+        return False
+
+    try:
+        absolute_path = os.path.abspath(pdf_path)
+        system = platform.system()
+
+        if system == "Windows":
+            os.startfile(absolute_path)
+        elif system == "Darwin":
+            subprocess.Popen(["open", absolute_path])
+        else:
+            subprocess.Popen(["xdg-open", absolute_path])
+        return True
+    except Exception as e:
+        if error_callback:
+            error_callback(f"Erro ao abrir PDF no aplicativo padrao:\n{str(e)}")
+        return False
 
 
 class PDFViewer:
@@ -52,8 +78,10 @@ class PDFViewer:
         self.page_label = None
         self.options_dialog = None
         self.pymupdf_dialog = None
+        self.install_dialog = None
+        self._installing_pymupdf = False
     
-    def view_pdf(self, pdf_path):
+    def view_pdf(self, pdf_path, prefer_direct=False):
         """
         Inicia visualização do PDF com opções para o usuário.
         
@@ -65,7 +93,48 @@ class PDFViewer:
                 self.error_callback(f'Arquivo não encontrado:\n{pdf_path}')
             return
         
+        if prefer_direct and self._open_preferred_viewer(pdf_path):
+            return
+
         self._show_viewer_options(pdf_path)
+
+    def _open_preferred_viewer(self, pdf_path):
+        if not self._has_pymupdf():
+            return self._open_in_browser(pdf_path)
+
+        self._view_internal(pdf_path)
+        return True
+
+    def _has_pymupdf(self):
+        try:
+            return importlib.util.find_spec("fitz") is not None
+        except Exception:
+            return False
+
+    def _can_install_pymupdf(self):
+        return (not getattr(sys, "frozen", False)) and bool(getattr(sys, "executable", None))
+
+    def print_pdf(self, pdf_path):
+        if not os.path.exists(pdf_path):
+            if self.error_callback:
+                self.error_callback(f'Arquivo nÃ£o encontrado:\n{pdf_path}')
+            return False
+
+        try:
+            absolute_path = os.path.abspath(pdf_path)
+            system = platform.system()
+
+            if system == 'Windows':
+                os.startfile(absolute_path, 'print')
+            elif system == 'Darwin':
+                subprocess.Popen(['open', absolute_path])
+            else:
+                subprocess.Popen(['xdg-open', absolute_path])
+            return True
+        except Exception as e:
+            if self.error_callback:
+                self.error_callback(f'Erro ao imprimir PDF:\n{str(e)}')
+            return False
     
     def _show_viewer_options(self, pdf_path):
         """Exibe popup com opções de visualização do PDF."""
@@ -117,6 +186,13 @@ class PDFViewer:
                     on_release=lambda x: self.options_dialog.dismiss(),
                 ),
                 MDRectangleFlatButton(
+                    text="Imprimir agora",
+                    on_release=lambda x: [
+                        self.print_pdf(pdf_path),
+                        self.options_dialog.dismiss(),
+                    ],
+                ),
+                MDRectangleFlatButton(
                     text="Abrir no navegador",
                     on_release=lambda x: [
                         self._open_in_browser(pdf_path),
@@ -142,6 +218,10 @@ class PDFViewer:
         Args:
             pdf_path: Caminho para o arquivo PDF
         """
+        if not self._has_pymupdf():
+            self._show_pymupdf_install_message(pdf_path)
+            return
+
         try:
             import fitz
         except ImportError:
@@ -194,10 +274,12 @@ class PDFViewer:
             
             else:  # Linux
                 subprocess.call(['xdg-open', absolute_path])
-                
+
+            return True
         except Exception as e:
             if self.error_callback:
                 self.error_callback(f'Erro ao abrir navegador:\n{str(e)}')
+            return False
     
     def _create_pdf_viewer_window(self, pdf_path, total_pages):
         """
@@ -374,6 +456,11 @@ class PDFViewer:
             (0.2, 0.65, 0.33, 1)
         ))
         nav_box.add_widget(self._create_icon_button(
+            "printer",
+            lambda x: self.print_pdf(pdf_path),
+            (0.2, 0.65, 0.33, 1)
+        ))
+        nav_box.add_widget(self._create_icon_button(
             "plus",
             lambda x: self._zoom_page(0.20),
             (0.8, 0.4, 0.1, 1)
@@ -449,8 +536,7 @@ class PDFViewer:
         # Imagem do PDF
         pdf_image = KivyImage(
             size_hint=(None, None),
-            allow_stretch=True,
-            keep_ratio=True
+            fit_mode="contain",
         )
         
         pdf_container.add_widget(pdf_image)
@@ -612,11 +698,18 @@ class PDFViewer:
         if getattr(self, "pymupdf_dialog", None):
             self.pymupdf_dialog.dismiss()
 
-        instructions = (
-            "Para usar o visualizador interno de PDF,\\n"
-            "instale a biblioteca PyMuPDF:\\n\\n"
-            "pip install PyMuPDF --break-system-packages"
-        )
+        if self._can_install_pymupdf():
+            instructions = (
+                "O visualizador interno usa a biblioteca PyMuPDF.\n\n"
+                "Posso instalar esta dependencia agora e abrir o PDF automaticamente."
+            )
+        else:
+            instructions = (
+                "Esta versao do app foi iniciada sem suporte para instalar novas "
+                "bibliotecas em tempo real.\n\n"
+                "Inclua PyMuPDF na instalacao ou na build do projeto para ativar o "
+                "visualizador interno."
+            )
 
         content = MDBoxLayout(
             orientation='vertical',
@@ -656,20 +749,178 @@ class PDFViewer:
             type='custom',
             content_cls=content,
             size_hint=(None, None),
-            size=(min(dp(560), Window.width * 0.9), dp(260)),
-            buttons=[
-                MDFlatButton(
-                    text='Fechar',
-                    on_release=lambda x: self.pymupdf_dialog.dismiss(),
-                ),
-                MDRaisedButton(
-                    text='Abrir no navegador',
-                    md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
-                    on_release=lambda x: [
-                        self._open_in_browser(pdf_path),
-                        self.pymupdf_dialog.dismiss(),
-                    ],
-                ),
-            ],
+            size=(min(dp(580), Window.width * 0.9), dp(280)),
+            buttons=self._build_pymupdf_dialog_buttons(pdf_path),
         )
         self.pymupdf_dialog.open()
+
+    def _build_pymupdf_dialog_buttons(self, pdf_path):
+        buttons = [
+            MDFlatButton(
+                text='Fechar',
+                on_release=lambda x: self.pymupdf_dialog.dismiss(),
+            ),
+            MDRectangleFlatButton(
+                text='Abrir no navegador',
+                on_release=lambda x: [
+                    self._open_in_browser(pdf_path),
+                    self.pymupdf_dialog.dismiss(),
+                ],
+            ),
+        ]
+
+        if self._can_install_pymupdf():
+            buttons.append(
+                MDRaisedButton(
+                    text='Instalar e abrir',
+                    md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
+                    on_release=lambda x: self._install_pymupdf_async(pdf_path),
+                )
+            )
+
+        return buttons
+
+    def _install_pymupdf_async(self, pdf_path):
+        if self._installing_pymupdf:
+            return
+
+        if getattr(self, "pymupdf_dialog", None):
+            self.pymupdf_dialog.dismiss()
+            self.pymupdf_dialog = None
+
+        if not self._can_install_pymupdf():
+            self._show_pymupdf_install_message(pdf_path)
+            return
+
+        self._installing_pymupdf = True
+        self._show_install_progress_dialog()
+
+        def worker():
+            error_message = None
+
+            for command in self._build_pymupdf_install_commands():
+                try:
+                    completed = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                    )
+                except Exception as exc:
+                    error_message = str(exc)
+                    continue
+
+                if completed.returncode == 0:
+                    importlib.invalidate_caches()
+                    error_message = None
+                    break
+
+                error_message = self._summarize_install_output(
+                    completed.stderr or completed.stdout,
+                    completed.returncode,
+                )
+
+            Clock.schedule_once(
+                lambda _dt, err=error_message: self._finish_pymupdf_install(pdf_path, err),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _build_pymupdf_install_commands(self):
+        base_command = [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "PyMuPDF",
+        ]
+        commands = [base_command]
+
+        base_prefix = getattr(sys, "base_prefix", sys.prefix)
+        real_prefix = getattr(sys, "real_prefix", None)
+        in_virtualenv = bool(real_prefix) or (base_prefix != sys.prefix)
+
+        if not in_virtualenv:
+            commands.append(base_command[:-1] + ["--user", "PyMuPDF"])
+
+        return commands
+
+    def _summarize_install_output(self, raw_output, returncode):
+        text = (raw_output or "").strip()
+        if not text:
+            return f"pip terminou com codigo {returncode}."
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        summary = " ".join(lines[-3:])
+        if len(summary) > 320:
+            summary = summary[:317].rstrip() + "..."
+        return summary
+
+    def _show_install_progress_dialog(self):
+        if getattr(self, "install_dialog", None):
+            self.install_dialog.dismiss()
+
+        content = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(10),
+            padding=[dp(16), dp(12), dp(16), dp(10)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter('height'))
+
+        headline = MDLabel(
+            text='A instalar PyMuPDF...',
+            font_style='Subtitle1',
+            bold=True,
+            halign='left',
+            theme_text_color='Custom',
+            text_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
+            size_hint_y=None,
+            height=dp(24),
+        )
+        content.add_widget(headline)
+
+        message = MDLabel(
+            text=(
+                'Isto pode demorar alguns segundos.\n'
+                'Assim que a instalacao terminar, o PDF sera aberto automaticamente.'
+            ),
+            font_style='Body2',
+            halign='left',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=_theme_color('text_primary', (0.3, 0.3, 0.3, 1)),
+            size_hint_y=None,
+        )
+        message.bind(size=lambda inst, _: setattr(inst, 'text_size', (inst.width, None)))
+        message.bind(texture_size=lambda inst, value: setattr(inst, 'height', value[1]))
+        content.add_widget(message)
+
+        self.install_dialog = MDDialog(
+            title='Preparando visualizador interno',
+            type='custom',
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(560), Window.width * 0.9), dp(220)),
+        )
+        self.install_dialog.open()
+
+    def _finish_pymupdf_install(self, pdf_path, error_message):
+        self._installing_pymupdf = False
+
+        if getattr(self, "install_dialog", None):
+            self.install_dialog.dismiss()
+            self.install_dialog = None
+
+        importlib.invalidate_caches()
+
+        if self._has_pymupdf():
+            self._view_internal(pdf_path)
+            return
+
+        if error_message and self.error_callback:
+            self.error_callback(f'Nao foi possivel instalar PyMuPDF:\n{error_message}')
+
+        self._show_pymupdf_install_message(pdf_path)

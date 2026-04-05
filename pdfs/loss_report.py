@@ -46,6 +46,8 @@ class LossReport(BasePDFReport):
         elements.append(Spacer(1, 14))
         self._add_summary(elements, metrics)
         elements.append(Spacer(1, 16))
+        self._add_type_chart(elements, metrics.get("by_type", {}))
+        elements.append(Spacer(1, 14))
         self._add_by_type(elements, metrics.get("by_type", {}))
         elements.append(Spacer(1, 14))
         self._add_by_user(elements, metrics.get("by_user", []))
@@ -108,6 +110,24 @@ class LossReport(BasePDFReport):
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
         elements.append(table)
+
+    def _add_type_chart(self, elements, by_type):
+        chart_items = [
+            {
+                "label": LOSS_LABELS.get(key, key),
+                "value": info.get("total_cost", 0),
+            }
+            for key, info in (by_type or {}).items()
+        ]
+        elements.append(
+            self._build_bar_chart(
+                "Grafico de Barras: Custo das Perdas por Tipo",
+                chart_items,
+                value_formatter=lambda value: f"MZN {value:,.2f}",
+                accent_color="#27ae60",
+                empty_message="Sem perdas por tipo para representar.",
+            )
+        )
 
     def _add_by_type(self, elements, by_type):
         self._add_section_title(elements, "Perdas por Tipo", "#27ae60")

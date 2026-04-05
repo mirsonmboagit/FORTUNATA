@@ -1,0 +1,1014 @@
+<SettingsCenteredIcon@MDIcon>:
+    halign: 'center'
+    valign: 'middle'
+    text_size: self.size
+
+<SettingsIconBadge@MDCard>:
+    icon_name: 'cog'
+    accent_color: app.theme_tokens['primary']
+    icon_color: app.theme_tokens['on_primary']
+    icon_size: dp(22)
+    size_hint: None, None
+    size: dp(44), dp(44)
+    radius: [dp(16)]
+    elevation: 0
+    md_bg_color: root.accent_color
+
+    AnchorLayout:
+        anchor_x: 'center'
+        anchor_y: 'center'
+
+        SettingsCenteredIcon:
+            icon: root.icon_name
+            size_hint: None, None
+            size: root.icon_size, root.icon_size
+            font_size: root.icon_size
+            theme_text_color: 'Custom'
+            text_color: root.icon_color
+
+<SettingsInlineIconSlot@AnchorLayout>:
+    icon_name: 'flash'
+    icon_color: app.theme_tokens['on_primary']
+    icon_size: dp(18)
+    box_size: dp(20)
+    size_hint: None, None
+    size: root.box_size, root.box_size
+    anchor_x: 'center'
+    anchor_y: 'center'
+
+    SettingsCenteredIcon:
+        icon: root.icon_name
+        size_hint: None, None
+        size: root.icon_size, root.icon_size
+        font_size: root.icon_size
+        theme_text_color: 'Custom'
+        text_color: root.icon_color
+
+<SettingsStatusCard@MDCard>:
+    icon_name: 'cog'
+    title_text: ''
+    subtitle_text: ''
+    accent_color: app.theme_tokens['primary']
+    size_hint_y: None
+    height: dp(92)
+    padding: [dp(14), dp(12), dp(14), dp(12)]
+    radius: [dp(18)]
+    elevation: 0
+    md_bg_color: app.theme_tokens['card_alt']
+
+    MDBoxLayout:
+        spacing: dp(12)
+
+        SettingsIconBadge:
+            icon_name: root.icon_name
+            accent_color: root.accent_color
+            icon_color: app.theme_tokens['on_primary']
+
+        MDBoxLayout:
+            orientation: 'vertical'
+            spacing: dp(4)
+
+            MDLabel:
+                text: root.title_text
+                font_style: 'Subtitle1'
+                bold: True
+                size_hint_y: None
+                height: self.texture_size[1]
+                theme_text_color: 'Custom'
+                text_color: app.theme_tokens['text_primary']
+
+            MDLabel:
+                text: root.subtitle_text
+                font_style: 'Caption'
+                size_hint_y: None
+                height: self.texture_size[1]
+                theme_text_color: 'Custom'
+                text_color: app.theme_tokens['text_secondary']
+                text_size: self.width, None
+
+<SettingsActionCard@MDCard+ButtonBehavior>:
+    icon_name: 'cog'
+    title_text: ''
+    subtitle_text: ''
+    accent_color: app.theme_tokens['primary']
+    tone_color: app.theme_tokens['card_alt']
+    size_hint_y: None
+    height: dp(126)
+    padding: [dp(14), dp(14), dp(14), dp(14)]
+    radius: [dp(18)]
+    elevation: 1
+    md_bg_color: root.tone_color
+    ripple_behavior: True
+
+    MDBoxLayout:
+        orientation: 'vertical'
+        spacing: dp(10)
+
+        MDBoxLayout:
+            size_hint_y: None
+            height: dp(44)
+            spacing: dp(10)
+
+            SettingsIconBadge:
+                icon_name: root.icon_name
+                accent_color: root.accent_color
+                icon_color: app.theme_tokens['on_primary']
+
+            Widget:
+
+            SettingsInlineIconSlot:
+                icon_name: 'chevron-right'
+                icon_color: app.theme_tokens['text_muted']
+                icon_size: dp(20)
+                box_size: dp(20)
+
+        MDLabel:
+            text: root.title_text
+            font_style: 'Subtitle1'
+            bold: True
+            size_hint_y: None
+            height: self.texture_size[1]
+            theme_text_color: 'Custom'
+            text_color: app.theme_tokens['text_primary']
+
+        MDLabel:
+            text: root.subtitle_text
+            font_style: 'Caption'
+            size_hint_y: None
+            height: self.texture_size[1]
+            theme_text_color: 'Custom'
+            text_color: app.theme_tokens['text_secondary']
+            text_size: self.width, None
+
+<SettingsSignalCard@MDCard>:
+    icon_name: 'flash'
+    label_text: ''
+    accent_color: 1, 1, 1, 0.12
+    size_hint_y: None
+    height: dp(44)
+    padding: [dp(12), dp(10), dp(12), dp(10)]
+    radius: [dp(16)]
+    elevation: 0
+    md_bg_color: root.accent_color
+
+    MDBoxLayout:
+        spacing: dp(8)
+
+        SettingsInlineIconSlot:
+            icon_name: root.icon_name
+            icon_color: app.theme_tokens['on_primary']
+            icon_size: dp(18)
+            box_size: dp(18)
+
+        MDLabel:
+            text: root.label_text
+            font_style: 'Caption'
+            theme_text_color: 'Custom'
+            text_color: app.theme_tokens['on_primary']
+            text_size: self.width, None
+
+<SettingsToggleShell@AnchorLayout>:
+    size_hint: None, None
+    size: dp(68), dp(40)
+    anchor_x: 'right'
+    anchor_y: 'center'
+
+<AdminSettingsScreen>:
+    md_bg_color: app.theme_tokens['surface']
+
+    FloatLayout:
+        MDBoxLayout:
+            orientation: 'vertical'
+            md_bg_color: app.theme_tokens['surface']
+
+            MDTopAppBar:
+                title: 'Definicoes'
+                md_bg_color: app.theme_tokens['primary']
+                specific_text_color: app.theme_tokens['on_primary']
+                left_action_items: [['arrow-left', lambda x: root.go_back()]]
+                right_action_items: [['history', lambda x: root.open_ai_menu()]]
+                elevation: 2
+
+            MDScrollView:
+                do_scroll_x: False
+                bar_width: dp(6)
+
+                MDBoxLayout:
+                    orientation: 'vertical'
+                    adaptive_height: True
+                    spacing: dp(12)
+                    padding: [dp(16), dp(16), dp(16), dp(96)]
+
+                    MDCard:
+                        id: hero_card
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(18), dp(16), dp(18), dp(16)]
+                        spacing: dp(14)
+                        radius: [dp(20)]
+                        elevation: 1
+                        md_bg_color: app.theme_tokens['primary']
+                        canvas.before:
+                            Color:
+                                rgba: 1, 1, 1, 0.07
+                            Ellipse:
+                                size: dp(190), dp(190)
+                                pos: self.right - dp(138), self.top - dp(126)
+                            Ellipse:
+                                size: dp(120), dp(120)
+                                pos: self.x - dp(26), self.y - dp(18)
+
+                        MDBoxLayout:
+                            id: hero_content
+                            orientation: 'horizontal'
+                            adaptive_height: True
+                            size_hint_y: None
+                            height: self.minimum_height
+                            spacing: dp(16)
+
+                            MDBoxLayout:
+                                id: hero_intro
+                                orientation: 'vertical'
+                                adaptive_height: True
+                                size_hint_y: None
+                                height: self.minimum_height
+                                spacing: dp(10)
+
+                                MDLabel:
+                                    text: 'Central de definicoes'
+                                    font_style: 'H6'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['on_primary']
+
+                                MDLabel:
+                                    text: 'Ajuste acessos, aparencia e tarefas tecnicas num painel mais claro e direto.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: 1, 1, 1, 0.92
+                                    text_size: self.width, None
+
+                                MDLabel:
+                                    text: 'Sessao ativa: {}'.format(getattr(app, 'current_user', '') or 'Administrador')
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: 1, 1, 1, 0.90
+
+                                MDGridLayout:
+                                    id: hero_signal_grid
+                                    cols: 4
+                                    spacing: dp(8)
+                                    adaptive_height: True
+                                    size_hint_y: None
+
+                                    SettingsSignalCard:
+                                        icon_name: 'bell-ring-outline'
+                                        label_text: '{} alerta(s) pendente(s)'.format(root.notification_count) if root.notification_count else 'Sem alertas pendentes'
+                                        accent_color: (1, 1, 1, 0.18) if root.notification_count else (1, 1, 1, 0.10)
+
+                                    SettingsSignalCard:
+                                        icon_name: 'robot'
+                                        label_text: 'Monitor ativo' if root.monitor_enabled else 'Monitor pausado'
+                                        accent_color: (1, 1, 1, 0.16) if root.monitor_enabled else (1, 1, 1, 0.09)
+
+                                    SettingsSignalCard:
+                                        icon_name: 'api'
+                                        label_text: 'IA externa ligada' if root.api_ai_enabled else 'Leitura local apenas'
+                                        accent_color: (1, 1, 1, 0.16) if root.api_ai_enabled else (1, 1, 1, 0.09)
+
+                                    SettingsSignalCard:
+                                        icon_name: 'brightness-6'
+                                        label_text: 'Modo escuro' if root.dark_theme_enabled else 'Modo claro'
+                                        accent_color: 1, 1, 1, 0.10
+
+                            MDBoxLayout:
+                                id: hero_actions
+                                orientation: 'vertical'
+                                spacing: dp(10)
+                                adaptive_height: True
+                                size_hint_y: None
+                                height: self.minimum_height
+                                size_hint_x: None
+                                width: dp(260)
+
+                                MDRaisedButton:
+                                    id: hero_add_user_btn
+                                    text: 'Adicionar utilizador'
+                                    size_hint_x: 1
+                                    md_bg_color: app.theme_tokens['success']
+                                    text_color: app.theme_tokens['on_primary']
+                                    on_release: root.add_user()
+
+                                MDRaisedButton:
+                                    id: hero_security_btn
+                                    text: 'Perguntas de recuperacao'
+                                    size_hint_x: 1
+                                    md_bg_color: app.theme_tokens['info']
+                                    text_color: app.theme_tokens['on_primary']
+                                    elevation: 1
+                                    on_release: root.configure_security_questions()
+
+                    MDCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(12)
+                        radius: [dp(20)]
+                        elevation: 1
+                        md_bg_color: app.theme_tokens['card']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(42)
+
+                            MDBoxLayout:
+                                orientation: 'vertical'
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: 'Preferencias rapidas'
+                                    font_style: 'Subtitle1'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Tudo o que muda o comportamento da app no dia a dia.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+
+                        MDGridLayout:
+                            id: prefs_grid
+                            cols: 4
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            MDCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(148)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(10)
+                                radius: [dp(18)]
+                                elevation: 0
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDBoxLayout:
+                                    size_hint_y: None
+                                    height: dp(48)
+                                    spacing: dp(12)
+
+                                    SettingsIconBadge:
+                                        icon_name: 'weather-night'
+                                        accent_color: app.theme_tokens['info']
+                                        icon_color: app.theme_tokens['on_primary']
+
+                                    MDBoxLayout:
+                                        orientation: 'vertical'
+                                        spacing: dp(2)
+                                        size_hint_x: 1
+
+                                        MDLabel:
+                                            text: 'Modo escuro'
+                                            font_style: 'Subtitle1'
+                                            bold: True
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_primary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                        MDLabel:
+                                            text: 'Visual'
+                                            font_style: 'Caption'
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_secondary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                    SettingsToggleShell:
+                                        AnchorLayout:
+                                            anchor_x: 'center'
+                                            anchor_y: 'center'
+
+                                            MDSwitch:
+                                                id: theme_toggle
+                                                size_hint: None, None
+                                                active: False
+                                                on_active: root.toggle_theme(self.active)
+
+                                MDLabel:
+                                    text: 'Escuro ativo' if theme_toggle.active else 'Claro e limpo'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Troque a aparencia sem sair da sessao.'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                            MDCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(148)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(10)
+                                radius: [dp(18)]
+                                elevation: 0
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDBoxLayout:
+                                    size_hint_y: None
+                                    height: dp(48)
+                                    spacing: dp(12)
+
+                                    SettingsIconBadge:
+                                        icon_name: 'robot'
+                                        accent_color: app.theme_tokens['success']
+                                        icon_color: app.theme_tokens['on_primary']
+
+                                    MDBoxLayout:
+                                        orientation: 'vertical'
+                                        spacing: dp(2)
+                                        size_hint_x: 1
+
+                                        MDLabel:
+                                            text: 'Monitor inteligente'
+                                            font_style: 'Subtitle1'
+                                            bold: True
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_primary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                        MDLabel:
+                                            text: 'Assistente'
+                                            font_style: 'Caption'
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_secondary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                    SettingsToggleShell:
+                                        AnchorLayout:
+                                            anchor_x: 'center'
+                                            anchor_y: 'center'
+
+                                            MDSwitch:
+                                                id: smart_monitor_toggle
+                                                size_hint: None, None
+                                                active: True
+                                                on_active: root.toggle_smart_monitor(self.active)
+
+                                MDLabel:
+                                    text: 'Monitor inteligente ativo' if smart_monitor_toggle.active else 'Monitor inteligente pausado'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Controla a leitura inteligente, o historico e os avisos do assistente.'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                            MDCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(148)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(10)
+                                radius: [dp(18)]
+                                elevation: 0
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDBoxLayout:
+                                    size_hint_y: None
+                                    height: dp(48)
+                                    spacing: dp(12)
+
+                                    SettingsIconBadge:
+                                        icon_name: 'view-stream-outline'
+                                        accent_color: app.theme_tokens['warning']
+                                        icon_color: app.theme_tokens['on_primary']
+
+                                    MDBoxLayout:
+                                        orientation: 'vertical'
+                                        spacing: dp(2)
+                                        size_hint_x: 1
+
+                                        MDLabel:
+                                            text: 'Banners automaticos'
+                                            font_style: 'Subtitle1'
+                                            bold: True
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_primary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                        MDLabel:
+                                            text: 'Apresentacao'
+                                            font_style: 'Caption'
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_secondary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                    SettingsToggleShell:
+                                        AnchorLayout:
+                                            anchor_x: 'center'
+                                            anchor_y: 'center'
+
+                                            MDSwitch:
+                                                id: auto_banners_toggle
+                                                size_hint: None, None
+                                                active: True
+                                                on_active: root.toggle_auto_banners(self.active)
+
+                                MDLabel:
+                                    text: 'Entrada automatica ligada' if auto_banners_toggle.active else 'Entrada automatica pausada'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Mostra os banners sozinho quando houver novidades, sem desligar o historico manual.'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                            MDCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(148)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(10)
+                                radius: [dp(18)]
+                                elevation: 0
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDBoxLayout:
+                                    size_hint_y: None
+                                    height: dp(48)
+                                    spacing: dp(12)
+
+                                    SettingsIconBadge:
+                                        icon_name: 'api'
+                                        accent_color: app.theme_tokens['primary']
+                                        icon_color: app.theme_tokens['on_primary']
+
+                                    MDBoxLayout:
+                                        orientation: 'vertical'
+                                        spacing: dp(2)
+                                        size_hint_x: 1
+
+                                        MDLabel:
+                                            text: 'IA externa'
+                                            font_style: 'Subtitle1'
+                                            bold: True
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_primary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                        MDLabel:
+                                            text: 'Integracoes'
+                                            font_style: 'Caption'
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_secondary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                    SettingsToggleShell:
+                                        AnchorLayout:
+                                            anchor_x: 'center'
+                                            anchor_y: 'center'
+
+                                            MDSwitch:
+                                                id: api_ai_toggle
+                                                size_hint: None, None
+                                                active: True
+                                                on_active: root.toggle_ai(self.active)
+
+                                MDLabel:
+                                    text: 'APIs ativas para analise opcional' if api_ai_toggle.active else 'Leitura apenas com dados locais'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Ative quando quiser apoio externo nas leituras e sugestoes.'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                    MDGridLayout:
+                        id: status_grid
+                        cols: 3
+                        spacing: dp(10)
+                        adaptive_height: True
+
+                        SettingsStatusCard:
+                            icon_name: 'brightness-6'
+                            title_text: 'Tema'
+                            subtitle_text: 'Modo escuro ativo' if root.dark_theme_enabled else 'Modo claro ativo'
+                            accent_color: app.theme_tokens['info']
+
+                        SettingsStatusCard:
+                            icon_name: 'robot'
+                            title_text: 'Monitor'
+                            subtitle_text: 'Monitor inteligente ligado' if root.monitor_enabled else 'Monitor inteligente pausado'
+                            accent_color: app.theme_tokens['success'] if root.monitor_enabled else app.theme_tokens['warning']
+
+                        SettingsStatusCard:
+                            icon_name: 'api'
+                            title_text: 'Analise externa'
+                            subtitle_text: 'APIs auxiliares ligadas' if root.api_ai_enabled else 'Somente analise local'
+                            accent_color: app.theme_tokens['primary'] if root.api_ai_enabled else app.theme_tokens['danger']
+
+                        SettingsStatusCard:
+                            icon_name: 'bell-ring-outline'
+                            title_text: 'Alertas'
+                            subtitle_text: '{} alerta(s) pendente(s)'.format(root.notification_count) if root.notification_count else 'Nada pendente agora'
+                            accent_color: app.theme_tokens['danger'] if root.notification_count else app.theme_tokens['success']
+
+                    MDCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(12)
+                        radius: [dp(20)]
+                        elevation: 1
+                        md_bg_color: app.theme_tokens['card']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(42)
+
+                            MDBoxLayout:
+                                orientation: 'vertical'
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: 'Acesso e seguranca'
+                                    font_style: 'Subtitle1'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Gestao de utilizadores e credenciais sensiveis.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+
+                        MDGridLayout:
+                            id: access_grid
+                            cols: 2
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            SettingsActionCard:
+                                icon_name: 'account-plus'
+                                title_text: 'Adicionar utilizador'
+                                subtitle_text: 'Crie novos acessos para admin ou manager.'
+                                accent_color: app.theme_tokens['success']
+                                on_press: root.add_user()
+
+                            SettingsActionCard:
+                                icon_name: 'account-edit'
+                                title_text: 'Atualizar acesso admin'
+                                subtitle_text: 'Mude nome de utilizador ou senha do admin.'
+                                accent_color: app.theme_tokens['primary']
+                                on_press: root.change_admin_data()
+
+                            SettingsActionCard:
+                                icon_name: 'help-circle'
+                                title_text: 'Perguntas de recuperacao'
+                                subtitle_text: 'Defina perguntas para recuperar a conta com seguranca.'
+                                accent_color: app.theme_tokens['info']
+                                on_press: root.configure_security_questions()
+
+                            SettingsActionCard:
+                                icon_name: 'account-remove'
+                                title_text: 'Apagar gerente'
+                                subtitle_text: 'Remova acessos de gerente que ja nao sao necessarios.'
+                                accent_color: app.theme_tokens['danger']
+                                on_press: root.delete_manager()
+
+                    MDCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(12)
+                        radius: [dp(20)]
+                        elevation: 1
+                        md_bg_color: app.theme_tokens['card']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(42)
+
+                            MDBoxLayout:
+                                orientation: 'vertical'
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: 'Fiscal e IVA'
+                                    font_style: 'Subtitle1'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Gerencie taxas, vigencias e modo de calculo para novas vendas.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+
+                        MDGridLayout:
+                            id: vat_grid
+                            cols: 2
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            SettingsActionCard:
+                                icon_name: 'percent-circle'
+                                title_text: 'Configurar IVA'
+                                subtitle_text: 'Edite regras, datas de vigencia e calculo de novas vendas.'
+                                accent_color: app.theme_tokens['warning']
+                                on_press: root.open_vat_settings()
+
+                            MDCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(124)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(8)
+                                radius: [dp(16)]
+                                elevation: 0
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDLabel:
+                                    text: 'Resumo atual'
+                                    font_style: 'Caption'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+
+                                MDLabel:
+                                    text: root.vat_overview_text
+                                    font_style: 'Subtitle1'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+                                    text_size: self.width, None
+
+                                MDLabel:
+                                    text: 'Dica: se mudares taxa ou vigencia, so as novas vendas usam a nova regra.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                    MDCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(12)
+                        radius: [dp(20)]
+                        elevation: 1
+                        md_bg_color: app.theme_tokens['card']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(42)
+
+                            MDBoxLayout:
+                                orientation: 'vertical'
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: 'Sistema'
+                                    font_style: 'Subtitle1'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Ferramentas gerais para manutencao e acompanhamento.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+
+                        MDGridLayout:
+                            id: system_grid
+                            cols: 2
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            SettingsActionCard:
+                                icon_name: 'text-box-search'
+                                title_text: 'Logs do sistema'
+                                subtitle_text: 'Veja historico de acoes, exporte PDF e limpe registos.'
+                                accent_color: app.theme_tokens['warning']
+                                on_press: root.view_system_logs()
+
+                            SettingsActionCard:
+                                icon_name: 'monitor-screenshot'
+                                title_text: 'Ajustar janela'
+                                subtitle_text: 'Troque rapidamente a largura e altura do app.'
+                                accent_color: app.theme_tokens['info']
+                                on_press: root.change_screen_size()
+
+                        MDCard:
+                            size_hint_y: None
+                            height: self.minimum_height
+                            padding: [dp(14), dp(12), dp(14), dp(12)]
+                            radius: [dp(16)]
+                            elevation: 0
+                            md_bg_color: app.theme_tokens['card_alt']
+
+                            MDBoxLayout:
+                                adaptive_height: True
+                                size_hint_y: None
+                                height: self.minimum_height
+                                spacing: dp(10)
+
+                                SettingsInlineIconSlot:
+                                    icon_name: 'robot'
+                                    icon_color: app.theme_tokens['primary']
+                                    icon_size: dp(20)
+                                    box_size: dp(20)
+
+                                MDLabel:
+                                    text: 'Os banners e o historico inteligente continuam disponiveis no botao flutuante.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                    MDCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(12)
+                        radius: [dp(20)]
+                        elevation: 1
+                        md_bg_color: app.theme_tokens['card']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(42)
+
+                            MDBoxLayout:
+                                orientation: 'vertical'
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: 'Integracoes e cache'
+                                    font_style: 'Subtitle1'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Operacoes tecnicas agrupadas numa zona propria para evitar confusao.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+
+                        MDGridLayout:
+                            id: cache_notice_grid
+                            cols: 1
+                            adaptive_height: True
+
+                            MDCard:
+                                size_hint_y: None
+                                height: self.minimum_height
+                                padding: [dp(14), dp(12), dp(14), dp(12)]
+                                radius: [dp(16)]
+                                elevation: 0
+                                md_bg_color: app.theme_tokens['card_alt']
+
+                                MDBoxLayout:
+                                    adaptive_height: True
+                                    size_hint_y: None
+                                    height: self.minimum_height
+                                    spacing: dp(10)
+
+                                    SettingsInlineIconSlot:
+                                        icon_name: 'shield-sync'
+                                        icon_color: app.theme_tokens['warning']
+                                        icon_size: dp(20)
+                                        box_size: dp(20)
+
+                                    MDLabel:
+                                        text: 'Use estas tarefas apenas quando precisar reconstruir cache, preencher codigos ou forcar sincronizacao.'
+                                        font_style: 'Caption'
+                                        theme_text_color: 'Custom'
+                                        text_color: app.theme_tokens['text_secondary']
+                                        text_size: self.width, None
+
+                        MDGridLayout:
+                            id: cache_grid
+                            cols: 2
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            SettingsActionCard:
+                                icon_name: 'key-variant'
+                                title_text: 'Configurar Gemini'
+                                subtitle_text: 'Atualize a chave GEMINI_API_KEY e o modelo da analise externa.'
+                                accent_color: app.theme_tokens['primary']
+                                on_press: root.open_gemini_settings()
+
+                            SettingsActionCard:
+                                icon_name: 'database'
+                                title_text: 'Cache Bazara'
+                                subtitle_text: 'Atualiza o pre-carregamento principal da integracao Bazara.'
+                                accent_color: app.theme_tokens['success']
+                                on_press: root.prefill_bazara_cache()
+
+                            SettingsActionCard:
+                                icon_name: 'refresh'
+                                title_text: 'Reset Bazara'
+                                subtitle_text: 'Limpa e volta a reconstruir o cache da Bazara.'
+                                accent_color: app.theme_tokens['danger']
+                                on_press: root.reset_bazara_cache()
+
+                            SettingsActionCard:
+                                icon_name: 'barcode'
+                                title_text: 'Backfill de barcodes'
+                                subtitle_text: 'Procura codigos em falta nos dados importados da Bazara.'
+                                accent_color: app.theme_tokens['primary']
+                                on_press: root.backfill_bazara_barcodes()
+
+                            SettingsActionCard:
+                                icon_name: 'database-sync'
+                                title_text: 'Cache Open Food Facts'
+                                subtitle_text: 'Busca e guarda dados do Open Food Facts para uso offline.'
+                                accent_color: app.theme_tokens['info']
+                                on_press: root.prefill_openfoodfacts_cache()
+
+        MDFloatingActionButton:
+            id: ai_button
+            icon: 'assets/icon/idea.ico'
+            elevation: 6
+            md_bg_color: app.theme_tokens['primary']
+            pos_hint: {'right': 0.965, 'y': 0.04}
+            on_release: root.open_ai_menu(self)
+
+        MDCard:
+            id: ai_badge
+            size_hint: None, None
+            size: dp(24), dp(24)
+            md_bg_color: app.theme_tokens['badge']
+            radius: [dp(12)]
+            elevation: 8
+            pos_hint: {'right': 0.978, 'y': 0.098}
+            opacity: 0
+
+            MDLabel:
+                id: ai_badge_label
+                text: '0'
+                halign: 'center'
+                valign: 'middle'
+                theme_text_color: 'Custom'
+                text_color: app.theme_tokens['on_primary']
+                font_size: dp(12)
+                bold: True
+
+        FloatLayout:
+            id: ai_banner_container
+            size_hint: 1, 1
+            pos: 0, 0

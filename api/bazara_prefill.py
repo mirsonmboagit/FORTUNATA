@@ -8,13 +8,13 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from api.api_bazara import BazaraAPI
+from api.optional_deps import BeautifulSoup, has_beautifulsoup
 
 GRAPHQL_URL = "https://bazara.co.mz/graphql"
 BASE_URL = "https://bazara.co.mz"
@@ -284,6 +284,8 @@ def _barcode_from_json_ld(data):
 
 
 def _extract_barcode_from_html(html_text: str) -> str | None:
+    if not has_beautifulsoup():
+        return None
     if not html_text:
         return None
 
@@ -479,6 +481,9 @@ def prefill_bazara_cache(
 
 
 def main():
+    if not has_beautifulsoup():
+        print("BeautifulSoup indisponivel. Instale beautifulsoup4 para executar o prefill Bazara.")
+        return
     parser = argparse.ArgumentParser(description="Prefill do cache offline do Bazara via GraphQL")
     parser.add_argument("--page-size", type=int, default=200, help="Tamanho da pagina")
     parser.add_argument("--delay", type=float, default=0.2, help="Delay entre paginas")

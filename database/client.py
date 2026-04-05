@@ -18,6 +18,7 @@ class DatabaseClient:
         "get_products_for_stock_control": 2.0,
         "get_products_for_filter": 10.0,
         "get_categories": 30.0,
+        "get_vat_rules": 30.0,
         "get_productivity_report_data": 15.0,
         "get_admin_home_snapshot": 20.0,
     }
@@ -25,12 +26,19 @@ class DatabaseClient:
         "add_",
         "update_",
         "delete_",
+        "replace_",
         "record_",
         "restock_",
+        "reset_",
         "refund_",
         "approve_",
         "clear_",
     )
+    _FALLBACK_SAFE_RPC_METHODS = {
+        "get_products_for_sale_page",
+        "get_products_for_sale_ids",
+        "get_all_products_page",
+    }
 
     def __init__(self, base_url=None, api_key=None, timeout=None, config=None):
         config = config or self._load_config()
@@ -40,8 +48,16 @@ class DatabaseClient:
         self._last_error = None
         self._rpc_cache = {}
         self._rpc_cache_lock = threading.Lock()
+        self._unsupported_rpc_methods = set()
         self._pool_size = int(config.get("http_pool_size") or 16)
         self._session = None
+        self._availability = None
+        self._availability_checked_at = 0.0
+        self._availability_retry_after = 0.0
+        self._availability_lock = threading.Lock()
+        self._availability_ttl = float(config.get("availability_ttl") or 4.0)
+        self._availability_cooldown = float(config.get("availability_cooldown") or 6.0)
+        self._health_timeout = float(config.get("health_timeout") or 0.8)
 
     def _load_config(self):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +71,9 @@ class DatabaseClient:
             return {}
 
     def _rpc(self, method, *args, **kwargs):
+        if method in self._unsupported_rpc_methods:
+            return None
+
         cached = self._get_cached_rpc_result(method, args, kwargs)
         if cached is not None:
             return cached
@@ -64,9 +83,7 @@ class DatabaseClient:
             return None
 
         url = f"{self.base_url.rstrip('/')}/rpc"
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["X-API-KEY"] = self.api_key
+        headers = self._build_headers(include_content_type=True)
         payload = {
             "method": method,
             "args": self._to_json_compatible(list(args)),
@@ -83,6 +100,14 @@ class DatabaseClient:
 
             if resp.status_code >= 400:
                 err = data.get("error") if isinstance(data, dict) else None
+                if (
+                    resp.status_code == 400
+                    and err in {"method_not_allowed", "method_not_found"}
+                    and method in self._FALLBACK_SAFE_RPC_METHODS
+                ):
+                    self._unsupported_rpc_methods.add(method)
+                    self._last_error = f"{resp.status_code} {err}"
+                    return None
                 if not err:
                     err = (resp.text or "").strip() or f"HTTP {resp.status_code}"
                 raise RuntimeError(f"{resp.status_code} {err}")
@@ -90,12 +115,14 @@ class DatabaseClient:
             if not data.get("ok"):
                 raise RuntimeError(data.get("error") or "RPC error")
             result = self._normalize_result(data.get("result"))
+            self._mark_available()
             self._set_cached_rpc_result(method, args, kwargs, result)
             if self._is_mutating_method(method):
                 self._invalidate_rpc_cache()
             return result
         except Exception as exc:
             self._last_error = str(exc)
+            self._mark_unavailable(exc)
             print(f"[DatabaseClient] RPC error ({method}): {exc}")
             return None
 
@@ -119,6 +146,81 @@ class DatabaseClient:
             self._last_error = str(exc)
             print(f"[DatabaseClient] Session init error: {exc}")
             return None
+
+    def _build_headers(self, include_content_type=False):
+        headers = {}
+        if include_content_type:
+            headers["Content-Type"] = "application/json"
+        if self.api_key:
+            headers["X-API-KEY"] = self.api_key
+        return headers
+
+    def _mark_available(self):
+        now = time.perf_counter()
+        with self._availability_lock:
+            self._availability = True
+            self._availability_checked_at = now
+            self._availability_retry_after = now
+
+    def _mark_unavailable(self, reason=None):
+        now = time.perf_counter()
+        with self._availability_lock:
+            self._availability = False
+            self._availability_checked_at = now
+            self._availability_retry_after = now + max(0.5, self._availability_cooldown)
+        if reason:
+            self._last_error = str(reason)
+
+    def is_available(self, force=False, timeout=None):
+        now = time.perf_counter()
+        with self._availability_lock:
+            available = self._availability
+            checked_at = self._availability_checked_at
+            retry_after = self._availability_retry_after
+
+        if not force:
+            if available is True and (now - checked_at) <= self._availability_ttl:
+                return True
+            if available is False and now < retry_after:
+                return False
+
+        session = self._ensure_session()
+        if session is None:
+            self._mark_unavailable(self._last_error or "Sessao HTTP indisponivel")
+            return False
+
+        if not hasattr(session, "get"):
+            return True
+
+        url = f"{self.base_url.rstrip('/')}/health"
+        try:
+            health_timeout = min(float(timeout or self.timeout), self._health_timeout)
+            resp = session.get(
+                url,
+                headers=self._build_headers(include_content_type=False),
+                timeout=health_timeout,
+            )
+            payload = {}
+            try:
+                payload = resp.json() or {}
+            except Exception:
+                payload = {}
+
+            if resp.status_code >= 400:
+                err = payload.get("error") if isinstance(payload, dict) else None
+                if not err:
+                    err = (resp.text or "").strip() or f"HTTP {resp.status_code}"
+                raise RuntimeError(f"{resp.status_code} {err}")
+
+            if isinstance(payload, dict) and payload.get("ok") is False:
+                raise RuntimeError(payload.get("error") or "healthcheck_failed")
+
+            self._last_error = None
+            self._mark_available()
+            return True
+        except Exception as exc:
+            self._mark_unavailable(exc)
+            return False
 
     def _freeze_for_cache(self, value):
         if isinstance(value, dict):
@@ -381,10 +483,31 @@ class DatabaseClient:
     def get_product(self, product_id):
         return self._rpc("get_product", product_id)
 
+    def get_vat_rules(self):
+        return self._rpc("get_vat_rules") or []
+
+    def replace_vat_rules(self, rules):
+        result = self._rpc("replace_vat_rules", rules)
+        return bool(result) if result is not None else False
+
+    def reset_vat_rules(self):
+        result = self._rpc("reset_vat_rules")
+        return bool(result) if result is not None else False
+
     def delete_product(self, product_id, username=None):
         return self._rpc("delete_product", product_id, username=username)
 
-    def add_sale(self, product_id, quantity, price, username, role, is_promotional=False):
+    def add_sale(
+        self,
+        product_id,
+        quantity,
+        price,
+        username,
+        role,
+        is_promotional=False,
+        terminal_id=None,
+        vat_rule_code=None,
+    ):
         return self._rpc(
             "add_sale",
             product_id,
@@ -392,7 +515,9 @@ class DatabaseClient:
             price,
             username,
             role,
+            terminal_id=terminal_id,
             is_promotional=is_promotional,
+            vat_rule_code=vat_rule_code,
         )
 
     def record_stock_movement(self, *args, **kwargs):
@@ -481,6 +606,9 @@ class DatabaseClient:
 
     def get_products_with_barcodes(self):
         return self._rpc("get_products_with_barcodes") or []
+
+    def get_known_barcodes(self):
+        return self._rpc("get_known_barcodes") or []
 
     def get_products_for_losses(self):
         return self._rpc("get_products_for_losses") or []

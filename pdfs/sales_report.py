@@ -46,6 +46,8 @@ class SalesReport(BasePDFReport):
         
         elements.append(Spacer(1, 14))
         self._add_executive_summary(elements, data)
+        elements.append(Spacer(1, 16))
+        self._add_sales_chart(elements, data)
         elements.append(Spacer(1, 20))
         self._add_top_products(elements, data)
         self._create_footer(elements)
@@ -120,6 +122,21 @@ class SalesReport(BasePDFReport):
         
         elements.append(summary_table)
     
+    def _add_sales_chart(self, elements, data):
+        top_sales = data.nlargest(7, 'sold_stock')
+        chart_items = [
+            (row['description'], row['sold_stock'])
+            for _, row in top_sales.iterrows()
+        ]
+        elements.append(
+            self._build_bar_chart(
+                "Grafico de Barras: Ranking de Produtos Mais Vendidos",
+                chart_items,
+                value_formatter=lambda value: f"{int(round(value))} un.",
+                accent_color="#2980b9",
+            )
+        )
+
     def _add_top_products(self, elements, data):
         """Adiciona seção de top 15 produtos mais vendidos (expandido)."""
         styles = getSampleStyleSheet()

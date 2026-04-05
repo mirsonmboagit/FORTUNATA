@@ -5,7 +5,8 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup
+
+from api.optional_deps import BeautifulSoup, has_beautifulsoup
 
 
 class BazaraAPI:
@@ -161,6 +162,8 @@ class BazaraAPI:
             return None
 
     def _fetch_from_base(self, base_url: str, barcode: str) -> dict | None:
+        if not has_beautifulsoup():
+            return None
         response = self._get_search_page(base_url, barcode)
         if not response:
             return None
@@ -468,6 +471,8 @@ class BazaraAPI:
         """
         Abre a pagina do produto e extrai a categoria a partir do breadcrumb.
         """
+        if not has_beautifulsoup():
+            return None
         try:
             response = self._session.get(product_url, headers=self.HEADERS, timeout=self.REQUEST_TIMEOUT, allow_redirects=True)
             if response.status_code != 200:

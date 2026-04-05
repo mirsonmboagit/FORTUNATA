@@ -77,15 +77,18 @@ class RestockScreen(MDScreen):
         self._movements_dialog = None
         self._movements_filter_menu = None
         self._movements_filter_btn = None
+        self._movements_print_btn = None
         self._movements_total_label = None
         self._movements_table_container = None
         self._movements_modal_rows = []
+        self._movements_modal_title = ""
         self._movements_filter_key = "ALL"
         self._movements_render_ev = None
         self._movements_render_rows = []
         self._movements_render_index = 0
         self._movements_row_cache = []
         self._movements_empty_label = None
+        self._movement_pdf_busy = False
         self._stock_form_dialog = None
         self._modal_title_label = None
         self._modal_selected_product_label = None
@@ -106,7 +109,10 @@ class RestockScreen(MDScreen):
         self._modal_submit_btn = None
         self._out_label_to_code = {label: code for label, code in self.OUT_TYPES}
         self._out_code_to_label = {code: label for label, code in self.OUT_TYPES}
+        self.stock_movements_report = None
+        self.pdf_viewer = None
         self._expiry_alerts_by_id = {}
+        self._movement_submitting = False
         Clock.schedule_once(self.init_screen, 0.1)
 
     def init_screen(self, _dt):
@@ -117,6 +123,16 @@ class RestockScreen(MDScreen):
         app = App.get_running_app()
         role = getattr(app, "current_role", None)
         if role != "admin":
+            actor = getattr(app, "current_user", None) or "desconhecido"
+            try:
+                self.db.log_action(
+                    actor,
+                    role or "guest",
+                    "ACCESS_DENIED",
+                    "Tentativa de abrir a tela de reposicao sem privilegio admin",
+                )
+            except Exception:
+                pass
             self._show_dialog("Acesso Negado", "Apenas admin pode gerir stock nesta tela.")
             self._redirect_after_denied()
             return
@@ -248,6 +264,26 @@ class RestockScreen(MDScreen):
         self._movements_modal_rows = list(rows or [])
         self._refresh_movements_modal_table()
 
+    def _ensure_pdf_viewer(self):
+        if self.pdf_viewer is None:
+            from pdfs.pdf_viewer import PDFViewer
+
+            self.pdf_viewer = PDFViewer(error_callback=lambda message: self._show_dialog("Erro", message))
+        return self.pdf_viewer
+
+    def _ensure_stock_movements_report(self):
+        if self.stock_movements_report is None:
+            from pdfs.stock_movements_report import StockMovementsReport
+
+            self.stock_movements_report = StockMovementsReport()
+        return self.stock_movements_report
+
+    def _set_movements_print_busy(self, busy):
+        self._movement_pdf_busy = bool(busy)
+        if self._movements_print_btn:
+            self._movements_print_btn.disabled = self._movement_pdf_busy
+            self._movements_print_btn.text = "A IMPRIMIR..." if self._movement_pdf_busy else "IMPRIMIR PDF"
+
     # ---------- Mode ----------
     def set_mode(self, mode):
         mode = str(mode or "IN").upper()
@@ -293,6 +329,20 @@ class RestockScreen(MDScreen):
             field_ids=("movement_type_field", "movement_type_btn"),
         )
         self._sync_stock_form_modal_from_hidden()
+
+    def _set_movement_busy(self, busy):
+        self._movement_submitting = bool(busy)
+        busy_text = "A PROCESSAR..."
+        if self.ids and "submit_btn" in self.ids:
+            self.ids.submit_btn.disabled = self._movement_submitting
+            if self._movement_submitting:
+                self.ids.submit_btn.text = busy_text
+        if self._modal_submit_btn:
+            self._modal_submit_btn.disabled = self._movement_submitting
+            if self._movement_submitting:
+                self._modal_submit_btn.text = busy_text
+        if not self._movement_submitting:
+            self._apply_mode_ui()
 
     def _set_row_visibility(self, row_id, visible, target_height, field_ids):
         if row_id not in self.ids:
@@ -587,6 +637,9 @@ class RestockScreen(MDScreen):
             self._modal_submit_btn.md_bg_color = (
                 tokens.get("success", [0.2, 0.7, 0.3, 1]) if is_in else tokens.get("primary", [0.15, 0.35, 0.65, 1])
             )
+            self._modal_submit_btn.disabled = self._movement_submitting
+            if self._movement_submitting:
+                self._modal_submit_btn.text = "A PROCESSAR..."
         self._set_modal_row_visibility(
             self._modal_entry_cost_row,
             is_in,
@@ -605,6 +658,10 @@ class RestockScreen(MDScreen):
             dp(52),
             (self._modal_movement_type_field, self._modal_movement_type_btn),
         )
+        if self.ids and "submit_btn" in self.ids:
+            self.ids.submit_btn.disabled = self._movement_submitting
+            if self._movement_submitting:
+                self.ids.submit_btn.text = "A PROCESSAR..."
 
     @staticmethod
     def _set_modal_row_visibility(row, visible, target_height, fields):
@@ -1169,16 +1226,20 @@ class RestockScreen(MDScreen):
             self._movements_dialog.dismiss()
             self._movements_dialog = None
         self._movements_filter_btn = None
+        self._movements_print_btn = None
         self._movements_total_label = None
         self._movements_table_container = None
         self._movements_modal_rows = []
+        self._movements_modal_title = ""
         self._movements_filter_key = "ALL"
         self._movements_row_cache = []
         self._movements_empty_label = None
+        self._movement_pdf_busy = False
 
     def _open_movements_modal(self, title, rows):
         self._dismiss_movements_dialog()
         self._movements_modal_rows = list(rows or [])
+        self._movements_modal_title = title
         self._movements_filter_key = "ALL"
 
         content = MDBoxLayout(
@@ -1204,6 +1265,13 @@ class RestockScreen(MDScreen):
             on_release=lambda _btn: self.open_movements_filter_menu(),
         )
         controls.add_widget(self._movements_filter_btn)
+        self._movements_print_btn = MDRaisedButton(
+            text="IMPRIMIR PDF",
+            size_hint=(None, None),
+            size=(dp(132), dp(32)),
+            on_release=lambda _btn: self.print_movements_pdf(),
+        )
+        controls.add_widget(self._movements_print_btn)
         content.add_widget(controls)
 
         header = MDBoxLayout(
@@ -1417,6 +1485,144 @@ class RestockScreen(MDScreen):
             if self._movements_empty_label and self._movements_empty_label.parent is self._movements_table_container:
                 self._movements_table_container.remove_widget(self._movements_empty_label)
 
+    def _get_movements_filter_label(self):
+        if not self._movements_filter_btn:
+            return "TODOS"
+        text = str(self._movements_filter_btn.text or "").strip()
+        if ":" in text:
+            return text.split(":", 1)[1].strip() or "TODOS"
+        return text or "TODOS"
+
+    def _get_filtered_movement_rows(self):
+        filtered_rows = []
+        for raw in self._movements_modal_rows:
+            normalized = self._normalize_movement_row(raw)
+            direction = str(normalized[5] or "").upper()
+            movement_type = str(normalized[6] or "").upper()
+            if self._movement_matches_filter(direction, movement_type):
+                filtered_rows.append(normalized)
+        return filtered_rows
+
+    def _prepare_movement_rows_for_pdf(self, rows):
+        prepared = []
+        for raw in rows or []:
+            (
+                _mid,
+                _created_at,
+                entry_date,
+                exit_date,
+                update_day,
+                direction,
+                movement_type,
+                _product_id,
+                product_name,
+                qty,
+                unit,
+                _unit_cost,
+                _total_cost,
+                _stock_before,
+                _stock_after,
+                _reason,
+                _note,
+                created_by,
+                _supplier,
+                _invoice,
+            ) = self._normalize_movement_row(raw)
+
+            qty_val = self._to_float(qty)
+            unit_label = unit or "UN"
+            if str(unit_label).upper() == "UN" and float(qty_val).is_integer():
+                qty_text = f"{int(qty_val)} UN"
+            else:
+                qty_text = f"{qty_val:.2f} {unit_label}"
+
+            prepared.append(
+                {
+                    "entry_date": self._format_dt(entry_date, with_time=True),
+                    "exit_date": self._format_dt(exit_date, with_time=True),
+                    "update_day": self._format_update_day(update_day),
+                    "movement_label": self._out_code_to_label.get(movement_type, movement_type or "-"),
+                    "movement_code": str(movement_type or "").upper(),
+                    "product_name": product_name or "-",
+                    "qty_text": qty_text,
+                    "direction": str(direction or "-").upper(),
+                    "created_by": created_by or "-",
+                }
+            )
+        return prepared
+
+    def print_movements_pdf(self):
+        if self._movement_pdf_busy:
+            return
+
+        filtered_rows = self._get_filtered_movement_rows()
+        if not filtered_rows:
+            self._show_dialog("Atencao", "Nao ha movimentos para imprimir com o filtro atual.")
+            return
+
+        title = self._movements_modal_title or getattr(self._movements_dialog, "title", "") or "Movimentos de Stock"
+        filter_label = self._get_movements_filter_label()
+        prepared_rows = self._prepare_movement_rows_for_pdf(filtered_rows)
+
+        self._set_movements_print_busy(True)
+
+        def worker():
+            try:
+                report = self._ensure_stock_movements_report()
+                pdf_path = report.generate(
+                    prepared_rows,
+                    {
+                        "title": title,
+                        "filter_label": filter_label,
+                        "record_count": len(prepared_rows),
+                        "source_label": "Tela de reposicao de stock",
+                    },
+                )
+                return {"status": "ok", "pdf_path": pdf_path}
+            except Exception as exc:
+                return {"status": "error", "message": str(exc)}
+
+        def apply_result(result):
+            self._set_movements_print_busy(False)
+            status = (result or {}).get("status")
+            if status == "ok":
+                pdf_path = result.get("pdf_path")
+                printed = self._ensure_pdf_viewer().print_pdf(pdf_path)
+                if printed:
+                    self._show_movements_pdf_success(pdf_path, printed=True)
+                else:
+                    self._show_movements_pdf_success(pdf_path, printed=False)
+                return
+
+            message = (result or {}).get("message") or "Erro ao gerar PDF dos movimentos."
+            self._show_dialog("Erro", message)
+
+        def finish_worker():
+            result = worker()
+            Clock.schedule_once(lambda dt, payload=result: apply_result(payload), 0)
+
+        Thread(target=finish_worker, daemon=True).start()
+
+    def _show_movements_pdf_success(self, pdf_path, printed=True):
+        filename = str(pdf_path or "").split("\\")[-1].split("/")[-1]
+        message = (
+            f"PDF enviado para impressao:\n{filename}"
+            if printed
+            else f"PDF gerado com sucesso:\n{filename}"
+        )
+        dialog = MDDialog(
+            title="Movimentos em PDF",
+            text=message,
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda btn: dialog.dismiss()),
+                MDRaisedButton(
+                    text="VISUALIZAR PDF",
+                    on_release=lambda btn, path=pdf_path: [dialog.dismiss(), self._ensure_pdf_viewer().view_pdf(path)],
+                ),
+            ],
+        )
+        dialog.open()
+
     def _populate_movements_container(self, table, rows, start_index=0):
         tokens = self._theme_tokens()
         row_even = tokens.get("surface_alt", [0.97, 0.98, 0.99, 1])
@@ -1486,6 +1692,9 @@ class RestockScreen(MDScreen):
 
     # ---------- Submit ----------
     def register_movement(self):
+        if self._movement_submitting:
+            return
+
         if not self.selected_product:
             self._show_dialog("Validacao", "Selecione um produto antes de registar movimento.")
             return
@@ -1524,8 +1733,9 @@ class RestockScreen(MDScreen):
         role = getattr(app, "current_role", "admin")
         note = self.ids.note_input.text.strip()
         now = datetime.now()
+        is_in = self.current_mode == "IN"
 
-        if self.current_mode == "IN":
+        if is_in:
             try:
                 unit_cost = float(self.ids.unit_cost_input.text.strip())
             except Exception:
@@ -1537,59 +1747,80 @@ class RestockScreen(MDScreen):
 
             supplier = self.ids.supplier_input.text.strip() or None
             invoice = self.ids.invoice_input.text.strip() or None
-            movement_id = self.db.restock_product(
-                pid,
-                qty,
-                unit_cost,
-                reason="Reposicao de stock",
-                note=note,
-                created_by=user,
-                created_role=role,
-                supplier_name=supplier,
-                invoice_number=invoice,
-            )
-            if not movement_id:
-                self._show_dialog("Erro", "Falha ao registar entrada de stock.")
-                return
+        else:
+            unit_cost = None
+            supplier = None
+            invoice = None
 
-            self.ids.entry_date_field.text = now.strftime("%d/%m/%Y %H:%M")
-            self.ids.exit_date_field.text = "--"
-            self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
-            self.ids.qty_input.text = "1"
-            self.ids.note_input.text = ""
-            self._show_dialog("Sucesso", f"Entrada registada para {name}.")
-            self.force_refresh()
-            return
-
-        # OUT mode
         stock_val = self._to_float(stock)
-        if qty > stock_val:
+        movement_label = self.ids.movement_type_field.text.strip() or "AJUSTE"
+        movement_code = self._out_label_to_code.get(movement_label, movement_label.upper())
+
+        if (not is_in) and qty > stock_val:
             self._show_dialog("Erro", f"Quantidade maior que stock disponivel ({stock_val:.2f}).")
             return
 
-        movement_label = self.ids.movement_type_field.text.strip() or "AJUSTE"
-        movement_code = self._out_label_to_code.get(movement_label, movement_label.upper())
-        movement_id = self.db.record_stock_movement(
-            pid,
-            movement_code,
-            qty,
-            "OUT",
-            reason="Saida manual de stock",
-            note=note,
-            created_by=user,
-            created_role=role,
-        )
-        if not movement_id:
-            self._show_dialog("Erro", "Falha ao registar saida de stock.")
-            return
+        self._set_movement_busy(True)
 
-        self.ids.entry_date_field.text = "--"
-        self.ids.exit_date_field.text = now.strftime("%d/%m/%Y %H:%M")
-        self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
-        self.ids.qty_input.text = "1"
-        self.ids.note_input.text = ""
-        self._show_dialog("Sucesso", f"Saida registada para {name}.")
-        self.force_refresh()
+        def worker():
+            try:
+                if is_in:
+                    movement_id = self.db.restock_product(
+                        pid,
+                        qty,
+                        unit_cost,
+                        reason="Reposicao de stock",
+                        note=note,
+                        created_by=user,
+                        created_role=role,
+                        supplier_name=supplier,
+                        invoice_number=invoice,
+                    )
+                    if not movement_id:
+                        return {"ok": False, "message": "Falha ao registar entrada de stock."}
+                    return {"ok": True, "direction": "IN"}
+
+                movement_id = self.db.record_stock_movement(
+                    pid,
+                    movement_code,
+                    qty,
+                    "OUT",
+                    reason="Saida manual de stock",
+                    note=note,
+                    created_by=user,
+                    created_role=role,
+                )
+                if not movement_id:
+                    return {"ok": False, "message": "Falha ao registar saida de stock."}
+                return {"ok": True, "direction": "OUT"}
+            except Exception as exc:
+                return {"ok": False, "message": str(exc)}
+
+        def apply_result(result):
+            self._set_movement_busy(False)
+            if not result.get("ok"):
+                self._show_dialog("Erro", result.get("message") or "Falha ao registar movimento.")
+                return
+
+            if result.get("direction") == "IN":
+                self.ids.entry_date_field.text = now.strftime("%d/%m/%Y %H:%M")
+                self.ids.exit_date_field.text = "--"
+                self._show_dialog("Sucesso", f"Entrada registada para {name}.")
+            else:
+                self.ids.entry_date_field.text = "--"
+                self.ids.exit_date_field.text = now.strftime("%d/%m/%Y %H:%M")
+                self._show_dialog("Sucesso", f"Saida registada para {name}.")
+
+            self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
+            self.ids.qty_input.text = "1"
+            self.ids.note_input.text = ""
+            self.force_refresh()
+
+        def finish_worker():
+            result = worker()
+            Clock.schedule_once(lambda dt, payload=result: apply_result(payload), 0)
+
+        Thread(target=finish_worker, daemon=True).start()
 
     def clear_form(self):
         self.selected_product = None

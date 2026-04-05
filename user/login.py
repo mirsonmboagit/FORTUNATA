@@ -24,7 +24,7 @@ from kivymd.uix.textfield import MDTextField
 from kivymd.uix.button import MDFlatButton
 from kivymd.uix.scrollview import MDScrollView
 
-from database.provider import get_db
+from database.provider import get_db, uses_remote_backend
 from utils.security_questions import QUESTIONS
 
 LOGIN_KV_PATH = os.path.join(os.path.dirname(__file__), 'login_screen.kv')
@@ -115,6 +115,12 @@ class LoginScreen(MDScreen):
         hero_shell = self.ids.hero_shell
         admin_preview_card = self.ids.admin_preview_card
         manager_preview_card = self.ids.manager_preview_card
+        admin_slide_one_image = self.ids.get("admin_slide_one_image")
+        admin_slide_one_summary = self.ids.get("admin_slide_one_summary")
+        admin_slide_two_image = self.ids.get("admin_slide_two_image")
+        admin_slide_two_summary = self.ids.get("admin_slide_two_summary")
+        manager_preview_image = self.ids.get("manager_preview_image")
+        manager_preview_summary = self.ids.get("manager_preview_summary")
         admin_highlights_grid = self.ids.admin_highlights_grid
         divider = self.ids.divider
         form_scroll = self.ids.form_scroll
@@ -137,6 +143,33 @@ class LoginScreen(MDScreen):
         show_admin_preview = variant == "admin"
         show_manager_preview = variant == "manager"
 
+        if compact:
+            admin_preview_image_h = dp(120)
+            admin_preview_summary_h = dp(76)
+            manager_preview_image_h = dp(112)
+            manager_preview_summary_h = dp(76)
+        elif medium:
+            admin_preview_image_h = dp(144)
+            admin_preview_summary_h = dp(80)
+            manager_preview_image_h = dp(132)
+            manager_preview_summary_h = dp(80)
+        else:
+            admin_preview_image_h = dp(160)
+            admin_preview_summary_h = dp(82)
+            manager_preview_image_h = dp(148)
+            manager_preview_summary_h = dp(82)
+
+        for image in (admin_slide_one_image, admin_slide_two_image):
+            if image is not None:
+                image.height = admin_preview_image_h
+        for summary_card in (admin_slide_one_summary, admin_slide_two_summary):
+            if summary_card is not None:
+                summary_card.height = admin_preview_summary_h
+        if manager_preview_image is not None:
+            manager_preview_image.height = manager_preview_image_h
+        if manager_preview_summary is not None:
+            manager_preview_summary.height = manager_preview_summary_h
+
         if admin_highlights_grid:
             admin_highlights_grid.cols = 1 if compact else 2
 
@@ -145,7 +178,7 @@ class LoginScreen(MDScreen):
             admin_preview_card.disabled = not show_admin_preview
             admin_preview_card.size_hint_y = None
             admin_preview_card.height = (
-                dp(252) if compact else dp(292) if medium else dp(326)
+                admin_preview_image_h + admin_preview_summary_h + dp(44)
             ) if show_admin_preview else 0
 
         if manager_preview_card:
@@ -153,13 +186,13 @@ class LoginScreen(MDScreen):
             manager_preview_card.disabled = not show_manager_preview
             manager_preview_card.size_hint_y = None
             manager_preview_card.height = (
-                dp(244) if compact else dp(282) if medium else dp(312)
+                manager_preview_image_h + manager_preview_summary_h + dp(44)
             ) if show_manager_preview else 0
 
         hero_shell.padding = (
-            [dp(18), dp(16), dp(18), dp(16)] if compact else [dp(22), dp(20), dp(22), dp(20)]
+            [dp(16), dp(14), dp(16), dp(14)] if compact else [dp(20), dp(18), dp(20), dp(18)] if medium else [dp(22), dp(20), dp(22), dp(20)]
         )
-        hero_shell.spacing = dp(12) if compact else dp(14)
+        hero_shell.spacing = dp(10) if compact else dp(12) if medium else dp(14)
 
         if compact:
             hero_anchor.size_hint_x = 1
@@ -306,8 +339,7 @@ class LoginScreen(MDScreen):
         self._refresh_input_state()
 
     def _uses_remote_db(self):
-        module_name = str(getattr(self.db.__class__, "__module__", "") or "")
-        return module_name.startswith("database.client")
+        return uses_remote_backend(self.db)
 
     def _run_background_task(self, task, callback, busy_text="A processar..."):
         token = self._operation_token + 1
@@ -344,6 +376,11 @@ class LoginScreen(MDScreen):
                 pass
 
         Thread(target=worker, daemon=True).start()
+
+    def _audit_event(self, username, role, action, details):
+        actor = str(username or "").strip() or "desconhecido"
+        actor_role = str(role or "").strip() or "guest"
+        self._log_action_async(actor, actor_role, action, details)
 
     def _find_default_admin(self):
         for username in self.db.get_admin_usernames():
@@ -681,6 +718,12 @@ class LoginScreen(MDScreen):
             role = (result or {}).get("role")
             if role in ("admin", "manager"):
                 if self.allowed_roles and role not in self.allowed_roles:
+                    self._audit_event(
+                        user,
+                        role,
+                        "ACCESS_DENIED",
+                        f"Tentativa de acesso a painel nao autorizado | permitido: {','.join(self.allowed_roles)}",
+                    )
                     self.username_error = "Acesso nao autorizado!"
                     self.password_error = "Acesso nao autorizado!"
                     return
@@ -690,6 +733,12 @@ class LoginScreen(MDScreen):
                 self._complete_login(user, role)
                 return
 
+            self._audit_event(
+                user,
+                "guest",
+                "ACCESS_ATTEMPT",
+                "Tentativa de login com credenciais invalidas",
+            )
             self.username_error = "Credenciais invalidas!"
             self.password_error = "Credenciais invalidas!"
 
@@ -701,7 +750,6 @@ class LoginScreen(MDScreen):
 
     def _complete_login(self, user, role):
         self._set_current_user(user, role)
-        self._log_action_async(user, role, 'LOGIN', 'Login realizado')
         self.reset_fields()
         target = self.success_screen or role
         if not self.manager:
@@ -872,13 +920,13 @@ class LoginScreen(MDScreen):
             if not role and self._db_last_error():
                 return None
             if not role:
-                return {"status": "user_not_found"}
+                return {"status": "user_not_found", "username": username}
 
             result = self.db.verify_security_answers(username, answers)
             if not result and self._db_last_error():
                 return None
             if not result or not result.get("ok"):
-                return {"status": "answers_failed", "result": result or {}}
+                return {"status": "answers_failed", "result": result or {}, "role": role}
 
             updated = self.db.update_user_password(username, new_password, role=role)
             if not updated and self._db_last_error():
@@ -900,17 +948,49 @@ class LoginScreen(MDScreen):
 
             status = (result or {}).get("status")
             if status == "user_not_found":
+                self._audit_event(
+                    (result or {}).get("username") or username,
+                    "guest",
+                    "ACCESS_ATTEMPT",
+                    "Tentativa de recuperacao de senha para utilizador inexistente",
+                )
                 self._show_message('Erro', 'Usuario nao encontrado')
                 return
             if status == "answers_failed":
-                reason = ((result or {}).get("result") or {}).get("reason")
+                payload = (result or {}).get("result") or {}
+                reason = payload.get("reason")
+                audit_role = (result or {}).get("role") or "guest"
                 if reason == "not_configured":
+                    self._audit_event(
+                        username,
+                        audit_role,
+                        "ACCESS_DENIED",
+                        "Tentativa de recuperacao sem perguntas configuradas",
+                    )
                     self._show_message('Erro', 'Perguntas nao configuradas. Fale com o admin')
                 elif reason == "locked":
-                    remaining = ((result or {}).get("result") or {}).get("remaining_minutes") or 15
+                    remaining = payload.get("remaining_minutes") or 15
+                    self._audit_event(
+                        username,
+                        audit_role,
+                        "SECURITY_ALERT",
+                        f"Tentativa de recuperacao bloqueada | aguarde {remaining} min",
+                    )
                     self._show_message('Erro', f'Tentativas excedidas. Aguarde {remaining} min')
                 elif reason == "invalid":
-                    remaining = ((result or {}).get("result") or {}).get("remaining")
+                    remaining = payload.get("remaining")
+                    attempts = payload.get("attempts")
+                    details = "Respostas de recuperacao incorretas"
+                    if remaining is not None:
+                        details += f" | restantes: {remaining}"
+                    if attempts is not None:
+                        details += f" | falhas: {attempts}"
+                    self._audit_event(
+                        username,
+                        audit_role,
+                        "ACCESS_ATTEMPT",
+                        details,
+                    )
                     if remaining is not None:
                         self._show_message('Erro', f'Respostas incorretas. Tentativas restantes: {remaining}')
                     else:

@@ -8,7 +8,48 @@ from kivy.app import App
 
 from .alert_manager import AlertManager
 from .monitor import IntelligenceMonitor
-from ui.components.intelligent_banner import IntelligentBannerCenter
+from ui.components import intelligent_banner as intelligent_banner_module
+
+IntelligentBannerCenter = intelligent_banner_module.IntelligentBannerCenter
+
+
+def _build_history_banner_data(
+    active_items: list[dict[str, Any]] | None = None,
+    history_items: list[dict[str, Any]] | None = None,
+    insights: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    helper = getattr(intelligent_banner_module, "build_history_banner_data", None)
+    if callable(helper):
+        return helper(
+            active_items=active_items,
+            history_items=history_items,
+            insights=insights,
+        )
+    return list(history_items or active_items or [])
+
+
+def _get_banner_notification_key(banner_data: list[dict[str, Any]] | None = None) -> str:
+    helper = getattr(intelligent_banner_module, "get_banner_notification_key", None)
+    if callable(helper):
+        return helper(banner_data)
+    return f"fallback:{len(list(banner_data or []))}"
+
+
+def _get_banner_notification_total(
+    banner_data: list[dict[str, Any]] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> int:
+    if payload is not None:
+        try:
+            unread = int(payload.get("unread_count") or 0)
+        except Exception:
+            unread = 0
+        if unread > 0:
+            return unread
+    helper = getattr(intelligent_banner_module, "get_banner_notification_total", None)
+    if callable(helper):
+        return helper(banner_data)
+    return len(list(banner_data or []))
 
 
 class SharedIntelligenceHub:
@@ -88,7 +129,7 @@ class ProactiveIntelligenceController:
         interval_seconds: float = 30.0,
         banner_columns: int = 1,
         auto_batch_size: int | None = None,
-        auto_stagger_seconds: float = 0.2,
+        auto_stagger_seconds: float = 2.0,
         auto_present_enabled: bool = False,
     ) -> None:
         self.screen = screen
@@ -102,6 +143,7 @@ class ProactiveIntelligenceController:
         self._banner_center: IntelligentBannerCenter | None = None
         self._last_payload: dict[str, Any] = {}
         self._auto_presented_once = False
+        self._last_notification_key = ""
 
     def start(self) -> None:
         if not self._is_enabled():
@@ -120,13 +162,36 @@ class ProactiveIntelligenceController:
         if self._is_enabled():
             self.hub.request_refresh()
 
-    def open_history(self) -> None:
+    def open_history(self, caller: Any = None) -> None:
         center = self._ensure_banner_center()
-        center.open_history(
-            self.hub.alert_manager.snapshot().get("history", []),
-            insights=self._last_payload.get("banner_insights", {}),
+        snapshot = self.hub.alert_manager.snapshot()
+        active_items = snapshot.get("active_alerts", [])
+        history_items = snapshot.get("history", [])
+        insights = self._last_payload.get("banner_insights", {})
+        banner_data = _build_history_banner_data(
+            active_items=active_items,
+            history_items=history_items,
+            insights=insights,
         )
+        notification_key = _get_banner_notification_key(banner_data)
+        app = App.get_running_app()
+        if app is not None:
+            setattr(app, "_ai_notifications_seen_key", notification_key)
+        self._last_notification_key = notification_key
+        try:
+            center.open_history(
+                caller=caller,
+                active_items=active_items,
+                history_items=history_items,
+                insights=insights,
+            )
+        except TypeError:
+            center.open_history(
+                history_items=history_items,
+                insights=insights,
+            )
         self.hub.mark_all_seen()
+        self._update_badge(0)
 
     def set_enabled(self, enabled: bool) -> None:
         self.hub.set_enabled(enabled)
@@ -145,13 +210,21 @@ class ProactiveIntelligenceController:
         app = App.get_running_app()
         return bool(getattr(app, "smart_monitor_enabled", True)) if app else True
 
+    def _auto_banners_enabled(self) -> bool:
+        app = App.get_running_app()
+        return bool(getattr(app, "auto_banners_enabled", True)) if app else True
+
     def _apply_payload(self, payload: dict[str, Any]) -> None:
         self._last_payload = dict(payload)
         display_alerts = payload.get("display_alerts", []) or []
         banner_insights = payload.get("banner_insights", {}) or {}
         center = self._ensure_banner_center()
         center.set_history(payload.get("history", []))
-        has_auto_content = self.auto_present_enabled and bool(display_alerts or banner_insights)
+        has_auto_content = (
+            self.auto_present_enabled
+            and self._auto_banners_enabled()
+            and bool(display_alerts or banner_insights)
+        )
         should_auto_show = False
         if has_auto_content:
             if not self._auto_presented_once:
@@ -164,7 +237,18 @@ class ProactiveIntelligenceController:
                 insights=banner_insights,
             )
             self._auto_presented_once = True
-        self._update_badge(int(payload.get("unread_count", 0) or 0))
+        history_banner_data = _build_history_banner_data(
+            active_items=payload.get("active_alerts", []),
+            history_items=payload.get("history", []),
+            insights=banner_insights,
+        )
+        notification_key = _get_banner_notification_key(history_banner_data)
+        notification_total = _get_banner_notification_total(history_banner_data, payload=payload)
+        app = App.get_running_app()
+        if app is not None and getattr(app, "_ai_notifications_seen_key", "") == notification_key:
+            notification_total = 0
+        self._last_notification_key = notification_key
+        self._update_badge(notification_total)
 
     def _update_badge(self, count: int) -> None:
         if hasattr(self.screen, "update_notification_badge"):

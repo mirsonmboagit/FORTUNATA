@@ -5,9 +5,9 @@ import re
 import time
 import random
 from collections import defaultdict
-from dotenv import load_dotenv
 from kivy.app import App
 from database.provider import get_db
+from utils.env_loader import load_dotenv
 
 load_dotenv()
 

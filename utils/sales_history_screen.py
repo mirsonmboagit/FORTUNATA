@@ -1,10 +1,13 @@
+from collections import deque
 from kivymd.uix.dialog import MDDialog
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import lru_cache
 from threading import Thread
 from time import perf_counter
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle  # ← MOVIDO PARA O TOPO (era importado dentro do loop)
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty
@@ -14,7 +17,6 @@ from kivymd.uix.button import MDRaisedButton, MDFlatButton
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
-from kivymd.uix.dialog import MDDialog
 from kivymd.uix.textfield import MDTextField
 
 from database.provider import get_db
@@ -35,7 +37,7 @@ Builder.load_string("""
             specific_text_color: app.theme_tokens['on_primary']
             elevation: 4
             left_action_items: [["arrow-left", lambda x: root.go_back()]]
-            right_action_items: [["file-download-outline", lambda x: root.export_sales()], ["refresh", lambda x: root.load_all_sales()]]
+            right_action_items: [["file-download-outline", lambda x: root.export_sales()], ["refresh", lambda x: root.load_all_sales(force_refresh=True)]]
 
         # Main Content
         MDBoxLayout:
@@ -111,6 +113,7 @@ Builder.load_string("""
                             icon_right: "calendar"
                             max_text_length: 10
                             line_color_focus: app.theme_tokens['primary']
+                            on_text_validate: root.apply_date_filter()
 
                         MDTextField:
                             id: end_date
@@ -122,6 +125,7 @@ Builder.load_string("""
                             icon_right: "calendar"
                             max_text_length: 10
                             line_color_focus: app.theme_tokens['primary']
+                            on_text_validate: root.apply_date_filter()
 
                         MDRaisedButton:
                             id: apply_filter_btn
@@ -488,6 +492,7 @@ Builder.load_string("""
                     disabled: True
 
                     MDIcon:
+                        id: empty_state_icon
                         icon: "basket-off-outline"
                         font_size: dp(80)
                         halign: "center"
@@ -495,6 +500,7 @@ Builder.load_string("""
                         text_color: app.theme_tokens['text_secondary']
 
                     MDLabel:
+                        id: empty_state_title
                         text: "Nenhuma venda encontrada"
                         halign: "center"
                         theme_text_color: "Hint"
@@ -502,6 +508,7 @@ Builder.load_string("""
                         bold: True
 
                     MDLabel:
+                        id: empty_state_message
                         text: "Ajuste os filtros ou adicione novas vendas ao sistema"
                         halign: "center"
                         theme_text_color: "Hint"
@@ -516,17 +523,32 @@ Builder.load_string("""
                     on_release: root.load_more_rows()
                     opacity: 0
                     disabled: True
+
 """)
 
 
 class SalesHistoryScreen(MDScreen):
     ENTER_CACHE_SECONDS = 5
+    RENDER_BATCH_SIZE = 20          # ← AUMENTADO de 8 para 20 (widgets mais leves agora suportam)
+    RENDER_INTERVAL_SECONDS = 0.016 # ← AJUSTADO de 0.01 para ~60fps sem acumular frames
     compact_mode = BooleanProperty(False)
+
+    # ─── Cache de cores para evitar lookup de tokens por linha ───────────────
+    _divider_color_cache = [0, 0, 0, 0.12]
+    _bg_even_cache = [0.98, 0.99, 1, 1]
+    _bg_odd_cache = [1, 1, 1, 1]
+    _text_primary_cache = [0.15, 0.20, 0.30, 1]
+    _text_secondary_cache = [0.35, 0.40, 0.50, 1]
+    _primary_cache = [0.10, 0.35, 0.65, 1]
+    _success_cache = [0.20, 0.65, 0.30, 1]
+    _warning_cache = [0.95, 0.62, 0.12, 1]
+    _on_primary_cache = [1, 1, 1, 1]
+    _card_alt_cache = [0.65, 0.65, 0.65, 1]
 
     def __init__(self, db=None, **kwargs):
         self._last_rows = []
         self._render_ev = None
-        self._pending_rows = []
+        self._pending_rows = deque()
         self._render_index = 0
         self._display_rows = []
         self._page_size = 60
@@ -534,6 +556,14 @@ class SalesHistoryScreen(MDScreen):
         self._last_loaded_at = 0.0
         self._rows_loading = False
         self._rows_token = 0
+        self._all_sales_cache = []
+        self._all_sales_summary = None
+        self._all_sales_cache_valid = False
+        self._all_sales_cache_at = 0.0
+        self.sales_history_report = None
+        self.pdf_viewer = None
+        self._exporting_sales = False
+        self._pending_enter_filter = None
         self.back_target = "admin_home"
         super().__init__(**kwargs)
         self.db = db or get_db()
@@ -543,7 +573,15 @@ class SalesHistoryScreen(MDScreen):
         self._update_responsive_layout()
 
     def on_pre_enter(self, *args):
+        pending_filter = (self._pending_enter_filter or "").strip().lower()
+        self._pending_enter_filter = None
+        if pending_filter == "today":
+            Clock.schedule_once(lambda dt: self.filter_today(), 0.05)
+            return
         self.request_enter_refresh()
+
+    def queue_enter_filter(self, filter_name):
+        self._pending_enter_filter = str(filter_name or "").strip().lower() or None
 
     def request_enter_refresh(self, force=False, delay=0.05):
         stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
@@ -551,26 +589,176 @@ class SalesHistoryScreen(MDScreen):
             return
         Clock.schedule_once(lambda dt: self.load_all_sales(), delay)
 
-    def _load_rows_async(self, fetcher):
+    def _update_load_more_button(self, visible):
+        if "load_more_btn" not in self.ids:
+            return
+        self.ids.load_more_btn.opacity = 1 if visible else 0
+        self.ids.load_more_btn.disabled = not visible
+
+    def _set_empty_state(self, title, message, icon="basket-off-outline"):
+        if "empty_state_icon" in self.ids:
+            self.ids.empty_state_icon.icon = icon
+        if "empty_state_title" in self.ids:
+            self.ids.empty_state_title.text = title
+        if "empty_state_message" in self.ids:
+            self.ids.empty_state_message.text = message
+
+    def _show_empty_state(self, title, message, icon="basket-off-outline"):
+        if "empty_state" not in self.ids:
+            return
+        self._set_empty_state(title, message, icon=icon)
+        self.ids.empty_state.opacity = 1
+        self.ids.empty_state.height = dp(240)
+        self.ids.empty_state.disabled = False
+        if "sales_list" in self.ids:
+            self.ids.sales_list.opacity = 0
+
+    def _hide_empty_state(self):
+        if "empty_state" not in self.ids:
+            return
+        self.ids.empty_state.opacity = 0
+        self.ids.empty_state.height = 0
+        self.ids.empty_state.disabled = True
+        if "sales_list" in self.ids:
+            self.ids.sales_list.opacity = 1
+
+    def _stop_rendering(self):
+        if self._render_ev:
+            try:
+                self._render_ev.cancel()
+            except Exception:
+                Clock.unschedule(self._render_ev)
+            self._render_ev = None
+        self._pending_rows = deque()
+
+    def _show_loading_state(self):
+        if "sales_list" not in self.ids:
+            return
+        self._stop_rendering()
+        self._display_rows = []
+        self._current_page = 1
+        self._render_index = 0
+        # CORRIGIDO: clear_widgets() adiado para o próximo frame.
+        # Antes era síncrono: removia 120+ widgets na UI thread antes do botão
+        # soltar visualmente, causando o travamento percebido pelo usuário.
+        self._update_load_more_button(False)
+        self._show_empty_state("A carregar...", "Aguarde.", icon="progress-clock")
+        Clock.schedule_once(lambda dt: self.ids.sales_list.clear_widgets() if "sales_list" in self.ids else None, 0)
+
+    def _invalidate_all_sales_cache(self):
+        self._all_sales_cache = []
+        self._all_sales_summary = None
+        self._all_sales_cache_valid = False
+        self._all_sales_cache_at = 0.0
+
+    def _get_cached_all_sales(self):
+        if not self._all_sales_cache_valid:
+            return None
+        return self._all_sales_cache
+
+    def _normalize_filter_dates(self, start_text="", end_text=""):
+        start = (start_text or "").strip()
+        end = (end_text or "").strip()
+        if start and not end:
+            end = start
+        elif end and not start:
+            start = end
+        return start, end
+
+    def _filter_rows_by_date_range_local(self, rows, start_text="", end_text=""):
+        start_text, end_text = self._normalize_filter_dates(start_text, end_text)
+        if not start_text and not end_text:
+            return list(rows or [])
+
+        start_dt = self._parse_sale_datetime(start_text)
+        end_dt = self._parse_sale_datetime(end_text)
+        if start_text and start_dt is None:
+            return []
+        if end_text and end_dt is None:
+            return []
+
+        start_date = start_dt.date() if start_dt else None
+        end_date = end_dt.date() if end_dt else None
+        filtered = []
+        for row in rows or []:
+            sale_raw = row[5] if len(row) > 5 else ""
+            sale_dt = self._parse_sale_datetime(sale_raw)
+            if sale_dt is None:
+                continue
+            sale_date = sale_dt.date()
+            if start_date and sale_date < start_date:
+                continue
+            if end_date and sale_date > end_date:
+                continue
+            filtered.append(row)
+        return filtered
+
+    def _get_cached_filtered_rows(self, start_text="", end_text="", promo_only=False):
+        rows = self._get_cached_all_sales()
+        if rows is None:
+            return None
+        filtered = self._filter_rows_by_date_range_local(rows, start_text, end_text)
+        if promo_only:
+            filtered = self._only_promotional_rows(filtered)
+        return filtered
+
+    def _load_rows_from_cache(self, start_text="", end_text="", promo_only=False):
+        if not self._all_sales_cache_valid:
+            return False
+        if not start_text and not end_text and not promo_only:
+            # Sem filtro: entrega direto, sem thread nem loading state
+            self._populate_list(
+                list(self._all_sales_cache),
+                summary=self._all_sales_summary,
+            )
+            return True
+        # CORRIGIDO: filtro local (Python puro) não precisa de thread nem de
+        # _show_loading_state(). Executa na UI thread mas é O(n) simples —
+        # muito mais rápido do que o custo de clear_widgets() + thread overhead.
+        rows = self._get_cached_filtered_rows(start_text, end_text, promo_only=promo_only)
+        if rows is None:
+            return False
+        self._populate_list(rows)
+        return True
+
+    def _load_rows_async(self, fetcher, cache_all=False):
         token = self._rows_token + 1
         self._rows_token = token
         self._rows_loading = True
+        self._show_loading_state()
 
         def worker():
             rows = []
+            summary = None
             try:
-                rows = fetcher() or []
+                rows = list(fetcher() or [])
+                summary = self._build_summary(rows)
             except Exception as exc:
                 print(f"Erro ao carregar historico de vendas: {exc}")
-            Clock.schedule_once(lambda dt, data=rows, tok=token: self._apply_loaded_rows(data, tok), 0)
+                rows = []
+                summary = self._build_summary(rows)
+            Clock.schedule_once(
+                lambda dt, data=rows, stats=summary, tok=token, cache_flag=cache_all: self._apply_loaded_rows(
+                    data,
+                    stats,
+                    tok,
+                    cache_all=cache_flag,
+                ),
+                0,
+            )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_loaded_rows(self, rows, token):
+    def _apply_loaded_rows(self, rows, summary, token, cache_all=False):
         if token != self._rows_token:
             return
         self._rows_loading = False
-        self._populate_list(rows)
+        if cache_all:
+            self._all_sales_cache = list(rows or [])
+            self._all_sales_summary = dict(summary or {})
+            self._all_sales_cache_valid = True
+            self._all_sales_cache_at = perf_counter()
+        self._populate_list(rows, summary=summary)
         self._last_loaded_at = perf_counter()
 
     def on_size(self, *args):
@@ -702,6 +890,33 @@ class SalesHistoryScreen(MDScreen):
         except Exception:
             return "0.00"
 
+    def _build_summary(self, rows):
+        total_sales = len(rows or [])
+        gross_revenue = 0.0
+        refunded_total = 0.0
+        for row in rows or []:
+            gross_revenue += float(row[4] or 0) if len(row) > 4 else 0.0
+            refunded_qty = float(row[6] or 0) if len(row) > 6 else 0.0
+            unit_price = float(row[3] or 0) if len(row) > 3 else 0.0
+            refunded_total += refunded_qty * unit_price
+        return {
+            "total_sales": total_sales,
+            "net_revenue": gross_revenue - refunded_total,
+            "refunded_total": refunded_total,
+        }
+
+    def _apply_summary(self, summary):
+        if "total_sales_label" not in self.ids:
+            return
+        summary = summary or {}
+        self.ids.total_sales_label.text = str(int(summary.get("total_sales") or 0))
+        self.ids.total_revenue_label.text = (
+            f"{self._format_currency(summary.get('net_revenue', 0.0))} MT"
+        )
+        self.ids.avg_sale_label.text = (
+            f"{self._format_currency(summary.get('refunded_total', 0.0))} MT"
+        )
+
     def _calculate_summary(self, rows):
         """Calcula estatísticas resumidas"""
         total_sales = len(rows)
@@ -746,80 +961,108 @@ class SalesHistoryScreen(MDScreen):
             "is_promotional": is_promotional,
         }
 
+    # ─── NOVO: fábrica de separador vertical reutilizável ────────────────────
+    def _make_vsep(self):
+        """
+        Cria um separador vertical de 1dp.
+        Usa Color e Rectangle já importados no topo do módulo — sem re-import por linha.
+        """
+        sep = Widget(size_hint_x=None, width=dp(1))
+        with sep.canvas.before:
+            Color(*self._divider_color_cache)
+            rect = Rectangle(pos=sep.pos, size=sep.size)
+        sep.bind(
+            pos=lambda w, p, r=rect: setattr(r, "pos", p),
+            size=lambda w, s, r=rect: setattr(r, "size", s),
+        )
+        return sep
+
+    # ─── NOVO: fábrica de separador horizontal reutilizável ─────────────────
+    def _make_hsep(self):
+        """Cria um separador horizontal de 1dp entre linhas da tabela."""
+        div = Widget(size_hint_y=None, height=dp(1))
+        with div.canvas.before:
+            Color(*self._divider_color_cache)
+            rect = Rectangle(pos=div.pos, size=div.size)
+        div.bind(
+            pos=lambda w, p, r=rect: setattr(r, "pos", p),
+            size=lambda w, s, r=rect: setattr(r, "size", s),
+        )
+        return div
+
     def _create_table_row(self, row, index):
-        """Cria uma linha da tabela com separadores verticais"""
+        """
+        Cria uma linha da tabela com separadores verticais.
+
+        Otimizações aplicadas vs versão anterior:
+        - Color/Rectangle importados no topo do módulo (não por chamada)
+        - _make_vsep() / _make_hsep() centralizam a criação de separadores
+        - Cores lidas do cache de instância (não de theme_tokens por linha)
+        - MDCard removido do badge de quantidade → MDLabel direto
+        - MDBoxLayout de wrapper removido de qty, total e action → widgets diretos
+        - product_box mantido como MDBoxLayout pois pode ter 1-3 filhos dinâmicos
+        """
         sale = self._row_to_dict(row)
-        sale_id = sale["sale_id"]
-        product = sale["product"]
-        qty = sale["qty"]
-        price = sale["price"]
-        total = sale["total"]
-        sale_date = sale["sale_date"]
+        sale_id      = sale["sale_id"]
+        product      = sale["product"]
+        qty          = sale["qty"]
+        price        = sale["price"]
+        total        = sale["total"]
+        sale_date    = sale["sale_date"]
         returned_qty = sale["returned_qty"]
         available_qty = sale["available_qty"]
         is_promotional = sale["is_promotional"]
 
-        app = App.get_running_app()
-        tokens = getattr(app, "theme_tokens", {})
-        bg_even = tokens.get("surface_alt", [0.98, 0.99, 1, 1])
-        bg_odd = tokens.get("card", [1, 1, 1, 1])
-        divider_color = tokens.get("divider", [0, 0, 0, 0.12])
-        text_primary = tokens.get("text_primary", [0.15, 0.20, 0.30, 1])
-        text_secondary = tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])
-        primary = tokens.get("primary", [0.10, 0.35, 0.65, 1])
-        success = tokens.get("success", [0.20, 0.65, 0.30, 1])
-        # Cores alternadas com melhor contraste
-        bg = bg_even if index % 2 == 0 else bg_odd
+        # Cores lidas do cache (atualizado em _populate_list uma vez por lote)
+        bg = self._bg_even_cache if index % 2 == 0 else self._bg_odd_cache
+        divider_color   = self._divider_color_cache
+        text_primary    = self._text_primary_cache
+        text_secondary  = self._text_secondary_cache
+        primary         = self._primary_cache
+        success         = self._success_cache
+
         if self.compact_mode:
             date_w, product_w, qty_w, total_w, action_w = 0.24, 0.40, 0.12, 0.14, 0.10
         else:
             date_w, product_w, qty_w, price_w, total_w, action_w = 0.20, 0.33, 0.11, 0.13, 0.13, 0.10
 
+        # Container externo (linha + divider horizontal)
         container = MDBoxLayout(
             orientation="vertical",
             size_hint_y=None,
             height=dp(56),
-            spacing=dp(0)
+            spacing=dp(0),
         )
 
+        # Linha principal
         line = MDBoxLayout(
             size_hint_y=None,
             height=dp(56),
             padding=[dp(16), dp(10)],
             spacing=dp(0),
-            md_bg_color=bg
+            md_bg_color=bg,
         )
 
-        # Data/Hora
-        date_label = MDLabel(
+        # ── Data/Hora ────────────────────────────────────────────────────────
+        line.add_widget(MDLabel(
             text=self._format_date(sale_date),
             size_hint_x=date_w,
             halign="left",
             font_size=dp(11),
             theme_text_color="Custom",
-            text_color=text_secondary
-        )
-        line.add_widget(date_label)
+            text_color=text_secondary,
+        ))
 
-        # Separador vertical
-        sep1 = Widget(size_hint_x=None, width=dp(1))
-        sep1.canvas.before.clear()
-        from kivy.graphics import Color, Rectangle
-        with sep1.canvas.before:
-            Color(*divider_color)
-            rect1 = Rectangle(pos=sep1.pos, size=sep1.size)
-        sep1.bind(pos=lambda i, p: setattr(rect1, 'pos', p))
-        sep1.bind(size=lambda i, s: setattr(rect1, 'size', s))
-        line.add_widget(sep1)
+        line.add_widget(self._make_vsep())
 
-        # Produto
+        # ── Produto (com sub-labels opcionais para promo e estorno) ──────────
         product_box = MDBoxLayout(
             orientation="vertical",
             size_hint_x=product_w,
             padding=[dp(12), 0, dp(8), 0],
             spacing=dp(2),
         )
-        product_label = MDLabel(
+        product_box.add_widget(MDLabel(
             text=str(product),
             halign="left",
             font_size=dp(12),
@@ -827,23 +1070,21 @@ class SalesHistoryScreen(MDScreen):
             shorten=True,
             shorten_from="right",
             theme_text_color="Custom",
-            text_color=text_primary
-        )
-        product_box.add_widget(product_label)
+            text_color=text_primary,
+        ))
         if is_promotional:
-            promo_meta = MDLabel(
+            product_box.add_widget(MDLabel(
                 text="PROMO",
                 halign="left",
                 font_size=dp(10),
                 theme_text_color="Custom",
-                text_color=tokens.get("warning", [0.95, 0.62, 0.12, 1]),
+                text_color=self._warning_cache,
                 bold=True,
                 shorten=True,
                 shorten_from="right",
-            )
-            product_box.add_widget(promo_meta)
+            ))
         if returned_qty > 0:
-            refunded_meta = MDLabel(
+            product_box.add_widget(MDLabel(
                 text=f"Estornado: {self._format_qty(returned_qty)}",
                 halign="left",
                 font_size=dp(10),
@@ -851,173 +1092,131 @@ class SalesHistoryScreen(MDScreen):
                 text_color=text_secondary,
                 shorten=True,
                 shorten_from="right",
-            )
-            product_box.add_widget(refunded_meta)
+            ))
         line.add_widget(product_box)
 
-        # Separador vertical
-        sep2 = Widget(size_hint_x=None, width=dp(1))
-        with sep2.canvas.before:
-            Color(*divider_color)
-            rect2 = Rectangle(pos=sep2.pos, size=sep2.size)
-        sep2.bind(pos=lambda i, p: setattr(rect2, 'pos', p))
-        sep2.bind(size=lambda i, s: setattr(rect2, 'size', s))
-        line.add_widget(sep2)
+        line.add_widget(self._make_vsep())
 
-        # Quantidade com badge
-        qty_box = MDBoxLayout(size_hint_x=qty_w, padding=dp(4))
-        qty_card = MDCard(
-            size_hint=(None, None),
-            size=(dp(40), dp(26)),
-            md_bg_color=[primary[0], primary[1], primary[2], 0.18],
-            radius=[dp(14)],
-            pos_hint={"center_x": 0.5, "center_y": 0.5}
-        )
-        qty_label = MDLabel(
+        # ── Quantidade (MDLabel direto — sem MDCard nem MDBoxLayout wrapper) ─
+        # ANTES: MDBoxLayout > MDCard > MDLabel  (3 widgets + canvas por badge)
+        # AGORA: MDLabel direto com padding embutido (1 widget)
+        line.add_widget(MDLabel(
             text=self._format_qty(qty),
             halign="center",
             valign="center",
             font_size=dp(12),
             bold=True,
+            size_hint_x=qty_w,
             theme_text_color="Custom",
-            text_color=primary
-        )
-        qty_card.add_widget(qty_label)
-        qty_box.add_widget(qty_card)
-        line.add_widget(qty_box)
+            text_color=primary,
+        ))
 
+        # ── Preço Unitário (apenas em modo normal) ───────────────────────────
         if not self.compact_mode:
-            # Separador vertical
-            sep3 = Widget(size_hint_x=None, width=dp(1))
-            with sep3.canvas.before:
-                Color(*divider_color)
-                rect3 = Rectangle(pos=sep3.pos, size=sep3.size)
-            sep3.bind(pos=lambda i, p: setattr(rect3, 'pos', p))
-            sep3.bind(size=lambda i, s: setattr(rect3, 'size', s))
-            line.add_widget(sep3)
-
-            # Preço Unitário
-            price_box = MDBoxLayout(size_hint_x=price_w, padding=[0, 0, dp(8), 0])
-            price_label = MDLabel(
+            line.add_widget(self._make_vsep())
+            line.add_widget(MDLabel(
                 text=f"{self._format_currency(price)}",
                 halign="right",
                 font_size=dp(11),
+                size_hint_x=price_w,
+                padding=[0, 0, dp(8), 0],
                 theme_text_color="Custom",
-                text_color=text_secondary
-            )
-            price_box.add_widget(price_label)
-            line.add_widget(price_box)
+                text_color=text_secondary,
+            ))
+            line.add_widget(self._make_vsep())
 
-            # Separador vertical
-            sep4 = Widget(size_hint_x=None, width=dp(1))
-            with sep4.canvas.before:
-                Color(*divider_color)
-                rect4 = Rectangle(pos=sep4.pos, size=sep4.size)
-            sep4.bind(pos=lambda i, p: setattr(rect4, 'pos', p))
-            sep4.bind(size=lambda i, s: setattr(rect4, 'size', s))
-            line.add_widget(sep4)
-
-        # Total com destaque (liquido de estornos)
+        # ── Total líquido (sem MDBoxLayout wrapper) ──────────────────────────
         total_liquido = max(0.0, total - (returned_qty * price))
-        total_box = MDBoxLayout(size_hint_x=total_w, padding=[0, 0, dp(8), 0])
-        total_label = MDLabel(
+        line.add_widget(MDLabel(
             text=f"{self._format_currency(total_liquido)} MT",
             halign="right",
             font_size=dp(12),
             bold=True,
+            size_hint_x=total_w,
+            padding=[0, 0, dp(8), 0],
             theme_text_color="Custom",
-            text_color=success
-        )
-        total_box.add_widget(total_label)
-        line.add_widget(total_box)
+            text_color=success,
+        ))
 
-        # Separador vertical (acao)
-        sep_action = Widget(size_hint_x=None, width=dp(1))
-        with sep_action.canvas.before:
-            Color(*divider_color)
-            rect_action = Rectangle(pos=sep_action.pos, size=sep_action.size)
-        sep_action.bind(pos=lambda i, p: setattr(rect_action, "pos", p))
-        sep_action.bind(size=lambda i, s: setattr(rect_action, "size", s))
-        line.add_widget(sep_action)
+        line.add_widget(self._make_vsep())
 
-        action_box = MDBoxLayout(
-            size_hint_x=action_w,
-            padding=[dp(4), dp(4), dp(4), dp(4)],
-        )
+        # ── Ação (botão ESTORNAR ou OK desabilitado) ─────────────────────────
+        # MDBoxLayout de wrapper removido — botão direto com size_hint_x
         row_payload = dict(sale)
         if sale_id and available_qty > 0.0001:
-            refund_btn = MDRaisedButton(
+            action_btn = MDRaisedButton(
                 text="ESTORNAR",
-                md_bg_color=tokens.get("warning", [0.95, 0.62, 0.12, 1]),
+                size_hint_x=action_w,
+                md_bg_color=self._warning_cache,
                 theme_text_color="Custom",
-                text_color=tokens.get("on_primary", [1, 1, 1, 1]),
+                text_color=self._on_primary_cache,
                 font_size=dp(10),
                 on_release=lambda _btn, data=row_payload: self.open_refund_dialog(data),
             )
         else:
-            refund_btn = MDRaisedButton(
+            action_btn = MDRaisedButton(
                 text="OK",
-                md_bg_color=tokens.get("card_alt", [0.65, 0.65, 0.65, 1]),
+                size_hint_x=action_w,
+                md_bg_color=self._card_alt_cache,
                 theme_text_color="Custom",
-                text_color=tokens.get("on_primary", [1, 1, 1, 1]),
+                text_color=self._on_primary_cache,
                 font_size=dp(10),
                 disabled=True,
             )
-        action_box.add_widget(refund_btn)
-        line.add_widget(action_box)
+        line.add_widget(action_btn)
 
         container.add_widget(line)
-
-        # Divider horizontal entre linhas
-        divider = Widget(size_hint_y=None, height=dp(1))
-        with divider.canvas.before:
-            Color(*divider_color)
-            rect_div = Rectangle(pos=divider.pos, size=divider.size)
-        divider.bind(pos=lambda i, p: setattr(rect_div, 'pos', p))
-        divider.bind(size=lambda i, s: setattr(rect_div, 'size', s))
-        container.add_widget(divider)
+        container.add_widget(self._make_hsep())
 
         return container
 
-    def _populate_list(self, rows):
+    def _populate_list(self, rows, summary=None):
         """Popula a lista de vendas"""
         if "sales_list" not in self.ids:
             return
 
-        rows = rows or []
-        self._last_rows = list(rows)
+        rows = list(rows or [])
+        self._last_rows = rows
+        self._stop_rendering()
         self.ids.sales_list.clear_widgets()
+
+        # ── Atualiza cache de cores UMA vez por lote (não por linha) ─────────
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {})
+        self._divider_color_cache  = tokens.get("divider",        [0,    0,    0,    0.12])
+        self._bg_even_cache        = tokens.get("surface_alt",    [0.98, 0.99, 1,    1   ])
+        self._bg_odd_cache         = tokens.get("card",           [1,    1,    1,    1   ])
+        self._text_primary_cache   = tokens.get("text_primary",   [0.15, 0.20, 0.30, 1   ])
+        self._text_secondary_cache = tokens.get("text_secondary", [0.35, 0.40, 0.50, 1   ])
+        self._primary_cache        = tokens.get("primary",        [0.10, 0.35, 0.65, 1   ])
+        self._success_cache        = tokens.get("success",        [0.20, 0.65, 0.30, 1   ])
+        self._warning_cache        = tokens.get("warning",        [0.95, 0.62, 0.12, 1   ])
+        self._on_primary_cache     = tokens.get("on_primary",     [1,    1,    1,    1   ])
+        self._card_alt_cache       = tokens.get("card_alt",       [0.65, 0.65, 0.65, 1   ])
 
         # Mostrar/ocultar estado vazio
         if len(rows) == 0:
-            self.ids.empty_state.opacity = 1
-            self.ids.empty_state.height = dp(240)
-            self.ids.empty_state.disabled = False
-            self.ids.sales_list.opacity = 0
-            if "load_more_btn" in self.ids:
-                self.ids.load_more_btn.opacity = 0
-                self.ids.load_more_btn.disabled = True
-            if self._render_ev:
-                Clock.unschedule(self._render_ev)
-                self._render_ev = None
-            self._pending_rows = []
+            self._display_rows = []
+            self._apply_summary(None)
+            self._update_load_more_button(False)
+            self._show_empty_state(
+                "Nenhuma venda encontrada",
+                "Ajuste os filtros ou adicione novas vendas ao sistema",
+            )
             return
-        else:
-            self.ids.empty_state.opacity = 0
-            self.ids.empty_state.height = 0
-            self.ids.empty_state.disabled = True
-            self.ids.sales_list.opacity = 1
+        self._hide_empty_state()
 
         # Calcular estatísticas
-        self._calculate_summary(rows)
+        self._apply_summary(summary or self._build_summary(rows))
 
         # Adicionar linhas com separadores (em lotes)
-        self._display_rows = list(rows)
+        self._display_rows = rows
         self._current_page = 1
         self._render_page(reset=True)
 
     def _render_page(self, reset=False):
         if not self._display_rows:
+            self._update_load_more_button(False)
             return
         if reset:
             start = 0
@@ -1028,12 +1227,10 @@ class SalesHistoryScreen(MDScreen):
         rows_to_render = self._display_rows[start:end]
         self._start_batch_render(rows_to_render, reset=reset)
         has_more = end < len(self._display_rows)
-        if "load_more_btn" in self.ids:
-            self.ids.load_more_btn.opacity = 1 if has_more else 0
-            self.ids.load_more_btn.disabled = not has_more
+        self._update_load_more_button(has_more)
 
     def load_more_rows(self):
-        if not self._display_rows:
+        if not self._display_rows or self._rows_loading or self._pending_rows:
             return
         end = self._current_page * self._page_size
         if end >= len(self._display_rows):
@@ -1042,21 +1239,22 @@ class SalesHistoryScreen(MDScreen):
         self._render_page(reset=False)
 
     def _start_batch_render(self, rows, reset=False):
-        if self._render_ev:
-            Clock.unschedule(self._render_ev)
-            self._render_ev = None
-        self._pending_rows = list(rows)
+        self._stop_rendering()
+        self._pending_rows = deque(rows or [])
         if reset:
             self.ids.sales_list.clear_widgets()
             self._render_index = 0
         if not self._pending_rows:
             return
-        self._render_ev = Clock.schedule_interval(self._render_next_batch, 0)
+        self._render_ev = Clock.schedule_interval(
+            self._render_next_batch,
+            self.RENDER_INTERVAL_SECONDS,
+        )
 
     def _render_next_batch(self, dt):
-        batch_size = 30
+        batch_size = self.RENDER_BATCH_SIZE
         for _ in range(min(batch_size, len(self._pending_rows))):
-            row = self._pending_rows.pop(0)
+            row = self._pending_rows.popleft()
             row_widget = self._create_table_row(row, self._render_index)
             self.ids.sales_list.add_widget(row_widget)
             self._render_index += 1
@@ -1072,6 +1270,125 @@ class SalesHistoryScreen(MDScreen):
             buttons=[MDFlatButton(text="OK", on_release=lambda _x: dialog.dismiss())],
         )
         dialog.open()
+
+    def _ensure_sales_history_report(self):
+        if self.sales_history_report is None:
+            from pdfs.sales_history_report import SalesHistoryReport
+            self.sales_history_report = SalesHistoryReport()
+        return self.sales_history_report
+
+    def _ensure_pdf_viewer(self):
+        if self.pdf_viewer is None:
+            from pdfs.pdf_viewer import PDFViewer
+            self.pdf_viewer = PDFViewer(
+                error_callback=lambda msg: self._show_message_dialog("Erro", msg)
+            )
+        return self.pdf_viewer
+
+    # CORRIGIDO: memoização por string de data.
+    # Antes: chamado por linha de tabela, tentava 4 parsers com try/except cada vez.
+    # Para 1000 linhas = 4000 tentativas de parse a cada filtro aplicado.
+    # Agora: resultado cacheado por valor — cada string única é parseada só uma vez.
+    @staticmethod
+    @lru_cache(maxsize=2048)
+    def _parse_sale_datetime(value):
+        if not value:
+            return None
+        raw = str(value).strip()
+        if not raw:
+            return None
+        for fmt, parser in (
+            ("iso",            lambda s: datetime.fromisoformat(s)),
+            ("%Y-%m-%d %H:%M:%S", lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M:%S")),
+            ("%Y-%m-%d",       lambda s: datetime.strptime(s, "%Y-%m-%d")),
+            ("%d/%m/%Y",       lambda s: datetime.strptime(s, "%d/%m/%Y")),
+        ):
+            try:
+                return parser(raw)
+            except Exception:
+                continue
+        return None
+
+    def _get_export_period(self, sales):
+        start_text = (self.ids.start_date.text or "").strip() if "start_date" in self.ids else ""
+        end_text   = (self.ids.end_date.text   or "").strip() if "end_date"   in self.ids else ""
+        start_dt = self._parse_sale_datetime(start_text)
+        end_dt   = self._parse_sale_datetime(end_text)
+
+        row_dates = []
+        for sale in sales or []:
+            parsed = self._parse_sale_datetime(sale.get("sale_date"))
+            if parsed is not None:
+                row_dates.append(parsed)
+
+        if start_dt is None and row_dates:
+            start_dt = min(row_dates)
+        if end_dt is None and row_dates:
+            end_dt = max(row_dates)
+        if start_dt is None:
+            start_dt = datetime.now()
+        if end_dt is None:
+            end_dt = start_dt
+        if end_dt < start_dt:
+            start_dt, end_dt = end_dt, start_dt
+        return start_dt, end_dt
+
+    def _get_filter_label(self):
+        labels = {
+            "today": "Hoje",
+            "week":  "Esta semana",
+            "month": "Este mes",
+            "year":  "Este ano",
+            "promo": "Promocoes",
+            "custom":"Periodo personalizado",
+        }
+        return labels.get(self.current_filter, "Todos os registos")
+
+    def _build_pdf_filters(self, sales):
+        start_dt, end_dt = self._get_export_period(sales)
+        return {
+            "start_date":   start_dt,
+            "end_date":     end_dt,
+            "filter_label": self._get_filter_label(),
+            "record_count": len(sales or []),
+        }
+
+    def _finish_sales_export(self, result):
+        self._exporting_sales = False
+        status = result.get("status")
+        if status == "ok":
+            self._show_pdf_success(result.get("path"))
+            return
+        self._show_message_dialog(
+            "Erro",
+            f"Falha ao gerar PDF de vendas: {result.get('error')}",
+        )
+
+    def _show_pdf_success(self, pdf_path):
+        dialog = MDDialog(
+            title="PDF Gerado",
+            text=f"Arquivo criado em:\n{pdf_path}",
+            buttons=[
+                MDFlatButton(text="FECHAR",    on_release=lambda _x: dialog.dismiss()),
+                MDFlatButton(
+                    text="NAVEGADOR",
+                    on_release=lambda _x: self._open_pdf_in_browser(dialog, pdf_path),
+                ),
+                MDRaisedButton(
+                    text="INTERNO",
+                    on_release=lambda _x: self._open_pdf_internal(dialog, pdf_path),
+                ),
+            ],
+        )
+        dialog.open()
+
+    def _open_pdf_internal(self, dialog, pdf_path):
+        dialog.dismiss()
+        self._ensure_pdf_viewer()._view_internal(pdf_path)
+
+    def _open_pdf_in_browser(self, dialog, pdf_path):
+        dialog.dismiss()
+        self._ensure_pdf_viewer()._open_in_browser(pdf_path)
 
     def _reload_current_filter(self):
         if self.current_filter == "today":
@@ -1108,11 +1425,11 @@ class SalesHistoryScreen(MDScreen):
         )
         content.bind(minimum_height=content.setter("height"))
 
-        sale_id = sale_data.get("sale_id")
-        product = sale_data.get("product") or "Produto"
-        qty = float(sale_data.get("qty", 0) or 0)
+        sale_id      = sale_data.get("sale_id")
+        product      = sale_data.get("product") or "Produto"
+        qty          = float(sale_data.get("qty",          0) or 0)
         returned_qty = float(sale_data.get("returned_qty", 0) or 0)
-        price = float(sale_data.get("price", 0) or 0)
+        price        = float(sale_data.get("price",        0) or 0)
 
         info = MDLabel(
             text=(
@@ -1177,11 +1494,11 @@ class SalesHistoryScreen(MDScreen):
             )
             return
 
-        app = App.get_running_app()
+        app      = App.get_running_app()
         username = getattr(app, "current_user", None)
-        role = getattr(app, "current_role", None) or "manager"
-        reason = (reason_input.text or "").strip()
-        sale_id = sale_data.get("sale_id")
+        role     = getattr(app, "current_role", None) or "manager"
+        reason   = (reason_input.text or "").strip()
+        sale_id  = sale_data.get("sale_id")
 
         result = self.db.refund_sale_item(
             sale_id,
@@ -1212,73 +1529,101 @@ class SalesHistoryScreen(MDScreen):
             pass
 
         dialog.dismiss()
+        self._invalidate_all_sales_cache()
         self._reload_current_filter()
         self._show_message_dialog(
             "Sucesso",
             f"Estorno registado com sucesso ({qty:.2f}).",
         )
 
-    def load_all_sales(self):
+    def load_all_sales(self, force_refresh=False, prefer_local_cache=False):
         """Carrega todas as vendas"""
         if "sales_list" not in self.ids:
-            Clock.schedule_once(lambda dt: self.load_all_sales(), 0.1)
+            Clock.schedule_once(
+                lambda dt: self.load_all_sales(
+                    force_refresh=force_refresh,
+                    prefer_local_cache=prefer_local_cache,
+                ),
+                0.1,
+            )
             return
         self.current_filter = None
         self.ids.start_date.text = ""
-        self.ids.end_date.text = ""
-        self._load_rows_async(lambda: self.db.get_all_sales())
+        self.ids.end_date.text   = ""
+        if force_refresh:
+            self._invalidate_all_sales_cache()
+        if not force_refresh and prefer_local_cache and self._all_sales_cache_valid:
+            self._populate_list(
+                list(self._all_sales_cache),
+                summary=self._all_sales_summary,
+            )
+            return
+        self._load_rows_async(lambda: self.db.get_all_sales(), cache_all=True)
 
     def filter_today(self):
         """Filtra vendas de hoje"""
         today = datetime.now().strftime("%d/%m/%Y")
         self.current_filter = "today"
         self.ids.start_date.text = today
-        self.ids.end_date.text = today
+        self.ids.end_date.text   = today
+        if self._load_rows_from_cache(today, today):
+            return
         self._load_rows_async(lambda day=today: self.db.get_sales_by_date(day))
 
     def filter_this_week(self):
         """Filtra vendas desta semana"""
-        from datetime import timedelta
-        today = datetime.now()
+        today      = datetime.now()
         start_week = today - timedelta(days=today.weekday())
-        
+
         start_date = start_week.strftime("%d/%m/%Y")
-        end_date = today.strftime("%d/%m/%Y")
-        
+        end_date   = today.strftime("%d/%m/%Y")
+
         self.current_filter = "week"
         self.ids.start_date.text = start_date
-        self.ids.end_date.text = end_date
-        self._load_rows_async(lambda start=start_date, end=end_date: self.db.get_sales_by_date_range(start, end))
+        self.ids.end_date.text   = end_date
+        if self._load_rows_from_cache(start_date, end_date):
+            return
+        self._load_rows_async(
+            lambda start=start_date, end=end_date: self.db.get_sales_by_date_range(start, end)
+        )
 
     def filter_this_month(self):
         """Filtra vendas deste mês"""
-        today = datetime.now()
+        today       = datetime.now()
         start_month = today.replace(day=1)
-        
+
         start_date = start_month.strftime("%d/%m/%Y")
-        end_date = today.strftime("%d/%m/%Y")
-        
+        end_date   = today.strftime("%d/%m/%Y")
+
         self.current_filter = "month"
         self.ids.start_date.text = start_date
-        self.ids.end_date.text = end_date
-        self._load_rows_async(lambda start=start_date, end=end_date: self.db.get_sales_by_date_range(start, end))
+        self.ids.end_date.text   = end_date
+        if self._load_rows_from_cache(start_date, end_date):
+            return
+        self._load_rows_async(
+            lambda start=start_date, end=end_date: self.db.get_sales_by_date_range(start, end)
+        )
 
     def filter_this_year(self):
         """Filtra vendas deste ano"""
-        today = datetime.now()
+        today      = datetime.now()
         start_year = today.replace(month=1, day=1)
-        
+
         start_date = start_year.strftime("%d/%m/%Y")
-        end_date = today.strftime("%d/%m/%Y")
-        
+        end_date   = today.strftime("%d/%m/%Y")
+
         self.current_filter = "year"
         self.ids.start_date.text = start_date
-        self.ids.end_date.text = end_date
-        self._load_rows_async(lambda start=start_date, end=end_date: self.db.get_sales_by_date_range(start, end))
+        self.ids.end_date.text   = end_date
+        if self._load_rows_from_cache(start_date, end_date):
+            return
+        self._load_rows_async(
+            lambda start=start_date, end=end_date: self.db.get_sales_by_date_range(start, end)
+        )
 
     def _get_rows_from_date_inputs(self):
         start = self.ids.start_date.text.strip()
-        end = self.ids.end_date.text.strip()
+        end   = self.ids.end_date.text.strip()
         if start and end:
             return self.db.get_sales_by_date_range(start, end)
         if start:
@@ -1288,43 +1633,114 @@ class SalesHistoryScreen(MDScreen):
         return self.db.get_all_sales()
 
     def _only_promotional_rows(self, rows):
-        return [row for row in rows if self._row_to_dict(row).get("is_promotional")]
+        return [row for row in rows if len(row) > 10 and bool(row[10])]
 
     def filter_promotional_sales(self):
         """Filtra vendas promocionais, respeitando datas quando preenchidas."""
         self.current_filter = "promo"
-        self._load_rows_async(lambda: self._only_promotional_rows(self._get_rows_from_date_inputs()))
+        start, end = self._normalize_filter_dates(
+            self.ids.start_date.text,
+            self.ids.end_date.text,
+        )
+        if self._load_rows_from_cache(start, end, promo_only=True):
+            return
+        self._load_rows_async(
+            lambda: self._only_promotional_rows(self._get_rows_from_date_inputs())
+        )
 
     def clear_filters(self):
         """Limpa todos os filtros"""
-        self.load_all_sales()
+        self.load_all_sales(prefer_local_cache=True)
 
     def apply_date_filter(self):
         """Aplica filtro de data personalizado"""
-        start = self.ids.start_date.text.strip()
-        end = self.ids.end_date.text.strip()
+        start, end = self._normalize_filter_dates(
+            self.ids.start_date.text,
+            self.ids.end_date.text,
+        )
 
         if self.current_filter == "promo":
-            self._load_rows_async(lambda: self._only_promotional_rows(self._get_rows_from_date_inputs()))
+            if self._load_rows_from_cache(start, end, promo_only=True):
+                return
+            if start and end:
+                self._load_rows_async(
+                    lambda s=start, e=end: self._only_promotional_rows(
+                        self.db.get_sales_by_date_range(s, e)
+                    )
+                )
+                return
+            self._load_rows_async(lambda: self._only_promotional_rows(self.db.get_all_sales()))
             return
 
         if start and end:
             self.current_filter = "custom"
-            self._load_rows_async(lambda s=start, e=end: self.db.get_sales_by_date_range(s, e))
-            return
-        if start:
-            self.current_filter = "custom"
-            self._load_rows_async(lambda s=start: self.db.get_sales_by_date(s))
-            return
-        if end:
-            self.current_filter = "custom"
-            self._load_rows_async(lambda e=end: self.db.get_sales_by_date(e))
+            if self._load_rows_from_cache(start, end):
+                return
+            self._load_rows_async(
+                lambda s=start, e=end: self.db.get_sales_by_date_range(s, e)
+            )
             return
         self.current_filter = None
-        self.load_all_sales()
+        self.load_all_sales(prefer_local_cache=True)
 
     def export_sales(self):
-        """Exporta vendas para CSV"""
-        # TODO: Implementar exportação
+        """Exporta vendas para PDF"""
         from kivymd.toast import toast
-        toast("Funcionalidade de exportação em desenvolvimento")
+
+        if self._exporting_sales:
+            toast("Ja existe uma exportacao em andamento.")
+            return
+        if self._rows_loading:
+            self._show_message_dialog(
+                "Aguarde",
+                "As vendas ainda estao a carregar. Tente novamente em instantes.",
+            )
+            return
+
+        rows = list(self._last_rows or [])
+        if not rows:
+            self._show_message_dialog(
+                "Aviso",
+                "Nao ha vendas para exportar com os filtros atuais.",
+            )
+            return
+
+        sales   = [self._row_to_dict(row) for row in rows]
+        filters = self._build_pdf_filters(sales)
+        app      = App.get_running_app()
+        username = getattr(app, "current_user", None)
+        role     = getattr(app, "current_role", None) or "manager"
+        self._exporting_sales = True
+        toast("A gerar PDF do historico de vendas...")
+
+        def worker(sales_snapshot, filter_payload, actor, actor_role):
+            result = {"status": "ok", "path": None, "error": None}
+            try:
+                pdf_path = self._ensure_sales_history_report().generate(
+                    sales_snapshot,
+                    filter_payload,
+                )
+                result["path"] = str(pdf_path)
+                if actor:
+                    try:
+                        self.db.log_action(
+                            actor,
+                            actor_role,
+                            "EXPORT_SALES_PDF",
+                            f"PDF: {pdf_path}",
+                        )
+                    except Exception:
+                        pass
+            except Exception as exc:
+                result["status"] = "error"
+                result["error"]  = str(exc)
+            Clock.schedule_once(
+                lambda dt, payload=result: self._finish_sales_export(payload),
+                0,
+            )
+
+        Thread(
+            target=worker,
+            args=(sales, filters, username, role),
+            daemon=True,
+        ).start()

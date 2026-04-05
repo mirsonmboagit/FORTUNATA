@@ -1,36 +1,107 @@
 {
-  "6009522301262": {
-    "source": "Open Food Facts",
-    "data": {
-      "name": "THE ORIGINAL TANGY MAYONNAISE",
-      "brand": "CROSSE & BLACKWELL",
-      "category": "Mayonnaises",
-      "expiry_date": "",
-      "sold_by_weight": true,
-      "quantity": "750g",
-      "price": "",
-      "image": "https://images.openfoodfacts.org/images/products/600/952/230/1262/front_en.34.400.jpg",
-      "barcode": "6009522301262"
-    },
-    "timestamp": "2026-02-11T23:00:27.045591"
-  },
   "6001299026973": {
     "source": "Open Food Facts",
     "data": {
-      "barcode": "6001299026973",
       "name": "Full Cream Milk",
       "brand": "Clover ULTRA",
       "category": "Dairy Milk",
+      "expiry_date": "",
       "sold_by_weight": false,
       "quantity": "1000ml",
+      "price": "",
       "image": "https://images.openfoodfacts.org/images/products/600/129/902/6973/front_en.7.400.jpg",
+      "barcode": "6001299026973",
+      "source_url": "https://world.openfoodfacts.org/product/6001299026973",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001299026973"
+    },
+    "timestamp": "2026-04-04T10:21:38.696417"
+  },
+  "6001068323005": {
+    "source": "Open Food Facts",
+    "data": {
+      "name": "Ricoffy",
+      "brand": "Nescafé",
+      "category": "Sweetened Beverages",
+      "expiry_date": "",
+      "sold_by_weight": true,
+      "quantity": "250 g",
+      "price": "",
+      "image": "https://images.openfoodfacts.org/images/products/600/106/832/3005/front_en.33.400.jpg",
+      "barcode": "6001068323005",
+      "source_url": "https://world.openfoodfacts.org/product/6001068323005",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001068323005"
+    },
+    "timestamp": "2026-04-04T10:21:37.266270"
+  },
+  "5000112664560": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "5000112664560",
+      "name": "Fanta",
+      "brand": "Coca Cola",
+      "category": "Carbonated Drinks",
+      "sold_by_weight": false,
+      "quantity": "330 ml",
+      "image": "https://images.openfoodfacts.org/images/products/500/011/266/4560/front_tr.15.400.jpg",
       "source_chain": [
         "Open Food Facts"
       ],
-      "price": "105.00",
-      "source": "UPCitemdb",
-      "is_new": true
+      "source_url": "https://world.openfoodfacts.org/product/5000112664560",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5000112664560"
     },
-    "timestamp": "2026-02-19T23:19:36.759667"
+    "timestamp": "2026-04-04T11:03:25.258240"
+  },
+  "6005363482054": {
+    "source": "Open Food Facts",
+    "data": {
+      "name": "Maizena",
+      "brand": "",
+      "category": "Cornmeal",
+      "expiry_date": "",
+      "sold_by_weight": false,
+      "quantity": "",
+      "price": "",
+      "image": "https://images.openfoodfacts.org/images/products/600/536/348/2054/front_fr.10.400.jpg",
+      "barcode": "6005363482054",
+      "source_url": "https://world.openfoodfacts.org/product/6005363482054",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6005363482054"
+    },
+    "timestamp": "2026-04-04T10:21:41.311003"
+  },
+  "6009522301262": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "6009522301262",
+      "name": "Mayonaise",
+      "brand": "Cross and Blackwell",
+      "category": "Mayonnaises",
+      "sold_by_weight": true,
+      "quantity": "750g",
+      "image": "https://images.openfoodfacts.org/images/products/600/952/230/1262/front_en.34.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009522301262",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009522301262",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-04-04T11:22:12.860573"
+  },
+  "5449000147417": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "5449000147417",
+      "name": "Cappy PULPY",
+      "brand": "Coca cola",
+      "category": "Orange Based Beverages",
+      "sold_by_weight": false,
+      "quantity": "1L",
+      "image": "https://images.openfoodfacts.org/images/products/544/900/014/7417/front_en.73.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/5449000147417",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000147417",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-04-04T11:25:02.744405"
   }
 }
