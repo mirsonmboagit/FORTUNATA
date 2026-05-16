@@ -45,7 +45,9 @@ from ui.components.tooltip_widgets import (
     TooltipCleanupBehavior,
     TooltipIconButton,
 )
+from utils.device_config import get_device_settings
 from utils.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
+from utils.thermal_printer import print_pdf_with_system, print_thermal_receipt
 from utils.vat import compute_vat_breakdown
 from utils.vision import get_vision_dependencies
 
@@ -68,6 +70,47 @@ def _format_qty(value, is_weight=False):
     return str(int(round(amount)))
 
 
+def _format_sale_expiry_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.fromisoformat(text).strftime("%d/%m/%Y")
+    except Exception:
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except Exception:
+            return text
+
+
+def _sale_catalog_key_from_product(product):
+    # Cria uma chave estavel para juntar lotes do mesmo produto.
+    barcode = str(product[4] if len(product) > 4 and product[4] is not None else "").strip().lower()
+    if barcode:
+        return f"bc:{barcode}"
+    description = " ".join(str(product[1] if len(product) > 1 and product[1] is not None else "").split()).lower()
+    if description:
+        sale_price = round(_safe_float(product[3] if len(product) > 3 else 0.0), 4)
+        is_weight = 1 if (len(product) > 5 and bool(product[5])) else 0
+        units_per_package = (
+            int(_safe_float(product[8], 0))
+            if len(product) > 8 and product[8] not in (None, "")
+            else 0
+        )
+        allow_pack_sale = 1 if (len(product) > 9 and bool(product[9])) else 0
+        vat_rule = (
+            str(product[10] or "STANDARD").strip().upper()
+            if len(product) > 10
+            else "STANDARD"
+        )
+        return (
+            f"desc:{description}|w:{is_weight}|p:{sale_price:.4f}|"
+            f"u:{units_per_package}|a:{allow_pack_sale}|v:{vat_rule}"
+        )
+    product_id = int(product[0] if len(product) > 0 else 0)
+    return f"id:{product_id}"
+
+
 def _calculate_promo(product):
     base_price = _safe_float(product[3] if len(product) > 3 else 0.0)
     status = str(product[7] if len(product) > 7 and product[7] is not None else "").strip().upper()
@@ -76,6 +119,7 @@ def _calculate_promo(product):
 
 
 def _unpack_sale_product(product):
+    # Converte a linha do banco num dicionario usado pela venda.
     return {
         "id": product[0],
         "name": str(product[1] or "").strip(),
@@ -88,10 +132,13 @@ def _unpack_sale_product(product):
         "units_per_package": int(_safe_float(product[8], 0)) if len(product) > 8 and product[8] not in (None, "") else None,
         "allow_pack_sale": bool(product[9]) if len(product) > 9 else False,
         "vat_rule_code": str(product[10] or "STANDARD").strip().upper() if len(product) > 10 else "STANDARD",
+        "catalog_key": str(product[11]).strip().lower() if len(product) > 11 and product[11] not in (None, "") else _sale_catalog_key_from_product(product),
+        "lot_count": max(1, int(_safe_float(product[12], 1))) if len(product) > 12 else 1,
     }
 
 
 class QuickProductCard(MDCard):
+    # Cartao usado na lista rapida de produtos.
     def __init__(self, product_data=None, add_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.product_data = product_data
@@ -131,6 +178,11 @@ class QuickProductCard(MDCard):
         else:
             meta_parts.append(f"Stock {_format_qty(info['stock'])} un")
             meta_parts.append(f"Emb. {int(info['units_per_package'])} un" if allow_pack_sale else "Venda unitária")
+        if int(info.get("lot_count") or 1) > 1:
+            meta_parts.append(f"{int(info['lot_count'])} lotes")
+        expiry_text = _format_sale_expiry_date(info.get("expiry_date"))
+        if expiry_text:
+            meta_parts.append(f"Val. {expiry_text}")
         barcode = str(info["barcode"] or "").strip()
         if barcode:
             meta_parts.append(barcode)
@@ -216,6 +268,7 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
 
 
 class FloatingScannerPanel(MDCard):
+    # Painel flutuante da camera/leitor.
     min_panel_width = NumericProperty(dp(220))
     min_panel_height = NumericProperty(dp(220))
     drag_bar_height = NumericProperty(dp(34))
@@ -352,6 +405,7 @@ Builder.load_file(os.path.join(CURRENT_DIR, "sales_screen.kv"))
 
 
 class SalesScreen(MDScreen):
+    # Tela principal de vendas do gerente.
     PRODUCTS_PAGE_SIZE = 80
     PRODUCTS_CACHE_SECONDS = 8
     STOCK_SYNC_INTERVAL_SECONDS = 15
@@ -366,13 +420,16 @@ class SalesScreen(MDScreen):
         super().__init__(**kwargs)
         self.db = db or get_db()
         self.back_target = "manager"
+        # Estado do carrinho, busca e leitura de codigos.
         self.cart_items = []
         self.total_amount = 0.0
         self.discount_amount = 0.0
         self.final_amount = 0.0
         self.payment_method = "cash"
         self.products_dict = {}
+        self.products_catalog_dict = {}
         self._loaded_products = []
+        self._products_page_offset = 0
         self._products_offset = 0
         self._products_has_more = False
         self._products_loading = False
@@ -395,6 +452,15 @@ class SalesScreen(MDScreen):
         self._keyboard_shortcuts_bound = False
         self._last_shortcut_signature = None
         self._last_shortcut_at = 0.0
+        self._device_settings = get_device_settings()
+        self._physical_scanner_enabled = True
+        self._physical_scanner_min_length = 6
+        self._scanner_keyboard_buffer = ""
+        self._scanner_keyboard_first_at = 0.0
+        self._scanner_keyboard_last_at = 0.0
+        self._scanner_keyboard_max_gap = 0.12
+        self._last_physical_barcode = None
+        self._last_physical_barcode_at = 0.0
         self._vision_modules = None
         self._scanner_panel_initialized = False
         self.scanning = False
@@ -410,6 +476,7 @@ class SalesScreen(MDScreen):
 
     def _post_init(self, *_args):
         self._bind_scanner_panel_ids()
+        self._refresh_device_settings()
         self._set_notice_detail("one", "Stock sob controlo", "Sem alertas críticos no momento.", ["Use este espaço para acompanhar reposição e desvios de stock."])
         self._set_notice_detail("two", "Movimento inicial", "Ainda não há produto destaque hoje.", ["Assim que houver vendas suficientes, este banner mostra o produto líder do dia."])
         self._set_notice_detail("three", "Pico operacional", "O sistema ainda está a acumular dados do dia.", ["Quando houver volume suficiente, este banner mostra a hora de maior movimento."])
@@ -418,18 +485,18 @@ class SalesScreen(MDScreen):
         self.load_scanner_sounds()
         self.set_payment_method("cash")
         self.set_search_feedback(
-            "Pronto para vender | Ctrl+F pesquisa | Enter adiciona | Ctrl+B scanner",
+            "Pronto para vender",
             "success",
             "check-circle",
         )
         self.load_products()
         self._load_operational_snapshot()
         self._update_action_states()
-        self._update_responsive_layout()
         self._refresh_notice_widgets()
 
     def on_enter(self):
         # Os atalhos ficam ativos apenas enquanto o manager estiver em foco.
+        self._refresh_device_settings()
         self._bind_keyboard_shortcuts()
         self._refresh_header_meta()
         self._start_clock()
@@ -445,6 +512,11 @@ class SalesScreen(MDScreen):
                 lambda _dt: warmup(("sales_history", "losses", "losses_history"), delay=0.1),
                 0.18,
             )
+        if self._physical_scanner_enabled:
+            Clock.schedule_once(
+                lambda _dt: self._focus_text_field("search_input", select_all=False),
+                0.05,
+            )
 
     def on_leave(self):
         self._unbind_keyboard_shortcuts()
@@ -455,9 +527,10 @@ class SalesScreen(MDScreen):
             self._search_ev = None
         self.close_notice_overlay()
         self.stop_scanner()
+        self._reset_scanner_keyboard_buffer()
 
     def on_size(self, *_args):
-        Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
+        return
 
     def _bind_keyboard_shortcuts(self):
         if self._keyboard_shortcuts_bound:
@@ -573,7 +646,7 @@ class SalesScreen(MDScreen):
             self.finalize_sale()
             return True
         if "ctrl" in modifiers and key_name == "p":
-            self.emit_receipt()
+            self.emit_receipt(print_now=True, preview_after=False)
             return True
         if "ctrl" in modifiers and key_name == "s":
             self.toggle_suspend_sale()
@@ -604,11 +677,117 @@ class SalesScreen(MDScreen):
         )
 
     def _handle_window_key_down(self, _window, key, scancode=None, codepoint=None, modifiers=None):
+        if self._capture_physical_scanner_key(
+            key,
+            codepoint=codepoint or "",
+            modifiers=modifiers or [],
+        ):
+            return True
         return self._dispatch_keyboard_shortcut(
             key,
             codepoint=codepoint or "",
             modifiers=modifiers or [],
         )
+
+    def _refresh_device_settings(self):
+        try:
+            self._device_settings = get_device_settings(force_reload=True)
+        except Exception:
+            self._device_settings = get_device_settings()
+        self._physical_scanner_enabled = bool(
+            self._device_settings.get("physical_scanner_enabled", True)
+        )
+        self._physical_scanner_min_length = int(
+            self._device_settings.get("physical_scanner_min_length") or 6
+        )
+        if self.ids:
+            label = self.ids.get("physical_scanner_status_label")
+            if label is not None:
+                label.text = (
+                    "Scanner USB pronto para leitura"
+                    if self._physical_scanner_enabled
+                    else "Scanner USB desativado nas definicoes"
+                )
+
+    def _reset_scanner_keyboard_buffer(self):
+        self._scanner_keyboard_buffer = ""
+        self._scanner_keyboard_first_at = 0.0
+        self._scanner_keyboard_last_at = 0.0
+
+    def _looks_like_physical_barcode(self, value):
+        code = str(value or "").strip()
+        if len(code) < int(self._physical_scanner_min_length or 6):
+            return False
+        if any(char.isspace() for char in code):
+            return False
+        duration = max(0.0, self._scanner_keyboard_last_at - self._scanner_keyboard_first_at)
+        return duration <= max(0.45, len(code) * self._scanner_keyboard_max_gap + 0.18)
+
+    def _capture_physical_scanner_key(self, key, codepoint="", modifiers=None):
+        if not self._physical_scanner_enabled:
+            return False
+        if not self.manager or self.manager.current != self.name:
+            return False
+        if self._sale_submitting or self._has_open_modal():
+            self._reset_scanner_keyboard_buffer()
+            return False
+
+        modifiers = {str(modifier or "").lower() for modifier in (modifiers or [])}
+        if modifiers & {"ctrl", "alt", "meta", "super"}:
+            self._reset_scanner_keyboard_buffer()
+            return False
+
+        key_name = self._normalize_key_name(key, codepoint)
+        now = time.perf_counter()
+        if key_name == "enter":
+            candidate = self._scanner_keyboard_buffer.strip()
+            is_barcode = self._looks_like_physical_barcode(candidate)
+            self._reset_scanner_keyboard_buffer()
+            if not is_barcode:
+                return False
+            self._submit_physical_scanner_code(candidate)
+            return True
+
+        char = str(codepoint or "")
+        if not char and len(key_name) == 1:
+            char = key_name
+        if len(char) != 1 or not char.isprintable() or char.isspace():
+            self._reset_scanner_keyboard_buffer()
+            return False
+
+        if self._scanner_keyboard_last_at and (now - self._scanner_keyboard_last_at) > self._scanner_keyboard_max_gap:
+            self._scanner_keyboard_buffer = ""
+            self._scanner_keyboard_first_at = now
+        elif not self._scanner_keyboard_buffer:
+            self._scanner_keyboard_first_at = now
+
+        self._scanner_keyboard_buffer = (self._scanner_keyboard_buffer + char)[-64:]
+        self._scanner_keyboard_last_at = now
+        return False
+
+    def _submit_physical_scanner_code(self, barcode_value):
+        code = "".join(char for char in str(barcode_value or "") if char.isprintable()).strip()
+        if not code:
+            return False
+
+        now = time.perf_counter()
+        if code == self._last_physical_barcode and (now - self._last_physical_barcode_at) < 0.9:
+            return True
+        self._last_physical_barcode = code
+        self._last_physical_barcode_at = now
+
+        if self.ids:
+            search_input = self.ids.get("search_input")
+            if search_input is not None:
+                if str(search_input.text or "").strip() == code:
+                    search_input.text = ""
+                search_input.focus = True
+            status = self.ids.get("physical_scanner_status_label")
+            if status is not None:
+                status.text = f"Scanner USB leu: {code}"
+
+        self._lookup_barcode_async(code, source="physical")
+        return True
 
     def _refresh_header_meta(self):
         app = App.get_running_app()
@@ -654,72 +833,19 @@ class SalesScreen(MDScreen):
     def _update_responsive_layout(self):
         if not self.ids:
             return
-        width = self.width or dp(1360)
         body_shell = self.ids.get("body_shell")
         workspace_card = self.ids.get("workspace_card")
         cart_card = self.ids.get("cart_card")
         summary_card = self.ids.get("summary_card")
-        sidebar = self.ids.get("sidebar")
         bottom_actions_grid = self.ids.get("bottom_actions_grid")
-        product_results_card = self.ids.get("product_results_card")
 
-        if not body_shell or not workspace_card or not bottom_actions_grid or not product_results_card:
+        if not body_shell or not workspace_card or not cart_card or not summary_card or not bottom_actions_grid:
             return
-
-        if sidebar is None and cart_card is not None and summary_card is not None:
-            if width >= dp(1320):
-                body_shell.orientation = "horizontal"
-                workspace_card.size_hint_x = 0.36
-                cart_card.size_hint_x = 0.39
-                summary_card.size_hint_x = 0.25
-                bottom_actions_grid.cols = 4
-                product_results_card.height = dp(230)
-            elif width >= dp(1120):
-                body_shell.orientation = "horizontal"
-                workspace_card.size_hint_x = 0.35
-                cart_card.size_hint_x = 0.40
-                summary_card.size_hint_x = 0.25
-                bottom_actions_grid.cols = 3
-                product_results_card.height = dp(210)
-            else:
-                body_shell.orientation = "vertical"
-                workspace_card.size_hint_x = 1
-                cart_card.size_hint_x = 1
-                summary_card.size_hint_x = 1
-                bottom_actions_grid.cols = 2 if width >= dp(820) else 1
-                product_results_card.height = dp(190)
-            panel = self.ids.get("scanner_preview_card")
-            if panel is not None and (self._scanner_panel_initialized or panel.opacity > 0.01):
-                self._ensure_scanner_panel_geometry()
-            return
-
-        if width >= dp(1260):
-            body_shell.orientation = "horizontal"
-            workspace_card.size_hint_x = 0.70
-            if sidebar is not None:
-                sidebar.size_hint_x = 0.30
-                sidebar.size_hint_y = 1
-                sidebar.height = 0
-            bottom_actions_grid.cols = 4
-            product_results_card.height = dp(230)
-        elif width >= dp(980):
-            body_shell.orientation = "vertical"
-            workspace_card.size_hint_x = 1
-            if sidebar is not None:
-                sidebar.size_hint_x = 1
-                sidebar.size_hint_y = None
-                sidebar.height = dp(520)
-            bottom_actions_grid.cols = 2
-            product_results_card.height = dp(210)
-        else:
-            body_shell.orientation = "vertical"
-            workspace_card.size_hint_x = 1
-            if sidebar is not None:
-                sidebar.size_hint_x = 1
-                sidebar.size_hint_y = None
-                sidebar.height = dp(560)
-            bottom_actions_grid.cols = 1
-            product_results_card.height = dp(190)
+        body_shell.orientation = "horizontal"
+        workspace_card.size_hint_x = 0.35
+        cart_card.size_hint_x = 0.40
+        summary_card.size_hint_x = 0.25
+        bottom_actions_grid.cols = 4
 
         panel = self.ids.get("scanner_preview_card")
         if panel is not None and (self._scanner_panel_initialized or panel.opacity > 0.01):
@@ -846,14 +972,19 @@ class SalesScreen(MDScreen):
             return (self._pending_search or "").strip()
         return str(widget.text or "").strip()
 
-    def _request_products_page(self, reset=True, search_text="", silent=True):
+    def _request_products_page(self, reset=True, search_text="", silent=True, offset=None):
         if self._products_loading:
             return False
 
         token = self._products_token + 1
         self._products_token = token
         self._products_loading = True
-        offset = 0 if reset else self._products_offset
+        if offset is None:
+            offset = 0 if reset else self._products_page_offset
+        try:
+            offset = max(0, int(offset))
+        except Exception:
+            offset = 0
         query_text = str(search_text or "").strip()
         self._update_action_states()
 
@@ -861,7 +992,7 @@ class SalesScreen(MDScreen):
             rows = []
             error = None
             try:
-                rows = self.db.get_products_for_sale_page(
+                rows = self.db.get_products_for_sale_catalog_page(
                     search_text=query_text,
                     limit=self.PRODUCTS_PAGE_SIZE,
                     offset=offset,
@@ -887,11 +1018,27 @@ class SalesScreen(MDScreen):
             self._update_action_states()
             return
 
-        if reset:
-            self._loaded_products = list(rows)
-        else:
-            self._loaded_products.extend(rows)
+        if not rows and offset > 0:
+            fallback_offset = max(0, offset - self.PRODUCTS_PAGE_SIZE)
+            Clock.schedule_once(
+                lambda _dt, next_offset=fallback_offset: self._request_products_page(
+                    reset=False,
+                    search_text=self._current_search_text(),
+                    silent=True,
+                    offset=next_offset,
+                ),
+                0,
+            )
+            self._update_action_states()
+            return
+
+        self._loaded_products = self._aggregate_sale_lot_rows(rows or [])
         self.products_dict = {row[0]: row for row in self._loaded_products}
+        self.products_catalog_dict = {
+            _unpack_sale_product(row)["catalog_key"]: row
+            for row in self._loaded_products
+        }
+        self._products_page_offset = offset
         self._products_offset = offset + len(rows)
         self._products_has_more = len(rows) >= self.PRODUCTS_PAGE_SIZE
         self._last_products_refresh_at = time.perf_counter()
@@ -922,6 +1069,36 @@ class SalesScreen(MDScreen):
         results = list(products or [])
         results_label.text = f"{len(results)} produtos"
         rv.data = [{"product_data": product, "add_callback": self.add_to_cart} for product in results]
+        self._sync_products_pagination_controls(len(results))
+
+    def _sync_products_pagination_controls(self, visible_count=None):
+        if not self.ids:
+            return
+
+        page_rows_count = len(self._loaded_products)
+        count = page_rows_count if visible_count is None else max(0, int(visible_count))
+        page_number = (self._products_page_offset // self.PRODUCTS_PAGE_SIZE) + 1
+
+        if count <= 0:
+            label_text = f"Pagina {page_number}"
+        elif count != page_rows_count:
+            label_text = f"Pagina {page_number} | {count} visiveis"
+        else:
+            start = self._products_page_offset + 1
+            end = self._products_page_offset + count
+            label_text = f"Pagina {page_number} | {start}-{end}"
+
+        page_label = self.ids.get("product_page_label")
+        if page_label is not None:
+            page_label.text = label_text
+
+        prev_btn = self.ids.get("product_prev_btn")
+        if prev_btn is not None:
+            prev_btn.disabled = self._products_loading or self._products_page_offset <= 0
+
+        next_btn = self.ids.get("product_next_btn")
+        if next_btn is not None:
+            next_btn.disabled = self._products_loading or not self._products_has_more or page_rows_count <= 0
 
     def on_search(self, text):
         self._pending_search = str(text or "")
@@ -939,7 +1116,7 @@ class SalesScreen(MDScreen):
             search_input.text = ""
             search_input.focus = True
         self._pending_search = ""
-        self.display_products(self._loaded_products)
+        self._request_products_page(reset=True, search_text="", silent=True)
         self.set_search_feedback("Pesquisa limpa", "info", "magnify")
         self._update_action_states()
 
@@ -1017,15 +1194,39 @@ class SalesScreen(MDScreen):
         )
 
     def on_products_scroll(self, scroll_y):
-        if scroll_y > 0.04:
-            return
-        if self._products_has_more and not self._products_loading:
-            self._request_products_page(reset=False, search_text=self._pending_search, silent=True)
+        return
+
+    def previous_products_page(self):
+        if self._products_loading or self._products_page_offset <= 0:
+            return False
+        previous_offset = max(0, self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
+        return self._request_products_page(
+            reset=False,
+            search_text=self._current_search_text(),
+            silent=True,
+            offset=previous_offset,
+        )
+
+    def next_products_page(self):
+        if self._products_loading or not self._products_has_more:
+            return False
+        next_offset = self._products_page_offset + self.PRODUCTS_PAGE_SIZE
+        return self._request_products_page(
+            reset=False,
+            search_text=self._current_search_text(),
+            silent=True,
+            offset=next_offset,
+        )
 
     def manual_refresh_stock(self, silent=False):
         if self._products_loading:
             return False
-        return self._request_products_page(reset=True, search_text=self._current_search_text(), silent=silent)
+        return self._request_products_page(
+            reset=False,
+            search_text=self._current_search_text(),
+            silent=silent,
+            offset=self._products_page_offset,
+        )
 
     def refresh_products_panel(self):
         self.manual_refresh_stock(silent=False)
@@ -1044,15 +1245,120 @@ class SalesScreen(MDScreen):
             self._stock_poll_ev.cancel()
             self._stock_poll_ev = None
 
+    @staticmethod
+    def _aggregate_sale_lot_rows(rows):
+        # Junta lotes iguais para evitar produtos repetidos na venda.
+        grouped = {}
+        ordered_keys = []
+        for row in rows or []:
+            if not row:
+                continue
+            info = _unpack_sale_product(row)
+            catalog_key = info["catalog_key"]
+            current = grouped.get(catalog_key)
+            if current is None:
+                grouped[catalog_key] = {
+                    "id": info["id"],
+                    "name": info["name"],
+                    "stock": info["stock"],
+                    "unit_price": info["unit_price"],
+                    "barcode": info["barcode"],
+                    "is_weight": info["is_weight"],
+                    "expiry_date": info["expiry_date"],
+                    "status": info["status"],
+                    "units_per_package": info["units_per_package"],
+                    "allow_pack_sale": info["allow_pack_sale"],
+                    "vat_rule_code": info["vat_rule_code"],
+                    "catalog_key": catalog_key,
+                    "lot_count": 1,
+                }
+                ordered_keys.append(catalog_key)
+                continue
+
+            current["stock"] += info["stock"]
+            current["lot_count"] += 1
+
+        result = []
+        for key in ordered_keys:
+            item = grouped[key]
+            result.append(
+                (
+                    item["id"],
+                    item["name"],
+                    item["stock"],
+                    item["unit_price"],
+                    item["barcode"],
+                    1 if item["is_weight"] else 0,
+                    item["expiry_date"],
+                    item["status"],
+                    item["units_per_package"],
+                    1 if item["allow_pack_sale"] else 0,
+                    item["vat_rule_code"],
+                    item["catalog_key"],
+                    item["lot_count"],
+                )
+            )
+        return result
+
+    def _get_live_sale_rows_for_item(self, item):
+        barcode = str(item.get("barcode") or "").strip()
+        if barcode:
+            rows = self.db.get_products_by_barcode(
+                barcode,
+                include_expired=False,
+                include_zero_stock=False,
+            ) or []
+        else:
+            catalog_key = str(item.get("catalog_key") or "").strip().lower()
+            if catalog_key:
+                rows = [
+                    row for row in (self.db.get_products_for_sale() or [])
+                    if _unpack_sale_product(row)["catalog_key"] == catalog_key
+                ]
+            else:
+                product_id = item.get("id")
+                rows = self.db.get_products_for_sale_ids([product_id]) or []
+        valid_rows = []
+        today = datetime.now().date()
+        for row in rows:
+            info = _unpack_sale_product(row)
+            status = str(info.get("status") or "").strip().upper()
+            if info["stock"] <= 0 or status not in ("ATIVO", "PERTO_DO_PRAZO"):
+                continue
+            expiry_text = str(info.get("expiry_date") or "").strip()
+            if expiry_text:
+                try:
+                    expiry_date = datetime.fromisoformat(expiry_text).date()
+                except Exception:
+                    try:
+                        expiry_date = datetime.strptime(expiry_text, "%Y-%m-%d").date()
+                    except Exception:
+                        expiry_date = None
+                if expiry_date and expiry_date < today:
+                    continue
+            valid_rows.append(row)
+        return valid_rows
+
     def _sync_cart_with_live_stock(self):
+        # Atualiza o carrinho quando o stock muda no banco.
         changed = False
         for item in self.cart_items:
-            live_product = self.products_dict.get(item.get("id"))
+            catalog_key = str(item.get("catalog_key") or "").strip().lower()
+            live_product = self.products_catalog_dict.get(catalog_key)
+            if live_product is None and item.get("id") is not None:
+                live_product = self.products_dict.get(item.get("id"))
             if live_product is None:
                 continue
-            live_stock = _unpack_sale_product(live_product)["stock"]
+            live_info = _unpack_sale_product(live_product)
+            live_stock = live_info["stock"]
             if abs(_safe_float(item.get("max_stock")) - live_stock) > 1e-9:
                 item["max_stock"] = live_stock
+                changed = True
+            if item.get("id") != live_info["id"]:
+                item["id"] = live_info["id"]
+                changed = True
+            if int(item.get("lot_count") or 1) != int(live_info.get("lot_count") or 1):
+                item["lot_count"] = int(live_info.get("lot_count") or 1)
                 changed = True
         if changed:
             self.update_cart_display()
@@ -1065,12 +1371,19 @@ class SalesScreen(MDScreen):
             product = self.db.get_product_by_barcode(barcode_value)
         if not product:
             return None
-        product_id = product[0]
-        live_product = self.products_dict.get(product_id)
+        info = _unpack_sale_product(product)
+        live_product = self.products_catalog_dict.get(info["catalog_key"])
         if live_product is not None:
             return live_product
-        rows = self.db.get_products_for_sale_ids([product_id]) or []
-        return rows[0] if rows else product
+        rows = self._get_live_sale_rows_for_item(
+            {
+                "id": info["id"],
+                "barcode": info["barcode"],
+                "catalog_key": info["catalog_key"],
+            }
+        )
+        grouped_rows = self._aggregate_sale_lot_rows(rows)
+        return grouped_rows[0] if grouped_rows else product
 
     def _lookup_barcode_async(self, barcode_value, source="search"):
         code = str(barcode_value or "").strip()
@@ -1108,10 +1421,11 @@ class SalesScreen(MDScreen):
         self.add_to_cart(product, source="barcode")
         self.play_scanner_sound(True)
         self.set_search_feedback(f"{product[1]} adicionado ao carrinho", "success", "check-circle")
-        if source == "search" and self.ids:
+        if source in {"search", "physical"} and self.ids:
             search_input = self.ids.get("search_input")
             if search_input is not None:
                 search_input.text = ""
+                search_input.focus = True
         self._update_action_states()
 
     def add_to_cart(self, product, sale_mode=None, source="manual"):
@@ -1128,6 +1442,7 @@ class SalesScreen(MDScreen):
                 and info["units_per_package"] >= 2
                 and not is_weight
             )
+            catalog_key = info["catalog_key"]
 
             if is_weight:
                 self.show_weight_dialog(product)
@@ -1141,7 +1456,7 @@ class SalesScreen(MDScreen):
                 pack_units = int(info["units_per_package"])
                 pack_price = base_price * pack_units
                 for item in self.cart_items:
-                    if item["id"] == info["id"] and item.get("sale_mode") == "pack":
+                    if item.get("catalog_key") == catalog_key and item.get("sale_mode") == "pack":
                         next_units = _safe_float(item.get("qty_units")) + pack_units
                         if next_units > info["stock"]:
                             self.show_message("Estoque insuficiente.")
@@ -1155,7 +1470,9 @@ class SalesScreen(MDScreen):
                 self.cart_items.append(
                     {
                         "id": info["id"],
+                        "catalog_key": catalog_key,
                         "name": info["name"],
+                        "barcode": info["barcode"],
                         "qty": 1,
                         "qty_units": pack_units,
                         "pack_units": pack_units,
@@ -1168,13 +1485,14 @@ class SalesScreen(MDScreen):
                         "sale_mode": "pack",
                         "promo_active": promo_active,
                         "vat_rule_code": info["vat_rule_code"],
+                        "lot_count": int(info.get("lot_count") or 1),
                     }
                 )
                 self.update_cart_display()
                 return
 
             for item in self.cart_items:
-                if item["id"] == info["id"] and item.get("sale_mode", "unit") == "unit":
+                if item.get("catalog_key") == catalog_key and item.get("sale_mode", "unit") == "unit":
                     next_qty = _safe_float(item.get("qty")) + 1
                     if next_qty > info["stock"]:
                         self.show_message("Estoque insuficiente.")
@@ -1188,7 +1506,9 @@ class SalesScreen(MDScreen):
             self.cart_items.append(
                 {
                     "id": info["id"],
+                    "catalog_key": catalog_key,
                     "name": info["name"],
+                    "barcode": info["barcode"],
                     "qty": 1,
                     "qty_units": 1,
                     "pack_units": None,
@@ -1201,6 +1521,7 @@ class SalesScreen(MDScreen):
                     "sale_mode": "unit",
                     "promo_active": promo_active,
                     "vat_rule_code": info["vat_rule_code"],
+                    "lot_count": int(info.get("lot_count") or 1),
                 }
             )
             self.update_cart_display()
@@ -1325,7 +1646,7 @@ class SalesScreen(MDScreen):
 
             total_price = round(weight * base_price, 2)
             for item in self.cart_items:
-                if item["id"] == info["id"] and item.get("sale_mode") == "weight":
+                if item.get("catalog_key") == info["catalog_key"] and item.get("sale_mode") == "weight":
                     next_weight = _safe_float(item.get("weight_kg")) + weight
                     if next_weight > info["stock"]:
                         self.show_message("Peso acima do stock disponível.")
@@ -1341,7 +1662,9 @@ class SalesScreen(MDScreen):
             self.cart_items.append(
                 {
                     "id": info["id"],
+                    "catalog_key": info["catalog_key"],
                     "name": info["name"],
+                    "barcode": info["barcode"],
                     "qty": weight,
                     "qty_units": weight,
                     "pack_units": None,
@@ -1354,6 +1677,7 @@ class SalesScreen(MDScreen):
                     "sale_mode": "weight",
                     "promo_active": promo_active,
                     "vat_rule_code": info["vat_rule_code"],
+                    "lot_count": int(info.get("lot_count") or 1),
                 }
             )
             dialog.dismiss()
@@ -1394,6 +1718,8 @@ class SalesScreen(MDScreen):
                 "pack": f"Embalagem x {int(item.get('pack_units') or 1)}",
                 "weight": "Venda por peso",
             }.get(sale_mode, "Venda")
+            if int(item.get("lot_count") or 1) > 1:
+                mode_label = f"{mode_label} | {int(item['lot_count'])} lotes FEFO"
             info_box.add_widget(
                 MDLabel(
                     text=item["name"],
@@ -1717,6 +2043,59 @@ class SalesScreen(MDScreen):
             )
         return allocations
 
+    def _build_sale_commit_allocations(self, cart_snapshot, discount_amount):
+        live_map = {}
+        conflicts = []
+        sale_allocations = []
+
+        for item in self._allocate_discount(cart_snapshot, discount_amount):
+            catalog_key = str(item.get("catalog_key") or "").strip().lower()
+            if not catalog_key:
+                catalog_key = f"id:{int(item.get('id') or 0)}"
+            live_rows = self._get_live_sale_rows_for_item(item)
+            grouped_live_rows = self._aggregate_sale_lot_rows(live_rows)
+            if grouped_live_rows:
+                live_map[catalog_key] = grouped_live_rows[0]
+
+            requested_qty = _safe_float(item.get("qty_units"))
+            available_qty = sum(_safe_float(_unpack_sale_product(row)["stock"]) for row in live_rows)
+            if requested_qty > available_qty + 1e-9:
+                conflicts.append((item.get("name") or "Produto", requested_qty, available_qty))
+                continue
+
+            remaining_qty = requested_qty
+            for row in live_rows:
+                if remaining_qty <= 1e-9:
+                    break
+                lot_info = _unpack_sale_product(row)
+                lot_stock = _safe_float(lot_info.get("stock"))
+                if lot_stock <= 0:
+                    continue
+
+                allocated_qty = min(remaining_qty, lot_stock)
+                if allocated_qty <= 1e-9:
+                    continue
+                sale_allocations.append(
+                    {
+                        **item,
+                        "catalog_key": catalog_key,
+                        "id": lot_info["id"],
+                        "qty_units": allocated_qty,
+                        "promo_active": str(lot_info.get("status") or "").strip().upper() == "PERTO_DO_PRAZO",
+                        "vat_rule_code": item.get("vat_rule_code") or lot_info.get("vat_rule_code"),
+                    }
+                )
+                remaining_qty -= allocated_qty
+
+            if remaining_qty > 1e-6:
+                conflicts.append((item.get("name") or "Produto", requested_qty, available_qty))
+
+        return {
+            "conflicts": conflicts,
+            "live_map": live_map,
+            "sale_allocations": sale_allocations,
+        }
+
     def _build_receipt_data(self, cart_snapshot, discount_amount, paid_amount, change_amount):
         app = App.get_running_app()
         operator = getattr(app, "current_user", None) if app else None
@@ -1811,15 +2190,10 @@ class SalesScreen(MDScreen):
 
         def worker():
             try:
-                ids = [item.get("id") for item in cart_snapshot if item.get("id") is not None]
-                live_rows = self.db.get_products_for_sale_ids(ids) or []
-                live_map = {row[0]: row for row in live_rows}
-                conflicts = []
-                for item in cart_snapshot:
-                    live_product = live_map.get(item["id"]) or self.products_dict.get(item["id"])
-                    live_stock = _unpack_sale_product(live_product)["stock"] if live_product else 0.0
-                    if _safe_float(item.get("qty_units")) > live_stock + 1e-9:
-                        conflicts.append((item["name"], _safe_float(item.get("qty_units")), live_stock))
+                allocation_plan = self._build_sale_commit_allocations(cart_snapshot, discount_amount)
+                conflicts = allocation_plan.get("conflicts") or []
+                live_map = allocation_plan.get("live_map") or {}
+                sale_allocations = allocation_plan.get("sale_allocations") or []
                 if conflicts:
                     actor = username or terminal_id or "desconhecido"
                     try:
@@ -1839,7 +2213,7 @@ class SalesScreen(MDScreen):
                         pass
                     return {"status": "conflict", "conflicts": conflicts, "live_map": live_map}
 
-                for item in self._allocate_discount(cart_snapshot, discount_amount):
+                for item in sale_allocations:
                     result = self.db.add_sale(
                         item["id"],
                         item["qty_units"],
@@ -1872,9 +2246,15 @@ class SalesScreen(MDScreen):
             if status == "conflict":
                 conflicts = result.get("conflicts") or []
                 for item in self.cart_items:
-                    live_product = (result.get("live_map") or {}).get(item["id"]) or self.products_dict.get(item["id"])
+                    catalog_key = str(item.get("catalog_key") or "").strip().lower()
+                    live_product = (result.get("live_map") or {}).get(catalog_key)
+                    if live_product is None and item.get("id") is not None:
+                        live_product = self.products_dict.get(item.get("id"))
                     if live_product is not None:
-                        item["max_stock"] = _unpack_sale_product(live_product)["stock"]
+                        live_info = _unpack_sale_product(live_product)
+                        item["max_stock"] = live_info["stock"]
+                        item["id"] = live_info["id"]
+                        item["lot_count"] = int(live_info.get("lot_count") or 1)
                 self.update_cart_display()
                 if conflicts:
                     name, requested, available = conflicts[0]
@@ -1892,6 +2272,14 @@ class SalesScreen(MDScreen):
                 self._load_operational_snapshot()
                 self.set_search_feedback("Venda finalizada com sucesso", "success", "cash-check")
                 self.show_message("Venda finalizada com sucesso.")
+                try:
+                    self._refresh_device_settings()
+                    if bool(self._device_settings.get("receipt_auto_print", False)):
+                        self.emit_receipt(print_now=True, preview_after=False)
+                    else:
+                        self._focus_text_field("search_input", select_all=False)
+                except Exception:
+                    pass
                 return
             self.show_message((result or {}).get("error") or "Erro ao finalizar venda.")
 
@@ -1901,7 +2289,7 @@ class SalesScreen(MDScreen):
 
         Thread(target=commit_worker, daemon=True).start()
 
-    def emit_receipt(self):
+    def emit_receipt(self, print_now=False, preview_after=True):
         if self._sale_submitting:
             return
         receipt_data = resolve_receipt_data_for_emission(self._last_completed_receipt_data)
@@ -1909,33 +2297,80 @@ class SalesScreen(MDScreen):
             self.show_message("Não há dados de venda para emitir recibo.")
             return
 
+        settings = get_device_settings(force_reload=True)
+        printer_name = str(settings.get("receipt_printer_name") or "").strip()
+        paper_width = int(settings.get("receipt_paper_width_mm") or 80)
+
         def worker():
             path = None
             error = None
+            printed = False
+            print_message = ""
             try:
                 path = self.receipt_report.generate(receipt_data)
+                if print_now:
+                    printed, print_message = print_thermal_receipt(
+                        receipt_data,
+                        printer_name=printer_name,
+                        paper_width_mm=paper_width,
+                    )
+                    if not printed and path:
+                        printed, print_message = print_pdf_with_system(
+                            path,
+                            printer_name=printer_name,
+                        )
                 app = App.get_running_app()
                 username = getattr(app, "current_user", None) if app else None
                 role = getattr(app, "current_role", None) or "manager"
                 if username:
                     try:
-                        self.db.log_action(username, role, "SAVE_RECEIPT", f"Recibo salvo: {path}")
+                        action = "PRINT_RECEIPT" if print_now else "SAVE_RECEIPT"
+                        details = f"Recibo salvo: {path}"
+                        if print_now:
+                            details = f"{details} | Impressao: {print_message or printed}"
+                        self.db.log_action(username, role, action, details)
                     except Exception:
                         pass
             except Exception as exc:
                 error = str(exc)
-            Clock.schedule_once(lambda _dt, pdf_path=path, err=error: apply_result(pdf_path, err), 0)
+            Clock.schedule_once(
+                lambda _dt, pdf_path=path, err=error, ok=printed, msg=print_message:
+                    apply_result(pdf_path, err, ok, msg),
+                0,
+            )
 
-        def apply_result(path, error):
+        def apply_result(path, error, printed, print_message):
             if error:
                 self.show_message("Falha ao emitir recibo.")
                 return
             if not path:
                 self.show_message("Nao foi possivel localizar o PDF gerado.")
                 return
-            self._ensure_pdf_viewer().view_pdf(path)
-            self.show_message(f"Recibo gerado em {os.path.basename(path)}.")
-            self.set_search_feedback("Recibo pronto para visualizacao", "success", "file-document-check")
+            should_preview = bool(preview_after or not print_now)
+            if print_now:
+                if printed:
+                    self.show_message(print_message or "Recibo enviado para impressao.")
+                    self.set_search_feedback("Recibo enviado para a impressora", "success", "printer-check")
+                    self._focus_text_field("search_input", select_all=False)
+                    if not preview_after:
+                        return
+                else:
+                    should_preview = True
+                    self.show_message(
+                        (print_message or "Nao foi possivel imprimir o recibo.")
+                        + " O PDF sera aberto para visualizacao."
+                    )
+                    self.set_search_feedback("Recibo gerado; impressao indisponivel", "warning", "file-eye")
+            if should_preview:
+                self._ensure_pdf_viewer().view_pdf(path)
+                message = f"Recibo gerado em {os.path.basename(path)}."
+                if print_now and not printed:
+                    message = f"PDF do recibo disponivel: {os.path.basename(path)}."
+                self.show_message(message)
+                tone = "warning" if print_now and not printed else "success"
+                icon = "file-eye" if print_now and not printed else "file-document-check"
+                self.set_search_feedback("Recibo pronto para visualizacao", tone, icon)
+                self._focus_text_field("search_input", select_all=False)
 
         Thread(target=worker, daemon=True).start()
 
@@ -1957,6 +2392,8 @@ class SalesScreen(MDScreen):
             self.ids.pay_mobile_btn.disabled = self._sale_submitting
             self.ids.paid_input.disabled = self._sale_submitting
             self.ids.discount_input.disabled = self._sale_submitting
+            visible_results = len(getattr(self.ids.get("product_matches_rv"), "data", []) or [])
+            self._sync_products_pagination_controls(visible_results)
         self.hold_button_text = "Retomar Venda" if (not has_cart and self._suspended_sale) else "Suspender Venda"
 
     def open_sales_history(self):

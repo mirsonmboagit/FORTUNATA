@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 from threading import Thread
 from time import perf_counter
 
@@ -15,14 +16,16 @@ from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.label import MDLabel
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
+from kivymd.uix.snackbar import MDSnackbar
 from kivymd.uix.textfield import MDTextField
 
 from database.provider import get_db
+from ui.components.loading_overlay import ScreenLoadingController
 from utils.expiry_alerts import evaluate_expiry_alert
 from utils.perf_utils import perf_start, perf_log
 
 
-Builder.load_file("utils/restock_screen.kv")
+Builder.load_file(str(Path(__file__).with_name("restock_screen.kv")))
 
 
 class StockProductRow(ButtonBehavior, MDBoxLayout):
@@ -95,6 +98,7 @@ class RestockScreen(MDScreen):
         self._modal_selected_stock_label = None
         self._modal_qty_input = None
         self._modal_note_input = None
+        self._modal_expiry_input = None
         self._modal_unit_cost_input = None
         self._modal_supplier_input = None
         self._modal_invoice_input = None
@@ -103,6 +107,7 @@ class RestockScreen(MDScreen):
         self._modal_entry_date_field = None
         self._modal_exit_date_field = None
         self._modal_update_day_field = None
+        self._modal_entry_expiry_row = None
         self._modal_entry_cost_row = None
         self._modal_entry_supplier_row = None
         self._modal_out_type_row = None
@@ -113,26 +118,27 @@ class RestockScreen(MDScreen):
         self.pdf_viewer = None
         self._expiry_alerts_by_id = {}
         self._movement_submitting = False
+        self._loading_controller = getattr(self, "_loading_controller", None)
         Clock.schedule_once(self.init_screen, 0.1)
 
     def init_screen(self, _dt):
         self._apply_mode_ui()
         self._set_now_markers()
 
+    def on_kv_post(self, base_widget):
+        self._ensure_loading_overlay()
+
     def on_enter(self):
         app = App.get_running_app()
         role = getattr(app, "current_role", None)
         if role != "admin":
             actor = getattr(app, "current_user", None) or "desconhecido"
-            try:
-                self.db.log_action(
-                    actor,
-                    role or "guest",
-                    "ACCESS_DENIED",
-                    "Tentativa de abrir a tela de reposicao sem privilegio admin",
-                )
-            except Exception:
-                pass
+            self._log_action_async(
+                actor,
+                role or "guest",
+                "ACCESS_DENIED",
+                "Tentativa de abrir a tela de reposicao sem privilegio admin",
+            )
             self._show_dialog("Acesso Negado", "Apenas admin pode gerir stock nesta tela.")
             self._redirect_after_denied()
             return
@@ -141,6 +147,16 @@ class RestockScreen(MDScreen):
         elif (perf_counter() - self._last_products_loaded_at) >= self.REFRESH_SECONDS:
             self.load_products_async(force=True)
         self._apply_mode_ui()
+        Clock.schedule_once(lambda dt: self._focus_field("search_input"), 0.05)
+
+    def _log_action_async(self, actor, role, action, details):
+        def worker():
+            try:
+                self.db.log_action(actor, role, action, details)
+            except Exception:
+                pass
+
+        Thread(target=worker, daemon=True).start()
 
     def on_leave(self):
         if self._enter_refresh_ev:
@@ -150,6 +166,24 @@ class RestockScreen(MDScreen):
         self._dismiss_stock_form_dialog()
         self._dismiss_movements_dialog()
         self._dismiss_type_menu()
+        self._clear_loading_overlay()
+
+    def _ensure_loading_overlay(self):
+        if getattr(self, "_loading_controller", None) is None:
+            self._loading_controller = ScreenLoadingController(self)
+        self._loading_controller.attach()
+        return self._loading_controller
+
+    def _set_loading_overlay(self, key, active, message="", detail=""):
+        controller = self._ensure_loading_overlay()
+        if active:
+            controller.show(key, message, detail)
+            return
+        controller.hide(key)
+
+    def _clear_loading_overlay(self):
+        if getattr(self, "_loading_controller", None) is not None:
+            self._loading_controller.clear()
 
     def go_back(self):
         if not self.manager:
@@ -280,6 +314,15 @@ class RestockScreen(MDScreen):
 
     def _set_movements_print_busy(self, busy):
         self._movement_pdf_busy = bool(busy)
+        if self._movement_pdf_busy:
+            self._set_loading_overlay(
+                "movements_print",
+                True,
+                "A preparar PDF dos movimentos...",
+                "Estamos a organizar o historico filtrado para impressao.",
+            )
+        else:
+            self._set_loading_overlay("movements_print", False)
         if self._movements_print_btn:
             self._movements_print_btn.disabled = self._movement_pdf_busy
             self._movements_print_btn.text = "A IMPRIMIR..." if self._movement_pdf_busy else "IMPRIMIR PDF"
@@ -317,6 +360,12 @@ class RestockScreen(MDScreen):
             field_ids=("unit_cost_input",),
         )
         self._set_row_visibility(
+            row_id="entry_expiry_row",
+            visible=is_in,
+            target_height=dp(52),
+            field_ids=("expiry_input",),
+        )
+        self._set_row_visibility(
             row_id="entry_supplier_row",
             visible=is_in,
             target_height=dp(52),
@@ -332,6 +381,16 @@ class RestockScreen(MDScreen):
 
     def _set_movement_busy(self, busy):
         self._movement_submitting = bool(busy)
+        if self._movement_submitting:
+            action_label = "entrada" if self.current_mode == "IN" else "saida"
+            self._set_loading_overlay(
+                "movement_submit",
+                True,
+                f"A registar {action_label} de stock...",
+                "Estamos a validar os dados e a guardar o movimento no sistema.",
+            )
+        else:
+            self._set_loading_overlay("movement_submit", False)
         busy_text = "A PROCESSAR..."
         if self.ids and "submit_btn" in self.ids:
             self.ids.submit_btn.disabled = self._movement_submitting
@@ -471,6 +530,19 @@ class RestockScreen(MDScreen):
         qty_row.add_widget(self._modal_note_input)
         form_box.add_widget(qty_row)
 
+        self._modal_entry_expiry_row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(52),
+            spacing=dp(8),
+        )
+        self._modal_expiry_input = MDTextField(
+            hint_text="Validade do lote DD/MM/AAAA",
+            mode="rectangle",
+        )
+        self._modal_entry_expiry_row.add_widget(self._modal_expiry_input)
+        form_box.add_widget(self._modal_entry_expiry_row)
+
         self._modal_entry_cost_row = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -589,6 +661,7 @@ class RestockScreen(MDScreen):
         self._modal_selected_stock_label = None
         self._modal_qty_input = None
         self._modal_note_input = None
+        self._modal_expiry_input = None
         self._modal_unit_cost_input = None
         self._modal_supplier_input = None
         self._modal_invoice_input = None
@@ -597,6 +670,7 @@ class RestockScreen(MDScreen):
         self._modal_entry_date_field = None
         self._modal_exit_date_field = None
         self._modal_update_day_field = None
+        self._modal_entry_expiry_row = None
         self._modal_entry_cost_row = None
         self._modal_entry_supplier_row = None
         self._modal_out_type_row = None
@@ -613,6 +687,8 @@ class RestockScreen(MDScreen):
             self._modal_qty_input.text = self.ids.qty_input.text
         if "note_input" in self.ids and self._modal_note_input:
             self._modal_note_input.text = self.ids.note_input.text
+        if "expiry_input" in self.ids and self._modal_expiry_input:
+            self._modal_expiry_input.text = self.ids.expiry_input.text
         if "unit_cost_input" in self.ids and self._modal_unit_cost_input:
             self._modal_unit_cost_input.text = self.ids.unit_cost_input.text
         if "supplier_input" in self.ids and self._modal_supplier_input:
@@ -640,6 +716,12 @@ class RestockScreen(MDScreen):
             self._modal_submit_btn.disabled = self._movement_submitting
             if self._movement_submitting:
                 self._modal_submit_btn.text = "A PROCESSAR..."
+        self._set_modal_row_visibility(
+            self._modal_entry_expiry_row,
+            is_in,
+            dp(52),
+            (self._modal_expiry_input,),
+        )
         self._set_modal_row_visibility(
             self._modal_entry_cost_row,
             is_in,
@@ -681,6 +763,8 @@ class RestockScreen(MDScreen):
             self.ids.qty_input.text = self._modal_qty_input.text
         if self._modal_note_input and "note_input" in self.ids:
             self.ids.note_input.text = self._modal_note_input.text
+        if self._modal_expiry_input and "expiry_input" in self.ids:
+            self.ids.expiry_input.text = self._modal_expiry_input.text
         if self._modal_unit_cost_input and "unit_cost_input" in self.ids:
             self.ids.unit_cost_input.text = self._modal_unit_cost_input.text
         if self._modal_supplier_input and "supplier_input" in self.ids:
@@ -710,6 +794,12 @@ class RestockScreen(MDScreen):
         token = self._products_load_token + 1
         self._products_load_token = token
         self._products_loading = True
+        self._set_loading_overlay(
+            "products",
+            True,
+            "A carregar produtos para reposicao...",
+            "Estamos a atualizar o stock, a velocidade de venda e os alertas de vencimento.",
+        )
 
         def worker():
             rows = []
@@ -739,6 +829,7 @@ class RestockScreen(MDScreen):
             return
 
         self._products_loading = False
+        self._set_loading_overlay("products", False)
         self._last_products_loaded_at = perf_counter()
         self.products = list(rows or [])
         self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
@@ -816,6 +907,12 @@ class RestockScreen(MDScreen):
         token = self._movements_load_token + 1
         self._movements_load_token = token
         self._movements_loading = True
+        self._set_loading_overlay(
+            "movements",
+            True,
+            "A carregar historico de movimentos...",
+            "Estamos a preparar entradas, saidas e vendas relacionadas com o stock.",
+        )
         requested_limit = int(limit or 200)
 
         def worker():
@@ -853,6 +950,7 @@ class RestockScreen(MDScreen):
             return
 
         self._movements_loading = False
+        self._set_loading_overlay("movements", False)
         self._last_movements_loaded_at = perf_counter()
         self.movements = list(rows or [])
         self._show_movements(self.movements)
@@ -922,7 +1020,17 @@ class RestockScreen(MDScreen):
         if self._search_ev:
             self._search_ev.cancel()
             self._search_ev = None
-        self._apply_search_now()
+        query = (self._pending_search or self.ids.search_input.text if "search_input" in self.ids else "").strip().lower()
+        filtered = self._filter_products(query)
+        self._show_products(filtered)
+        if not query:
+            return
+        if len(filtered) == 1:
+            self.select_product(filtered[0])
+        elif len(filtered) > 1:
+            self.show_feedback(f"{len(filtered)} produtos encontrados. Escolha um da lista.", "info")
+        else:
+            self.show_feedback("Nenhum produto encontrado para esta pesquisa.", "warning")
 
     def _apply_search_now(self):
         self._search_ev = None
@@ -931,6 +1039,12 @@ class RestockScreen(MDScreen):
             self._show_products(self.products)
             return
 
+        self._show_products(self._filter_products(query))
+
+    def _filter_products(self, query):
+        normalized_query = str(query or "").strip().lower()
+        if not normalized_query:
+            return list(self.products or [])
         filtered = []
         for p in self.products:
             pid, name, _stock, _price, _cost, barcode, _is_weight, _exp, _status, _avg, _days, _last = (
@@ -941,9 +1055,9 @@ class RestockScreen(MDScreen):
                 str(name or "").lower(),
                 str(barcode or "").lower(),
             ]
-            if any(query in term for term in terms):
+            if any(normalized_query in term for term in terms):
                 filtered.append(p)
-        self._show_products(filtered)
+        return filtered
 
     # ---------- Product table ----------
     def _show_products(self, rows):
@@ -1110,18 +1224,40 @@ class RestockScreen(MDScreen):
         )
         unit = "KG" if is_weight else "UN"
         stock_text = f"{self._to_float(stock):.2f}" if is_weight else str(int(self._to_float(stock)))
-        self.ids.selected_product_label.text = f"Produto: {name or '--'} (ID {pid})"
+        expiry_text = self._format_expiry_input(_exp) or "sem validade"
+        self.ids.selected_product_label.text = f"Produto: {name or '--'} (ID {pid}) | Validade base: {expiry_text}"
         self.ids.selected_stock_label.text = f"Stock atual: {stock_text} {unit}"
         # Prefill do campo de preco/custo com o preco atual do produto.
         current_price = self._to_float(_price)
         if current_price <= 0:
             current_price = self._to_float(_cost)
         self.ids.unit_cost_input.text = f"{current_price:.2f}" if current_price > 0 else ""
+        if "expiry_input" in self.ids:
+            self.ids.expiry_input.text = self._format_expiry_input(_exp)
         if last_update:
             self.ids.update_day_field.text = self._format_update_day(last_update)
         else:
             self.ids.update_day_field.text = "--"
         self._sync_stock_form_modal_from_hidden()
+        self.show_feedback(f"{name} pronto para {('entrada' if self.current_mode == 'IN' else 'saida')}.", "info")
+        Clock.schedule_once(lambda dt: self._focus_field("qty_input", select_all=True), 0)
+
+    def _advance_restock_form(self):
+        if not self.selected_product:
+            return self._focus_field("search_input", select_all=True)
+        if self.current_mode == "IN":
+            expiry_text = str(self.ids.expiry_input.text or "").strip() if "expiry_input" in self.ids else ""
+            if expiry_text:
+                try:
+                    self._parse_expiry_input(expiry_text)
+                except ValueError as exc:
+                    self.show_feedback(str(exc), "warning")
+                    return self._focus_field("expiry_input", select_all=True)
+            if not str(self.ids.unit_cost_input.text or "").strip():
+                self.show_feedback("Informe o custo unitario para concluir a entrada.", "info")
+                return self._focus_field("unit_cost_input", select_all=True)
+            return self._focus_field("note_input", select_all=True)
+        return self._focus_field("note_input", select_all=True)
 
     def open_register_for_product(self, product):
         self.select_product(product)
@@ -1745,10 +1881,17 @@ class RestockScreen(MDScreen):
                 self._show_dialog("Erro", "Custo unitario deve ser maior que zero.")
                 return
 
+            try:
+                expiry_iso = self._parse_expiry_input(self.ids.expiry_input.text)
+            except ValueError as exc:
+                self._show_dialog("Erro", str(exc))
+                return
+
             supplier = self.ids.supplier_input.text.strip() or None
             invoice = self.ids.invoice_input.text.strip() or None
         else:
             unit_cost = None
+            expiry_iso = None
             supplier = None
             invoice = None
 
@@ -1769,6 +1912,7 @@ class RestockScreen(MDScreen):
                         pid,
                         qty,
                         unit_cost,
+                        expiry_date=expiry_iso,
                         reason="Reposicao de stock",
                         note=note,
                         created_by=user,
@@ -1805,16 +1949,17 @@ class RestockScreen(MDScreen):
             if result.get("direction") == "IN":
                 self.ids.entry_date_field.text = now.strftime("%d/%m/%Y %H:%M")
                 self.ids.exit_date_field.text = "--"
-                self._show_dialog("Sucesso", f"Entrada registada para {name}.")
+                self.show_feedback(f"Entrada registada para {name}.", "success")
             else:
                 self.ids.entry_date_field.text = "--"
                 self.ids.exit_date_field.text = now.strftime("%d/%m/%Y %H:%M")
-                self._show_dialog("Sucesso", f"Saida registada para {name}.")
+                self.show_feedback(f"Saida registada para {name}.", "success")
 
             self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
             self.ids.qty_input.text = "1"
             self.ids.note_input.text = ""
             self.force_refresh()
+            Clock.schedule_once(lambda dt: self._focus_field("qty_input", select_all=True), 0)
 
         def finish_worker():
             result = worker()
@@ -1829,6 +1974,7 @@ class RestockScreen(MDScreen):
         self.ids.search_input.text = ""
         self.ids.qty_input.text = "1"
         self.ids.note_input.text = ""
+        self.ids.expiry_input.text = ""
         self.ids.unit_cost_input.text = ""
         self.ids.supplier_input.text = ""
         self.ids.invoice_input.text = ""
@@ -1836,6 +1982,7 @@ class RestockScreen(MDScreen):
         self._set_now_markers()
         self._apply_search_now()
         self._sync_stock_form_modal_from_hidden()
+        Clock.schedule_once(lambda dt: self._focus_field("search_input"), 0)
 
     def _set_now_markers(self):
         if not self.ids:
@@ -1844,6 +1991,36 @@ class RestockScreen(MDScreen):
         self.ids.exit_date_field.text = "--"
         self.ids.update_day_field.text = datetime.now().strftime("%d/%m/%Y")
         self._sync_stock_form_modal_from_hidden()
+
+    def _focus_field(self, field_id, select_all=False):
+        if not hasattr(self, "ids"):
+            return False
+        field = self.ids.get(field_id)
+        if field is None or getattr(field, "disabled", False):
+            return False
+        field.focus = True
+        if select_all and hasattr(field, "select_all"):
+            Clock.schedule_once(lambda dt, widget=field: widget.select_all(), 0)
+        return True
+
+    def show_feedback(self, message, tone="info"):
+        tokens = self._theme_tokens()
+        tones = {
+            "success": tokens.get("success", [0.2, 0.7, 0.3, 1]),
+            "warning": tokens.get("warning", [0.9, 0.7, 0.1, 1]),
+            "danger": tokens.get("danger", [0.9, 0.2, 0.2, 1]),
+            "info": tokens.get("info", [0.2, 0.5, 0.9, 1]),
+        }
+        MDSnackbar(
+            MDLabel(
+                text=str(message),
+                theme_text_color="Custom",
+                text_color=[1, 1, 1, 1],
+            ),
+            md_bg_color=tones.get(tone, tones["info"]),
+            pos=(dp(12), dp(12)),
+            size_hint_x=0.58,
+        ).open()
 
     # ---------- Helpers ----------
     def _show_dialog(self, title, message):
@@ -1966,3 +2143,27 @@ class RestockScreen(MDScreen):
             except Exception:
                 continue
         return raw[:10]
+
+    @staticmethod
+    def _format_expiry_input(value):
+        if not value:
+            return ""
+        raw = str(value).strip()
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(raw[:19], fmt).strftime("%d/%m/%Y")
+            except Exception:
+                continue
+        return raw
+
+    @staticmethod
+    def _parse_expiry_input(value):
+        text = str(value or "").strip()
+        if not text:
+            return None
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text[:19], fmt).strftime("%Y-%m-%d")
+            except Exception:
+                continue
+        raise ValueError("Data de validade invalida. Use DD/MM/AAAA.")

@@ -19,12 +19,19 @@ from kivy.metrics import dp, sp
 from kivy.app import App
 
 from kivymd.uix.button import MDRaisedButton, MDFlatButton
+from kivymd.uix.dialog import MDDialog
 from kivymd.uix.textfield import MDTextField
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.selectioncontrol import MDSwitch
 from kivymd.uix.card import MDCard
 from kivymd.uix.pickers import MDDatePicker
-from ui.components.tooltip_widgets import TooltipIconButton
+from ui.components.tooltip_widgets import (
+    TooltipFlatButton,
+    TooltipIconButton,
+    TooltipRaisedButton,
+    TooltipTextField,
+)
+from utils.focus_navigation import FormKeyboardController
 
 from utils.vat import (
     DEFAULT_VAT_RULE_CODE,
@@ -63,6 +70,7 @@ def _describe_dependency_error(exc, prefix):
 
 
 class _UnavailableAPIManager:
+    # Fallback quando as APIs externas nao estao disponiveis.
     def __init__(self, reason, on_status=None):
         self.is_loading = False
         self._reason = reason
@@ -90,6 +98,7 @@ class _UnavailableAPIManager:
 
 
 def _build_api_manager(database, on_success, on_failure, on_status):
+    # Liga o formulario ao motor de busca por codigo de barras.
     try:
         from api.api_manager import APIManager
 
@@ -106,6 +115,7 @@ def _build_api_manager(database, on_success, on_failure, on_status):
 
 
 def _build_category_sources():
+    # Fontes usadas para sugerir categoria e quantidade do produto.
     source_defs = (
         ("Open Food Facts", "api.api_openfoodfacts", "OpenFoodFactsAPI"),
         ("Bazara", "api.api_bazara", "BazaraAPI"),
@@ -122,6 +132,7 @@ def _build_category_sources():
 
 
 class ProductForm(Popup):
+    # Popup para criar ou editar produtos.
     COLOR_PRIMARY    = (0.2,  0.6,  0.86, 1)
     COLOR_SUCCESS    = (0.27, 0.7,  0.42, 1)
     COLOR_ERROR      = (0.85, 0.35, 0.35, 1)
@@ -169,10 +180,13 @@ class ProductForm(Popup):
         self._barcode_request_id      = 0
         self._queued_barcode_request  = None
 
-        self._calculating           = False
-        self._auto_calc_done        = False
-        self._discount_base_price   = None
-        self._applying_price_action = False
+        self._calculating                = False
+        self._discount_base_price        = None
+        self._applying_price_action      = False
+        self._auto_unit_purchase_price   = False
+        self._auto_total_purchase_price  = False
+        self._auto_sale_price            = False
+        self._cost_source_field          = None
 
         self._price_discount_buttons = []
         self._price_revert_btn       = None
@@ -183,9 +197,13 @@ class ProductForm(Popup):
         self._form_section           = None
         self._camera_card            = None
         self._compact_layout         = None
+        self._shortcut_help_dialog   = None
+        self._field_navigation       = None
 
+        # A interface e construida por blocos para reaproveitar os campos.
         self._setup_popup()
         self._build_ui()
+        self._setup_keyboard_navigation()
 
         if self.product:
             self._populate_fields()
@@ -307,7 +325,7 @@ class ProductForm(Popup):
             icon             = "close",
             theme_text_color = "Custom",
             text_color       = self.COLOR_TEXT,
-            hint_text        = "Fechar",
+            hint_text        = "Fechar (Esc)",
             on_release       = self.dismiss,
             pos_hint         = {"center_y": 0.5},
         )
@@ -361,13 +379,13 @@ class ProductForm(Popup):
         self.scan_btn = TooltipIconButton(
             icon="barcode-scan", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(40), dp(40)),
-            hint_text="Iniciar ou parar scanner",
+            hint_text="Iniciar ou parar scanner (Alt+B)",
             on_release=self._toggle_scanner,
         )
         switch_btn = TooltipIconButton(
             icon="camera-switch", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_GRAY, size_hint=(None, None), size=(dp(40), dp(40)),
-            hint_text="Trocar camera",
+            hint_text="Trocar camera (Alt+M)",
             on_release=self._switch_camera,
         )
         btn_row.add_widget(self.scan_btn)
@@ -466,9 +484,15 @@ class ProductForm(Popup):
         h  = self.FIELD_H
         fs = self.FONT_SIZE
 
-        def _f(hint, readonly=False, inp_filter=None, size_hint_x=1):
-            f = MDTextField(
+        def _tooltip(hint, shortcut=None):
+            hint = str(hint or "").strip()
+            shortcut = str(shortcut or "").strip()
+            return f"{hint} ({shortcut})" if shortcut else hint
+
+        def _f(hint, readonly=False, inp_filter=None, size_hint_x=1, shortcut=None):
+            f = TooltipTextField(
                 hint_text         = hint,
+                tooltip_text      = _tooltip(hint, shortcut),
                 mode              = "rectangle",
                 size_hint         = (size_hint_x, None),
                 height            = h,
@@ -483,7 +507,7 @@ class ProductForm(Popup):
             return f
 
         # â”€â”€ Fila 1 â”€â”€
-        self.barcode_input = _f("Cod. Barras (opcional)")
+        self.barcode_input = _f("Cod. Barras (opcional)", shortcut="Ctrl+B")
         self.barcode_input.bind(on_text_validate=self._on_barcode_manual_entry)
 
         self.sku_input = _f("SKU (auto)", readonly=True)
@@ -492,18 +516,18 @@ class ProductForm(Popup):
         self.units_per_package_input = _f("Unidades por embalagem", inp_filter="int")
 
         # â”€â”€ Fila 2 â”€â”€
-        self.description = _f("Nome do produto *")
+        self.description = _f("Nome do produto *", shortcut="Ctrl+N")
         self.description.bind(text=self._on_description_text)
 
         # Categoria: campo + botao dropdown + botao adicionar
         self.category_layout = BoxLayout(
             orientation="horizontal", size_hint=(1, None), height=h, spacing=dp(4),
         )
-        self.category_field = _f("Categoria *")
+        self.category_field = _f("Categoria *", shortcut="Alt+C")
         dropdown_btn = TooltipIconButton(
             icon="menu-down", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(36), dp(36)),
-            hint_text="Selecionar categoria",
+            hint_text="Selecionar categoria (Alt+C)",
             pos_hint={"center_y": 0.5}, on_release=self._open_category_menu,
         )
         add_cat_btn = TooltipIconButton(
@@ -525,13 +549,13 @@ class ProductForm(Popup):
         self.vat_rule_layout = BoxLayout(
             orientation="horizontal", size_hint=(1, None), height=h, spacing=dp(4),
         )
-        self.vat_rule_field = _f("Criterio de IVA", readonly=True)
+        self.vat_rule_field = _f("Criterio de IVA", readonly=True, shortcut="Alt+I")
         self.vat_rule_field.text = get_vat_choice_label(self._selected_vat_rule_code)
         vat_dropdown_btn = TooltipIconButton(
             icon="menu-down", theme_text_color="Custom", text_color=(1, 1, 1, 1),
             md_bg_color=self.COLOR_PRIMARY,
             size_hint=(None, None), size=(dp(36), dp(36)),
-            hint_text="Selecionar criterio de IVA",
+            hint_text="Selecionar criterio de IVA (Alt+I)",
             pos_hint={"center_y": 0.5}, on_release=self._open_vat_menu,
         )
         self._vat_menu = MDDropdownMenu(
@@ -558,7 +582,7 @@ class ProductForm(Popup):
         self.vat_mode_layout.add_widget(self.vat_mode_field)
 
         # â”€â”€ Fila 3 â”€â”€
-        self.existing_stock = _f("Estoque atual *", inp_filter="float")
+        self.existing_stock = _f("Estoque atual *", inp_filter="float", shortcut="Ctrl+E")
         self.existing_stock.bind(text=self._on_stock_or_price_change)
 
         self.sold_stock = _f("Vendido", readonly=False)
@@ -568,11 +592,11 @@ class ProductForm(Popup):
         self.expiry_date_layout = BoxLayout(
             orientation="horizontal", size_hint_y=None, height=h, spacing=dp(4),
         )
-        self.expiry_date = _f("Validade DD/MM/AAAA")
+        self.expiry_date = _f("Validade DD/MM/AAAA", shortcut="Alt+V")
         cal_btn = TooltipIconButton(
             icon="calendar", theme_text_color="Custom", text_color=self.COLOR_PRIMARY,
             size_hint=(None, None), size=(dp(36), dp(36)),
-            hint_text="Escolher validade",
+            hint_text="Escolher validade (Alt+V)",
             pos_hint={"center_y": 0.5}, on_release=self._show_date_picker,
         )
         self.expiry_date_layout.add_widget(self.expiry_date)
@@ -599,8 +623,9 @@ class ProductForm(Popup):
             valign="middle",
         )
         peso_lbl.bind(size=lambda i, *_: setattr(i, "text_size", (i.width, None)))
-        self.weight_state_btn = MDRaisedButton(
+        self.weight_state_btn = TooltipRaisedButton(
             text="INATIVO",
+            tooltip_text="Alternar modo KG (Alt+K)",
             md_bg_color=(0.45, 0.45, 0.48, 1),
             text_color=(1, 1, 1, 1),
             font_size=sp(11),
@@ -636,8 +661,9 @@ class ProductForm(Popup):
             valign="middle",
         )
         pack_lbl.bind(size=lambda i, *_: setattr(i, "text_size", (i.width, None)))
-        self.pack_sale_state_btn = MDRaisedButton(
+        self.pack_sale_state_btn = TooltipRaisedButton(
             text="INATIVO",
+            tooltip_text="Alternar venda por embalagem (Alt+E)",
             md_bg_color=(0.45, 0.45, 0.48, 1),
             text_color=(1, 1, 1, 1),
             font_size=sp(11),
@@ -653,13 +679,13 @@ class ProductForm(Popup):
         self._set_pack_sale_state(False)
 
         # â”€â”€ Fila 4 â”€â”€
-        self.unit_purchase_price = _f("Preco unit. compra *", inp_filter="float")
+        self.unit_purchase_price = _f("Preco unit. compra *", inp_filter="float", shortcut="Ctrl+U")
         self.unit_purchase_price.bind(text=self._on_unit_price_change)
 
-        self.total_purchase_price = _f("Preco total compra *", inp_filter="float")
+        self.total_purchase_price = _f("Preco total compra *", inp_filter="float", shortcut="Ctrl+T")
         self.total_purchase_price.bind(text=self._on_total_price_change)
 
-        self.sale_price = _f("Preco de venda *", inp_filter="float")
+        self.sale_price = _f("Preco de venda *", inp_filter="float", shortcut="Ctrl+P")
         self.sale_price.bind(text=self._on_sale_price_text_change)
 
         # â”€â”€ Fila 5 â€” ajuste â”€â”€
@@ -705,13 +731,15 @@ class ProductForm(Popup):
             orientation="horizontal", size_hint=(1, None), height=self.BUTTON_H, spacing=dp(10),
         )
         layout.add_widget(BoxLayout(size_hint_x=1))
-        self._cancel_btn = MDFlatButton(
+        self._cancel_btn = TooltipFlatButton(
             text="Cancelar", theme_text_color="Custom",
+            tooltip_text="Cancelar e fechar (Esc)",
             text_color=self.COLOR_TEXT, md_bg_color=self.COLOR_CARD_ALT,
             font_size=self.FONT_SIZE, size_hint=(None, 1), width=dp(120), on_release=self.dismiss,
         )
-        self._save_btn = MDRaisedButton(
+        self._save_btn = TooltipRaisedButton(
             text="Salvar" if self.product else "Cadastrar",
+            tooltip_text="Salvar produto (Ctrl+S ou Ctrl+Enter)",
             md_bg_color=self.COLOR_SUCCESS, font_size=self.FONT_SIZE,
             size_hint=(None, 1), width=dp(130), on_release=self._save_product,
         )
@@ -719,8 +747,91 @@ class ProductForm(Popup):
         layout.add_widget(self._save_btn)
         return layout
 
+    def _setup_keyboard_navigation(self):
+        self._field_navigation = FormKeyboardController(
+            host=self,
+            fields=[
+                self.barcode_input,
+                self.description,
+                self.category_field,
+                self.package_quantity,
+                self.expiry_date,
+                self.units_per_package_input,
+                self.existing_stock,
+                self.sold_stock,
+                self.unit_purchase_price,
+                self.total_purchase_price,
+                self.sale_price,
+            ],
+            initial_field=lambda: self.description if self.product else self.barcode_input,
+            on_escape=self.dismiss,
+            on_submit=lambda: self._save_product(None),
+            shortcuts={
+                "ctrl+s": lambda: self._save_product(None),
+                "ctrl+h": self._show_keyboard_shortcuts,
+                "ctrl+b": lambda: self._focus_form_field(self.barcode_input, select_all=True),
+                "ctrl+n": lambda: self._focus_form_field(self.description, select_all=True),
+                "ctrl+e": lambda: self._focus_form_field(self.existing_stock, select_all=True),
+                "ctrl+u": lambda: self._focus_form_field(self.unit_purchase_price, select_all=True),
+                "ctrl+t": lambda: self._focus_form_field(self.total_purchase_price, select_all=True),
+                "ctrl+p": lambda: self._focus_form_field(self.sale_price, select_all=True),
+                "alt+c": lambda: self._open_category_menu(None),
+                "alt+i": lambda: self._open_vat_menu(None),
+                "alt+v": lambda: self._show_date_picker(None),
+                "alt+k": lambda: self._toggle_weight_button(None),
+                "alt+e": lambda: self._toggle_pack_sale_button(None),
+                "alt+b": lambda: self._toggle_scanner(None),
+                "alt+m": lambda: self._switch_camera(None),
+            },
+        )
+
+    @staticmethod
+    def _focus_form_field(field, select_all=False):
+        if field is None or getattr(field, "disabled", False) or getattr(field, "readonly", False):
+            return
+        try:
+            field.focus = True
+        except Exception:
+            return
+        if select_all and hasattr(field, "select_all"):
+            Clock.schedule_once(lambda _dt, widget=field: widget.select_all(), 0)
+
+    def _show_keyboard_shortcuts(self):
+        dialog = self._shortcut_help_dialog
+        if dialog is None:
+            help_text = (
+                "Ctrl+B: focar codigo de barras\n"
+                "Ctrl+N: focar nome\n"
+                "Ctrl+E: focar estoque\n"
+                "Ctrl+U: focar preco unitario de compra\n"
+                "Ctrl+T: focar preco total de compra\n"
+                "Ctrl+P: focar preco de venda\n"
+                "Ctrl+S ou Ctrl+Enter: salvar\n"
+                "Ctrl+H: ver atalhos\n"
+                "Alt+C: abrir categorias\n"
+                "Alt+I: abrir criterio de IVA\n"
+                "Alt+V: abrir validade\n"
+                "Alt+K: alternar modo KG\n"
+                "Alt+E: alternar venda por embalagem\n"
+                "Alt+B: iniciar/parar scanner\n"
+                "Alt+M: trocar camera\n"
+                "Tab / Shift+Tab: navegar entre campos\n"
+                "Esc: fechar formulario"
+            )
+            dialog = MDDialog(
+                title="Atalhos do Formulario",
+                text=help_text,
+                buttons=[MDFlatButton(text="Fechar")],
+            )
+            if dialog.buttons:
+                dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+            dialog.bind(on_dismiss=lambda *_: setattr(self, "_shortcut_help_dialog", None))
+            self._shortcut_help_dialog = dialog
+        dialog.open()
+
     # â”€â”€ Window resize â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _update_responsive_layout(self):
+        # Ajusta camera e formulario para janelas pequenas.
         if not self._content_layout:
             return
 
@@ -770,6 +881,7 @@ class ProductForm(Popup):
         return request_id == self._barcode_request_id and barcode == self._barcode_context
 
     def _prepare_form_for_barcode(self, barcode):
+        # Limpa dados antigos antes de aplicar uma nova leitura.
         if barcode == self._barcode_context:
             return
         self._barcode_context = barcode
@@ -779,6 +891,7 @@ class ProductForm(Popup):
             self.barcode_input.text = barcode
 
     def _run_barcode_search(self, barcode, request_id):
+        # Busca dados do produto nas fontes externas.
         self._queued_barcode_request = None
         self._set_status("Buscando...", self.COLOR_PRIMARY)
         self.api_manager.search_enriched(
@@ -1020,45 +1133,92 @@ class ProductForm(Popup):
         popup.open()
 
     # â”€â”€ Auto price calc â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    def _on_total_price_change(self, instance, value):
-        if self._calculating or self._auto_calc_done: return
+    @staticmethod
+    def _parse_numeric_input(raw):
+        text = (raw or "").strip().replace(",", ".")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _set_field_value(self, field, value):
+        text = "" if value is None else f"{value:.2f}"
+        if field.text == text:
+            return
         self._calculating = True
         try:
-            total = value.strip(); stock = self.existing_stock.text.strip()
-            if total and stock and not self.unit_purchase_price.text.strip():
-                try:
-                    unit = float(total) / float(stock)
-                    self.unit_purchase_price.text = f"{unit:.2f}"
-                    self._auto_calc_done = True
-                    self._suggest_sale_price(unit)
-                except (ValueError, ZeroDivisionError): pass
-        finally: self._calculating = False
+            field.text = text
+        finally:
+            self._calculating = False
+
+    def _set_unit_purchase_price_value(self, value, auto=False):
+        self._auto_unit_purchase_price = auto
+        self._set_field_value(self.unit_purchase_price, value)
+
+    def _set_total_purchase_price_value(self, value, auto=False):
+        self._auto_total_purchase_price = auto
+        self._set_field_value(self.total_purchase_price, value)
+
+    def _sync_costs_from_total(self, total_changed=False):
+        total = self._parse_numeric_input(self.total_purchase_price.text)
+        stock = self._parse_numeric_input(self.existing_stock.text)
+        if total_changed:
+            self._auto_total_purchase_price = False
+            self._cost_source_field = "total" if total is not None else None
+        if total is None or stock is None or stock <= 0:
+            return
+        unit_cost = total / stock
+        self._set_unit_purchase_price_value(unit_cost, auto=True)
+        self._suggest_sale_price(unit_cost)
+
+    def _sync_costs_from_unit(self, unit_changed=False):
+        unit_cost = self._parse_numeric_input(self.unit_purchase_price.text)
+        stock = self._parse_numeric_input(self.existing_stock.text)
+        if unit_changed:
+            self._auto_unit_purchase_price = False
+            self._cost_source_field = "unit" if unit_cost is not None else None
+        if unit_cost is None or stock is None:
+            return
+        self._set_total_purchase_price_value(unit_cost * stock, auto=True)
+        self._suggest_sale_price(unit_cost)
+
+    def _on_total_price_change(self, instance, value):
+        if self._calculating or self.product:
+            return
+        self._sync_costs_from_total(total_changed=True)
 
     def _on_unit_price_change(self, instance, value):
-        if self._calculating or self._auto_calc_done: return
-        self._calculating = True
-        try:
-            unit = value.strip(); stock = self.existing_stock.text.strip()
-            if unit and stock and not self.total_purchase_price.text.strip():
-                try:
-                    u = float(unit)
-                    self.total_purchase_price.text = f"{u * float(stock):.2f}"
-                    self._auto_calc_done = True
-                    self._suggest_sale_price(u)
-                except (ValueError, ZeroDivisionError): pass
-        finally: self._calculating = False
+        if self._calculating or self.product:
+            return
+        self._sync_costs_from_unit(unit_changed=True)
 
     def _on_stock_or_price_change(self, instance, value):
-        if self._calculating or self._auto_calc_done: return
-        if self.total_purchase_price.text.strip() and value.strip():
-            self._on_total_price_change(self.total_purchase_price, self.total_purchase_price.text)
-        elif self.unit_purchase_price.text.strip() and value.strip():
-            self._on_unit_price_change(self.unit_purchase_price, self.unit_purchase_price.text)
+        if self._calculating or self.product:
+            return
+        total_value = self._parse_numeric_input(self.total_purchase_price.text)
+        unit_value = self._parse_numeric_input(self.unit_purchase_price.text)
+        if self._cost_source_field == "total" and total_value is not None:
+            self._sync_costs_from_total()
+            return
+        if self._cost_source_field == "unit" and unit_value is not None:
+            self._sync_costs_from_unit()
+            return
+        if unit_value is not None and not self._auto_unit_purchase_price:
+            self._sync_costs_from_unit()
+            return
+        if total_value is not None and not self._auto_total_purchase_price:
+            self._sync_costs_from_total()
 
     def _suggest_sale_price(self, unit_cost):
-        if not self.sale_price.text.strip():
-            try: self.sale_price.text = f"{unit_cost * 1.30:.2f}"
-            except Exception: pass
+        current_sale_price = self._parse_price_value(self.sale_price.text)
+        if current_sale_price is not None and not self._auto_sale_price:
+            return
+        try:
+            self._set_sale_price_value(unit_cost * 1.30, auto=True)
+        except Exception:
+            pass
 
     # â”€â”€ Price actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     @staticmethod
@@ -1067,14 +1227,22 @@ class ProductForm(Popup):
         try: return float(text) if text else None
         except ValueError: return None
 
-    def _set_sale_price_value(self, value):
+    def _set_sale_price_value(self, value, auto=False):
+        text = f"{value:.2f}"
         self._applying_price_action = True
-        try: self.sale_price.text = f"{value:.2f}"
-        finally: self._applying_price_action = False
+        try:
+            self._auto_sale_price = auto
+            if self.sale_price.text != text:
+                self.sale_price.text = text
+        finally:
+            self._applying_price_action = False
 
     def _on_sale_price_text_change(self, instance, value):
-        if not self._applying_price_action and self._discount_base_price is not None:
-            self._discount_base_price = None
+        # Mantem o preco manual quando o utilizador edita o campo.
+        if not self._applying_price_action:
+            self._auto_sale_price = False
+            if self._discount_base_price is not None:
+                self._discount_base_price = None
         self._update_price_actions_state()
 
     def _apply_quick_discount(self, pct):
@@ -1143,6 +1311,7 @@ class ProductForm(Popup):
         self._set_pack_sale_state(not current)
 
     def _on_weight_switch_toggle(self, instance, active):
+        # Produto por peso nao pode vender embalagem fechada.
         if not hasattr(self, "weight_state_btn"):
             return
         self.weight_state_btn.text = "ATIVO" if active else "INATIVO"
@@ -1192,6 +1361,7 @@ class ProductForm(Popup):
         self._scanner_auto_start_ev = None
         self._start_scanner()
 
+    # Camera e leitura de codigo de barras.
     def _start_scanner(self):
         self._cancel_scanner_auto_start()
         if self.scanning:
@@ -1348,7 +1518,7 @@ class ProductForm(Popup):
         if token == self._category_lookup_token and barcode == self._category_lookup_barcode:
             self._category_lookup_inflight = False
 
-    # â”€â”€ Save / Validate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Salvar e validar dados do produto.
     def _save_product(self, instance):
         if not self._validate_fields(): return
         expiry = self._process_expiry_date()
@@ -1487,48 +1657,67 @@ class ProductForm(Popup):
                   self.units_per_package_input]
         if not preserve_barcode:
             fields.insert(0, self.barcode_input)
-        for f in fields:
-            f.text = ""
-        if preserve_barcode:
-            self.barcode_input.text = self._sanitize_barcode(barcode_value or self.barcode_input.text)
-            self._barcode_context = self.barcode_input.text or None
-        else:
-            self.barcode_input.text = ""
-            self._barcode_context = None
-            self._queued_barcode_request = None
-        self.sold_stock.text = "0"
+        self._calculating = True
+        try:
+            for f in fields:
+                f.text = ""
+            if preserve_barcode:
+                self.barcode_input.text = self._sanitize_barcode(barcode_value or self.barcode_input.text)
+                self._barcode_context = self.barcode_input.text or None
+            else:
+                self.barcode_input.text = ""
+                self._barcode_context = None
+                self._queued_barcode_request = None
+            self.sold_stock.text = "0"
+        finally:
+            self._calculating = False
         self._set_weight_state(False)
         self._set_pack_sale_state(False)
         self._category_lookup_inflight = False
         self._category_lookup_barcode  = None
         self._category_lookup_token    = 0
-        self._auto_calc_done           = False
         self._discount_base_price      = None
         self._applying_price_action    = False
+        self._auto_unit_purchase_price = False
+        self._auto_total_purchase_price = False
+        self._auto_sale_price          = False
+        self._cost_source_field        = None
         self._update_price_actions_state()
         self._set_vat_rule(DEFAULT_VAT_RULE_CODE)
         self.barcode_input.focus = True
 
     def _populate_fields(self):
         p = self.product
-        self.description.text          = p[1]
-        self.category_field.text       = p[11] if len(p) > 11 else ""
-        self.existing_stock.text       = str(p[2])
-        self.sold_stock.text           = str(p[3])
-        self.sale_price.text           = str(p[4])
-        self.total_purchase_price.text = str(p[5])
-        self.unit_purchase_price.text  = str(p[6])
-        self._discount_base_price      = None
-        self._auto_calc_done           = True
-        if len(p) > 21 and p[21]: self.package_quantity.text = str(p[21])
-        if len(p) > 22 and p[22]: self.sku_input.text        = str(p[22])
-        if len(p) > 23 and p[23] not in (None, ""):
-            self.units_per_package_input.text = str(int(float(p[23])))
-        if len(p) > 12 and p[12]: self.barcode_input.text    = str(p[12])
-        if len(p) > 13 and p[13]:
-            try: self.expiry_date.text = datetime.strptime(str(p[13]), "%Y-%m-%d").strftime("%d/%m/%Y")
-            except ValueError: self.expiry_date.text = str(p[13])
+        self._calculating = True
+        try:
+            self.description.text          = p[1]
+            self.category_field.text       = p[11] if len(p) > 11 else ""
+            self.existing_stock.text       = str(p[2])
+            self.sold_stock.text           = str(p[3])
+            self.sale_price.text           = str(p[4])
+            self.total_purchase_price.text = str(p[5])
+            self.unit_purchase_price.text  = str(p[6])
+            if len(p) > 21 and p[21]:
+                self.package_quantity.text = str(p[21])
+            if len(p) > 22 and p[22]:
+                self.sku_input.text = str(p[22])
+            if len(p) > 23 and p[23] not in (None, ""):
+                self.units_per_package_input.text = str(int(float(p[23])))
+            if len(p) > 12 and p[12]:
+                self.barcode_input.text = str(p[12])
+            if len(p) > 13 and p[13]:
+                try:
+                    self.expiry_date.text = datetime.strptime(str(p[13]), "%Y-%m-%d").strftime("%d/%m/%Y")
+                except ValueError:
+                    self.expiry_date.text = str(p[13])
+        finally:
+            self._calculating = False
         self._barcode_context = self._sanitize_barcode(self.barcode_input.text) or None
+        self._discount_base_price      = None
+        self._auto_unit_purchase_price = False
+        self._auto_total_purchase_price = False
+        self._auto_sale_price          = False
+        self._cost_source_field        = "unit" if self._parse_numeric_input(self.unit_purchase_price.text) is not None else None
         is_weight = bool(p[15]) if len(p) > 15 else False
         self._set_weight_state(is_weight)
         self._set_pack_sale_state(bool(p[24]) if (len(p) > 24 and not is_weight) else False)
@@ -1576,9 +1765,29 @@ class ProductForm(Popup):
         self.scanner_status.color = color
 
     def on_open(self):
+        if self._field_navigation:
+            self._field_navigation.activate(focus_initial=True)
         self._schedule_scanner_auto_start()
 
     def on_dismiss(self):
+        if self._field_navigation:
+            self._field_navigation.deactivate()
+        if self.category_menu:
+            try:
+                self.category_menu.dismiss()
+            except Exception:
+                pass
+        if self._vat_menu:
+            try:
+                self._vat_menu.dismiss()
+            except Exception:
+                pass
+        if self._shortcut_help_dialog:
+            try:
+                self._shortcut_help_dialog.dismiss()
+            except Exception:
+                pass
+            self._shortcut_help_dialog = None
         self._cancel_scanner_auto_start()
         if self.scanning: self._stop_scanner()
         Window.unbind(on_resize=self._on_window_resize)

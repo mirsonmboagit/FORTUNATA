@@ -44,7 +44,40 @@
         theme_text_color: 'Custom'
         text_color: root.icon_color
 
-<SettingsStatusCard@MDCard>:
+<SettingsPanelCard@HoverCard>:
+    radius: [dp(20)]
+    elevation: 1
+    line_color: 0, 0, 0, 0
+    line_width: 1
+    hover_bg_mix: 0.06
+    hover_line_mix: 0.24
+    hover_elevation_delta: 1.6
+    hover_duration: 0.14
+    hover_accent_color: app.theme_tokens['primary']
+
+<SettingsPreferenceCard@HoverCard>:
+    radius: [dp(18)]
+    elevation: 0
+    line_color: 0, 0, 0, 0
+    line_width: 1
+    hover_bg_mix: 0.10
+    hover_line_mix: 0.24
+    hover_elevation_delta: 1.3
+    hover_duration: 0.12
+    hover_accent_color: app.theme_tokens['primary']
+
+<SettingsHeroActionButton@HoverRaisedButton>:
+    radius: [dp(16)]
+    line_width: 1
+    line_color: 1, 1, 1, 0.14
+    press_enabled: True
+    hover_bg_mix: 0.10
+    hover_line_mix: 0.22
+    hover_elevation_delta: 2.2
+    hover_duration: 0.12
+    hover_accent_color: 1, 1, 1, 1
+
+<SettingsStatusCard@HoverCard>:
     icon_name: 'cog'
     title_text: ''
     subtitle_text: ''
@@ -55,6 +88,13 @@
     radius: [dp(18)]
     elevation: 0
     md_bg_color: app.theme_tokens['card_alt']
+    line_color: 0, 0, 0, 0
+    line_width: 1
+    hover_bg_mix: 0.08
+    hover_line_mix: 0.24
+    hover_elevation_delta: 1.4
+    hover_duration: 0.12
+    hover_accent_color: root.accent_color
 
     MDBoxLayout:
         spacing: dp(12)
@@ -86,7 +126,7 @@
                 text_color: app.theme_tokens['text_secondary']
                 text_size: self.width, None
 
-<SettingsActionCard@MDCard+ButtonBehavior>:
+<SettingsActionCard@HoverCard+ButtonBehavior>:
     icon_name: 'cog'
     title_text: ''
     subtitle_text: ''
@@ -99,6 +139,14 @@
     elevation: 1
     md_bg_color: root.tone_color
     ripple_behavior: True
+    line_color: 0, 0, 0, 0
+    line_width: 1
+    press_enabled: True
+    hover_bg_mix: 0.10
+    hover_line_mix: 0.26
+    hover_elevation_delta: 2.0
+    hover_duration: 0.12
+    hover_accent_color: root.accent_color
 
     MDBoxLayout:
         orientation: 'vertical'
@@ -140,7 +188,7 @@
             text_color: app.theme_tokens['text_secondary']
             text_size: self.width, None
 
-<SettingsSignalCard@MDCard>:
+<SettingsSignalCard@HoverCard>:
     icon_name: 'flash'
     label_text: ''
     accent_color: 1, 1, 1, 0.12
@@ -150,6 +198,13 @@
     radius: [dp(16)]
     elevation: 0
     md_bg_color: root.accent_color
+    line_color: 1, 1, 1, 0.04
+    line_width: 1
+    hover_bg_mix: 0.18
+    hover_line_mix: 0.24
+    hover_elevation_delta: 1.0
+    hover_duration: 0.12
+    hover_accent_color: 1, 1, 1, 1
 
     MDBoxLayout:
         spacing: dp(8)
@@ -182,7 +237,7 @@
             md_bg_color: app.theme_tokens['surface']
 
             MDTopAppBar:
-                title: 'Definicoes'
+                title: app.t('settings.title', app.language)
                 md_bg_color: app.theme_tokens['primary']
                 specific_text_color: app.theme_tokens['on_primary']
                 left_action_items: [['arrow-left', lambda x: root.go_back()]]
@@ -199,7 +254,7 @@
                     spacing: dp(12)
                     padding: [dp(16), dp(16), dp(16), dp(96)]
 
-                    MDCard:
+                    SettingsPanelCard:
                         id: hero_card
                         orientation: 'vertical'
                         size_hint_y: None
@@ -207,17 +262,20 @@
                         padding: [dp(18), dp(16), dp(18), dp(16)]
                         spacing: dp(14)
                         radius: [dp(20)]
-                        elevation: 1
                         md_bg_color: app.theme_tokens['primary']
+                        hover_accent_color: 1, 1, 1, 1
+                        line_color: 1, 1, 1, 0.10
                         canvas.before:
                             Color:
-                                rgba: 1, 1, 1, 0.07
-                            Ellipse:
-                                size: dp(190), dp(190)
-                                pos: self.right - dp(138), self.top - dp(126)
-                            Ellipse:
-                                size: dp(120), dp(120)
-                                pos: self.x - dp(26), self.y - dp(18)
+                                rgba: 1, 1, 1, 0.10
+                            Rectangle:
+                                pos: self.x, self.top - dp(2)
+                                size: self.width, dp(2)
+                            Color:
+                                rgba: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.16
+                            Rectangle:
+                                pos: self.x, self.y
+                                size: dp(5), self.height
 
                         MDBoxLayout:
                             id: hero_content
@@ -292,7 +350,7 @@
                                 size_hint_x: None
                                 width: dp(260)
 
-                                MDRaisedButton:
+                                SettingsHeroActionButton:
                                     id: hero_add_user_btn
                                     text: 'Adicionar utilizador'
                                     size_hint_x: 1
@@ -300,24 +358,23 @@
                                     text_color: app.theme_tokens['on_primary']
                                     on_release: root.add_user()
 
-                                MDRaisedButton:
+                                SettingsHeroActionButton:
                                     id: hero_security_btn
                                     text: 'Perguntas de recuperacao'
                                     size_hint_x: 1
                                     md_bg_color: app.theme_tokens['info']
                                     text_color: app.theme_tokens['on_primary']
-                                    elevation: 1
                                     on_release: root.configure_security_questions()
 
-                    MDCard:
+                    SettingsPanelCard:
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
                         padding: [dp(16), dp(14), dp(16), dp(16)]
                         spacing: dp(12)
                         radius: [dp(20)]
-                        elevation: 1
                         md_bg_color: app.theme_tokens['card']
+                        hover_accent_color: app.theme_tokens['info']
 
                         MDBoxLayout:
                             size_hint_y: None
@@ -346,15 +403,15 @@
                             spacing: dp(10)
                             adaptive_height: True
 
-                            MDCard:
+                            SettingsPreferenceCard:
                                 orientation: 'vertical'
                                 size_hint_y: None
                                 height: dp(148)
                                 padding: [dp(14), dp(14), dp(14), dp(14)]
                                 spacing: dp(10)
                                 radius: [dp(18)]
-                                elevation: 0
                                 md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['info']
 
                                 MDBoxLayout:
                                     size_hint_y: None
@@ -416,15 +473,15 @@
                                     text_color: app.theme_tokens['text_secondary']
                                     text_size: self.width, None
 
-                            MDCard:
+                            SettingsPreferenceCard:
                                 orientation: 'vertical'
                                 size_hint_y: None
                                 height: dp(148)
                                 padding: [dp(14), dp(14), dp(14), dp(14)]
                                 spacing: dp(10)
                                 radius: [dp(18)]
-                                elevation: 0
                                 md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['success']
 
                                 MDBoxLayout:
                                     size_hint_y: None
@@ -486,15 +543,15 @@
                                     text_color: app.theme_tokens['text_secondary']
                                     text_size: self.width, None
 
-                            MDCard:
+                            SettingsPreferenceCard:
                                 orientation: 'vertical'
                                 size_hint_y: None
                                 height: dp(148)
                                 padding: [dp(14), dp(14), dp(14), dp(14)]
                                 spacing: dp(10)
                                 radius: [dp(18)]
-                                elevation: 0
                                 md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['warning']
 
                                 MDBoxLayout:
                                     size_hint_y: None
@@ -556,15 +613,15 @@
                                     text_color: app.theme_tokens['text_secondary']
                                     text_size: self.width, None
 
-                            MDCard:
+                            SettingsPreferenceCard:
                                 orientation: 'vertical'
                                 size_hint_y: None
                                 height: dp(148)
                                 padding: [dp(14), dp(14), dp(14), dp(14)]
                                 spacing: dp(10)
                                 radius: [dp(18)]
-                                elevation: 0
                                 md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['primary']
 
                                 MDBoxLayout:
                                     size_hint_y: None
@@ -639,6 +696,12 @@
                             accent_color: app.theme_tokens['info']
 
                         SettingsStatusCard:
+                            icon_name: 'translate'
+                            title_text: app.t('settings.language.status_title', app.language)
+                            subtitle_text: root.language_label
+                            accent_color: app.theme_tokens['primary']
+
+                        SettingsStatusCard:
                             icon_name: 'robot'
                             title_text: 'Monitor'
                             subtitle_text: 'Monitor inteligente ligado' if root.monitor_enabled else 'Monitor inteligente pausado'
@@ -656,15 +719,199 @@
                             subtitle_text: '{} alerta(s) pendente(s)'.format(root.notification_count) if root.notification_count else 'Nada pendente agora'
                             accent_color: app.theme_tokens['danger'] if root.notification_count else app.theme_tokens['success']
 
-                    MDCard:
+                    SettingsPanelCard:
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
                         padding: [dp(16), dp(14), dp(16), dp(16)]
                         spacing: dp(12)
                         radius: [dp(20)]
-                        elevation: 1
                         md_bg_color: app.theme_tokens['card']
+                        hover_accent_color: app.theme_tokens['info']
+
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(42)
+
+                            MDBoxLayout:
+                                orientation: 'vertical'
+                                spacing: dp(2)
+
+                                MDLabel:
+                                    text: 'Dispositivos POS'
+                                    font_style: 'Subtitle1'
+                                    bold: True
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Scanner fisico e impressora termica usados no caixa.'
+                                    font_style: 'Caption'
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+
+                        MDGridLayout:
+                            id: devices_grid
+                            cols: 3
+                            spacing: dp(10)
+                            adaptive_height: True
+
+                            SettingsPreferenceCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(156)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(10)
+                                radius: [dp(18)]
+                                md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['success']
+
+                                MDBoxLayout:
+                                    size_hint_y: None
+                                    height: dp(48)
+                                    spacing: dp(12)
+
+                                    SettingsIconBadge:
+                                        icon_name: 'barcode-scan'
+                                        accent_color: app.theme_tokens['success']
+                                        icon_color: app.theme_tokens['on_primary']
+
+                                    MDBoxLayout:
+                                        orientation: 'vertical'
+                                        spacing: dp(2)
+                                        size_hint_x: 1
+
+                                        MDLabel:
+                                            text: 'Scanner USB'
+                                            font_style: 'Subtitle1'
+                                            bold: True
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_primary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                        MDLabel:
+                                            text: 'Entrada por teclado'
+                                            font_style: 'Caption'
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_secondary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                    SettingsToggleShell:
+                                        AnchorLayout:
+                                            anchor_x: 'center'
+                                            anchor_y: 'center'
+
+                                            MDSwitch:
+                                                id: physical_scanner_toggle
+                                                size_hint: None, None
+                                                active: True
+                                                on_active: root.toggle_physical_scanner(self.active)
+
+                                MDLabel:
+                                    text: 'Leitura fisica ativa' if physical_scanner_toggle.active else 'Leitura fisica pausada'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'O caixa aceita leitores USB que enviam codigo e Enter.'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                            SettingsPreferenceCard:
+                                orientation: 'vertical'
+                                size_hint_y: None
+                                height: dp(156)
+                                padding: [dp(14), dp(14), dp(14), dp(14)]
+                                spacing: dp(10)
+                                radius: [dp(18)]
+                                md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['warning']
+
+                                MDBoxLayout:
+                                    size_hint_y: None
+                                    height: dp(48)
+                                    spacing: dp(12)
+
+                                    SettingsIconBadge:
+                                        icon_name: 'printer'
+                                        accent_color: app.theme_tokens['warning']
+                                        icon_color: app.theme_tokens['on_primary']
+
+                                    MDBoxLayout:
+                                        orientation: 'vertical'
+                                        spacing: dp(2)
+                                        size_hint_x: 1
+
+                                        MDLabel:
+                                            text: 'Auto-recibo'
+                                            font_style: 'Subtitle1'
+                                            bold: True
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_primary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                        MDLabel:
+                                            text: 'Depois da venda'
+                                            font_style: 'Caption'
+                                            theme_text_color: 'Custom'
+                                            text_color: app.theme_tokens['text_secondary']
+                                            shorten: True
+                                            shorten_from: 'right'
+
+                                    SettingsToggleShell:
+                                        AnchorLayout:
+                                            anchor_x: 'center'
+                                            anchor_y: 'center'
+
+                                            MDSwitch:
+                                                id: receipt_auto_print_toggle
+                                                size_hint: None, None
+                                                active: False
+                                                on_active: root.toggle_receipt_auto_print(self.active)
+
+                                MDLabel:
+                                    text: 'Imprime automaticamente' if receipt_auto_print_toggle.active else 'Impressao manual'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: 'Quando ativo, o recibo sai logo apos finalizar a venda.'
+                                    font_style: 'Caption'
+                                    size_hint_y: None
+                                    height: self.texture_size[1]
+                                    theme_text_color: 'Custom'
+                                    text_color: app.theme_tokens['text_secondary']
+                                    text_size: self.width, None
+
+                            SettingsActionCard:
+                                icon_name: 'printer'
+                                title_text: 'Impressora termica'
+                                subtitle_text: '{} | {}mm'.format(root.receipt_printer_name, int(root.receipt_paper_width_mm))
+                                accent_color: app.theme_tokens['primary']
+                                on_press: root.open_printer_settings()
+
+                    SettingsPanelCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(12)
+                        radius: [dp(20)]
+                        md_bg_color: app.theme_tokens['card']
+                        hover_accent_color: app.theme_tokens['success']
 
                         MDBoxLayout:
                             size_hint_y: None
@@ -721,15 +968,15 @@
                                 accent_color: app.theme_tokens['danger']
                                 on_press: root.delete_manager()
 
-                    MDCard:
+                    SettingsPanelCard:
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
                         padding: [dp(16), dp(14), dp(16), dp(16)]
                         spacing: dp(12)
                         radius: [dp(20)]
-                        elevation: 1
                         md_bg_color: app.theme_tokens['card']
+                        hover_accent_color: app.theme_tokens['warning']
 
                         MDBoxLayout:
                             size_hint_y: None
@@ -765,15 +1012,15 @@
                                 accent_color: app.theme_tokens['warning']
                                 on_press: root.open_vat_settings()
 
-                            MDCard:
+                            SettingsPreferenceCard:
                                 orientation: 'vertical'
                                 size_hint_y: None
                                 height: dp(124)
                                 padding: [dp(14), dp(14), dp(14), dp(14)]
                                 spacing: dp(8)
                                 radius: [dp(16)]
-                                elevation: 0
                                 md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['warning']
 
                                 MDLabel:
                                     text: 'Resumo atual'
@@ -798,15 +1045,15 @@
                                     text_color: app.theme_tokens['text_secondary']
                                     text_size: self.width, None
 
-                    MDCard:
+                    SettingsPanelCard:
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
                         padding: [dp(16), dp(14), dp(16), dp(16)]
                         spacing: dp(12)
                         radius: [dp(20)]
-                        elevation: 1
                         md_bg_color: app.theme_tokens['card']
+                        hover_accent_color: app.theme_tokens['info']
 
                         MDBoxLayout:
                             size_hint_y: None
@@ -836,6 +1083,14 @@
                             adaptive_height: True
 
                             SettingsActionCard:
+                                id: language_card
+                                icon_name: 'translate'
+                                title_text: app.t('settings.language.title', app.language)
+                                subtitle_text: root.language_label
+                                accent_color: app.theme_tokens['primary']
+                                on_press: root.open_language_menu(self)
+
+                            SettingsActionCard:
                                 icon_name: 'text-box-search'
                                 title_text: 'Logs do sistema'
                                 subtitle_text: 'Veja historico de acoes, exporte PDF e limpe registos.'
@@ -849,13 +1104,13 @@
                                 accent_color: app.theme_tokens['info']
                                 on_press: root.change_screen_size()
 
-                        MDCard:
+                        SettingsPreferenceCard:
                             size_hint_y: None
                             height: self.minimum_height
                             padding: [dp(14), dp(12), dp(14), dp(12)]
                             radius: [dp(16)]
-                            elevation: 0
                             md_bg_color: app.theme_tokens['card_alt']
+                            hover_accent_color: app.theme_tokens['info']
 
                             MDBoxLayout:
                                 adaptive_height: True
@@ -876,15 +1131,15 @@
                                     text_color: app.theme_tokens['text_secondary']
                                     text_size: self.width, None
 
-                    MDCard:
+                    SettingsPanelCard:
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
                         padding: [dp(16), dp(14), dp(16), dp(16)]
                         spacing: dp(12)
                         radius: [dp(20)]
-                        elevation: 1
                         md_bg_color: app.theme_tokens['card']
+                        hover_accent_color: app.theme_tokens['primary']
 
                         MDBoxLayout:
                             size_hint_y: None
@@ -912,13 +1167,13 @@
                             cols: 1
                             adaptive_height: True
 
-                            MDCard:
+                            SettingsPreferenceCard:
                                 size_hint_y: None
                                 height: self.minimum_height
                                 padding: [dp(14), dp(12), dp(14), dp(12)]
                                 radius: [dp(16)]
-                                elevation: 0
                                 md_bg_color: app.theme_tokens['card_alt']
+                                hover_accent_color: app.theme_tokens['warning']
 
                                 MDBoxLayout:
                                     adaptive_height: True

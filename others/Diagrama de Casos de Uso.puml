@@ -1,0 +1,84 @@
+@startuml
+left to right direction
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam actorStyle awesome
+
+title Diagrama de Casos de Uso do Sistema de Gestao Comercial
+
+actor "Administrador" as Admin
+actor "Gerente" as Manager
+
+rectangle "Sistema de Gestao Comercial" {
+  usecase "Autenticar-se" as UC_Login
+  usecase "Recuperar senha\npor perguntas de seguranca" as UC_Recovery
+  usecase "Configurar perguntas\nde seguranca" as UC_Security
+  usecase "Gerir utilizadores" as UC_Users
+  usecase "Gerir produtos" as UC_Products
+  usecase "Configurar regras\nde IVA" as UC_Vat
+  usecase "Consultar painel,\nindicadores e alertas" as UC_Dashboard
+  usecase "Registar venda" as UC_Sale
+  usecase "Emitir recibo" as UC_Receipt
+  usecase "Localizar produto" as UC_FindProduct
+  usecase "Calcular total e IVA" as UC_Calc
+  usecase "Actualizar stock" as UC_Stock
+  usecase "Consultar historico\nde vendas" as UC_SalesHistory
+  usecase "Estornar venda" as UC_Refund
+  usecase "Registar perda" as UC_Loss
+  usecase "Consultar historico\nde perdas" as UC_LossHistory
+  usecase "Aprovar movimentos\npendentes" as UC_Approve
+  usecase "Registar reposicao\nde stock" as UC_Restock
+  usecase "Consultar historico\nde reposicoes" as UC_RestockHistory
+  usecase "Gerar relatorios\nem PDF" as UC_Reports
+  usecase "Consultar produtividade" as UC_Productivity
+  usecase "Consultar e exportar\nlogs do sistema" as UC_Logs
+}
+
+Admin --> UC_Login
+Manager --> UC_Login
+
+Admin --> UC_Recovery
+Manager --> UC_Recovery
+
+Admin --> UC_Security
+Admin --> UC_Users
+Admin --> UC_Products
+Admin --> UC_Vat
+Admin --> UC_Dashboard
+Admin --> UC_SalesHistory
+Admin --> UC_Refund
+Admin --> UC_Loss
+Admin --> UC_LossHistory
+Admin --> UC_Approve
+Admin --> UC_Restock
+Admin --> UC_RestockHistory
+Admin --> UC_Reports
+Admin --> UC_Productivity
+Admin --> UC_Logs
+
+Manager --> UC_Sale
+Manager --> UC_SalesHistory
+Manager --> UC_Refund
+Manager --> UC_Loss
+Manager --> UC_LossHistory
+
+UC_Sale .> UC_FindProduct : <<include>>
+UC_Sale .> UC_Calc : <<include>>
+UC_Sale .> UC_Stock : <<include>>
+UC_Receipt .> UC_Sale : <<extend>>
+
+UC_Refund .> UC_Stock : <<include>>
+UC_Loss .> UC_FindProduct : <<include>>
+UC_Loss .> UC_Stock : <<include>>
+UC_Restock .> UC_FindProduct : <<include>>
+UC_Restock .> UC_Stock : <<include>>
+UC_Approve .> UC_Stock : <<include>>
+
+note bottom of UC_Dashboard
+Inclui leitura de stock baixo, produtos
+proximos da validade, lucro negativo
+e padroes suspeitos de operacao.
+end note
+
+@enduml
+

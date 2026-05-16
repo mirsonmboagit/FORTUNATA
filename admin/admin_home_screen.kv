@@ -1,5 +1,28 @@
-<HomeButtonCard@MDCard+ButtonBehavior>:
+<HomeButtonCard@HoverCard+ButtonBehavior>:
     ripple_behavior: True
+    press_enabled: True
+    hover_bg_mix: 0.10
+    hover_line_mix: 0.26
+    hover_elevation_delta: 2
+    press_bg_mix: 0.16
+    press_line_mix: 0.34
+    press_elevation_delta: 0.8
+    hover_accent_color: app.theme_tokens["primary"]
+
+<HeroActionButton@HoverRaisedButton>:
+    press_enabled: True
+    hover_bg_mix: 0.12
+    hover_line_mix: 0.22
+    hover_elevation_delta: 2
+    press_bg_mix: 0.18
+    press_line_mix: 0.34
+    press_elevation_delta: 0.8
+
+<PanelHoverCard@HoverCard>:
+    hover_bg_mix: 0.05
+    hover_line_mix: 0.24
+    hover_elevation_delta: 1.2
+    hover_accent_color: app.theme_tokens["primary"]
 
 <AdminHomeScreen>:
     FloatLayout:
@@ -8,18 +31,18 @@
             md_bg_color: app.theme_tokens["surface"]
 
             MDTopAppBar:
-                title: "HOME do Administrador"
+                title: "PAINEL ADMINISTRATIVO"
                 md_bg_color: app.theme_tokens["primary"]
                 specific_text_color: app.theme_tokens["on_primary"]
                 elevation: 4
-                right_action_items: [["refresh", lambda x: root.refresh_home(), "Atualizar home"], ["chart-bar", lambda x: root.open_reports(), "Relatorios"], ["cog", lambda x: root.go_to_settings(), "Definicoes"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
+                right_action_items: [["refresh", lambda x: root.refresh_home(), "Atualizar (Ctrl+R)"], ["chart-bar", lambda x: root.open_reports(), "Relatorios (Alt+3)"], ["cog", lambda x: root.go_to_settings(), "Definicoes (Alt+S)"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
 
             MDBoxLayout:
                 orientation: "vertical"
                 spacing: dp(10)
                 padding: [dp(12), dp(12), dp(12), dp(12)]
 
-                MDCard:
+                PanelHoverCard:
                     id: hero_card
                     size_hint_y: None
                     height: min(max(dp(94), root.height * 0.15), dp(106))
@@ -29,13 +52,15 @@
                     md_bg_color: app.theme_tokens["primary"]
                     canvas.before:
                         Color:
-                            rgba: 1, 1, 1, 0.08
-                        Ellipse:
-                            size: dp(180), dp(180)
-                            pos: self.right - dp(140), self.top - dp(120)
-                        Ellipse:
-                            size: dp(120), dp(120)
-                            pos: self.x - dp(24), self.y - dp(28)
+                            rgba: 1, 1, 1, 0.10
+                        Rectangle:
+                            pos: self.x, self.top - dp(2)
+                            size: self.width, dp(2)
+                        Color:
+                            rgba: app.theme_tokens["success"][0], app.theme_tokens["success"][1], app.theme_tokens["success"][2], 0.16
+                        Rectangle:
+                            pos: self.x, self.y
+                            size: dp(5), self.height
 
                     MDBoxLayout:
                         id: hero_content
@@ -88,16 +113,17 @@
                                 size_hint_y: None
                                 height: dp(36)
 
-                                MDRaisedButton:
+                                HeroActionButton:
                                     id: hero_add_button
                                     text: "Adicionar"
                                     md_bg_color: app.theme_tokens["on_primary"]
                                     text_color: app.theme_tokens["primary"]
+                                    hover_accent_color: app.theme_tokens["primary"]
                                     size_hint_x: None
                                     width: dp(96)
                                     on_release: root.add_product()
 
-                                MDRaisedButton:
+                                HeroActionButton:
                                     id: hero_reports_button
                                     text: "Relatorios"
                                     md_bg_color: 1, 1, 1, 0.12
@@ -105,11 +131,12 @@
                                     elevation: 0
                                     line_color: 1, 1, 1, 0.35
                                     line_width: 1
+                                    hover_accent_color: [1, 1, 1, 1]
                                     size_hint_x: None
                                     width: dp(96)
                                     on_release: root.open_reports()
 
-                                MDRaisedButton:
+                                HeroActionButton:
                                     id: hero_pdfs_button
                                     text: "PDFs"
                                     md_bg_color: 1, 1, 1, 0.12
@@ -117,6 +144,7 @@
                                     elevation: 0
                                     line_color: 1, 1, 1, 0.35
                                     line_width: 1
+                                    hover_accent_color: [1, 1, 1, 1]
                                     size_hint_x: None
                                     width: dp(84)
                                     on_release: root.show_all_pdfs()
@@ -133,7 +161,7 @@
                         spacing: dp(10)
                         size_hint_x: 0.64
 
-                        MDCard:
+                        PanelHoverCard:
                             id: summary_card
                             orientation: "vertical"
                             spacing: dp(8)
@@ -170,7 +198,7 @@
                         spacing: dp(10)
                         size_hint_x: 0.36
 
-                        MDCard:
+                        PanelHoverCard:
                             id: alerts_card
                             orientation: "vertical"
                             spacing: dp(8)
@@ -205,7 +233,7 @@
                                 spacing: dp(8)
                                 size_hint_y: 1
 
-                        MDCard:
+                        PanelHoverCard:
                             id: quick_actions_card
                             orientation: "vertical"
                             spacing: dp(8)
@@ -230,7 +258,7 @@
                                 spacing: dp(8)
                                 size_hint_y: 1
 
-                        MDCard:
+                        PanelHoverCard:
                             id: insights_card
                             orientation: "vertical"
                             spacing: dp(8)

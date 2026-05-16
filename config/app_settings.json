@@ -1,0 +1,13 @@
+{
+  "ai_enabled": true,
+  "auto_banners_enabled": false,
+  "smart_monitor_enabled": true,
+  "theme_style": "Dark",
+  "manager_theme_style": "Dark",
+  "language": "pt",
+  "physical_scanner_enabled": true,
+  "physical_scanner_min_length": 6,
+  "receipt_auto_print": true,
+  "receipt_printer_name": "Microsoft Edge",
+  "receipt_paper_width_mm": 80
+}

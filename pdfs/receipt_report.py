@@ -8,10 +8,12 @@ from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .base_report import BasePDFReport
+from utils.paths import RECEIPTS_DIR
 
 
 class ReceiptReport(BasePDFReport):
-    def __init__(self, output_dir="Recibos"):
+    def __init__(self, output_dir=None):
+        output_dir = output_dir or RECEIPTS_DIR
         super().__init__(output_dir=output_dir)
 
     @staticmethod

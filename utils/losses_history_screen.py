@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from collections import deque
+from pathlib import Path
 from threading import Thread
 from time import perf_counter
 
@@ -18,7 +19,7 @@ from database.provider import get_db
 from utils.reports_screen import DateRangeDialog
 
 
-Builder.load_file("utils/losses_history_screen.kv")
+Builder.load_file(str(Path(__file__).with_name("losses_history_screen.kv")))
 
 
 def _theme_color(name, fallback):
@@ -54,6 +55,7 @@ class LossesHistoryScreen(MDScreen):
         self._render_token = 0
         self._row_theme = {}
         self._last_loaded_at = 0.0
+        self._exporting_pdf = False
         self.back_target = "losses"
 
     def _ensure_loss_report(self):
@@ -418,20 +420,43 @@ class LossesHistoryScreen(MDScreen):
         dialog.open()
 
     def _generate_losses_pdf(self, start_dt, end_dt):
-        try:
-            metrics = self.db.calculate_loss_metrics(start_dt, end_dt) or {}
-            records = self.db.get_loss_records(start_dt, end_dt, limit=300)
-            data = {"metrics": metrics, "records": records}
-            filters = {
-                "start_date": start_dt,
-                "end_date": end_dt,
-                "product": "Todos os Produtos",
-                "category": "Todas as Categorias",
-            }
-            pdf_path = self._ensure_loss_report().generate(data, filters)
-            self._show_pdf_success(pdf_path)
-        except Exception as e:
-            self._show_simple_dialog("Erro", f"Falha ao gerar PDF de perdas: {e}")
+        if self._exporting_pdf:
+            self._show_simple_dialog("Aguarde", "Ja existe uma exportacao de perdas em andamento.")
+            return
+
+        self._exporting_pdf = True
+
+        def worker():
+            result = {"ok": True, "path": None, "error": None}
+            try:
+                metrics = self.db.calculate_loss_metrics(start_dt, end_dt) or {}
+                records = self.db.get_loss_records(start_dt, end_dt, limit=300)
+                data = {"metrics": metrics, "records": records}
+                filters = {
+                    "start_date": start_dt,
+                    "end_date": end_dt,
+                    "product": "Todos os Produtos",
+                    "category": "Todas as Categorias",
+                }
+                pdf_path = self._ensure_loss_report().generate(data, filters)
+                result["path"] = str(pdf_path)
+            except Exception as exc:
+                result["ok"] = False
+                result["error"] = str(exc)
+
+            Clock.schedule_once(lambda _dt, payload=result: self._finish_losses_pdf_export(payload), 0)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _finish_losses_pdf_export(self, result):
+        self._exporting_pdf = False
+        if not (result or {}).get("ok"):
+            self._show_simple_dialog(
+                "Erro",
+                f"Falha ao gerar PDF de perdas: {(result or {}).get('error') or 'erro desconhecido'}",
+            )
+            return
+        self._show_pdf_success((result or {}).get("path"))
 
     def _show_pdf_success(self, pdf_path):
         dialog = MDDialog(

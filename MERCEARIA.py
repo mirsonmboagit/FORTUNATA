@@ -3,6 +3,13 @@ import sys
 import json
 from utils.logging_setup import configure_runtime_logging
 
+try:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except Exception:
+    pass
+
+# Ativa logs antes de carregar as telas.
 configure_runtime_logging()
 
 from kivymd.app import MDApp
@@ -12,17 +19,20 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import DictProperty
+from kivy.properties import DictProperty, StringProperty
 
 from kivy.core.text import LabelBase
 from database.provider import get_db
 from kivy.config import Config
 from utils.theme import get_theme_tokens
+from utils.i18n import language_label, language_options, language_short, normalize_language, translate
+from utils.i18n_runtime import install_i18n_hooks, localize_widget_tree
 
 
 if sys.platform.startswith('win'):
     try:
         import ctypes
+        # Define o identificador da app no Windows.
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             'MerceariaApp.SistemaEstoque.1.0'
         )
@@ -30,7 +40,8 @@ if sys.platform.startswith('win'):
         pass
 
 
-Config.set('kivy', 'window_icon', 'icon4.ico')
+# Configuracao basica da janela.
+Config.set('kivy', 'window_icon', 'admin.ico')
 Config.set('graphics', 'fullscreen', '0')
 Config.set('graphics', 'minimum_width', '640')
 Config.set('graphics', 'minimum_height', '420')
@@ -83,9 +94,7 @@ else:
     print("  Usando Roboto como fallback para JoeFont")
 
 
-# ✅ KivyMD App
-
-
+# Limites usados para abrir a janela em tamanho seguro.
 DEFAULT_WINDOW_MIN_WIDTH = int(dp(920))
 DEFAULT_WINDOW_MIN_HEIGHT = int(dp(560))
 WINDOW_IDEAL_WIDTH = int(dp(1280))
@@ -168,7 +177,9 @@ except Exception:
 
 
 class MainApp(MDApp):
+    # App principal com selecao de perfil, admin e gerente.
     theme_tokens = DictProperty({})
+    language = StringProperty("pt")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -188,8 +199,10 @@ class MainApp(MDApp):
         self.smart_monitor_enabled = True
         self.auto_banners_enabled = True
         self.theme_style = "Light"
+        self.language = "pt"
         self._load_app_settings()
         self.apply_theme(self.theme_style, persist=False)
+        install_i18n_hooks()
         
         # ============================================
         # CONFIGURAÇÃO DO TEMA KIVYMD
@@ -218,6 +231,7 @@ class MainApp(MDApp):
         # self.theme_cls.ripple_duration_out = 0.6
 
     def _load_app_settings(self):
+        # Carrega preferencias salvas e usa padroes se algo falhar.
         try:
             if os.path.exists(self._app_settings_path):
                 with open(self._app_settings_path, "r", encoding="utf-8") as f:
@@ -225,6 +239,7 @@ class MainApp(MDApp):
                 self.ai_enabled = bool(data.get("ai_enabled", True))
                 self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
                 self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
+                self.language = normalize_language(data.get("language", self.language))
                 theme_style = data.get("theme_style", self.theme_style)
                 if theme_style in ("Light", "Dark"):
                     self.theme_style = theme_style
@@ -233,8 +248,10 @@ class MainApp(MDApp):
             self.smart_monitor_enabled = True
             self.auto_banners_enabled = True
             self.theme_style = "Light"
+            self.language = "pt"
 
     def apply_theme(self, style, persist=True):
+        # Aplica o tema visual em todas as telas.
         style = "Dark" if style == "Dark" else "Light"
         self.theme_style = style
         self.theme_cls.theme_style = style
@@ -248,6 +265,7 @@ class MainApp(MDApp):
                 "ai_enabled": bool(self.ai_enabled),
                 "smart_monitor_enabled": bool(self.smart_monitor_enabled),
                 "auto_banners_enabled": bool(self.auto_banners_enabled),
+                "language": normalize_language(getattr(self, "language", "pt")),
                 "theme_style": self.theme_style,
             }
             with open(self._app_settings_path, "w", encoding="utf-8") as f:
@@ -255,9 +273,34 @@ class MainApp(MDApp):
         except Exception:
             pass
 
+    def set_language(self, language_code, persist=True):
+        # Troca o idioma e atualiza os textos da interface.
+        self.language = normalize_language(language_code)
+        if persist:
+            self.save_app_settings()
+        Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
+        return self.language
+
+    def t(self, key, _language=None, **kwargs):
+        return translate(key, _language or self.language, **kwargs)
+
+    def language_options(self):
+        return language_options()
+
+    def language_label(self, code=None, include_short=False):
+        return language_label(self.language if code is None else code, include_short=include_short)
+
+    def language_short(self, code=None):
+        return language_short(self.language if code is None else code)
+
+    def refresh_language(self, root=None):
+        target = root or getattr(self, "root", None)
+        localize_widget_tree(target, self.language)
+
     def build(self):
+        # Monta o ScreenManager com a selecao inicial de perfil.
         self.title = 'MERCEARIA'
-        self.icon = 'icon/icon4.ico'
+        self.icon = 'icon/admin.ico'
 
         sm = ScreenManager()
         self._screen_manager = sm
@@ -287,6 +330,7 @@ class MainApp(MDApp):
             'restock_history': self._build_restock_history_screen,
         }
         sm.current = 'login'
+        Clock.schedule_once(lambda _dt: self.refresh_language(sm), 0)
         return sm
 
     def on_stop(self):
@@ -307,6 +351,7 @@ class MainApp(MDApp):
         if screen is None:
             return None
         manager.add_widget(screen)
+        Clock.schedule_once(lambda _dt, target=screen: self.refresh_language(target), 0)
         return screen
 
     def warmup_screens(self, screen_names, delay=0.14):
@@ -392,8 +437,9 @@ class MainApp(MDApp):
     def on_start(self):
         Window.set_title('MERCEARIA')
 
-        if os.path.exists('icon/icon4.ico'):
-            Window.set_icon('icon/icon4.ico')
+        if os.path.exists('icon/admin.ico'):
+            Window.set_icon('icon/admin.ico')
+        Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
 
     def change_screen_size(self, width, height):
         constraints = _resolve_window_constraints()

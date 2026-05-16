@@ -7,9 +7,11 @@ from time import perf_counter
 from kivy.app import App
 from kivy.animation import Animation
 from kivy.clock import Clock
+from kivy.core.window import Window
 from kivy.factory import Factory
 from kivy.lang import Builder
 from kivy.metrics import dp
+from kivy.uix.modalview import ModalView
 from kivy.properties import StringProperty
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
@@ -26,6 +28,8 @@ if PROJECT_ROOT not in sys.path:
 from AI.controller import ProactiveIntelligenceController
 from database.provider import get_db
 from ui.components.admin_home_dashboard import SalesTrendChart
+from ui.components.hover_widgets import HoverCard, HoverRaisedButton
+from ui.components.loading_overlay import ScreenLoadingController
 from ui.components.tooltip_widgets import TooltipFloatingActionButton
 from utils.ai_popups import build_positive_banner, render_auto_banners
 
@@ -88,6 +92,10 @@ class AdminHomeScreen(MDScreen):
         self._insights_render_signature = None
         self._today_sales_dialog = None
         self._today_sales_loading = False
+        self._keyboard_shortcuts_bound = False
+        self._last_shortcut_signature = None
+        self._last_shortcut_at = 0.0
+        self._loading_controller = None
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
             db=self.db,
@@ -100,6 +108,7 @@ class AdminHomeScreen(MDScreen):
         super().__init__(**kwargs)
 
     def on_kv_post(self, base_widget):
+        self._ensure_loading_overlay()
         self._ensure_chart_widgets()
         self._build_quick_actions()
         self._update_datetime_text()
@@ -108,6 +117,7 @@ class AdminHomeScreen(MDScreen):
         self._render_dashboard()
 
     def on_enter(self):
+        self._bind_keyboard_shortcuts()
         self._start_clock()
         self._ensure_snapshot_loaded(force=False)
         app = App.get_running_app()
@@ -125,15 +135,163 @@ class AdminHomeScreen(MDScreen):
         Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.1)
 
     def on_leave(self):
+        self._unbind_keyboard_shortcuts()
         if self._clock_ev:
             self._clock_ev.cancel()
             self._clock_ev = None
         self._stop_ai_polling()
         self._snapshot_token += 1
         self._snapshot_loading = False
+        self._clear_loading_overlay()
 
     def on_size(self, *args):
         Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+
+    def _ensure_loading_overlay(self):
+        if self._loading_controller is None:
+            self._loading_controller = ScreenLoadingController(self)
+        self._loading_controller.attach()
+        return self._loading_controller
+
+    def _set_loading_overlay(self, key, active, message="", detail="", blocks_input=True):
+        controller = self._ensure_loading_overlay()
+        if active:
+            controller.show(key, message, detail, blocks_input=blocks_input)
+            return
+        controller.hide(key)
+
+    def _clear_loading_overlay(self):
+        if self._loading_controller is not None:
+            self._loading_controller.clear()
+
+    def _bind_keyboard_shortcuts(self):
+        if self._keyboard_shortcuts_bound:
+            return
+        Window.bind(on_keyboard=self._handle_window_keyboard)
+        Window.bind(on_key_down=self._handle_window_key_down)
+        self._keyboard_shortcuts_bound = True
+
+    def _unbind_keyboard_shortcuts(self):
+        if not self._keyboard_shortcuts_bound:
+            return
+        Window.unbind(on_keyboard=self._handle_window_keyboard)
+        Window.unbind(on_key_down=self._handle_window_key_down)
+        self._keyboard_shortcuts_bound = False
+
+    def _has_open_modal(self):
+        return any(isinstance(child, ModalView) for child in Window.children)
+
+    @staticmethod
+    def _normalize_key_name(key, codepoint=""):
+        if isinstance(key, (tuple, list)):
+            numeric_key = key[0] if len(key) > 0 else None
+            string_key = str(key[1] or "").strip().lower() if len(key) > 1 else ""
+            if string_key:
+                return string_key
+            key = numeric_key
+
+        if isinstance(key, str):
+            key_name = key.strip().lower()
+            if key_name:
+                return key_name
+
+        key_name = str(codepoint or "").strip().lower()
+        if key_name:
+            return key_name
+
+        special_keys = {
+            13: "enter",
+            27: "escape",
+            271: "enter",
+        }
+        if key in special_keys:
+            return special_keys[key]
+
+        try:
+            if 32 <= int(key) <= 126:
+                return chr(int(key)).lower()
+        except Exception:
+            pass
+        return ""
+
+    def _should_skip_duplicate_shortcut(self, signature):
+        now = perf_counter()
+        if signature == self._last_shortcut_signature and (now - self._last_shortcut_at) < 0.20:
+            return True
+        self._last_shortcut_signature = signature
+        self._last_shortcut_at = now
+        return False
+
+    def _close_transient_panels(self):
+        dialog = getattr(self, "_today_sales_dialog", None)
+        if dialog is not None:
+            self._dismiss_today_sales_dialog()
+            return True
+        return False
+
+    def _dispatch_keyboard_shortcut(self, key, codepoint="", modifiers=None):
+        if not self.manager or self.manager.current != self.name:
+            return False
+
+        key_name = self._normalize_key_name(key, codepoint)
+        modifiers = {str(modifier or "").lower() for modifier in (modifiers or [])}
+        signature = (key_name, tuple(sorted(modifiers)))
+        if self._should_skip_duplicate_shortcut(signature):
+            return False
+
+        if key_name == "escape" and self._close_transient_panels():
+            return True
+        if self._has_open_modal():
+            return False
+
+        if "ctrl" in modifiers and key_name == "r":
+            self.refresh_home()
+            return True
+        if "ctrl" in modifiers and key_name == "n":
+            self.add_product()
+            return True
+        if "ctrl" in modifiers and key_name == "p":
+            self.go_to_products()
+            return True
+        if "ctrl" in modifiers and key_name == "h":
+            self.open_sales_history()
+            return True
+        if "ctrl" in modifiers and key_name == "t":
+            self.open_today_sales()
+            return True
+        if "alt" in modifiers and key_name == "1":
+            self.go_to_products()
+            return True
+        if "alt" in modifiers and key_name == "2":
+            self.open_stock_module()
+            return True
+        if "alt" in modifiers and key_name == "3":
+            self.open_reports()
+            return True
+        if "alt" in modifiers and key_name == "4":
+            self.open_users_module()
+            return True
+        if "alt" in modifiers and key_name == "p":
+            self.show_all_pdfs()
+            return True
+        if "alt" in modifiers and key_name == "s":
+            self.go_to_settings()
+            return True
+        return False
+
+    def _handle_window_keyboard(self, _window, key, scancode=None, codepoint=None, modifiers=None):
+        return self._dispatch_keyboard_shortcut(
+            key,
+            codepoint=codepoint or "",
+            modifiers=modifiers or [],
+        )
+
+    def _handle_window_key_down(self, _window, key, scancode=None, codepoint=None, modifiers=None):
+        return self._dispatch_keyboard_shortcut(
+            key,
+            codepoint=codepoint or "",
+            modifiers=modifiers or [],
+        )
 
     def _start_clock(self):
         self._update_datetime_text()
@@ -325,6 +483,13 @@ class AdminHomeScreen(MDScreen):
         self._snapshot_token = token
         self._snapshot_loading = True
         self._snapshot_error = None
+        self._set_loading_overlay(
+            "snapshot",
+            True,
+            "A carregar painel do admin...",
+            "Estamos a preparar o resumo operacional, alertas e indicadores principais.",
+            blocks_input=False,
+        )
         self.status_text = "A carregar resumo operacional..."
         self._render_dashboard()
 
@@ -350,6 +515,7 @@ class AdminHomeScreen(MDScreen):
         if token is not None and token != self._snapshot_token:
             return
         self._snapshot_loading = False
+        self._set_loading_overlay("snapshot", False)
         self._snapshot_loaded_at = perf_counter()
         self._snapshot_error = str(error).strip() if error else None
         self._snapshot = payload or {}
@@ -381,8 +547,13 @@ class AdminHomeScreen(MDScreen):
         self.home_title = f"{greeting}, {first_name}"
         self.home_subtitle = self._build_header_subtitle(snapshot)
 
+        backend_status = self._get_backend_status()
+        backend_notice = ""
+        if backend_status.get("label") == "Local":
+            backend_notice = "API offline, modo local"
+
         if self._snapshot_error:
-            self.status_text = "Resumo indisponivel no momento. Os atalhos continuam ativos."
+            self.status_text = "Resumo indisponivel no momento."
         elif self._snapshot_loading and not snapshot:
             self.status_text = "A carregar sinais do negocio..."
         else:
@@ -390,6 +561,17 @@ class AdminHomeScreen(MDScreen):
             alerts = snapshot.get("alerts") or {}
             total_alerts = sum(int(value or 0) for value in (alerts.get("counts") or {}).values())
             self.status_text = f"Hoje: {_format_mzn(summary.get('revenue_today'))} | Alertas ativos: {total_alerts}"
+        if backend_notice:
+            self.status_text = f"{self.status_text} | {backend_notice}"
+
+    def _get_backend_status(self):
+        getter = getattr(self.db, "get_connection_status", None)
+        if not callable(getter):
+            return {}
+        try:
+            return getter(force=False) or {}
+        except Exception as exc:
+            return {"label": "Local", "message": str(exc)}
 
     def _build_header_subtitle(self, snapshot):
         if self._snapshot_error:
@@ -470,6 +652,10 @@ class AdminHomeScreen(MDScreen):
             radius=[dp(12)],
             elevation=1,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            hover_accent_color=accent,
+            hover_bg_mix=0.10,
+            hover_line_mix=0.26,
+            hover_elevation_delta=2.0,
         )
         if callback:
             card.bind(on_release=lambda *_: callback())
@@ -533,6 +719,10 @@ class AdminHomeScreen(MDScreen):
             radius=[dp(12)],
             elevation=1,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            hover_accent_color=accent,
+            hover_bg_mix=0.10,
+            hover_line_mix=0.26,
+            hover_elevation_delta=2.0,
         )
         card.bind(on_release=lambda *_: callback())
 
@@ -633,6 +823,10 @@ class AdminHomeScreen(MDScreen):
             radius=[dp(12)],
             elevation=1,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            hover_accent_color=accent,
+            hover_bg_mix=0.10,
+            hover_line_mix=0.26,
+            hover_elevation_delta=2.0,
         )
         card.bind(on_release=lambda *_: callback())
 
@@ -723,7 +917,7 @@ class AdminHomeScreen(MDScreen):
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
         accent = tokens.get(tone, tokens.get("primary", [0.10, 0.35, 0.65, 1]))
 
-        card = MDCard(
+        card = HoverCard(
             orientation="vertical",
             size_hint_y=None,
             height=dp(68),
@@ -732,6 +926,10 @@ class AdminHomeScreen(MDScreen):
             radius=[dp(12)],
             elevation=1,
             md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+            hover_accent_color=accent,
+            hover_bg_mix=0.08,
+            hover_line_mix=0.24,
+            hover_elevation_delta=1.5,
         )
 
         header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))

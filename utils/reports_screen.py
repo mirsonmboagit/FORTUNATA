@@ -1,11 +1,13 @@
-import sys
 import os
 import sys
 import unicodedata
+from pathlib import Path
+
+from utils.paths import ROOT_DIR, report_search_dirs
 
 sys.path.insert(
     0,
-    os.path.join(os.path.dirname(__file__), 'pdfs')
+    str((ROOT_DIR / "pdfs").resolve())
 )
 
 from kivymd.uix.screen import MDScreen
@@ -36,7 +38,10 @@ from kivy.lang import Builder
 from kivy.properties import ObjectProperty, StringProperty
 
 from database.provider import get_db
+from ui.components.hover_widgets import HoverCard, HoverRaisedButton
+from ui.components.loading_overlay import ScreenLoadingController
 from utils.expiry_alerts import evaluate_expiry_alert
+from utils.focus_navigation import FormKeyboardController
 from utils.perf_utils import perf_start, perf_log
 
 def _theme_color(name, fallback):
@@ -45,7 +50,7 @@ def _theme_color(name, fallback):
     return tokens.get(name, fallback)
 
 
-Builder.load_file('utils/reports_screen.kv')
+Builder.load_file(str(Path(__file__).with_name("reports_screen.kv")))
 
 
 class DateRangeDialog(MDDialog):
@@ -83,6 +88,14 @@ class DateRangeDialog(MDDialog):
         )
         
         Window.bind(on_resize=self.reposition)
+        self._field_navigation = FormKeyboardController(
+            host=self,
+            fields=[self.start_date_field, self.end_date_field],
+            initial_field=self.start_date_field,
+            on_escape=self.dismiss,
+            on_submit=self.confirm,
+            shortcuts={"ctrl+s": self.confirm},
+        )
     
     def _create_content(self):
         """Cria o conteúdo do dialog."""
@@ -173,6 +186,16 @@ class DateRangeDialog(MDDialog):
                 min(dp(500), Window.width * 0.85),
                 min(dp(450), Window.height * 0.7)
             )
+
+    def on_pre_open(self, *args):
+        if hasattr(self, "_field_navigation"):
+            self._field_navigation.activate(focus_initial=True)
+        return super().on_pre_open(*args)
+
+    def on_dismiss(self, *args):
+        if hasattr(self, "_field_navigation"):
+            self._field_navigation.deactivate()
+        return super().on_dismiss(*args)
     
     def set_today(self):
         """Define período como hoje."""
@@ -307,6 +330,7 @@ class ReportsScreen(MDScreen):
         self._report_generation_busy = False
         self._active_report_button_id = None
         self._printing_charts_busy = False
+        self._loading_controller = None
         super(ReportsScreen, self).__init__(**kwargs)
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
@@ -343,6 +367,7 @@ class ReportsScreen(MDScreen):
         self.pdf_viewer = None
 
     def on_kv_post(self, base_widget):
+        self._ensure_loading_overlay()
         self._ensure_productivity_dashboard()
         Clock.schedule_once(lambda dt: self._render_productivity_dashboard(), 0)
         self.bind(size=lambda *_args: self._schedule_responsive_layout())
@@ -366,6 +391,7 @@ class ReportsScreen(MDScreen):
         self._stop_ai_polling()
         self._productivity_load_token += 1
         self._productivity_loading = False
+        self._clear_loading_overlay()
 
         if self._filters_load_ev:
             self._filters_load_ev.cancel()
@@ -376,6 +402,23 @@ class ReportsScreen(MDScreen):
         if self._search_ev:
             self._search_ev.cancel()
             self._search_ev = None
+
+    def _ensure_loading_overlay(self):
+        if self._loading_controller is None:
+            self._loading_controller = ScreenLoadingController(self)
+        self._loading_controller.attach()
+        return self._loading_controller
+
+    def _set_loading_overlay(self, key, active, message="", detail=""):
+        controller = self._ensure_loading_overlay()
+        if active:
+            controller.show(key, message, detail)
+            return
+        controller.hide(key)
+
+    def _clear_loading_overlay(self):
+        if self._loading_controller is not None:
+            self._loading_controller.clear()
 
     @staticmethod
     def _normalize_search_text(text):
@@ -402,6 +445,16 @@ class ReportsScreen(MDScreen):
     def _set_report_generation_busy(self, busy, button_id=None, status_text=None):
         self._report_generation_busy = bool(busy)
         self._active_report_button_id = button_id if self._report_generation_busy else None
+        if self._report_generation_busy:
+            report_label = self.REPORT_BUTTON_LABELS.get(button_id, "Relatorio")
+            self._set_loading_overlay(
+                "report_generation",
+                True,
+                f"A gerar {report_label.lower()}...",
+                "Estamos a compilar os dados e a preparar o PDF do periodo selecionado.",
+            )
+        else:
+            self._set_loading_overlay("report_generation", False)
         for card_id, default_text in self.REPORT_BUTTON_LABELS.items():
             button = self._report_cards_by_id.get(card_id)
             if button is None and hasattr(self, "ids"):
@@ -416,6 +469,15 @@ class ReportsScreen(MDScreen):
 
     def _set_print_charts_busy(self, busy):
         self._printing_charts_busy = bool(busy)
+        if self._printing_charts_busy:
+            self._set_loading_overlay(
+                "print_charts",
+                True,
+                "A preparar os graficos para impressao...",
+                "Os graficos estao a ser organizados para gerar o PDF final.",
+            )
+        else:
+            self._set_loading_overlay("print_charts", False)
         button = self.ids.get("print_charts_button") if hasattr(self, "ids") else None
         if button is None:
             return
@@ -867,6 +929,12 @@ class ReportsScreen(MDScreen):
         self._productivity_load_token = token
         self._productivity_loading = True
         self._productivity_error = None
+        self._set_loading_overlay(
+            "productivity",
+            True,
+            "A carregar produtividade...",
+            "Estamos a montar os graficos, caixas lideres e destaques do periodo.",
+        )
         self._render_productivity_dashboard()
 
         start_dt = self.start_date.strftime("%Y-%m-%d %H:%M:%S")
@@ -898,6 +966,7 @@ class ReportsScreen(MDScreen):
         if token is not None and token != self._productivity_load_token:
             return
         self._productivity_loading = False
+        self._set_loading_overlay("productivity", False)
         self._productivity_last_loaded_at = perf_counter()
         self._productivity_error = str(error).strip() if error else None
         self._productivity_payload = payload or {}
@@ -1111,6 +1180,12 @@ class ReportsScreen(MDScreen):
         token = self._filters_load_token + 1
         self._filters_load_token = token
         self._filters_loading = True
+        self._set_loading_overlay(
+            "filters",
+            True,
+            "A carregar filtros dos relatorios...",
+            "Estamos a atualizar produtos, categorias e opcoes disponiveis.",
+        )
 
         def worker():
             products = []
@@ -1164,6 +1239,7 @@ class ReportsScreen(MDScreen):
             )
         finally:
             self._filters_loading = False
+            self._set_loading_overlay("filters", False)
     
     # ----------------------------------------------------------------
     # Dropdown Menus para Produto e Categoria
@@ -1578,15 +1654,18 @@ class ReportsScreen(MDScreen):
     # ----------------------------------------------------------------
     def _get_available_pdf_files(self):
         """Retorna os PDFs gerados, ordenados do mais recente para o mais antigo."""
-        report_dir = "Relat\u00f3rios"
-        if not os.path.exists(report_dir):
-            return []
-
         pdf_files = []
-        for root, dirs, files in os.walk(report_dir):
-            for file in files:
-                if file.lower().endswith('.pdf'):
-                    pdf_files.append(os.path.join(root, file))
+        seen = set()
+        for report_dir in report_search_dirs():
+            for root, dirs, files in os.walk(report_dir):
+                for file in files:
+                    if not file.lower().endswith('.pdf'):
+                        continue
+                    full_path = os.path.join(root, file)
+                    if full_path in seen:
+                        continue
+                    seen.add(full_path)
+                    pdf_files.append(full_path)
 
         pdf_files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
         return pdf_files

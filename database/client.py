@@ -1,21 +1,28 @@
 import copy
-import json
-import os
+import logging
 import threading
 import time
 from datetime import date, datetime
 
+from utils.app_config import get_runtime_config
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 class DatabaseClient:
+    # Chamadas de leitura ficam em cache por poucos segundos.
     _CACHEABLE_RPC_TTL_SECONDS = {
         "get_products_for_sale": 1.5,
         "get_products_for_sale_page": 1.2,
+        "get_products_for_sale_catalog_page": 1.2,
         "get_products_for_sale_ids": 1.2,
         "get_all_products": 2.0,
         "get_all_products_page": 1.2,
         "get_products_for_losses": 2.0,
         "get_products_for_restock": 2.0,
         "get_products_for_stock_control": 2.0,
+        "get_products_by_barcode": 1.5,
         "get_products_for_filter": 10.0,
         "get_categories": 30.0,
         "get_vat_rules": 30.0,
@@ -36,12 +43,13 @@ class DatabaseClient:
     )
     _FALLBACK_SAFE_RPC_METHODS = {
         "get_products_for_sale_page",
+        "get_products_for_sale_catalog_page",
         "get_products_for_sale_ids",
         "get_all_products_page",
     }
 
     def __init__(self, base_url=None, api_key=None, timeout=None, config=None):
-        config = config or self._load_config()
+        config = dict(config or self._load_config())
         self.base_url = base_url or config.get("api_base_url") or "http://127.0.0.1:8080"
         self.api_key = api_key or config.get("api_key") or ""
         self.timeout = timeout or config.get("timeout") or 10
@@ -58,19 +66,20 @@ class DatabaseClient:
         self._availability_ttl = float(config.get("availability_ttl") or 4.0)
         self._availability_cooldown = float(config.get("availability_cooldown") or 6.0)
         self._health_timeout = float(config.get("health_timeout") or 0.8)
+        self.current_user = None
+        self.current_role = None
+
+    def set_active_user(self, username=None, role=None):
+        self.current_user = username
+        self.current_role = role
+        self._invalidate_rpc_cache()
 
     def _load_config(self):
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        config_path = os.path.join(base_dir, "config.json")
-        if not os.path.exists(config_path):
-            return {}
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
-        except Exception:
-            return {}
+        # Le a configuracao atual da API local.
+        return get_runtime_config(force_reload=True)
 
     def _rpc(self, method, *args, **kwargs):
+        # Envia a chamada remota e centraliza cache, sessao e erros.
         if method in self._unsupported_rpc_methods:
             return None
 
@@ -88,6 +97,10 @@ class DatabaseClient:
             "method": method,
             "args": self._to_json_compatible(list(args)),
             "kwargs": self._to_json_compatible(kwargs),
+            "session": {
+                "username": self.current_user,
+                "role": self.current_role,
+            },
         }
         self._last_error = None
         try:
@@ -123,7 +136,7 @@ class DatabaseClient:
         except Exception as exc:
             self._last_error = str(exc)
             self._mark_unavailable(exc)
-            print(f"[DatabaseClient] RPC error ({method}): {exc}")
+            LOGGER.warning("RPC error (%s): %s", method, exc)
             return None
 
     def _ensure_session(self):
@@ -144,10 +157,11 @@ class DatabaseClient:
             return self._session
         except Exception as exc:
             self._last_error = str(exc)
-            print(f"[DatabaseClient] Session init error: {exc}")
+            LOGGER.warning("Session init error: %s", exc)
             return None
 
     def _build_headers(self, include_content_type=False):
+        # Monta cabecalhos de autenticacao para a API.
         headers = {}
         if include_content_type:
             headers["Content-Type"] = "application/json"
@@ -172,6 +186,7 @@ class DatabaseClient:
             self._last_error = str(reason)
 
     def is_available(self, force=False, timeout=None):
+        # Verifica a API sem repetir healthcheck a cada chamada.
         now = time.perf_counter()
         with self._availability_lock:
             available = self._availability
@@ -250,7 +265,7 @@ class DatabaseClient:
             if now >= expires_at:
                 self._rpc_cache.pop(key, None)
                 return None
-            # Return a copy to prevent external mutation of cached lists/dicts.
+            # Devolve uma copia para evitar alteracao externa do cache.
             return copy.deepcopy(value)
 
     def _set_cached_rpc_result(self, method, args, kwargs, value):
@@ -289,6 +304,29 @@ class DatabaseClient:
     def last_error(self):
         return self._last_error
 
+    def get_connection_label(self):
+        return "API" if self.is_available() else "Local"
+
+    def get_health_status(self, force=False, timeout=None):
+        ok = bool(self.is_available(force=force, timeout=timeout))
+        error = str(self._last_error or "").strip()
+        message = "API local ativa."
+        if not ok:
+            message = "API indisponivel."
+            if error:
+                message = f"{message} {error}"
+        return {
+            "ok": ok,
+            "label": "API" if ok else "Local",
+            "base_url": self.base_url,
+            "timeout": float(timeout or self.timeout),
+            "error": error,
+            "message": message,
+        }
+
+    def get_connection_status(self, force=False):
+        return self.get_health_status(force=force)
+
     def close(self):
         if self._session is not None:
             try:
@@ -308,7 +346,7 @@ class DatabaseClient:
         self.close()
         return False
 
-    # ---------- Auth / Users ----------
+    # ---------- Autenticacao / Usuarios ----------
     def user_exists(self, username, exclude_username=None):
         result = self._rpc("user_exists", username, exclude_username=exclude_username)
         return bool(result) if result is not None else False
@@ -318,6 +356,9 @@ class DatabaseClient:
 
     def get_user(self, username):
         return self._rpc("get_user", username)
+
+    def get_user_data_owner(self, username):
+        return self._rpc("get_user_data_owner", username)
 
     def validate_user(self, username, password):
         return self._rpc("validate_user", username, password)
@@ -359,11 +400,19 @@ class DatabaseClient:
         result = self._rpc("is_admin_default", username, defaults=defaults)
         return bool(result) if result is not None else False
 
-    def create_user(self, username, password, role, email=None, phone=None):
-        result = self._rpc("create_user", username, password, role, email=email, phone=phone)
+    def create_user(self, username, password, role, email=None, phone=None, data_owner=None):
+        result = self._rpc(
+            "create_user",
+            username,
+            password,
+            role,
+            email=email,
+            phone=phone,
+            data_owner=data_owner,
+        )
         return bool(result) if result is not None else False
 
-    # ---------- Security questions ----------
+    # ---------- Perguntas de seguranca ----------
     def set_security_questions(self, username, answers):
         result = self._rpc("set_security_questions", username, answers)
         return bool(result) if result is not None else False
@@ -390,7 +439,83 @@ class DatabaseClient:
         )
         return bool(result) if result is not None else False
 
-    # ---------- Products / Sales ----------
+    # ---------- Produtos / Vendas ----------
+    @staticmethod
+    def _catalog_identity_from_sale_row(row):
+        barcode = str(row[4] if len(row) > 4 and row[4] is not None else "").strip().lower()
+        if barcode:
+            return f"bc:{barcode}"
+        description = " ".join(str(row[1] if len(row) > 1 and row[1] is not None else "").split()).lower()
+        if description:
+            sale_price = round(float(row[3] or 0.0), 4)
+            is_weight = 1 if (len(row) > 5 and bool(row[5])) else 0
+            units_per_package = (
+                int(float(row[8] or 0))
+                if len(row) > 8 and row[8] not in (None, "")
+                else 0
+            )
+            allow_pack_sale = 1 if (len(row) > 9 and bool(row[9])) else 0
+            vat_rule = str(row[10] or "STANDARD").strip().upper() if len(row) > 10 else "STANDARD"
+            return (
+                f"desc:{description}|w:{is_weight}|p:{sale_price:.4f}|"
+                f"u:{units_per_package}|a:{allow_pack_sale}|v:{vat_rule}"
+            )
+        return f"id:{int(row[0])}"
+
+    @classmethod
+    def _group_products_for_sale_catalog(cls, rows):
+        grouped = {}
+        ordered_keys = []
+        for row in rows or []:
+            if not row:
+                continue
+            catalog_key = cls._catalog_identity_from_sale_row(row)
+            stock_value = float(row[2] or 0.0)
+            current = grouped.get(catalog_key)
+            if current is None:
+                grouped[catalog_key] = {
+                    "id": row[0],
+                    "description": row[1],
+                    "stock": stock_value,
+                    "sale_price": row[3],
+                    "barcode": row[4] if len(row) > 4 else None,
+                    "is_sold_by_weight": bool(row[5]) if len(row) > 5 else False,
+                    "expiry_date": row[6] if len(row) > 6 else None,
+                    "status": row[7] if len(row) > 7 else None,
+                    "units_per_package": row[8] if len(row) > 8 else None,
+                    "allow_pack_sale": bool(row[9]) if len(row) > 9 else False,
+                    "vat_rule_code": row[10] if len(row) > 10 else "STANDARD",
+                    "catalog_key": catalog_key,
+                    "lot_count": 1,
+                }
+                ordered_keys.append(catalog_key)
+                continue
+
+            current["stock"] += stock_value
+            current["lot_count"] += 1
+
+        result = []
+        for key in ordered_keys:
+            item = grouped[key]
+            result.append(
+                (
+                    item["id"],
+                    item["description"],
+                    item["stock"],
+                    item["sale_price"],
+                    item["barcode"],
+                    1 if item["is_sold_by_weight"] else 0,
+                    item["expiry_date"],
+                    item["status"],
+                    item["units_per_package"],
+                    1 if item["allow_pack_sale"] else 0,
+                    item["vat_rule_code"],
+                    item["catalog_key"],
+                    item["lot_count"],
+                )
+            )
+        return result
+
     def get_products_for_sale(self):
         return self._rpc("get_products_for_sale") or []
 
@@ -421,6 +546,34 @@ class DatabaseClient:
             return rows[off:off + int(limit)]
         return rows[off:]
 
+    def get_products_for_sale_catalog_page(self, search_text="", limit=200, offset=0, refresh_statuses=False):
+        result = self._rpc(
+            "get_products_for_sale_catalog_page",
+            search_text=search_text,
+            limit=limit,
+            offset=offset,
+            refresh_statuses=refresh_statuses,
+        )
+        if result is not None:
+            return result
+
+        rows = self.get_products_for_sale() or []
+        search = (search_text or "").strip().lower()
+        if search:
+            rows = [
+                p for p in rows
+                if (
+                    search in str(p[0]).lower()
+                    or search in str(p[1]).lower()
+                    or (len(p) > 4 and p[4] and search in str(p[4]).lower())
+                )
+            ]
+        grouped_rows = self._group_products_for_sale_catalog(rows)
+        off = max(0, int(offset or 0))
+        if limit:
+            return grouped_rows[off:off + int(limit)]
+        return grouped_rows[off:]
+
     def get_products_for_sale_ids(self, product_ids):
         result = self._rpc("get_products_for_sale_ids", product_ids)
         if result is not None:
@@ -434,6 +587,14 @@ class DatabaseClient:
 
     def get_product_by_barcode(self, barcode):
         return self._rpc("get_product_by_barcode", barcode)
+
+    def get_products_by_barcode(self, barcode, include_expired=False, include_zero_stock=False):
+        return self._rpc(
+            "get_products_by_barcode",
+            barcode,
+            include_expired=include_expired,
+            include_zero_stock=include_zero_stock,
+        ) or []
 
     def get_all_products(self):
         return self._rpc("get_all_products") or []
@@ -667,7 +828,7 @@ class DatabaseClient:
     def get_products_by_weight(self):
         return self._rpc("get_products_by_weight") or []
 
-    # ---------- Insights / Admin ----------
+    # ---------- Insights / Administracao ----------
     def get_admin_insights(self):
         return self._rpc("get_admin_insights") or {}
 
@@ -689,7 +850,7 @@ class DatabaseClient:
     def log_action(self, username, role, action, details=""):
         return self._rpc("log_action", username, role, action, details)
 
-    # ---------- Logs / Managers ----------
+    # ---------- Logs / Gerentes ----------
     def get_all_managers(self):
         return self._rpc("get_all_managers") or []
 

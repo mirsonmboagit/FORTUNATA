@@ -1,0 +1,20 @@
+{
+  "app_env": "development",
+  "db_mode": "hybrid",
+  "db_path": "database/inventory.db",
+  "api_base_url": "http://127.0.0.1:8080",
+  "api_key": "",
+  "timeout": 10,
+  "health_timeout": 0.8,
+  "availability_ttl": 4.0,
+  "availability_cooldown": 6.0,
+  "http_pool_size": 16,
+  "log_level": "INFO",
+  "reports_dir": "data/reports",
+  "receipts_dir": "data/receipts",
+  "cache_dir": "data/cache",
+  "logs_dir": "logs",
+  "temp_dir": "temp",
+  "assets_dir": "assets",
+  "ocr_tesseract_cmd": ""
+}

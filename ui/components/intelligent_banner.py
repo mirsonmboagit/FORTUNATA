@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
 import time
 from typing import Any
 
@@ -21,23 +20,12 @@ from utils.ai_popups import build_auto_banner_data, clear_banner_container, rend
 
 
 _PRIORITY = {"critico": 0, "atencao": 1, "info": 2}
+_MAX_ALERT_PREVIEW_LINES = 2
+_MAX_ALERT_DETAIL_LINES = 4
 
 
 def _priority_of(alert_type: str) -> int:
     return _PRIORITY.get(str(alert_type or "").lower(), 99)
-
-
-def _format_timestamp(value: Any) -> str:
-    if isinstance(value, datetime):
-        return value.strftime("%d/%m/%Y %H:%M")
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return parsed.strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        return text
 
 
 def _severity_style(alert_type: str) -> tuple[str, tuple[float, float, float, float]]:
@@ -83,26 +71,74 @@ def _group_alerts(alerts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return groups
 
 
+def _compact_lines(
+    lines: list[str],
+    limit: int,
+    overflow_label: str,
+) -> list[str]:
+    cleaned = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    if not cleaned:
+        return []
+    capped = list(cleaned[: max(1, int(limit or 1))])
+    hidden = len(cleaned) - len(capped)
+    if hidden > 0:
+        capped.append(overflow_label.format(hidden=hidden))
+    return capped
+
+
+def _build_preview_messages(items: list[dict[str, Any]]) -> list[str]:
+    messages = [
+        str(item.get("mensagem") or "").strip()
+        for item in items
+        if str(item.get("mensagem") or "").strip()
+    ]
+    if not messages:
+        return []
+    preview = list(messages[:_MAX_ALERT_PREVIEW_LINES])
+    hidden = len(messages) - len(preview)
+    if hidden > 0:
+        preview.append(f"Mais {hidden} alerta(s) agrupado(s) neste banner.")
+    return preview
+
+
 def _build_details_sections(items: list[dict[str, Any]]) -> list[tuple[str, list[str]]]:
     details_lines = []
-    timeline_lines = []
+    severity_totals: dict[str, int] = defaultdict(int)
 
     for item in items:
+        severity_totals[str(item.get("tipo") or "info").strip().lower()] += 1
         mensagem = str(item.get("mensagem") or "").strip()
         detalhes = str(item.get("detalhes") or "").strip()
-        timestamp = _format_timestamp(item.get("timestamp"))
         if detalhes:
             details_lines.append(f"{mensagem}: {detalhes}")
         elif mensagem:
             details_lines.append(mensagem)
-        if mensagem and timestamp:
-            timeline_lines.append(f"{timestamp} - {mensagem}")
 
     sections = []
+    total_items = len(items)
+    if total_items:
+        severity_parts = []
+        if severity_totals.get("critico"):
+            severity_parts.append(f"{severity_totals['critico']} critico(s)")
+        if severity_totals.get("atencao"):
+            severity_parts.append(f"{severity_totals['atencao']} em atencao")
+        if severity_totals.get("info"):
+            severity_parts.append(f"{severity_totals['info']} informativo(s)")
+        summary = f"{total_items} alerta(s) agrupado(s) nesta categoria."
+        if severity_parts:
+            summary = f"{summary} Severidade: {', '.join(severity_parts)}."
+        sections.append(("Resumo rapido", [summary]))
     if details_lines:
-        sections.append(("Analise Inteligente", details_lines[:12]))
-    if timeline_lines:
-        sections.append(("Registos", timeline_lines[:12]))
+        sections.append(
+            (
+                "Ocorrencias recentes",
+                _compact_lines(
+                    details_lines,
+                    _MAX_ALERT_DETAIL_LINES,
+                    "Mais {hidden} ocorrencia(s) semelhante(s) no historico.",
+                ),
+            )
+        )
     return sections
 
 
@@ -121,7 +157,7 @@ def _alerts_to_banner_data(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "icon": icon,
                 "bg_color": bg_color,
                 "title": _title_for(top.get("categoria"), top.get("tipo")),
-                "messages": [str(item.get("mensagem") or "") for item in items[:5]],
+                "messages": _build_preview_messages(items),
                 "all_messages": [str(item.get("mensagem") or "") for item in items],
                 "count": len(items),
                 "details_sections": _build_details_sections(items),

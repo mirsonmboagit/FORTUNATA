@@ -54,24 +54,43 @@
 
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(24)
+                        height: dp(36)
 
                         MDLabel:
-                            text: "Acesso ao Sistema"
+                            text: app.t("profile.header", app.language)
+                            size_hint_x: 0.42
                             bold: True
                             font_style: "Subtitle1"
+                            shorten: True
+                            shorten_from: "right"
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['primary']
 
+                        MDFillRoundFlatIconButton:
+                            id: language_button
+                            icon: "translate"
+                            text: root.language_button_text
+                            size_hint: None, None
+                            size: dp(136), dp(34)
+                            font_size: sp(12)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['primary']
+                            icon_color: app.theme_tokens['primary']
+                            md_bg_color: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.13
+                            on_release: root.open_language_menu(self)
+
                         MDLabel:
                             text: root.datetime_text
+                            size_hint_x: 0.38
                             halign: "right"
                             font_style: "Caption"
+                            shorten: True
+                            shorten_from: "left"
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_secondary']
 
                     MDLabel:
-                        text: "Escolha o perfil para entrar na plataforma."
+                        text: app.t("profile.title", app.language)
                         font_name: "MainFont"
                         font_size: sp(24)
                         bold: True
@@ -79,7 +98,7 @@
                         text_color: app.theme_tokens['text_primary']
 
                     MDLabel:
-                        text: "Administrador para gestao estrategica. Gerente para operacao de vendas e atendimento."
+                        text: app.t("profile.subtitle", app.language)
                         font_name: "LogoFont"
                         font_size: sp(10)
                         theme_text_color: "Custom"
@@ -117,7 +136,7 @@
                             text_color: app.theme_tokens['on_primary']
 
                     MDLabel:
-                        text: "Entrar como Administrador"
+                        text: app.t("profile.admin.title", app.language)
                         font_name: "MainFont"
                         font_size: sp(24)
                         bold: True
@@ -125,7 +144,7 @@
                         text_color: app.theme_tokens['text_primary']
 
                     MDLabel:
-                        text: "Ideal para controlo do negocio, configuracoes, relatorios, usuarios e monitorizacao."
+                        text: app.t("profile.admin.description", app.language)
                         font_name: "LogoFont"
                         font_size: sp(12)
                         theme_text_color: "Custom"
@@ -133,7 +152,7 @@
                         text_size: self.width, None
 
                     MDLabel:
-                        text: "Produtos, dashboards, alertas, produtividade e definicoes."
+                        text: app.t("profile.admin.details", app.language)
                         font_style: "Caption"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['text_secondary']
@@ -142,7 +161,7 @@
                     Widget:
 
                     MDRaisedButton:
-                        text: "ABRIR ACESSO ADMIN"
+                        text: app.t("profile.admin.button", app.language)
                         size_hint_x: 1
                         md_bg_color: app.theme_tokens['primary']
                         theme_text_color: "Custom"
@@ -176,7 +195,7 @@
                             text_color: app.theme_tokens['on_primary']
 
                     MDLabel:
-                        text: "Entrar como Gerente"
+                        text: app.t("profile.manager.title", app.language)
                         font_name: "MainFont"
                         font_size: sp(20)
                         bold: True
@@ -184,7 +203,7 @@
                         text_color: app.theme_tokens['text_primary']
 
                     MDLabel:
-                        text: "Fluxo mais direto para vendas, atendimento, historico de operacao e acompanhamento diario."
+                        text: app.t("profile.manager.description", app.language)
                         font_name: "LogoFont"
                         font_size: sp(10)
                         theme_text_color: "Custom"
@@ -192,7 +211,7 @@
                         text_size: self.width, None
 
                     MDLabel:
-                        text: "Caixa, perdas, historico e tema claro/escuro."
+                        text: app.t("profile.manager.details", app.language)
                         font_style: "Caption"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['text_secondary']
@@ -201,7 +220,7 @@
                     Widget:
 
                     MDRaisedButton:
-                        text: "ABRIR ACESSO GERENTE"
+                        text: app.t("profile.manager.button", app.language)
                         size_hint_x: 1
                         md_bg_color: app.theme_tokens['success']
                         theme_text_color: "Custom"

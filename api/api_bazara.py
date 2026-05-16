@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 import requests
 
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
+from utils.paths import CACHE_DIR
 
 
 class BazaraAPI:
@@ -58,7 +59,7 @@ class BazaraAPI:
         "Laticinios": "Alimentos",
         "Laticínios": "Alimentos",
     }
-    OFFLINE_CACHE_FILE = Path("data/cache/bazara_offline_cache.json")
+    OFFLINE_CACHE_FILE = CACHE_DIR / "bazara_offline_cache.json"
 
 
     def __init__(self):

@@ -1,6 +1,7 @@
 {
   "db_mode": "hybrid",
+  "db_path": "database/inventory.db",
   "api_base_url": "http://127.0.0.1:8080",
-  "api_key": "joe123",
+  "api_key": "",
   "timeout": 10
 }

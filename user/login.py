@@ -19,12 +19,15 @@ from datetime import datetime, timedelta
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
+from kivymd.uix.card import MDCard
+from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.textfield import MDTextField
-from kivymd.uix.button import MDFlatButton
+from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.scrollview import MDScrollView
+from kivymd.uix.menu import MDDropdownMenu
 
 from database.provider import get_db, uses_remote_backend
+from utils.i18n import language_options, language_short, translate
 from utils.security_questions import QUESTIONS
 
 LOGIN_KV_PATH = os.path.join(os.path.dirname(__file__), 'login_screen.kv')
@@ -36,6 +39,7 @@ Builder.load_file(LOGIN_KV_PATH)
 
 
 class LoginScreen(MDScreen):
+    # Tela base usada pelo login de admin e gerente.
     username = ObjectProperty(None)
     password = ObjectProperty(None)
 
@@ -53,10 +57,18 @@ class LoginScreen(MDScreen):
     login_caption = StringProperty("")
     login_button_text = StringProperty("INICIAR SESSAO")
     form_footer_text = StringProperty("")
+    back_button_text = StringProperty("Voltar")
     back_screen = StringProperty("")
     show_back_button = BooleanProperty(False)
     show_theme_toggle = BooleanProperty(False)
     theme_toggle_text = StringProperty("Modo escuro")
+    language_button_text = StringProperty("Idioma: PT")
+    username_hint = StringProperty("Utilizador")
+    password_hint = StringProperty("Palavra-passe")
+    forgot_password_text = StringProperty("Esqueci a senha")
+    register_text = StringProperty("Criar nova conta")
+    context_label = StringProperty("")
+    quick_layout_text = StringProperty("Leitura rapida e layout leve")
     allowed_roles = ListProperty([])
     allow_admin_setup = BooleanProperty(True)
     success_screen = StringProperty("")
@@ -90,16 +102,27 @@ class LoginScreen(MDScreen):
         self._register_username = None
         self._register_password = None
         self._register_confirm = None
+        self._register_feedback = None
+        self._register_content_container = None
+        self._register_submit_button = None
+        self._register_cancel_button = None
+        self._register_submit_default_text = "CRIAR CONTA"
         self._operation_token = 0
+        self._language_menu = None
+        self._language_bound_app = None
         self._apply_variant_defaults()
 
     def on_kv_post(self, base_widget):
+        # Sincroniza textos e layout depois que o KV termina de carregar.
+        self._bind_app_language()
         self._apply_variant_defaults()
         self._sync_theme_toggle_text()
+        self._sync_language_button_text()
         self._update_responsive_layout()
 
     def on_size(self, *args):
         Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+        Clock.schedule_once(lambda dt: self._update_register_dialog_size(), 0)
 
     def _update_responsive_layout(self):
         if not hasattr(self, "ids") or "root_layout" not in self.ids:
@@ -250,49 +273,126 @@ class LoginScreen(MDScreen):
                 button.size_hint_x = None
                 button.width = dp(148)
 
+    def _bind_app_language(self):
+        app = App.get_running_app()
+        bound_app = getattr(self, "_language_bound_app", None)
+        if not app or bound_app is app:
+            return
+        if bound_app is not None:
+            try:
+                bound_app.unbind(language=self._on_app_language)
+            except Exception:
+                pass
+        try:
+            app.bind(language=self._on_app_language)
+            self._language_bound_app = app
+        except Exception:
+            self._language_bound_app = None
+
+    def _on_app_language(self, *args):
+        self._apply_variant_defaults()
+        self._sync_theme_toggle_text()
+        self._sync_language_button_text()
+
+    def _tr(self, key, **kwargs):
+        app = App.get_running_app()
+        if app and hasattr(app, "t"):
+            return app.t(key, **kwargs)
+        return translate(key, **kwargs)
+
+    def _sync_language_button_text(self):
+        app = App.get_running_app()
+        current = getattr(app, "language", "pt") if app else "pt"
+        self.language_button_text = self._tr(
+            "login.language_button",
+            code=language_short(current),
+        )
+
+    def open_language_menu(self, caller=None):
+        if getattr(self, "_language_menu", None):
+            self._language_menu.dismiss()
+            self._language_menu = None
+        if caller is None and hasattr(self, "ids"):
+            caller = self.ids.get("language_button")
+        if caller is None:
+            return
+        items = []
+        for option in language_options():
+            code = option["code"]
+            items.append(
+                {
+                    "text": f"{option['native_name']} ({option['short']})",
+                    "height": dp(44),
+                    "on_release": lambda selected=code: self._select_language(selected),
+                }
+            )
+        self._language_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
+        self._language_menu.open()
+
+    def _select_language(self, language_code):
+        if getattr(self, "_language_menu", None):
+            self._language_menu.dismiss()
+            self._language_menu = None
+        app = App.get_running_app()
+        if app and hasattr(app, "set_language"):
+            app.set_language(language_code)
+        self._on_app_language()
+
     def _apply_variant_defaults(self):
         variant = (self.login_variant or "admin").strip().lower()
+        if variant not in ("admin", "manager"):
+            variant = "admin"
         configs = {
             "admin": {
-                "profile_name": "Administrador",
-                "identity_badge": "Acesso Administrativo",
-                "hero_title": "Controlo administrativo da operacao comercial.",
-                "hero_subtitle": "Acesso ao backoffice com foco em configuracao, supervisao e leitura do negocio.",
-                "feature_one": "Catalogo e stock",
-                "feature_two": "Relatorios e alertas",
-                "feature_three": "Utilizadores e definicoes",
-                "login_heading": "Entrar no painel administrativo",
-                "login_caption": "Use a sua conta para gerir produtos, indicadores e configuracoes do sistema.",
-                "login_button_text": "ENTRAR NO PAINEL",
-                "form_footer_text": "Credenciais administrativas com acesso ao controlo total da mercearia.",
+                "profile_name": self._tr("login.admin.profile_name"),
+                "identity_badge": self._tr("login.admin.identity_badge"),
+                "hero_title": self._tr("login.admin.hero_title"),
+                "hero_subtitle": self._tr("login.admin.hero_subtitle"),
+                "feature_one": self._tr("login.admin.feature_one"),
+                "feature_two": self._tr("login.admin.feature_two"),
+                "feature_three": self._tr("login.admin.feature_three"),
+                "login_heading": self._tr("login.admin.heading"),
+                "login_caption": self._tr("login.admin.caption"),
+                "login_button_text": self._tr("login.admin.button"),
+                "form_footer_text": self._tr("login.admin.footer"),
             },
             "manager": {
-                "profile_name": "Gerente",
-                "identity_badge": "Acesso Operacional",
-                "hero_title": "Entrada rapida para vendas e rotina da loja.",
-                "hero_subtitle": "Ambiente simples para atendimento, consulta de historico e operacao diaria.",
-                "feature_one": "Vendas e produtos",
-                "feature_two": "Historico e perdas",
-                "feature_three": "Tema e leitura",
-                "login_heading": "Entrar na operacao da loja",
-                "login_caption": "Acesso objetivo para atendimento, registo de vendas e consulta rapida.",
-                "login_button_text": "ENTRAR PARA OPERAR",
-                "form_footer_text": "Conta de gerente com foco em rapidez, leitura e estabilidade.",
+                "profile_name": self._tr("login.manager.profile_name"),
+                "identity_badge": self._tr("login.manager.identity_badge"),
+                "hero_title": self._tr("login.manager.hero_title"),
+                "hero_subtitle": self._tr("login.manager.hero_subtitle"),
+                "feature_one": self._tr("login.manager.feature_one"),
+                "feature_two": self._tr("login.manager.feature_two"),
+                "feature_three": self._tr("login.manager.feature_three"),
+                "login_heading": self._tr("login.manager.heading"),
+                "login_caption": self._tr("login.manager.caption"),
+                "login_button_text": self._tr("login.manager.button"),
+                "form_footer_text": self._tr("login.manager.footer"),
             },
         }
         selected = configs.get(variant, configs["admin"])
         for key, value in selected.items():
-            if not getattr(self, key):
-                setattr(self, key, value)
+            setattr(self, key, value)
+        self.context_label = self._tr(f"login.context.{variant}")
+        self.quick_layout_text = self._tr("login.quick_layout")
+        self.back_button_text = self._tr("login.back")
+        self.username_hint = self._tr("login.username_hint")
+        self.password_hint = self._tr("login.password_hint")
+        self.forgot_password_text = self._tr("login.forgot_password")
+        self.register_text = self._tr("login.create_account")
+        self._sync_language_button_text()
         self.show_back_button = bool(self.back_screen)
 
     def _sync_theme_toggle_text(self):
         app = App.get_running_app()
         is_dark = bool(app and getattr(app, "theme_style", "Light") == "Dark")
-        self.theme_toggle_text = "Modo claro" if is_dark else "Modo escuro"
+        self.theme_toggle_text = self._tr("login.theme_light") if is_dark else self._tr("login.theme_dark")
 
     def on_enter(self):
+        self._bind_app_language()
+        self._apply_variant_defaults()
         self._sync_theme_toggle_text()
+        self._sync_language_button_text()
         self.carousel_event = Clock.schedule_interval(self.next_slide, 4)
         Clock.schedule_once(lambda dt: self._ensure_admin_setup(), 0.05)
 
@@ -337,11 +437,13 @@ class LoginScreen(MDScreen):
         self.operation_in_progress = bool(busy)
         self.operation_status = status if busy else ""
         self._refresh_input_state()
+        self._set_register_busy(bool(busy))
 
     def _uses_remote_db(self):
         return uses_remote_backend(self.db)
 
     def _run_background_task(self, task, callback, busy_text="A processar..."):
+        # Executa operacoes de login sem bloquear a interface.
         token = self._operation_token + 1
         self._operation_token = token
         self._set_operation_state(True, busy_text)
@@ -389,6 +491,7 @@ class LoginScreen(MDScreen):
         return None
 
     def _ensure_admin_setup(self):
+        # Garante que existe um administrador antes de entrar no sistema.
         if not self.allow_admin_setup:
             self._set_login_enabled(True)
             return
@@ -443,8 +546,8 @@ class LoginScreen(MDScreen):
             self._setup_dialog.dismiss()
             self._setup_dialog = None
 
-        title = 'Criar Admin' if mode == 'create' else 'Atualizar Admin'
-        label_text = 'Configure o admin inicial' if mode == 'create' else 'Atualize o admin padrao'
+        title = 'Criar Administrador' if mode == 'create' else 'Atualizar Administrador Padrao'
+        label_text = 'Configure o administrador inicial' if mode == 'create' else 'Atualize o administrador padrao'
         button_text = 'CRIAR' if mode == 'create' else 'ATUALIZAR'
 
         content = MDBoxLayout(
@@ -683,6 +786,7 @@ class LoginScreen(MDScreen):
         )
 
     def login(self):
+        # Valida credenciais e encaminha o utilizador para a tela certa.
         if self.login_blocked or self.operation_in_progress:
             return
 
@@ -777,6 +881,7 @@ class LoginScreen(MDScreen):
             app._ai_banners_last_key = None
 
     def forgot_password(self):
+        # Fluxo de recuperacao por perguntas de seguranca.
         if self._forgot_dialog:
             if self.username and self.username.text.strip() and self._forgot_user_field:
                 self._forgot_user_field.text = self.username.text.strip()
@@ -1023,6 +1128,7 @@ class LoginScreen(MDScreen):
         return (self.registration_mode or 'disabled').strip().lower()
 
     def _db_last_error(self):
+        # Recupera o ultimo erro da base, quando o backend fornece esse detalhe.
         getter = getattr(self.db, 'last_error', None)
         if not callable(getter):
             return ''
@@ -1038,93 +1144,352 @@ class LoginScreen(MDScreen):
             return
         self._show_message('Erro', fallback_message)
 
+    def _theme_tokens(self):
+        app = App.get_running_app()
+        return getattr(app, "theme_tokens", {}) if app else {}
+
+    def _theme_color(self, key, fallback):
+        return self._theme_tokens().get(key, fallback)
+
+    def _color_with_alpha(self, color, alpha):
+        base = list(color or [0, 0, 0, 1])
+        while len(base) < 3:
+            base.append(0)
+        return [base[0], base[1], base[2], alpha]
+
+    def _register_accent_color(self, mode=None):
+        mode = mode or self._normalized_registration_mode()
+        tone = "primary" if mode == "admin_bootstrap" else "success"
+        fallback = [0.12, 0.36, 0.65, 1] if tone == "primary" else [0.16, 0.62, 0.38, 1]
+        return self._theme_color(tone, fallback)
+
+    def _register_text_label(self, text, color_key="text_secondary", font_style="Caption", bold=False):
+        fallback = {
+            "text_primary": [0.13, 0.16, 0.22, 1],
+            "text_secondary": [0.35, 0.38, 0.45, 1],
+        }.get(color_key, [0.35, 0.38, 0.45, 1])
+        label = MDLabel(
+            text=text,
+            font_style=font_style,
+            bold=bold,
+            theme_text_color="Custom",
+            text_color=self._theme_color(color_key, fallback),
+            size_hint_y=None,
+            height=dp(18),
+        )
+        label.bind(width=lambda inst, width: setattr(inst, "text_size", (width, None)))
+        label.bind(texture_size=lambda inst, size: setattr(inst, "height", max(dp(18), size[1])))
+        return label
+
+    def _calc_register_sizes(self):
+        width = Window.width or dp(900)
+        if width < dp(620):
+            width_hint = 0.92
+        elif width < dp(980):
+            width_hint = 0.72
+        else:
+            width_hint = 0.48
+        dialog_height = min(Window.height * 0.86, dp(600))
+        content_height = max(dp(260), dialog_height - dp(142))
+        return width_hint, dialog_height, content_height
+
+    def _update_register_dialog_size(self):
+        if not self._register_dialog:
+            return
+        width_hint, dialog_height, content_height = self._calc_register_sizes()
+        self._register_dialog.size_hint = (width_hint, None)
+        self._register_dialog.height = dialog_height
+        if self._register_content_container is not None:
+            self._register_content_container.height = content_height
+
+    def _set_register_busy(self, busy):
+        if not any((self._register_username, self._register_password, self._register_confirm)):
+            return
+        for field in (self._register_username, self._register_password, self._register_confirm):
+            if field is not None:
+                field.disabled = bool(busy)
+        if self._register_submit_button is not None:
+            self._register_submit_button.disabled = bool(busy)
+            self._register_submit_button.text = "A CRIAR..." if busy else self._register_submit_default_text
+        if self._register_cancel_button is not None:
+            self._register_cancel_button.disabled = bool(busy)
+
+    def _set_register_feedback(self, message="", tone="danger"):
+        if self._register_feedback is None:
+            return
+        self._register_feedback.text = message
+        self._register_feedback.opacity = 1 if message else 0
+        self._register_feedback.height = dp(34) if message else 0
+        fallback = [0.78, 0.22, 0.24, 1] if tone == "danger" else [0.12, 0.36, 0.65, 1]
+        self._register_feedback.text_color = self._theme_color(tone, fallback)
+
+    def _clear_register_feedback(self, *args):
+        self._set_register_feedback("")
+
+    def _focus_register_field(self, field):
+        if field is None:
+            return
+        Clock.schedule_once(lambda dt: setattr(field, "focus", True), 0)
+
     def _open_register_dialog(self):
+        # Abre cadastro de novo usuario conforme o modo permitido.
         if self._register_dialog:
             self._register_dialog.dismiss()
             self._register_dialog = None
 
         mode = self._normalized_registration_mode()
-        title = 'Criar Conta'
-        subtitle = 'Preencha os dados para criar uma nova conta'
-        if mode == 'manager_self_service':
-            subtitle = 'Nova conta manager'
-        elif mode == 'admin_bootstrap':
-            subtitle = 'Criar admin inicial'
+        is_admin_setup = mode == 'admin_bootstrap'
+        title = 'Criar administrador inicial' if is_admin_setup else 'Criar conta gerente'
+        role_text = 'Administrador' if is_admin_setup else 'Manager'
+        subtitle = (
+            'Primeiro acesso para configuracao e gestao do sistema.'
+            if is_admin_setup else
+            'Acesso para vendas, consulta rapida e operacao diaria.'
+        )
+        accent = self._register_accent_color(mode)
+        text_secondary = self._theme_color("text_secondary", [0.36, 0.40, 0.48, 1])
+        card_alt = self._theme_color("card_alt", [0.94, 0.95, 0.97, 1])
+        on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
+        min_len = int(self.registration_password_min_len or 4)
 
         content = MDBoxLayout(
             orientation='vertical',
             spacing=dp(12),
-            padding=dp(20),
+            padding=[dp(18), dp(14), dp(18), dp(10)],
             adaptive_height=True,
+            size_hint_x=1,
         )
-        content.add_widget(MDLabel(
-            text=subtitle,
-            theme_text_color='Secondary',
+        content.bind(minimum_height=content.setter('height'))
+
+        header = MDCard(
+            orientation='horizontal',
+            spacing=dp(12),
+            padding=[dp(14), dp(12), dp(14), dp(12)],
             size_hint_y=None,
-            height=dp(24),
+            height=dp(94),
+            radius=[dp(18)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(accent, 0.12),
+        )
+        icon_slot = MDCard(
+            size_hint=(None, None),
+            size=(dp(46), dp(46)),
+            radius=[dp(15)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(accent, 0.18),
+        )
+        icon = MDIcon(
+            icon='account-key-outline' if is_admin_setup else 'account-plus',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=accent,
+        )
+        icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        icon_slot.add_widget(icon)
+
+        header_text = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(3),
+            size_hint_x=1,
+        )
+        header_text.add_widget(self._register_text_label(role_text, "text_primary", "Subtitle1", True))
+        header_text.add_widget(self._register_text_label(subtitle, "text_secondary", "Caption"))
+        header.add_widget(icon_slot)
+        header.add_widget(header_text)
+        content.add_widget(header)
+
+        tip_row = MDBoxLayout(
+            orientation='horizontal',
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(42),
+        )
+        tip_icon = MDIcon(
+            icon='information-outline',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=accent,
+            size_hint_x=None,
+            width=dp(22),
+        )
+        tip_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        tip_row.add_widget(tip_icon)
+        tip_row.add_widget(self._register_text_label(
+            f'A senha precisa ter no minimo {min_len} caracteres.',
+            "text_secondary",
+            "Caption",
         ))
+        content.add_widget(tip_row)
 
         self._register_username = MDTextField(
             hint_text='Nome de usuario',
+            icon_right='account-outline',
             mode='rectangle',
             size_hint_y=None,
-            height=dp(56),
+            height=dp(64),
         )
+        self._register_username.line_color_focus = accent
         if self.username and self.username.text:
             self._register_username.text = self.username.text.strip()
         content.add_widget(self._register_username)
 
         self._register_password = MDTextField(
             hint_text='Senha',
+            helper_text=f'Minimo {min_len} caracteres',
+            helper_text_mode='on_focus',
+            icon_right='lock-outline',
             password=True,
             mode='rectangle',
             size_hint_y=None,
-            height=dp(56),
+            height=dp(64),
         )
+        self._register_password.line_color_focus = accent
         content.add_widget(self._register_password)
 
         self._register_confirm = MDTextField(
             hint_text='Confirmar senha',
+            helper_text='Repita a senha para evitar erro de digitacao',
+            helper_text_mode='on_focus',
+            icon_right='lock-check-outline',
             password=True,
             mode='rectangle',
             size_hint_y=None,
-            height=dp(56),
+            height=dp(64),
         )
+        self._register_confirm.line_color_focus = accent
+        self._register_confirm.bind(on_text_validate=self._submit_register)
         content.add_widget(self._register_confirm)
+
+        for field in (self._register_username, self._register_password, self._register_confirm):
+            field.bind(text=self._clear_register_feedback)
+
+        self._register_feedback = MDLabel(
+            text='',
+            opacity=0,
+            font_style='Caption',
+            theme_text_color='Custom',
+            text_color=self._theme_color("danger", [0.78, 0.22, 0.24, 1]),
+            size_hint_y=None,
+            height=0,
+            halign='left',
+        )
+        self._register_feedback.bind(width=lambda inst, width: setattr(inst, "text_size", (width, None)))
+        content.add_widget(self._register_feedback)
+
+        security_note = MDCard(
+            orientation='horizontal',
+            spacing=dp(8),
+            padding=[dp(12), dp(9), dp(12), dp(9)],
+            size_hint_y=None,
+            height=dp(62),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+        shield_icon = MDIcon(
+            icon='shield-check-outline',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=accent,
+            size_hint_x=None,
+            width=dp(22),
+        )
+        shield_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        security_note.add_widget(shield_icon)
+        security_note.add_widget(self._register_text_label(
+            'Depois de criar, entre com este usuario e senha na tela de login.',
+            "text_secondary",
+            "Caption",
+        ))
+        content.add_widget(security_note)
+
+        scroll = MDScrollView(do_scroll_x=False, size_hint=(1, 1))
+        scroll.add_widget(content)
+        width_hint, dialog_height, content_height = self._calc_register_sizes()
+        self._register_content_container = MDBoxLayout(
+            orientation='vertical',
+            size_hint=(1, None),
+            height=content_height,
+        )
+        self._register_content_container.add_widget(scroll)
+
+        self._register_cancel_button = MDFlatButton(
+            text='CANCELAR',
+            theme_text_color='Custom',
+            text_color=text_secondary,
+            on_release=self._close_register_dialog,
+        )
+        self._register_submit_default_text = 'CRIAR ADMIN' if is_admin_setup else 'CRIAR CONTA'
+        self._register_submit_button = MDRaisedButton(
+            text=self._register_submit_default_text,
+            md_bg_color=accent,
+            theme_text_color='Custom',
+            text_color=on_primary,
+            on_release=self._submit_register,
+        )
 
         self._register_dialog = MDDialog(
             title=title,
             type='custom',
-            content_cls=content,
+            content_cls=self._register_content_container,
+            size_hint=(width_hint, None),
+            height=dialog_height,
             auto_dismiss=False,
             buttons=[
-                MDFlatButton(text='CANCELAR', on_release=self._close_register_dialog),
-                MDFlatButton(text='CRIAR', on_release=self._submit_register),
+                self._register_cancel_button,
+                self._register_submit_button,
             ],
         )
         self._register_dialog.open()
+        self._focus_register_field(self._register_password if self._register_username.text else self._register_username)
 
     def _close_register_dialog(self, *args):
         if self._register_dialog:
             self._register_dialog.dismiss()
             self._register_dialog = None
+        self._register_username = None
+        self._register_password = None
+        self._register_confirm = None
+        self._register_feedback = None
+        self._register_content_container = None
+        self._register_submit_button = None
+        self._register_cancel_button = None
 
     def _submit_register(self, *args):
+        # Valida e grava a conta criada no dialogo.
         mode = self._normalized_registration_mode()
         username = self._register_username.text.strip() if self._register_username else ''
         password = self._register_password.text.strip() if self._register_password else ''
         confirm = self._register_confirm.text.strip() if self._register_confirm else ''
 
-        if not username or not password or not confirm:
-            self._show_message('Erro', 'Todos os campos sao obrigatorios')
+        if not username:
+            self._set_register_feedback('Informe o nome de usuario.')
+            self._focus_register_field(self._register_username)
+            return
+        if ' ' in username:
+            self._set_register_feedback('O nome de usuario nao deve ter espacos.')
+            self._focus_register_field(self._register_username)
+            return
+        if not password:
+            self._set_register_feedback('Informe a senha da conta.')
+            self._focus_register_field(self._register_password)
+            return
+        if not confirm:
+            self._set_register_feedback('Confirme a senha antes de criar a conta.')
+            self._focus_register_field(self._register_confirm)
             return
 
         min_len = int(self.registration_password_min_len or 4)
         if len(password) < min_len:
-            self._show_message('Erro', f'A senha deve ter no minimo {min_len} caracteres')
+            self._set_register_feedback(f'A senha deve ter no minimo {min_len} caracteres.')
+            self._focus_register_field(self._register_password)
             return
         if password != confirm:
-            self._show_message('Erro', 'As senhas nao coincidem')
+            self._set_register_feedback('As senhas nao coincidem.')
+            self._focus_register_field(self._register_confirm)
             return
 
         role = ''
@@ -1136,6 +1501,11 @@ class LoginScreen(MDScreen):
             self._show_message('Info', 'Cadastro indisponivel neste app')
             self._close_register_dialog()
             return
+
+        self._set_register_feedback(
+            'A criar admin...' if role == 'admin' else 'A criar conta...',
+            'primary' if role == 'admin' else 'success',
+        )
 
         def task():
             user_exists = self.db.user_exists(username)
@@ -1180,24 +1550,25 @@ class LoginScreen(MDScreen):
         def handle_result(result, error):
             if error:
                 if role == 'admin':
-                    self._show_operation_error('Nao foi possivel criar o admin')
+                    self._set_register_feedback('Nao foi possivel criar o administrador.')
                 else:
-                    self._show_operation_error('Nao foi possivel criar a conta')
+                    self._set_register_feedback('Nao foi possivel criar a conta.')
                 return
 
             status = (result or {}).get("status")
             if status == "user_exists":
-                self._show_message('Erro', 'Nome de usuario ja existe')
+                self._set_register_feedback('Nome de usuario ja existe.')
+                self._focus_register_field(self._register_username)
                 return
             if status == "admin_exists":
-                self._show_message('Info', 'Ja existe admin. Novos admins devem ser criados em Configuracoes.')
+                self._show_message('Info', 'Ja existe um administrador. Novos administradores devem ser criados em Configuracoes.')
                 self._close_register_dialog()
                 return
             if status == "create_failed":
                 if role == 'admin':
-                    self._show_message('Erro', 'Nao foi possivel criar o admin')
+                    self._set_register_feedback('Nao foi possivel criar o admin.')
                 else:
-                    self._show_message('Erro', 'Nao foi possivel criar a conta')
+                    self._set_register_feedback('Nao foi possivel criar a conta.')
                 return
 
             self._close_register_dialog()
@@ -1212,7 +1583,7 @@ class LoginScreen(MDScreen):
         self._run_background_task(
             task,
             handle_result,
-            busy_text="A criar conta...",
+            busy_text="A criar admin..." if role == 'admin' else "A criar conta...",
         )
 
     def _show_message(self, title, message):

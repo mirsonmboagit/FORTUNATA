@@ -4,21 +4,49 @@ loja/
 venv/
 env/
 .tmp_testes/
+loja_legacy/
+loja_bak_pre_kivymd_restore/
+loja_py314_broken_20260325/
 
 # Python
 __pycache__/
 *.pyc
+*.pyo
 
 # Banco de dados
 *.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
 *.sqlite3
+*.sqlite3-journal
+*.bak
 
 # Logs
 *.log
+logs/
 
 # IDE
 .vscode/
 .idea/
+
+# Config local
+.env
+config/.env
+
+# Dados/artefactos gerados em runtime
+data/cache/
+data/receipts/
+data/reports/
+temp/
+tmp/
+Recibos/
+Relatórios/
+
+# Builds/instaladores
+build/
+dist/
+release/
 
 # Sistema
 .DS_Store

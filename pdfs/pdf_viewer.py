@@ -80,6 +80,12 @@ class PDFViewer:
         self.pymupdf_dialog = None
         self.install_dialog = None
         self._installing_pymupdf = False
+        self._pdf_path = None
+        self._pdf_total_pages = 0
+        self._document_open_token = 0
+        self._render_token = 0
+        self._page_texture = None
+        self._page_texture_size = None
     
     def view_pdf(self, pdf_path, prefer_direct=False):
         """
@@ -211,44 +217,6 @@ class PDFViewer:
         )
         self.options_dialog.open()
     
-    def _view_internal(self, pdf_path):
-        """
-        Abre PDF no visualizador interno otimizado.
-        
-        Args:
-            pdf_path: Caminho para o arquivo PDF
-        """
-        if not self._has_pymupdf():
-            self._show_pymupdf_install_message(pdf_path)
-            return
-
-        try:
-            import fitz
-        except ImportError:
-            self._show_pymupdf_install_message(pdf_path)
-            return
-        
-        try:
-            # Abrir documento PDF
-            self.pdf_document = fitz.open(pdf_path)
-            total_pages = len(self.pdf_document)
-            
-            if total_pages == 0:
-                self.pdf_document.close()
-                if self.error_callback:
-                    self.error_callback('O PDF está vazio ou corrompido.')
-                return
-            
-            # Resetar estado
-            self.page_state = {'current': 0, 'zoom': 1.0}
-            
-            # Criar janela do visualizador
-            self._create_pdf_viewer_window(pdf_path, total_pages)
-            
-        except Exception as e:
-            if self.error_callback:
-                self.error_callback(f'Erro ao visualizar PDF:\n{str(e)}')
-    
     def _open_in_browser(self, pdf_path):
         """
         Abre PDF no navegador padrão do sistema.
@@ -262,18 +230,13 @@ class PDFViewer:
             
             if system == 'Windows':
                 # Tenta Edge primeiro, depois navegador padrão
-                edge_path = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-                
-                if os.path.exists(edge_path):
-                    subprocess.Popen([edge_path, absolute_path])
-                else:
-                    os.startfile(absolute_path)
+                os.startfile(absolute_path)
             
             elif system == 'Darwin':  # macOS
-                subprocess.call(['open', absolute_path])
+                subprocess.Popen(['open', absolute_path])
             
             else:  # Linux
-                subprocess.call(['xdg-open', absolute_path])
+                subprocess.Popen(['xdg-open', absolute_path])
 
             return True
         except Exception as e:
@@ -544,150 +507,191 @@ class PDFViewer:
         
         return pdf_scroll, pdf_image, pdf_container
     
-    def _render_page_with_fit(self):
-        """Renderiza página com ajuste automático à janela."""
-        if not self.pdf_document:
+    def _view_internal(self, pdf_path):
+        if not self._has_pymupdf():
+            self._show_pymupdf_install_message(pdf_path)
             return
-        
-        try:
-            page_num = self.page_state['current']
-            page = self.pdf_document[page_num]
-            
-            # Obter dimensões da página original
-            page_rect = page.rect
-            page_width = page_rect.width
-            page_height = page_rect.height
-            
-            # Calcular zoom para ajustar à janela (85% da área disponível)
-            available_width = Window.width * 0.85
-            available_height = Window.height * 0.75
-            
-            zoom_width = available_width / page_width
-            zoom_height = available_height / page_height
-            
-            # Usar o menor zoom para garantir que cabe
-            optimal_zoom = min(zoom_width, zoom_height) * 0.75
 
-            
-            # Limitar zoom entre 0.3 e 3.0
-            optimal_zoom = max(0.3, min(3.0, optimal_zoom))
-            
-            self.page_state['zoom'] = optimal_zoom
-            self._render_page()
-            
-        except Exception as e:
-            print(f"Erro ao ajustar página: {e}")
-            self._render_page()
-    
-    def _render_page(self):
-        """
-        Renderiza a página atual do PDF com alta qualidade.
-        """
-        if not self.pdf_document or not self.pdf_image or not self.pdf_container:
-            return
-        
-        try:
-            import fitz
-            
-            page_num = self.page_state['current']
-            total_pages = len(self.pdf_document)
-            
-            # Atualizar label de página
-            if self.page_label:
-                zoom_percent = int(self.page_state['zoom'] * 100)
-                self.page_label.text = f'Página {page_num + 1} de {total_pages} • {zoom_percent}%'
-            
-            # Obter página
-            page = self.pdf_document[page_num]
-            
-            # Matriz de transformação com alta resolução
-            zoom = self.page_state['zoom']
-            # Multiplicar por 2 para melhor qualidade de renderização
-            mat = fitz.Matrix(zoom * 2.0, zoom * 2.0)
-            
-            # Renderizar página com alta qualidade
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            
-            # Converter para PIL Image
-            img_data = pix.tobytes("png")
-            img = PILImage.open(io.BytesIO(img_data))
-            
-            # Garantir formato RGBA
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            
-            # Criar textura Kivy
-            img_width, img_height = img.size
-            texture = Texture.create(size=(img_width, img_height), colorfmt='rgba')
-            texture.blit_buffer(img.tobytes(), colorfmt='rgba', bufferfmt='ubyte')
-            texture.flip_vertical()
-            
-            # Aplicar textura
-            self.pdf_image.texture = texture
-            self.pdf_image.size = (img_width, img_height)
-            
-            # Ajustar container
-            self.pdf_container.size = (
-                img_width + dp(40), 
-                img_height + dp(40)
+        open_token = self._document_open_token + 1
+        self._document_open_token = open_token
+
+        def worker():
+            total_pages = 0
+            error = None
+            try:
+                import fitz
+
+                document = fitz.open(pdf_path)
+                try:
+                    total_pages = len(document)
+                finally:
+                    document.close()
+                if total_pages <= 0:
+                    error = 'O PDF estÃ¡ vazio ou corrompido.'
+            except ImportError:
+                error = "__missing_pymupdf__"
+            except Exception as exc:
+                error = str(exc)
+
+            Clock.schedule_once(
+                lambda _dt, path=pdf_path, pages=total_pages, err=error, tok=open_token:
+                    self._finish_open_document(path, pages, err, tok),
+                0,
             )
-            
-        except Exception as e:
-            print(f"Erro ao renderizar página: {e}")
+
+        Thread(target=worker, daemon=True).start()
+
+    def _finish_open_document(self, pdf_path, total_pages, error, token):
+        if token != self._document_open_token:
+            return
+        if error == "__missing_pymupdf__":
+            self._show_pymupdf_install_message(pdf_path)
+            return
+        if error:
             if self.error_callback:
-                self.error_callback(f'Erro ao renderizar página:\n{str(e)}')
-    
+                self.error_callback(f'Erro ao visualizar PDF:\n{error}')
+            return
+
+        self._pdf_path = pdf_path
+        self._pdf_total_pages = int(total_pages or 0)
+        self.page_state = {'current': 0, 'zoom': 1.0}
+        self._create_pdf_viewer_window(pdf_path, self._pdf_total_pages)
+
+    def _render_page_with_fit(self):
+        self._render_page_async(fit_to_window=True)
+
+    def _render_page(self):
+        self._render_page_async(fit_to_window=False)
+
+    def _render_page_async(self, fit_to_window=False):
+        if not self._pdf_path or not self.pdf_image or not self.pdf_container:
+            return
+
+        page_num = int(self.page_state.get('current', 0) or 0)
+        target_zoom = float(self.page_state.get('zoom', 1.0) or 1.0)
+        window_width = Window.width
+        window_height = Window.height
+        render_token = self._render_token + 1
+        self._render_token = render_token
+
+        if self.page_label:
+            self.page_label.text = f'Pagina {page_num + 1} de {self._pdf_total_pages} | a carregar...'
+
+        def worker():
+            payload = {"error": None}
+            document = None
+            try:
+                import fitz
+
+                document = fitz.open(self._pdf_path)
+                total_pages = len(document)
+                page = document[page_num]
+                zoom = target_zoom
+                if fit_to_window:
+                    page_rect = page.rect
+                    page_width = page_rect.width
+                    page_height = page_rect.height
+                    available_width = window_width * 0.85
+                    available_height = window_height * 0.75
+                    zoom_width = available_width / page_width
+                    zoom_height = available_height / page_height
+                    zoom = min(zoom_width, zoom_height) * 0.75
+                    zoom = max(0.3, min(3.0, zoom))
+
+                mat = fitz.Matrix(zoom * 2.0, zoom * 2.0)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img_data = pix.tobytes("png")
+                img = PILImage.open(io.BytesIO(img_data))
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                payload = {
+                    "page_num": page_num,
+                    "total_pages": total_pages,
+                    "zoom": zoom,
+                    "width": img.size[0],
+                    "height": img.size[1],
+                    "buffer": img.tobytes(),
+                    "error": None,
+                }
+            except Exception as exc:
+                payload = {"error": str(exc)}
+            finally:
+                if document is not None:
+                    try:
+                        document.close()
+                    except Exception:
+                        pass
+
+            Clock.schedule_once(
+                lambda _dt, data=payload, tok=render_token: self._apply_rendered_page(data, tok),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_rendered_page(self, payload, token):
+        if token != self._render_token:
+            return
+        if payload.get("error"):
+            if self.error_callback:
+                self.error_callback(f'Erro ao renderizar pÃ¡gina:\n{payload["error"]}')
+            return
+        if not self.pdf_image or not self.pdf_container:
+            return
+
+        self._pdf_total_pages = int(payload.get("total_pages") or self._pdf_total_pages or 0)
+        self.page_state['zoom'] = float(payload.get("zoom") or self.page_state.get('zoom') or 1.0)
+        page_num = int(payload.get("page_num") or 0)
+
+        size = (int(payload["width"]), int(payload["height"]))
+        if self._page_texture is None or self._page_texture_size != size:
+            # Reutilizar a textura reduz alocacoes ao navegar/zoomar paginas do PDF.
+            self._page_texture = Texture.create(size=size, colorfmt='rgba')
+            self._page_texture.flip_vertical()
+            self._page_texture_size = size
+        self._page_texture.blit_buffer(payload["buffer"], colorfmt='rgba', bufferfmt='ubyte')
+
+        self.pdf_image.texture = self._page_texture
+        self.pdf_image.size = (int(payload["width"]), int(payload["height"]))
+        self.pdf_container.size = (
+            int(payload["width"]) + dp(40),
+            int(payload["height"]) + dp(40),
+        )
+
+        if self.page_label:
+            zoom_percent = int(self.page_state['zoom'] * 100)
+            self.page_label.text = f'Pagina {page_num + 1} de {self._pdf_total_pages} | {zoom_percent}%'
+
     def _nav_page(self, direction, total_pages):
-        """
-        Navega entre páginas do PDF.
-        
-        Args:
-            direction: -1 para anterior, 1 para próxima
-            total_pages: Total de páginas do documento
-        """
-        new_page = self.page_state['current'] + direction
-        
+        total_pages = int(self._pdf_total_pages or total_pages or 0)
+        new_page = int(self.page_state.get('current', 0) or 0) + direction
         if 0 <= new_page < total_pages:
             self.page_state['current'] = new_page
             self._render_page()
-    
+
     def _zoom_page(self, amount):
-        """
-        Aplica zoom na página.
-        
-        Args:
-            amount: Valor a adicionar ao zoom (positivo ou negativo)
-        """
-        new_zoom = self.page_state['zoom'] + amount
-        
-        # Limitar zoom entre 30% e 300%
+        new_zoom = float(self.page_state.get('zoom', 1.0) or 1.0) + amount
         if 0.3 <= new_zoom <= 3.0:
             self.page_state['zoom'] = new_zoom
             self._render_page()
-    
+
     def _fit_to_window(self):
-        """Ajusta página para caber perfeitamente na janela."""
         self._render_page_with_fit()
-    
+
     def _close_viewer(self, popup):
-        """
-        Fecha o visualizador e libera recursos.
-        
-        Args:
-            popup: Popup a ser fechado
-        """
-        try:
-            if self.pdf_document:
-                self.pdf_document.close()
-                self.pdf_document = None
-        except Exception as e:
-            print(f"Erro ao fechar PDF: {e}")
-        
+        self._document_open_token += 1
+        self._render_token += 1
+        self._pdf_path = None
+        self._pdf_total_pages = 0
+        self._page_texture = None
+        self._page_texture_size = None
+        self.pdf_document = None
         self.pdf_image = None
         self.pdf_container = None
         self.page_label = None
+        self.current_popup = None
         popup.dismiss()
-    
+
     def _show_pymupdf_install_message(self, pdf_path):
         """
         Mostra mensagem para instalar PyMuPDF.

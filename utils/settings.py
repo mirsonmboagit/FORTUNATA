@@ -23,9 +23,20 @@ from kivy.animation import Animation
 from kivy.properties import BooleanProperty, NumericProperty, StringProperty
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.scrollview import ScrollView
-from database.provider import get_db
+from database.provider import get_db, uses_remote_backend
 from AI.controller import ProactiveIntelligenceController
+from ui.components.hover_widgets import HoverCard, HoverRaisedButton
+from ui.components.loading_overlay import ScreenLoadingController
+from utils.device_config import get_device_settings, save_device_settings
 from utils.env_loader import load_dotenv
+from utils.focus_navigation import FormKeyboardController
+from utils.i18n import language_label, language_options, normalize_language, translate
+from utils.paths import APP_SETTINGS_FILE, ENV_FILE
+from utils.thermal_printer import (
+    get_default_printer_name,
+    list_system_printers,
+    print_thermal_receipt,
+)
 from kivy.lang import Builder
 from utils.security_questions import QUESTIONS
 from utils.vat import VAT_RULES, DEFAULT_VAT_RULE_CODE, describe_vat_choice
@@ -117,8 +128,10 @@ Builder.load_file(os.path.join(os.path.dirname(__file__), "settings_layout.kv"))
 
 
 class ChangeAdminDataDialog:
+    # Dialogo para alterar credenciais do administrador.
     def __init__(self):
         self.dialog = None
+        self._field_navigation = None
 
     def _audit_event(self, username, role, action, details):
         actor = str(username or "").strip() or "desconhecido"
@@ -217,6 +230,22 @@ class ChangeAdminDataDialog:
                     )
                 ]
             )
+            self._field_navigation = FormKeyboardController(
+                host=self.dialog,
+                fields=[
+                    self.current_username,
+                    self.new_username,
+                    self.current_password,
+                    self.new_password,
+                    self.confirm_password,
+                ],
+                initial_field=lambda: self.new_username if self.current_username.readonly else self.current_username,
+                on_escape=self.dismiss,
+                on_submit=self.save_changes,
+                shortcuts={"ctrl+s": self.save_changes},
+            )
+            self.dialog.bind(on_pre_open=lambda *_: self._field_navigation.activate(focus_initial=True))
+            self.dialog.bind(on_dismiss=self._field_navigation.deactivate)
 
         # Abre sempre com o usuario logado e campos sensiveis limpos.
         self.current_username.text = session_user
@@ -330,9 +359,38 @@ class ChangeAdminDataDialog:
 
 
 class AddUserDialog:
+    # Dialogo para criar utilizadores e definir o escopo dos dados.
     def __init__(self):
         self.dialog = None
         self.db = get_db()
+        self._field_navigation = None
+        self.selected_data_scope = "own"
+
+    def _active_db(self):
+        app = App.get_running_app()
+        return getattr(app, "db", None) or self.db
+
+    def _current_data_owner(self):
+        app = App.get_running_app()
+        session_user = (getattr(app, "current_user", None) or "").strip() if app else ""
+        db = self._active_db()
+        if session_user:
+            getter = getattr(db, "get_user_data_owner", None)
+            if callable(getter):
+                try:
+                    owner = getter(session_user)
+                    if owner:
+                        return owner
+                except Exception:
+                    pass
+            return session_user
+        try:
+            admins = db.get_admin_usernames()
+            if admins:
+                return admins[0]
+        except Exception:
+            pass
+        return ""
         
     def show(self):
         if not self.dialog:
@@ -403,6 +461,31 @@ class AddUserDialog:
             content.add_widget(role_box)
 
             self.selected_role = None
+
+            access_box = MDBoxLayout(
+                orientation='horizontal',
+                spacing=dp(10),
+                size_hint_y=None,
+                height=dp(56)
+            )
+            access_box.add_widget(MDLabel(
+                text='Dados:',
+                size_hint_x=0.3
+            ))
+            self.access_own_btn = MDRectangleFlatButton(
+                text='Proprios',
+                size_hint_x=0.35,
+                on_release=lambda x: self.select_data_scope('own')
+            )
+            self.access_shared_btn = MDRectangleFlatButton(
+                text='Loja atual',
+                size_hint_x=0.35,
+                on_release=lambda x: self.select_data_scope('shared')
+            )
+            access_box.add_widget(self.access_own_btn)
+            access_box.add_widget(self.access_shared_btn)
+            content.add_widget(access_box)
+            self.select_data_scope('own')
             
             self.dialog = MDDialog(
                 title='Adicionar Novo Usuário',
@@ -419,8 +502,30 @@ class AddUserDialog:
                     )
                 ]
             )
-        
+            self._field_navigation = FormKeyboardController(
+                host=self.dialog,
+                fields=[self.username, self.email, self.password],
+                initial_field=self.username,
+                on_escape=self.dismiss,
+                on_submit=self.save_user,
+                shortcuts={
+                    "ctrl+s": self.save_user,
+                    "alt+a": lambda: self.select_role('admin'),
+                    "alt+m": lambda: self.select_role('manager'),
+                },
+            )
+            self.dialog.bind(on_pre_open=lambda *_: self._field_navigation.activate(focus_initial=True))
+            self.dialog.bind(on_dismiss=self._field_navigation.deactivate)
+
+        self._reset_form_defaults()
         self.dialog.open()
+
+    def _reset_form_defaults(self):
+        for field in (getattr(self, "username", None), getattr(self, "email", None), getattr(self, "password", None)):
+            if field is not None:
+                field.text = ""
+        self.select_role("manager")
+        self.select_data_scope("own")
     
     def select_role(self, role):
         self.selected_role = role
@@ -434,6 +539,14 @@ class AddUserDialog:
             self.role_manager_btn.text_color = (1, 1, 1, 1)
             self.role_admin_btn.md_bg_color = (0, 0, 0, 0)
             self.role_admin_btn.text_color = (0, 0, 0, 1)
+
+    def select_data_scope(self, scope):
+        self.selected_data_scope = scope if scope in ("own", "shared") else "own"
+        own_selected = self.selected_data_scope == "own"
+        self.access_own_btn.md_bg_color = (0.2, 0.5, 0.8, 1) if own_selected else (0, 0, 0, 0)
+        self.access_own_btn.text_color = (1, 1, 1, 1) if own_selected else (0, 0, 0, 1)
+        self.access_shared_btn.md_bg_color = (0.2, 0.5, 0.8, 1) if not own_selected else (0, 0, 0, 0)
+        self.access_shared_btn.text_color = (1, 1, 1, 1) if not own_selected else (0, 0, 0, 1)
     
     def dismiss(self, *args):
         self.dialog.dismiss()
@@ -446,19 +559,32 @@ class AddUserDialog:
         if not username or not password or not self.selected_role:
             self.show_message('Erro', 'Todos os campos são obrigatórios')
             return
-        
-        if self.db.user_exists(username):
+
+        if len(password) < 4:
+            self.show_message('Erro', 'A senha deve ter no minimo 4 caracteres')
+            return
+
+        db = self._active_db()
+        if db.user_exists(username):
             self.show_message('Erro', 'Nome de usuário já existe')
             return
 
         email_value = email if email else None
+        data_owner = None if self.selected_data_scope == "own" else self._current_data_owner()
+        if self.selected_data_scope == "shared" and not data_owner:
+            self.show_message('Erro', 'Nao foi possivel identificar a loja atual')
+            return
 
         try:
-            if not self.db.create_user(username, password, self.selected_role, email=email_value):
+            create_kwargs = {"email": email_value}
+            if data_owner:
+                create_kwargs["data_owner"] = data_owner
+            if not db.create_user(username, password, self.selected_role, **create_kwargs):
                 self.show_message('Erro', 'Não foi possível criar o usuário')
                 return
 
-            self.db.log_action(
+            scope_label = "dados proprios" if not data_owner else f"dados de {data_owner}"
+            db.log_action(
                 username,
                 self.selected_role,
                 'CREATE_USER',
@@ -472,17 +598,21 @@ class AddUserDialog:
             self.show_message('Erro', f'Erro ao adicionar: {str(e)}')
     
     def show_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
-        ).open()
+            buttons=[MDFlatButton(text='OK')]
+        )
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.open()
 
 
 class SecurityQuestionsDialog:
+    # Dialogo para configurar perguntas de recuperacao de senha.
     def __init__(self):
         self.dialog = None
         self.db = get_db()
+        self._field_navigation = None
 
     def show(self):
         if not self.dialog:
@@ -543,6 +673,16 @@ class SecurityQuestionsDialog:
                     )
                 ]
             )
+            self._field_navigation = FormKeyboardController(
+                host=self.dialog,
+                fields=[self.username, *self.answer_fields],
+                initial_field=self.username,
+                on_escape=self.dismiss,
+                on_submit=self.save_answers,
+                shortcuts={"ctrl+s": self.save_answers},
+            )
+            self.dialog.bind(on_pre_open=lambda *_: self._field_navigation.activate(focus_initial=True))
+            self.dialog.bind(on_dismiss=self._field_navigation.deactivate)
 
         self.dialog.open()
 
@@ -588,6 +728,7 @@ class SecurityQuestionsDialog:
             buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
         ).open()
 class DeleteManagerDialog:
+    # Dialogo para remover contas de gerente.
     def __init__(self):
         self.dialog = None
         
@@ -711,6 +852,7 @@ class DeleteManagerDialog:
 
 
 class SystemLogsDialog:
+    # Dialogo simples para consultar e exportar logs.
     def __init__(self):
         self.dialog = None
         self.search_btn = None
@@ -1190,6 +1332,7 @@ class SystemLogsDialog:
 
 
 class EnhancedSystemLogsDialog:
+    # Dialogo avancado para filtrar, resumir e exportar logs.
     def __init__(self):
         self.dialog = None
         self.search_btn = None
@@ -2121,9 +2264,11 @@ class EnhancedSystemLogsDialog:
 
 
 class ScreenSizeDialog:
+    # Dialogo para ajustar o tamanho da janela.
     def __init__(self, app):
         self.app = app
         self.dialog = None
+        self._field_navigation = None
         
     def show(self):
         if not self.dialog:
@@ -2209,6 +2354,16 @@ class ScreenSizeDialog:
                     )
                 ]
             )
+            self._field_navigation = FormKeyboardController(
+                host=self.dialog,
+                fields=[self.width_input, self.height_input],
+                initial_field=self.width_input,
+                on_escape=self.dismiss,
+                on_submit=self.apply_custom,
+                shortcuts={"ctrl+s": self.apply_custom},
+            )
+            self.dialog.bind(on_pre_open=lambda *_: self._field_navigation.activate(focus_initial=True))
+            self.dialog.bind(on_dismiss=self._field_navigation.deactivate)
         
         self.dialog.open()
     
@@ -2254,11 +2409,18 @@ class ScreenSizeDialog:
 
 
 class AdminSettingsScreen(MDScreen):
+    # Tela de configuracoes do administrador.
     notification_count = NumericProperty(0)
     monitor_enabled = BooleanProperty(True)
     auto_banners_enabled = BooleanProperty(True)
     api_ai_enabled = BooleanProperty(True)
     dark_theme_enabled = BooleanProperty(False)
+    physical_scanner_enabled = BooleanProperty(True)
+    receipt_auto_print = BooleanProperty(False)
+    receipt_printer_name = StringProperty("Impressora padrao")
+    receipt_paper_width_mm = NumericProperty(80)
+    language_code = StringProperty("pt")
+    language_label = StringProperty("Português")
     vat_overview_text = StringProperty("Taxa geral ativa: --")
 
     def __init__(self, app, **kwargs):
@@ -2279,6 +2441,9 @@ class AdminSettingsScreen(MDScreen):
         self._smart_monitor_toggle_ready = False
         self._auto_banners_toggle_ready = False
         self._theme_toggle_ready = False
+        self._device_toggle_ready = False
+        self._language_menu = getattr(self, "_language_menu", None)
+        self._language_bound_app = getattr(self, "_language_bound_app", None)
         self._security_questions_dialog = None
         self._change_admin_data_dialog = None
         self._ranxo_prefill_dialog = None
@@ -2287,16 +2452,25 @@ class AdminSettingsScreen(MDScreen):
         self._bazara_backfill_mode = False
         self._vat_settings_dialog = None
         self._vat_rule_form_rows = []
+        self._printer_settings_dialog = None
+        self._printer_name_field = None
+        self._printer_width_field = None
+        self._printer_status_label = None
         self._gemini_settings_dialog = None
         self._gemini_api_key_field = None
         self._gemini_model_field = None
         self._gemini_status_label = None
+        self._loading_controller = getattr(self, "_loading_controller", None)
+        self._background_task_title = ""
 
     def on_kv_post(self, base_widget):
+        self._ensure_loading_overlay()
+        self._bind_app_language()
         self._api_toggle_ready = False
         self._smart_monitor_toggle_ready = False
         self._auto_banners_toggle_ready = False
         self._theme_toggle_ready = False
+        self._device_toggle_ready = False
         app = App.get_running_app()
         enabled = bool(getattr(app, "smart_monitor_enabled", True)) if app else True
         auto_banners_enabled = bool(getattr(app, "auto_banners_enabled", True)) if app else True
@@ -2306,6 +2480,8 @@ class AdminSettingsScreen(MDScreen):
         self.auto_banners_enabled = auto_banners_enabled
         self.api_ai_enabled = api_enabled
         self.dark_theme_enabled = is_dark
+        self._sync_device_settings_state()
+        self._sync_language_state()
         if "smart_monitor_toggle" in self.ids:
             self.ids.smart_monitor_toggle.active = enabled
         if "auto_banners_toggle" in self.ids:
@@ -2314,24 +2490,65 @@ class AdminSettingsScreen(MDScreen):
             self.ids.api_ai_toggle.active = api_enabled
         if "theme_toggle" in self.ids:
             self.ids.theme_toggle.active = is_dark
+        if "physical_scanner_toggle" in self.ids:
+            self.ids.physical_scanner_toggle.active = self.physical_scanner_enabled
+        if "receipt_auto_print_toggle" in self.ids:
+            self.ids.receipt_auto_print_toggle.active = self.receipt_auto_print
         Clock.schedule_once(self._enable_api_toggle, 0)
         Clock.schedule_once(self._enable_smart_monitor_toggle, 0)
         Clock.schedule_once(self._enable_auto_banners_toggle, 0)
         Clock.schedule_once(self._enable_theme_toggle, 0)
+        Clock.schedule_once(self._enable_device_toggle, 0)
         Clock.schedule_once(lambda dt: self._refresh_vat_overview(), 0)
         Clock.schedule_once(self._apply_responsive_layout, 0)
 
     def on_enter(self):
+        self._bind_app_language()
+        self._sync_device_settings_state()
+        self._sync_language_state()
         Clock.schedule_once(self._init_badge, 0.1)
         Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.15)
         Clock.schedule_once(lambda dt: self._refresh_vat_overview(), 0)
         Clock.schedule_once(self._apply_responsive_layout, 0)
+        if self._ranxo_prefill_running:
+            self._set_background_task_loading(True, self._background_task_title or "Tarefa tecnica em andamento...")
 
     def on_leave(self):
         self._stop_ai_polling()
+        self._clear_loading_overlay()
 
     def on_size(self, *args):
         Clock.schedule_once(self._apply_responsive_layout, 0)
+
+    def _ensure_loading_overlay(self):
+        if getattr(self, "_loading_controller", None) is None:
+            self._loading_controller = ScreenLoadingController(self)
+        self._loading_controller.attach()
+        return self._loading_controller
+
+    def _set_loading_overlay(self, key, active, message="", detail=""):
+        controller = self._ensure_loading_overlay()
+        if active:
+            controller.show(key, message, detail)
+            return
+        controller.hide(key)
+
+    def _clear_loading_overlay(self):
+        if getattr(self, "_loading_controller", None) is not None:
+            self._loading_controller.clear()
+
+    def _set_background_task_loading(self, active, title):
+        if active:
+            self._background_task_title = str(title or "Tarefa tecnica em andamento...")
+            self._set_loading_overlay(
+                "settings_task",
+                True,
+                self._background_task_title,
+                "A tarefa continua em segundo plano. Pode acompanhar o progresso tambem no dialogo.",
+            )
+            return
+        self._background_task_title = ""
+        self._set_loading_overlay("settings_task", False)
 
     def go_back(self):
         if not self.manager:
@@ -2344,6 +2561,7 @@ class AdminSettingsScreen(MDScreen):
         grid_cols = {
             "hero_signal_grid": 4 if width >= dp(1260) else 2 if width >= dp(780) else 1,
             "prefs_grid": 4 if width >= dp(1240) else 2 if width >= dp(860) else 1,
+            "devices_grid": 3 if width >= dp(1120) else 2 if width >= dp(760) else 1,
             "status_grid": 4 if width >= dp(1260) else 2 if width >= dp(860) else 1,
             "access_grid": 2 if width >= dp(980) else 1,
             "vat_grid": 2 if width >= dp(980) else 1,
@@ -2377,15 +2595,276 @@ class AdminSettingsScreen(MDScreen):
     def _enable_theme_toggle(self, dt):
         self._theme_toggle_ready = True
 
-    def _settings_path(self):
+    def _enable_device_toggle(self, dt):
+        self._device_toggle_ready = True
+
+    def _bind_app_language(self):
         app = App.get_running_app()
-        base_dir = getattr(app, "base_dir", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-        return os.path.join(base_dir, "app_settings.json")
+        bound_app = getattr(self, "_language_bound_app", None)
+        if not app or bound_app is app:
+            return
+        if bound_app is not None:
+            try:
+                bound_app.unbind(language=self._on_app_language)
+            except Exception:
+                pass
+        try:
+            app.bind(language=self._on_app_language)
+            self._language_bound_app = app
+        except Exception:
+            self._language_bound_app = None
+
+    def _on_app_language(self, *args):
+        self._sync_language_state()
+
+    def _tr(self, key, **kwargs):
+        app = App.get_running_app()
+        if app and hasattr(app, "t"):
+            return app.t(key, **kwargs)
+        return translate(key, **kwargs)
+
+    def _sync_language_state(self):
+        app = App.get_running_app()
+        code = normalize_language(getattr(app, "language", "pt") if app else "pt")
+        self.language_code = code
+        self.language_label = language_label(code, include_short=True)
+
+    def open_language_menu(self, caller=None):
+        if getattr(self, "_language_menu", None):
+            self._language_menu.dismiss()
+            self._language_menu = None
+        if caller is None and hasattr(self, "ids"):
+            caller = self.ids.get("language_card")
+        if caller is None:
+            return
+        items = []
+        for option in language_options():
+            code = option["code"]
+            items.append(
+                {
+                    "text": f"{option['native_name']} ({option['short']})",
+                    "height": dp(44),
+                    "on_release": lambda selected=code: self._select_language(selected),
+                }
+            )
+        self._language_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
+        self._language_menu.open()
+
+    def _select_language(self, language_code):
+        if getattr(self, "_language_menu", None):
+            self._language_menu.dismiss()
+            self._language_menu = None
+        app = App.get_running_app()
+        if app and hasattr(app, "set_language"):
+            app.set_language(language_code)
+        else:
+            self._save_app_settings_fallback(language=normalize_language(language_code))
+        self._sync_language_state()
+        self.show_message(
+            self._tr("common.success"),
+            self._tr("settings.language.changed", language=self.language_label),
+        )
+
+    def _sync_device_settings_state(self):
+        settings = get_device_settings(force_reload=True)
+        self.physical_scanner_enabled = bool(settings.get("physical_scanner_enabled", True))
+        self.receipt_auto_print = bool(settings.get("receipt_auto_print", False))
+        printer_name = str(settings.get("receipt_printer_name") or "").strip()
+        self.receipt_printer_name = printer_name or "Impressora padrao"
+        self.receipt_paper_width_mm = int(settings.get("receipt_paper_width_mm") or 80)
+        if hasattr(self, "ids"):
+            scanner_toggle = self.ids.get("physical_scanner_toggle")
+            if scanner_toggle is not None and scanner_toggle.active != self.physical_scanner_enabled:
+                scanner_toggle.active = self.physical_scanner_enabled
+            auto_toggle = self.ids.get("receipt_auto_print_toggle")
+            if auto_toggle is not None and auto_toggle.active != self.receipt_auto_print:
+                auto_toggle.active = self.receipt_auto_print
+
+    def toggle_physical_scanner(self, enabled):
+        if not getattr(self, "_device_toggle_ready", True):
+            return
+        save_device_settings(physical_scanner_enabled=bool(enabled))
+        self._sync_device_settings_state()
+
+    def toggle_receipt_auto_print(self, enabled):
+        if not getattr(self, "_device_toggle_ready", True):
+            return
+        save_device_settings(receipt_auto_print=bool(enabled))
+        self._sync_device_settings_state()
+
+    def open_printer_settings(self):
+        if self._printer_settings_dialog is not None:
+            try:
+                self._printer_settings_dialog.dismiss()
+            except Exception:
+                pass
+            self._printer_settings_dialog = None
+        printers = list_system_printers()
+        default_printer = get_default_printer_name()
+        settings = get_device_settings(force_reload=True)
+        configured = str(settings.get("receipt_printer_name") or "").strip()
+        selected_name = configured or default_printer
+        width_value = int(settings.get("receipt_paper_width_mm") or 80)
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(16), dp(12), dp(16), dp(8)],
+            adaptive_height=True,
+        )
+
+        detected_text = (
+            "Detectadas: " + ", ".join(printers[:4])
+            if printers
+            else "Lista automatica indisponivel. Pode escrever o nome instalado no Windows."
+        )
+        if printers and len(printers) > 4:
+            detected_text += f" (+{len(printers) - 4})"
+
+        info = MDLabel(
+            text=detected_text,
+            theme_text_color="Secondary",
+            size_hint_y=None,
+            height=dp(44),
+        )
+        info.bind(size=lambda inst, _value: setattr(inst, "text_size", (inst.width, None)))
+        content.add_widget(info)
+
+        self._printer_name_field = MDTextField(
+            text=selected_name,
+            hint_text="Nome da impressora termica",
+            helper_text="Deixe vazio para usar a impressora padrao do Windows.",
+            helper_text_mode="persistent",
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(64),
+        )
+        content.add_widget(self._printer_name_field)
+
+        self._printer_width_field = MDTextField(
+            text=str(width_value),
+            hint_text="Largura do papel: 58 ou 80",
+            helper_text="Use 58mm ou 80mm conforme a bobina da impressora.",
+            helper_text_mode="persistent",
+            input_filter="int",
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(64),
+        )
+        content.add_widget(self._printer_width_field)
+
+        self._printer_status_label = MDLabel(
+            text="",
+            theme_text_color="Secondary",
+            size_hint_y=None,
+            height=dp(34),
+        )
+        self._printer_status_label.bind(
+            size=lambda inst, _value: setattr(inst, "text_size", (inst.width, None))
+        )
+        content.add_widget(self._printer_status_label)
+
+        self._printer_settings_dialog = MDDialog(
+            title="Impressora termica",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(620), Window.width * 0.92), dp(430)),
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda _x: self._printer_settings_dialog.dismiss()),
+                MDFlatButton(text="Testar", on_release=lambda _x: self.test_receipt_printer()),
+                MDRaisedButton(text="Salvar", on_release=lambda _x: self._save_printer_settings_from_dialog()),
+            ],
+        )
+        self._printer_settings_dialog.open()
+
+    def _save_printer_settings_from_dialog(self, close_dialog=True, silent=False):
+        name = (
+            self._printer_name_field.text.strip()
+            if self._printer_name_field is not None
+            else ""
+        )
+        width_text = (
+            self._printer_width_field.text.strip()
+            if self._printer_width_field is not None
+            else ""
+        )
+        try:
+            width = int(width_text or 80)
+        except Exception:
+            width = 80
+        width = 58 if width <= 58 else 80
+        save_device_settings(
+            receipt_printer_name=name,
+            receipt_paper_width_mm=width,
+        )
+        self._sync_device_settings_state()
+        if self._printer_status_label is not None:
+            label = name or "impressora padrao"
+            self._printer_status_label.text = f"Configurada: {label} | {width}mm"
+        if close_dialog and self._printer_settings_dialog is not None:
+            self._printer_settings_dialog.dismiss()
+        if not silent:
+            self.show_message("Sucesso", "Configuracao da impressora atualizada.")
+        return True
+
+    def _build_test_receipt_data(self):
+        return {
+            "store_name": "MERCEARIA",
+            "receipt_code": "TESTE",
+            "issued_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "operator": getattr(App.get_running_app(), "current_user", None) or "Administrador",
+            "items_count": 1,
+            "items": [
+                {
+                    "name": "Teste de impressao termica",
+                    "qty_text": "1 un",
+                    "unit_price": 1.0,
+                    "line_total": 1.0,
+                    "sale_mode_label": "Teste",
+                    "vat_tag": "",
+                }
+            ],
+            "subtotal": 1.0,
+            "vat_total": 0.0,
+            "total": 1.0,
+            "paid_amount": 1.0,
+            "change_amount": 0.0,
+            "vat_note": "Teste de configuracao da impressora.",
+        }
+
+    def test_receipt_printer(self):
+        self._save_printer_settings_from_dialog(close_dialog=False, silent=True)
+        settings = get_device_settings(force_reload=True)
+        printer_name = str(settings.get("receipt_printer_name") or "").strip()
+        paper_width = int(settings.get("receipt_paper_width_mm") or 80)
+        if self._printer_status_label is not None:
+            self._printer_status_label.text = "A enviar recibo de teste..."
+        receipt_data = self._build_test_receipt_data()
+
+        def worker():
+            ok, message = print_thermal_receipt(
+                receipt_data,
+                printer_name=printer_name,
+                paper_width_mm=paper_width,
+            )
+            Clock.schedule_once(lambda _dt, success=ok, msg=message: apply_result(success, msg), 0)
+
+        def apply_result(success, message):
+            if self._printer_status_label is not None:
+                self._printer_status_label.text = message
+            if success:
+                self.show_message("Sucesso", message)
+            else:
+                self.show_message("Aviso", message)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _settings_path(self):
+        return str(APP_SETTINGS_FILE)
 
     def _dotenv_path(self):
-        app = App.get_running_app()
-        base_dir = getattr(app, "base_dir", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-        return os.path.join(base_dir, ".env")
+        return str(ENV_FILE)
 
     def _read_env_values(self):
         env_path = self._dotenv_path()
@@ -2617,7 +3096,7 @@ class AdminSettingsScreen(MDScreen):
 
     def _build_vat_input(self, text="", hint_text="", helper_text="", input_filter=None):
         field = MDTextField(
-            text=str(text or ""),
+            text="" if text is None else str(text),
             hint_text=hint_text,
             mode="rectangle",
             size_hint_y=None,
@@ -2911,6 +3390,7 @@ class AdminSettingsScreen(MDScreen):
             self._show_inline_message("Erro", "Nao foi possivel salvar as regras de IVA.")
             return
 
+        self._sync_local_vat_rules_if_needed(payload=payload)
         dialog.dismiss()
         self._refresh_vat_overview()
         self._show_inline_message("Sucesso", "Regras de IVA atualizadas.")
@@ -2923,9 +3403,28 @@ class AdminSettingsScreen(MDScreen):
         if not resetter():
             self._show_inline_message("Erro", "Nao foi possivel restaurar as regras oficiais.")
             return
+        self._sync_local_vat_rules_if_needed(reset=True)
         dialog.dismiss()
         self._refresh_vat_overview()
         self._show_inline_message("Sucesso", "Regras oficiais de IVA restauradas.")
+
+    def _sync_local_vat_rules_if_needed(self, payload=None, reset=False):
+        if not uses_remote_backend(self.db):
+            return
+        local_db = getattr(self.db, "local_db", None)
+        if local_db is None:
+            return
+        try:
+            if reset:
+                local_resetter = getattr(local_db, "reset_vat_rules", None)
+                if callable(local_resetter):
+                    local_resetter()
+                return
+            local_saver = getattr(local_db, "replace_vat_rules", None)
+            if callable(local_saver):
+                local_saver(payload or [])
+        except Exception:
+            pass
 
     def _show_inline_message(self, title, message):
         MDDialog(
@@ -2943,6 +3442,7 @@ class AdminSettingsScreen(MDScreen):
         smart_monitor_enabled=None,
         auto_banners_enabled=None,
         theme_style=None,
+        language=None,
     ):
         try:
             settings_path = self._settings_path()
@@ -2961,6 +3461,8 @@ class AdminSettingsScreen(MDScreen):
                 data["auto_banners_enabled"] = bool(auto_banners_enabled)
             if theme_style:
                 data["theme_style"] = theme_style
+            if language:
+                data["language"] = normalize_language(language)
             with open(self._settings_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
@@ -3073,6 +3575,7 @@ class AdminSettingsScreen(MDScreen):
         if self._ranxo_prefill_running:
             return
         self._ranxo_prefill_running = True
+        self._set_background_task_loading(True, "A pre-carregar cache Ranxo...")
         self._ranxo_prefill_dialog = MDDialog(
             title="Pre-carregar cache Ranxo",
             text="Preparando...",
@@ -3118,6 +3621,7 @@ class AdminSettingsScreen(MDScreen):
 
     def _finish_ranxo_prefill(self, stats: dict):
         self._ranxo_prefill_running = False
+        self._set_background_task_loading(False, "")
         if not self._ranxo_prefill_dialog:
             return
         lines = [
@@ -3196,6 +3700,8 @@ class AdminSettingsScreen(MDScreen):
         self._bazara_prefill_reset = bool(reset)
         self._bazara_backfill_mode = False
         title = "Reset cache Bazara" if self._bazara_prefill_reset else "Pre-carregar cache Bazara"
+        overlay_title = "A recriar cache Bazara..." if self._bazara_prefill_reset else "A pre-carregar cache Bazara..."
+        self._set_background_task_loading(True, overlay_title)
         self._ranxo_prefill_dialog = MDDialog(
             title=title,
             text="Preparando...",
@@ -3210,6 +3716,7 @@ class AdminSettingsScreen(MDScreen):
         self._ranxo_prefill_running = True
         self._bazara_prefill_reset = False
         self._bazara_backfill_mode = True
+        self._set_background_task_loading(True, "A completar codigos de barras Bazara...")
         self._ranxo_prefill_dialog = MDDialog(
             title="Backfill codigos de barras Bazara",
             text="Preparando...",
@@ -3284,6 +3791,7 @@ class AdminSettingsScreen(MDScreen):
         self._ranxo_prefill_running = False
         self._bazara_prefill_reset = False
         self._bazara_backfill_mode = False
+        self._set_background_task_loading(False, "")
         if not self._ranxo_prefill_dialog:
             return
         lines = [
@@ -3299,6 +3807,7 @@ class AdminSettingsScreen(MDScreen):
     def _finish_bazara_backfill(self, stats: dict):
         self._ranxo_prefill_running = False
         self._bazara_backfill_mode = False
+        self._set_background_task_loading(False, "")
         if not self._ranxo_prefill_dialog:
             return
         lines = [
@@ -3337,6 +3846,7 @@ class AdminSettingsScreen(MDScreen):
         if self._ranxo_prefill_running:
             return
         self._ranxo_prefill_running = True
+        self._set_background_task_loading(True, "A atualizar cache Open Food Facts...")
         self._ranxo_prefill_dialog = MDDialog(
             title="Atualizar cache Open Food Facts",
             text="Preparando...",
@@ -3378,6 +3888,7 @@ class AdminSettingsScreen(MDScreen):
 
     def _finish_openfoodfacts_prefill(self, stats: dict):
         self._ranxo_prefill_running = False
+        self._set_background_task_loading(False, "")
         if not self._ranxo_prefill_dialog:
             return
         lines = [
@@ -3418,6 +3929,7 @@ class AdminSettingsScreen(MDScreen):
         if self._ranxo_prefill_running:
             return
         self._ranxo_prefill_running = True
+        self._set_background_task_loading(True, "A atualizar cache UPCitemdb...")
         self._ranxo_prefill_dialog = MDDialog(
             title="Atualizar cache UPCitemdb",
             text="Preparando...",
@@ -3460,6 +3972,7 @@ class AdminSettingsScreen(MDScreen):
 
     def _finish_upcitemdb_prefill(self, stats: dict):
         self._ranxo_prefill_running = False
+        self._set_background_task_loading(False, "")
         if not self._ranxo_prefill_dialog:
             return
         lines = [
@@ -3497,6 +4010,7 @@ class AdminSettingsScreen(MDScreen):
         if self._ranxo_prefill_running:
             return
         self._ranxo_prefill_running = True
+        self._set_background_task_loading(True, "A atualizar cache via APIs...")
         self._ranxo_prefill_dialog = MDDialog(
             title="Atualizar cache via APIs",
             text="Preparando...",
@@ -3539,6 +4053,7 @@ class AdminSettingsScreen(MDScreen):
 
     def _finish_refresh_cache(self, stats: dict):
         self._ranxo_prefill_running = False
+        self._set_background_task_loading(False, "")
         if not self._ranxo_prefill_dialog:
             return
         lines = [

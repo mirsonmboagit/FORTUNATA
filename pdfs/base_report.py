@@ -9,6 +9,8 @@ import math
 import os
 import re
 
+from utils.paths import REPORTS_DIR, resolve_path
+
 
 class BasePDFReport:
     """
@@ -29,8 +31,9 @@ class BasePDFReport:
         colors.HexColor("#F4B400"),
     )
 
-    def __init__(self, output_dir="Relatórios"):
-        self.base_output_dir = os.path.abspath(output_dir)
+    def __init__(self, output_dir=None):
+        resolved_output_dir = output_dir or REPORTS_DIR
+        self.base_output_dir = str(resolve_path(resolved_output_dir))
         self.styles = getSampleStyleSheet()
         self._ensure_directory(self.base_output_dir)
 

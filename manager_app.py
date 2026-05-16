@@ -1,11 +1,14 @@
 from kivy.uix.screenmanager import ScreenManager
+from kivy.clock import Clock
 
 from app_base import BaseApp
 from database.provider import get_db
 from user.login import ManagerLoginScreen
+from utils.paths import asset_path
 
 
 class ManagerApp(BaseApp):
+    # App do gerente: fluxo focado em vendas e historicos.
     theme_settings_key = "manager_theme_style"
 
     def __init__(self, **kwargs):
@@ -15,7 +18,7 @@ class ManagerApp(BaseApp):
 
     def build(self):
         self.title = 'MERCEARIA - MANAGER'
-        self.icon = 'icon/icon4.ico'
+        self.icon = str(asset_path('icon', 'manager.ico'))
 
         self.db = get_db()
 
@@ -26,6 +29,7 @@ class ManagerApp(BaseApp):
             name='login',
             success_screen='manager',
         ))
+        # As telas secundarias ficam em factories para reduzir o arranque.
         self._screen_factories = {
             'manager': self._build_manager_screen,
             'sales_history': self._build_sales_history_screen,
@@ -33,9 +37,11 @@ class ManagerApp(BaseApp):
             'losses_history': self._build_losses_history_screen,
         }
         sm.current = 'login'
+        Clock.schedule_once(lambda _dt: self.refresh_language(sm), 0)
         return sm
 
     def ensure_screen(self, name):
+        # Cria a tela pedida somente na primeira abertura.
         manager = self._screen_manager or self.root
         if manager is None:
             return None
@@ -48,6 +54,7 @@ class ManagerApp(BaseApp):
         if screen is None:
             return None
         manager.add_widget(screen)
+        Clock.schedule_once(lambda _dt, target=screen: self.refresh_language(target), 0)
         return screen
 
     def _build_manager_screen(self):

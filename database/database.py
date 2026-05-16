@@ -2,12 +2,13 @@ import builtins
 import os
 import sqlite3
 import sys
-import tempfile
 from datetime import datetime, timedelta, date
 from time import perf_counter
 import bcrypt
 
+from database.automation import DatabaseAutomationMixin
 from utils.perf_utils import perf_log, should_log_debug
+from utils.paths import DB_BACKUP_DIR, resolve_path
 from utils.vat import (
     DEFAULT_VAT_RULE_CODE,
     VAT_RULES,
@@ -23,6 +24,7 @@ LOSS_TYPES = {"DAMAGE", "EXPIRED", "THEFT", "ADJUSTMENT"}
 
 
 def _safe_print(*args, **kwargs):
+    # Evita quebra no terminal quando aparecer texto com encoding diferente.
     try:
         builtins.print(*args, **kwargs)
     except UnicodeEncodeError:
@@ -99,11 +101,13 @@ def _parse_datetime_value(value, end_of_day=False):
 
 def _fetch_sales_velocity(db, days=14):
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    owner = db._active_owner() if hasattr(db, "_active_owner") else None
     db.cursor.execute(
         "SELECT product_id, COALESCE(SUM(quantity), 0) "
         "FROM sales WHERE DATE(sale_date) >= ? "
-        "GROUP BY product_id",
-        (start_date,),
+        + ("AND COALESCE(owner_username, '') = ? " if owner else "")
+        + "GROUP BY product_id",
+        (start_date, owner) if owner else (start_date,),
     )
     totals = {row[0]: _safe_float(row[1], 0.0) for row in db.cursor.fetchall()}
     velocity = {}
@@ -114,21 +118,26 @@ def _fetch_sales_velocity(db, days=14):
 
 def _get_product_daily_sales(db, product_id, days=14):
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    owner = db._active_owner() if hasattr(db, "_active_owner") else None
     db.cursor.execute(
         "SELECT COALESCE(SUM(quantity), 0) FROM sales "
-        "WHERE product_id = ? AND DATE(sale_date) >= ?",
-        (product_id, start_date),
+        "WHERE product_id = ? AND DATE(sale_date) >= ? "
+        + ("AND COALESCE(owner_username, '') = ?" if owner else ""),
+        (product_id, start_date, owner) if owner else (product_id, start_date),
     )
     total = _safe_float(db.cursor.fetchone()[0], 0.0)
     return total / max(days, 1)
 
 
 def _build_forecasts(db, days=14, limit=10):
+    # Calcula previsao simples de reposicao e risco de validade.
     velocity = _fetch_sales_velocity(db, days=days)
+    scope_sql, scope_params = db._owner_filter() if hasattr(db, "_owner_filter") else ("", [])
     db.cursor.execute(
         "SELECT id, description, existing_stock, is_sold_by_weight, expiry_date, "
         "sale_price, unit_purchase_price "
-        "FROM products"
+        "FROM products WHERE 1=1 " + scope_sql,
+        tuple(scope_params),
     )
     forecasts = []
     expiry_risk = []
@@ -182,7 +191,8 @@ def _build_forecasts(db, days=14, limit=10):
     expiry_risk.sort(key=lambda x: x["days_to_expiry"])
     return forecasts[:limit], expiry_risk[:limit]
 
-class Database:
+class Database(DatabaseAutomationMixin):
+    # Camada principal de acesso ao SQLite.
     SKU_PREFIX_DEFAULT = "LOJA"
     BACKUP_RETENTION_DAYS = 30
     BACKUP_INTERVAL_HOURS = 24
@@ -195,21 +205,25 @@ class Database:
 
         # Definimos a pasta/base do banco
         if db_path:
-            self.db_path = os.path.abspath(db_path)
+            resolved_db_path = resolve_path(db_path)
+            self.db_path = str(resolved_db_path)
             self.db_folder = os.path.dirname(self.db_path) or "."
             self.db_name = os.path.basename(self.db_path)
         else:
-            self.db_folder = db_folder
+            self.db_folder = str(resolve_path(db_folder))
             self.db_path = os.path.join(self.db_folder, self.db_name)
 
-        # Criamos a pasta se nÃƒÂ£o existir
+        # Criamos a pasta se nÃƒÆ’Ã‚Â£o existir
         if self.db_folder and not os.path.exists(self.db_folder):
             os.makedirs(self.db_folder)
             print(f"Pasta '{self.db_folder}' criada!")
 
         self.conn = None
         self.cursor = None
-        self.backup_root = os.path.join(self.db_folder or ".", "backups")
+        self.backup_root = str(DB_BACKUP_DIR)
+        self.current_user = None
+        self.current_role = None
+        self.current_data_owner = None
         self.sku_prefix = self._sanitize_sku_token(
             os.getenv("SKU_PREFIX", self.SKU_PREFIX_DEFAULT),
             fallback=self.SKU_PREFIX_DEFAULT,
@@ -222,20 +236,28 @@ class Database:
         """Conectar ao banco de dados"""
         try:
             # IMPORTANTE: Usamos o self.db_path aqui
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
             self.cursor = self.conn.cursor()
-            print(f"Ã¢Å“â€¦ Conectado com sucesso em: {self.db_path}")
+            self.cursor.execute("PRAGMA busy_timeout = 30000")
+            self.cursor.execute("PRAGMA foreign_keys = ON")
+            try:
+                self.cursor.execute("PRAGMA journal_mode = WAL")
+            except sqlite3.Error:
+                pass
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Conectado com sucesso em: {self.db_path}")
         except (sqlite3.Error, ValueError) as e:
-            self.conn.rollback()
-            print(f"Ã¢ÂÅ’ Erro ao conectar: {e}")
+            if self.conn:
+                self.conn.rollback()
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao conectar: {e}")
     
     def close(self):
-        """Fechar a conexÃƒÂ£o com o banco de dados"""
+        """Fechar a conexÃƒÆ’Ã‚Â£o com o banco de dados"""
         if self.conn:
             self.conn.close()
 
     @staticmethod
     def _sanitize_sku_token(value, fallback="SKU", max_len=8):
+        # Mantem o SKU apenas com letras e numeros.
         token = "".join(ch for ch in str(value or "") if ch.isalnum()).upper()
         if not token:
             token = fallback
@@ -247,6 +269,27 @@ class Database:
     def _build_sku(self, product_id, description):
         manual = self._sku_manual_token(description)
         return f"{manual}-{self.sku_prefix}-{int(product_id):06d}"
+
+    def set_active_user(self, username=None, role=None):
+        """Define o espaco de dados visivel na sessao atual."""
+        self.current_user = username
+        self.current_role = role
+        self.current_data_owner = self.get_user_data_owner(username) if username else None
+
+    # Filtros de dono mantem cada utilizador no seu escopo de dados.
+    def _active_owner(self):
+        return (self.current_data_owner or self.current_user or "").strip() or None
+
+    def _owner_value(self, username=None):
+        owner = self.get_user_data_owner(username) if username else None
+        return owner or self._active_owner() or username or "SYSTEM"
+
+    def _owner_filter(self, alias=None):
+        owner = self._active_owner()
+        if not owner:
+            return "", []
+        prefix = f"{alias}." if alias else ""
+        return f" AND COALESCE({prefix}owner_username, '') = ?", [owner]
 
     def _rebuild_all_skus(self):
         """Regera SKUs no formato MANUAL-PREFIXO-000001 para produtos e arquivo."""
@@ -273,6 +316,7 @@ class Database:
             code = DEFAULT_VAT_RULE_CODE
         return code
 
+    # Regras de IVA usadas nos produtos e relatorios.
     def _seed_vat_rules(self):
         for rule in VAT_RULES:
             self.cursor.execute(
@@ -395,6 +439,7 @@ class Database:
         except (sqlite3.Error, ValueError) as e:
             print(f"Erro ao substituir regras de IVA: {e}")
             self.conn.rollback()
+            raise
             return False
 
     def reset_vat_rules(self):
@@ -421,13 +466,15 @@ class Database:
     def setup(self):
         """Configurar tabelas do banco de dados"""
         try:
-            # Tabela de usuÃƒÂ¡rios (administrador e gerente)
+            # Tabelas principais do sistema.
+            # Tabela de usuÃƒÆ’Ã‚Â¡rios (administrador e gerente)
             self.cursor.execute(''' 
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY,
                 username TEXT UNIQUE NOT NULL,
                 password TEXT NOT NULL,
-                role TEXT NOT NULL
+                role TEXT NOT NULL,
+                data_owner TEXT
             )''')
             # Garantir colunas de contacto para recuperacao (email/telefone)
             try:
@@ -437,6 +484,8 @@ class Database:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
                 if "phone" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+                if "data_owner" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN data_owner TEXT")
             except sqlite3.Error as e:
                 print(f"Erro ao adicionar colunas de contacto: {e}")
 
@@ -512,10 +561,11 @@ class Database:
                 sku TEXT,
                 units_per_package INTEGER,
                 allow_pack_sale INTEGER DEFAULT 0,
-                vat_rule_code TEXT DEFAULT 'STANDARD'
+                vat_rule_code TEXT DEFAULT 'STANDARD',
+                owner_username TEXT
             )''')
 
-            # Tabela de produtos arquivados (excluÃƒÂ­dos)
+            # Tabela de produtos arquivados (excluÃƒÆ’Ã‚Â­dos)
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS products_archive (
                 id INTEGER PRIMARY KEY,
@@ -542,7 +592,8 @@ class Database:
                 allow_pack_sale INTEGER DEFAULT 0,
                 vat_rule_code TEXT DEFAULT 'STANDARD',
                 deleted_at TEXT,
-                deleted_by TEXT
+                deleted_by TEXT,
+                owner_username TEXT
             )''')
 
             # Tabela de logs do sistema
@@ -553,19 +604,20 @@ class Database:
                 role TEXT,
                 action TEXT NOT NULL,
                 details TEXT,
-                timestamp TEXT NOT NULL
+                timestamp TEXT NOT NULL,
+                owner_username TEXT
             )''')
             
-            # ===== VERIFICAR E ADICIONAR COLUNAS NECESSÃƒÂRIAS =====
+            # ===== VERIFICAR E ADICIONAR COLUNAS NECESSÃƒÆ’Ã‚ÂRIAS =====
             self.cursor.execute("PRAGMA table_info(products)")
             columns = [column[1] for column in self.cursor.fetchall()]
             # Nao criar usuario padrao automaticamente
             if 'is_sold_by_weight' not in columns:
-                print("Ã¢Å¡â„¢Ã¯Â¸Â Adicionando coluna 'is_sold_by_weight' ÃƒÂ  tabela products...")
+                print("ÃƒÂ¢Ã…Â¡Ã¢â€žÂ¢ÃƒÂ¯Ã‚Â¸Ã‚Â Adicionando coluna 'is_sold_by_weight' ÃƒÆ’Ã‚Â  tabela products...")
                 self.cursor.execute("ALTER TABLE products ADD COLUMN is_sold_by_weight INTEGER DEFAULT 0")
-                print("Ã¢Å“â€¦ Coluna 'is_sold_by_weight' adicionada com sucesso!")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Coluna 'is_sold_by_weight' adicionada com sucesso!")
             
-            # ===== ADICIONAR COLUNAS DE STATUS (se necessÃƒÂ¡rio) =====
+            # ===== ADICIONAR COLUNAS DE STATUS (se necessÃƒÆ’Ã‚Â¡rio) =====
             def ensure_column(table, column, col_def):
                 self.cursor.execute(f"PRAGMA table_info({table})")
                 cols = [c[1] for c in self.cursor.fetchall()]
@@ -574,6 +626,7 @@ class Database:
                         f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
                     )
 
+            ensure_column("user_logs", "owner_username", "TEXT")
             ensure_column("products", "status", "TEXT DEFAULT 'ATIVO'")
             ensure_column("products", "status_source", "TEXT DEFAULT 'MANUAL'")
             ensure_column("products", "status_reason", "TEXT")
@@ -584,6 +637,7 @@ class Database:
             ensure_column("products", "units_per_package", "INTEGER")
             ensure_column("products", "allow_pack_sale", "INTEGER DEFAULT 0")
             ensure_column("products", "vat_rule_code", "TEXT DEFAULT 'STANDARD'")
+            ensure_column("products", "owner_username", "TEXT")
             ensure_column("products_archive", "package_quantity", "TEXT")
             ensure_column("products_archive", "status", "TEXT")
             ensure_column("products_archive", "status_source", "TEXT")
@@ -596,9 +650,10 @@ class Database:
             ensure_column("products_archive", "vat_rule_code", "TEXT DEFAULT 'STANDARD'")
             ensure_column("products_archive", "deleted_at", "TEXT")
             ensure_column("products_archive", "deleted_by", "TEXT")
+            ensure_column("products_archive", "owner_username", "TEXT")
 
             # ===== ALTERAR TIPO DE DADOS PARA SUPORTAR DECIMAIS (KG) =====
-            # Verificar se as colunas de estoque jÃƒÂ¡ sÃƒÂ£o REAL (suportam decimais)
+            # Verificar se as colunas de estoque jÃƒÆ’Ã‚Â¡ sÃƒÆ’Ã‚Â£o REAL (suportam decimais)
             self.cursor.execute("PRAGMA table_info(products)")
             columns_info = self.cursor.fetchall()
             
@@ -611,11 +666,11 @@ class Database:
                 elif col[1] == 'sold_stock':
                     sold_stock_type = col[2]
             
-            # Se as colunas forem INTEGER, precisamos recriÃƒÂ¡-las como REAL
+            # Se as colunas forem INTEGER, precisamos recriÃƒÆ’Ã‚Â¡-las como REAL
             if existing_stock_type == 'INTEGER' or sold_stock_type == 'INTEGER':
-                print("Ã¢Å¡â„¢Ã¯Â¸Â Convertendo colunas de estoque para suportar valores decimais (KG)...")
+                print("ÃƒÂ¢Ã…Â¡Ã¢â€žÂ¢ÃƒÂ¯Ã‚Â¸Ã‚Â Convertendo colunas de estoque para suportar valores decimais (KG)...")
                 
-                # Criar tabela temporÃƒÂ¡ria com tipos corretos
+                # Criar tabela temporÃƒÆ’Ã‚Â¡ria com tipos corretos
                 self.cursor.execute(''' 
                 CREATE TABLE IF NOT EXISTS products_temp (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -643,7 +698,7 @@ class Database:
                     vat_rule_code TEXT DEFAULT 'STANDARD'
                 )''')
                 
-                # Copiar dados para tabela temporÃƒÂ¡ria
+                # Copiar dados para tabela temporÃƒÆ’Ã‚Â¡ria
                 self.cursor.execute('''
                 INSERT INTO products_temp 
                 SELECT id, description, category, CAST(existing_stock AS REAL), 
@@ -659,10 +714,10 @@ class Database:
                 # Remover tabela antiga
                 self.cursor.execute('DROP TABLE products')
                 
-                # Renomear tabela temporÃƒÂ¡ria
+                # Renomear tabela temporÃƒÆ’Ã‚Â¡ria
                 self.cursor.execute('ALTER TABLE products_temp RENAME TO products')
                 
-                print("Ã¢Å“â€¦ Colunas convertidas para REAL (suportam decimais)!")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Colunas convertidas para REAL (suportam decimais)!")
             
             # Tabela de vendas (atualizada para aceitar quantidades decimais - KG)
             self.cursor.execute(''' 
@@ -684,6 +739,7 @@ class Database:
                 net_total REAL DEFAULT 0,
                 vat_amount REAL DEFAULT 0,
                 gross_total REAL DEFAULT 0,
+                owner_username TEXT,
                 FOREIGN KEY (product_id) REFERENCES products (id)
             )''')
 
@@ -699,6 +755,7 @@ class Database:
             ensure_column("sales", "net_total", "REAL DEFAULT 0")
             ensure_column("sales", "vat_amount", "REAL DEFAULT 0")
             ensure_column("sales", "gross_total", "REAL DEFAULT 0")
+            ensure_column("sales", "owner_username", "TEXT")
 
             # Tabela de devolucoes/estornos de venda
             self.cursor.execute(
@@ -716,6 +773,7 @@ class Database:
                     created_role TEXT,
                     terminal_id TEXT,
                     stock_movement_id INTEGER,
+                    owner_username TEXT,
                     FOREIGN KEY (sale_id) REFERENCES sales (id),
                     FOREIGN KEY (product_id) REFERENCES products (id),
                     FOREIGN KEY (stock_movement_id) REFERENCES stock_movements (id)
@@ -762,7 +820,7 @@ class Database:
                 "ON products (sku)"
             )
 
-            # Tabela de movimentos de stock (livro-razÃƒÂ£o)
+            # Tabela de movimentos de stock (livro-razÃƒÆ’Ã‚Â£o)
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS stock_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -792,10 +850,12 @@ class Database:
                 approved_by TEXT,
                 approved_at TEXT,
                 applied INTEGER DEFAULT 1,
+                owner_username TEXT,
                 FOREIGN KEY (product_id) REFERENCES products (id)
             )''')
             ensure_column("stock_movements", "supplier_name", "TEXT")
             ensure_column("stock_movements", "invoice_number", "TEXT")
+            ensure_column("stock_movements", "owner_username", "TEXT")
 
             # Historico de status do produto
             self.cursor.execute('''
@@ -808,8 +868,10 @@ class Database:
                 source TEXT,
                 changed_at TEXT,
                 changed_by TEXT,
+                owner_username TEXT,
                 FOREIGN KEY (product_id) REFERENCES products (id)
             )''')
+            ensure_column("product_status_history", "owner_username", "TEXT")
 
             # ===== NOVA: Tabela de alertas de fraude =====
             self.cursor.execute('''
@@ -828,11 +890,13 @@ class Database:
                 reviewed_by TEXT,
                 reviewed_at TEXT,
                 resolution_note TEXT,
+                owner_username TEXT,
                 FOREIGN KEY (related_product_id) REFERENCES products (id),
                 FOREIGN KEY (related_movement_id) REFERENCES stock_movements (id)
             )''')
+            ensure_column("fraud_alerts", "owner_username", "TEXT")
 
-            # Estado de tarefas automÃ¡ticas (backup/reconciliaÃ§Ã£o)
+            # Estado de tarefas automÃƒÂ¡ticas (backup/reconciliaÃƒÂ§ÃƒÂ£o)
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS automation_state (
                 state_key TEXT PRIMARY KEY,
@@ -840,7 +904,7 @@ class Database:
                 updated_at TEXT NOT NULL
             )''')
 
-            # Registo de inconsistÃªncias encontradas na reconciliaÃ§Ã£o de stock
+            # Registo de inconsistÃƒÂªncias encontradas na reconciliaÃƒÂ§ÃƒÂ£o de stock
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS stock_reconciliation_issues (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -854,9 +918,38 @@ class Database:
                 current_stock REAL,
                 diff_qty REAL,
                 details TEXT,
+                owner_username TEXT,
                 FOREIGN KEY (product_id) REFERENCES products (id),
                 FOREIGN KEY (movement_id) REFERENCES stock_movements (id)
             )''')
+            ensure_column("stock_reconciliation_issues", "owner_username", "TEXT")
+
+            self.cursor.execute(
+                "SELECT username FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1"
+            )
+            legacy_owner_row = self.cursor.fetchone()
+            legacy_owner = legacy_owner_row[0] if legacy_owner_row else None
+            if legacy_owner:
+                self.cursor.execute(
+                    "UPDATE users SET data_owner = ? WHERE data_owner IS NULL OR TRIM(data_owner) = ''",
+                    (legacy_owner,),
+                )
+                for table in (
+                    "products",
+                    "products_archive",
+                    "sales",
+                    "sales_returns",
+                    "stock_movements",
+                    "product_status_history",
+                    "fraud_alerts",
+                    "stock_reconciliation_issues",
+                    "user_logs",
+                ):
+                    self.cursor.execute(
+                        f"UPDATE {table} SET owner_username = ? "
+                        "WHERE owner_username IS NULL OR TRIM(owner_username) = ''",
+                        (legacy_owner,),
+                    )
 
             # Indices para performance
             self.cursor.execute(
@@ -921,25 +1014,29 @@ class Database:
             )
             
             self.conn.commit()
-            print("Ã¢Å“â€¦ Banco de dados configurado com suporte completo a vendas por KG e sistema de perdas!")
+            print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Banco de dados configurado com suporte completo a vendas por KG e sistema de perdas!")
             
         except (sqlite3.Error, ValueError) as e:
-            print(f"Ã¢ÂÅ’ Erro ao configurar o banco de dados: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao configurar o banco de dados: {e}")
+            try:
+                if self.conn:
+                    self.conn.rollback()
+            except Exception:
+                pass
     
+    # Autenticacao e recuperacao de acesso.
     def validate_user(self, username, password):
-        """Validar credenciais do usuÃƒÂ¡rio usando hashing"""
+        """Validar credenciais do usuÃƒÆ’Ã‚Â¡rio usando hashing"""
         try:
             self.cursor.execute(
                 "SELECT password, role FROM users WHERE username = ?", (username,)
             )
             result = self.cursor.fetchone()
             if result and bcrypt.checkpw(password.encode('utf-8'), result[0]):
-                return result[1]  # Retorna a role do usuÃƒÂ¡rio
+                return result[1]  # Retorna a role do usuÃƒÆ’Ã‚Â¡rio
             return None
         except (sqlite3.Error, ValueError) as e:
-            print(f"Erro ao validar usuÃƒÂ¡rio: {e}")
+            print(f"Erro ao validar usuÃƒÆ’Ã‚Â¡rio: {e}")
             return None
 
 
@@ -955,11 +1052,30 @@ class Database:
     def create_admin(self, username, password):
         """Criar admin inicial"""
         try:
+            self.cursor.execute("SELECT COUNT(*) FROM users")
+            had_users = int(self.cursor.fetchone()[0] or 0) > 0
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
             self.cursor.execute(
-                "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-                (username, hashed_password, 'admin'),
+                "INSERT INTO users (username, password, role, data_owner) VALUES (?, ?, ?, ?)",
+                (username, hashed_password, 'admin', username),
             )
+            if not had_users:
+                for table in (
+                    "products",
+                    "products_archive",
+                    "sales",
+                    "sales_returns",
+                    "stock_movements",
+                    "product_status_history",
+                    "fraud_alerts",
+                    "stock_reconciliation_issues",
+                    "user_logs",
+                ):
+                    self.cursor.execute(
+                        f"UPDATE {table} SET owner_username = ? "
+                        "WHERE owner_username IS NULL OR TRIM(owner_username) = ''",
+                        (username,),
+                    )
             self.conn.commit()
             self.log_action(username, 'admin', 'CREATE_USER', f"Admin criado: {username}")
             return True
@@ -1091,13 +1207,35 @@ class Database:
             print(f"Erro ao obter usuario: {e}")
             return None
 
-    def create_user(self, username, password, role, email=None, phone=None):
+    def get_user_data_owner(self, username):
+        """Obter o espaco de dados associado ao usuario."""
+        if not username:
+            return None
+        try:
+            self.cursor.execute(
+                "SELECT COALESCE(NULLIF(TRIM(data_owner), ''), username) FROM users WHERE username = ?",
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            return row[0] if row else None
+        except sqlite3.Error as e:
+            print(f"Erro ao obter dono dos dados: {e}")
+            return username
+
+    def create_user(self, username, password, role, email=None, phone=None, data_owner=None):
         """Criar usuario (admin ou manager)"""
         try:
+            username = str(username or "").strip()
+            role = str(role or "").strip().lower()
+            if not username or not password or role not in ("admin", "manager"):
+                return False
+            email = str(email).strip() if email else None
+            phone = str(phone).strip() if phone else None
+            owner = str(data_owner or username or "").strip() or username
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
             self.cursor.execute(
-                "INSERT INTO users (username, password, role, email, phone) VALUES (?, ?, ?, ?, ?)",
-                (username, hashed_password, role, email, phone),
+                "INSERT INTO users (username, password, role, email, phone, data_owner) VALUES (?, ?, ?, ?, ?, ?)",
+                (username, hashed_password, role, email, phone, owner),
             )
             self.conn.commit()
             return True
@@ -1283,22 +1421,22 @@ class Database:
             return {"ok": False, "reason": "error"}
 
     def log_action(self, username, role, action, details=""):
-        """Registrar aÃƒÂ§ÃƒÂ£o do usuÃƒÂ¡rio no log do sistema"""
+        """Registrar aÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do usuÃƒÆ’Ã‚Â¡rio no log do sistema"""
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.cursor.execute(
                 """
-                INSERT INTO user_logs (username, role, action, details, timestamp)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO user_logs (username, role, action, details, timestamp, owner_username)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (username, role, action, details, timestamp),
+                (username, role, action, details, timestamp, self._owner_value(username)),
             )
             self.conn.commit()
         except sqlite3.Error as e:
             print(f"Erro ao registrar log: {e}")
             self.conn.rollback()
     
-    # ==================== MÃƒâ€°TODOS PARA PRODUTOS ====================
+    # Metodos para produtos, lotes e movimentos de stock.
     
     def _now_str(self):
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1311,6 +1449,71 @@ class Database:
         except Exception:
             return None
 
+    @staticmethod
+    def _normalize_barcode_value(barcode):
+        text = str(barcode or "").strip()
+        return text or None
+
+    def _normalize_expiry_value(self, expiry_date):
+        if expiry_date in (None, ""):
+            return None
+        parsed = _parse_date(expiry_date)
+        if not parsed:
+            raise ValueError("Data de validade invalida.")
+        return parsed.isoformat()
+
+    @staticmethod
+    def _expiry_order_clause(prefix=""):
+        column = f"{prefix}expiry_date" if prefix else "expiry_date"
+        id_column = f"{prefix}id" if prefix else "id"
+        return (
+            f"CASE WHEN {column} IS NULL OR TRIM({column}) = '' THEN 1 ELSE 0 END, "
+            f"DATE({column}) ASC, {id_column} ASC"
+        )
+
+    @staticmethod
+    def _catalog_identity_sql(prefix=""):
+        barcode_column = f"{prefix}barcode" if prefix else "barcode"
+        id_column = f"{prefix}id" if prefix else "id"
+        return (
+            "CASE "
+            f"WHEN {barcode_column} IS NOT NULL AND TRIM({barcode_column}) != '' "
+            f"THEN LOWER(TRIM({barcode_column})) "
+            f"ELSE 'id:' || CAST({id_column} AS TEXT) "
+            "END"
+        )
+
+    def _find_existing_batch(self, barcode, expiry_date, exclude_id=None):
+        barcode_clean = self._normalize_barcode_value(barcode)
+        if not barcode_clean:
+            return None
+
+        normalized_expiry = self._normalize_expiry_value(expiry_date)
+        query = """
+            SELECT id, existing_stock, sold_stock, unit_purchase_price
+            FROM products
+            WHERE LOWER(TRIM(barcode)) = LOWER(TRIM(?))
+        """
+        params = [barcode_clean]
+
+        if normalized_expiry is None:
+            query += " AND (expiry_date IS NULL OR TRIM(expiry_date) = '')"
+        else:
+            query += " AND TRIM(COALESCE(expiry_date, '')) = ?"
+            params.append(normalized_expiry)
+
+        if exclude_id is not None:
+            query += " AND id != ?"
+            params.append(int(exclude_id))
+
+        scope_sql, scope_params = self._owner_filter()
+        query += scope_sql
+        params.extend(scope_params)
+
+        query += " LIMIT 1"
+        self.cursor.execute(query, tuple(params))
+        return self.cursor.fetchone()
+
     def _to_dt_str(self, value, end=False):
         if isinstance(value, datetime):
             return value.strftime("%Y-%m-%d %H:%M:%S")
@@ -1322,342 +1525,14 @@ class Database:
             return t.strftime("%Y-%m-%d %H:%M:%S")
         return value
 
-    # ==================== AUTOMAÃ‡Ã•ES CRÃTICAS ====================
-    def _get_automation_state_dt(self, state_key):
-        try:
-            self.cursor.execute(
-                "SELECT state_value FROM automation_state WHERE state_key = ?",
-                (state_key,),
-            )
-            row = self.cursor.fetchone()
-            if not row or not row[0]:
-                return None
-            return datetime.fromisoformat(str(row[0]))
-        except Exception:
-            return None
-
-    def _set_automation_state(self, state_key, state_value):
-        now = self._now_str()
-        self.cursor.execute(
-            """
-            INSERT INTO automation_state (state_key, state_value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(state_key) DO UPDATE SET
-                state_value = excluded.state_value,
-                updated_at = excluded.updated_at
-            """,
-            (state_key, str(state_value or ""), now),
-        )
-
-    def _cleanup_old_backups(self, retention_days=None):
-        retention_days = retention_days or self.BACKUP_RETENTION_DAYS
-        root = self.backup_root
-        if not os.path.isdir(root):
-            return 0
-
-        cutoff = datetime.now() - timedelta(days=int(retention_days))
-        removed = 0
-
-        for dirpath, _dirnames, filenames in os.walk(root):
-            for fname in filenames:
-                if not fname.lower().endswith((".db", ".sqlite", ".sqlite3", ".bak")):
-                    continue
-                fpath = os.path.join(dirpath, fname)
-                try:
-                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
-                    if mtime < cutoff:
-                        os.remove(fpath)
-                        removed += 1
-                except Exception:
-                    continue
-
-        # Limpar diretÃ³rios vazios de forma segura
-        for dirpath, _dirnames, _filenames in os.walk(root, topdown=False):
-            try:
-                if dirpath != root and not os.listdir(dirpath):
-                    os.rmdir(dirpath)
-            except Exception:
-                pass
-
-        return removed
-
-    def _verify_backup_restore(self, backup_path):
-        # 1) Integridade do backup
-        try:
-            with sqlite3.connect(backup_path) as conn_backup:
-                cur = conn_backup.cursor()
-                cur.execute("PRAGMA integrity_check")
-                row = cur.fetchone()
-                if not row or str(row[0]).lower() != "ok":
-                    return False, "integrity_check_failed"
-        except Exception as e:
-            return False, f"integrity_open_failed: {e}"
-
-        # 2) SimulaÃ§Ã£o de restauraÃ§Ã£o para arquivo temporÃ¡rio
-        tmp_fd = None
-        tmp_path = None
-        try:
-            tmp_fd, tmp_path = tempfile.mkstemp(prefix="restore_test_", suffix=".db")
-            os.close(tmp_fd)
-            tmp_fd = None
-
-            with sqlite3.connect(backup_path) as src, sqlite3.connect(tmp_path) as dst:
-                src.backup(dst)
-                cur = dst.cursor()
-                cur.execute("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
-                tables_count = int((cur.fetchone() or [0])[0])
-                if tables_count <= 0:
-                    return False, "restore_validation_failed_no_tables"
-                cur.execute("SELECT 1 FROM sqlite_master WHERE name = 'products' LIMIT 1")
-                if not cur.fetchone():
-                    return False, "restore_validation_failed_products_missing"
-            return True, "ok"
-        except Exception as e:
-            return False, f"restore_test_failed: {e}"
-        finally:
-            try:
-                if tmp_fd is not None:
-                    os.close(tmp_fd)
-            except Exception:
-                pass
-            try:
-                if tmp_path and os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
-
-    def create_verified_backup(self):
-        """
-        Cria backup automÃ¡tico e valida restauraÃ§Ã£o.
-        Retorna dict com status e caminho.
-        """
-        try:
-            now = datetime.now()
-            day_folder = os.path.join(self.backup_root, now.strftime("%Y-%m-%d"))
-            os.makedirs(day_folder, exist_ok=True)
-
-            db_stem = os.path.splitext(os.path.basename(self.db_path))[0] or "inventory"
-            backup_name = f"{db_stem}_backup_{now.strftime('%H-%M-%S')}.sqlite3"
-            backup_path = os.path.join(day_folder, backup_name)
-
-            # Garantir estado consistente antes de copiar
-            self.conn.commit()
-            with sqlite3.connect(backup_path) as backup_conn:
-                self.conn.backup(backup_conn)
-
-            ok, reason = self._verify_backup_restore(backup_path)
-            if not ok:
-                try:
-                    os.remove(backup_path)
-                except Exception:
-                    pass
-                return {"ok": False, "path": backup_path, "reason": reason}
-
-            removed = self._cleanup_old_backups(self.BACKUP_RETENTION_DAYS)
-            return {"ok": True, "path": backup_path, "removed_old": removed}
-        except Exception as e:
-            return {"ok": False, "path": None, "reason": str(e)}
-
-    def run_stock_reconciliation(self):
-        """
-        Reconcilia stock atual com cadeia de movimentos aplicados.
-        Regras:
-        - consistÃªncia por movimento: stock_before +/- qty == stock_after
-        - consistÃªncia de cadeia: stock_before de um movimento deve igualar
-          stock_after do movimento anterior do mesmo produto
-        - consistÃªncia final: Ãºltimo stock_after deve bater com products.existing_stock
-        """
-        now = self._now_str()
-        tolerance = float(self.RECONCILE_DIFF_TOLERANCE)
-        issues = []
-
-        try:
-            self.cursor.execute("SELECT id, existing_stock FROM products")
-            products_stock = {int(pid): float(stk or 0.0) for pid, stk in self.cursor.fetchall()}
-
-            # Cadeia cronolÃ³gica por produto
-            self.cursor.execute(
-                """
-                SELECT product_id, id, direction, qty, stock_before, stock_after
-                FROM stock_movements
-                WHERE applied = 1
-                ORDER BY product_id ASC, created_at ASC, id ASC
-                """
-            )
-            chain_rows = self.cursor.fetchall()
-
-            previous_after = {}
-            latest_after = {}
-
-            for product_id, movement_id, direction, qty, stock_before, stock_after in chain_rows:
-                product_id = int(product_id)
-                qty = float(qty or 0.0)
-                before = float(stock_before or 0.0)
-                after = float(stock_after or 0.0)
-                prev = previous_after.get(product_id)
-
-                if prev is not None and abs(before - prev) > tolerance:
-                    issues.append(
-                        (
-                            now,
-                            product_id,
-                            "CHAIN_BREAK",
-                            movement_id,
-                            before,
-                            after,
-                            prev,
-                            products_stock.get(product_id),
-                            before - prev,
-                            f"before={before:.4f} previous_after={prev:.4f}",
-                        )
-                    )
-
-                if direction == "IN":
-                    expected_after = before + qty
-                elif direction == "OUT":
-                    expected_after = before - qty
-                else:
-                    expected_after = before
-
-                if direction not in ("IN", "OUT") or abs(after - expected_after) > tolerance:
-                    issues.append(
-                        (
-                            now,
-                            product_id,
-                            "MOVEMENT_MISMATCH",
-                            movement_id,
-                            before,
-                            after,
-                            expected_after,
-                            products_stock.get(product_id),
-                            after - expected_after,
-                            f"direction={direction} qty={qty:.4f}",
-                        )
-                    )
-
-                previous_after[product_id] = after
-                latest_after[product_id] = after
-
-            # Verificar estado final da tabela products
-            for product_id, current_stock in products_stock.items():
-                if product_id not in latest_after:
-                    continue
-                expected_current = float(latest_after[product_id])
-                diff = current_stock - expected_current
-                if abs(diff) > tolerance:
-                    issues.append(
-                        (
-                            now,
-                            product_id,
-                            "FINAL_STOCK_MISMATCH",
-                            None,
-                            None,
-                            expected_current,
-                            expected_current,
-                            current_stock,
-                            diff,
-                            f"products.existing_stock={current_stock:.4f} latest_after={expected_current:.4f}",
-                        )
-                    )
-
-            # Limpar registros antigos para nÃ£o crescer indefinidamente
-            self.cursor.execute(
-                """
-                DELETE FROM stock_reconciliation_issues
-                WHERE check_run_at < DATETIME('now', '-90 day')
-                """
-            )
-
-            if issues:
-                self.cursor.executemany(
-                    """
-                    INSERT INTO stock_reconciliation_issues (
-                        check_run_at, product_id, issue_type, movement_id,
-                        stock_before, stock_after, expected_stock_after,
-                        current_stock, diff_qty, details
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    issues,
-                )
-
-            self.conn.commit()
-            return {
-                "ok": True,
-                "checked_products": len(products_stock),
-                "issues_found": len(issues),
-            }
-        except Exception as e:
-            self.conn.rollback()
-            return {
-                "ok": False,
-                "checked_products": 0,
-                "issues_found": 0,
-                "reason": str(e),
-            }
-
-    def run_automation_tasks(self, force=False):
-        """
-        Executa automaÃ§Ãµes crÃ­ticas:
-        1) backup automÃ¡tico com teste de restauraÃ§Ã£o
-        2) reconciliaÃ§Ã£o automÃ¡tica de stock
-        """
-        now = datetime.now()
-        summary = {
-            "backup": {"executed": False, "ok": True, "reason": ""},
-            "reconcile": {"executed": False, "ok": True, "issues": 0, "reason": ""},
-        }
-        try:
-            # Backup diÃ¡rio
-            should_backup = bool(force)
-            if not should_backup:
-                last_backup = self._get_automation_state_dt("auto_backup_last_run")
-                should_backup = (last_backup is None) or (
-                    now - last_backup >= timedelta(hours=self.BACKUP_INTERVAL_HOURS)
-                )
-            if should_backup:
-                backup_result = self.create_verified_backup()
-                summary["backup"]["executed"] = True
-                summary["backup"]["ok"] = bool(backup_result.get("ok"))
-                summary["backup"]["reason"] = str(backup_result.get("reason") or "")
-                self._set_automation_state("auto_backup_last_run", now.isoformat())
-                self._set_automation_state(
-                    "auto_backup_last_status",
-                    "ok" if backup_result.get("ok") else (backup_result.get("reason") or "error"),
-                )
-
-            # ReconciliaÃ§Ã£o horÃ¡ria
-            should_reconcile = bool(force)
-            if not should_reconcile:
-                last_reconcile = self._get_automation_state_dt("auto_reconcile_last_run")
-                should_reconcile = (last_reconcile is None) or (
-                    now - last_reconcile >= timedelta(minutes=self.RECONCILE_INTERVAL_MINUTES)
-                )
-            if should_reconcile:
-                rec_result = self.run_stock_reconciliation()
-                summary["reconcile"]["executed"] = True
-                summary["reconcile"]["ok"] = bool(rec_result.get("ok"))
-                summary["reconcile"]["issues"] = int(rec_result.get("issues_found") or 0)
-                summary["reconcile"]["reason"] = str(rec_result.get("reason") or "")
-                self._set_automation_state("auto_reconcile_last_run", now.isoformat())
-                self._set_automation_state(
-                    "auto_reconcile_last_status",
-                    f"ok:{summary['reconcile']['issues']}"
-                    if rec_result.get("ok")
-                    else (rec_result.get("reason") or "error"),
-                )
-
-            self.conn.commit()
-        except Exception as e:
-            self.conn.rollback()
-            print(f"Erro ao executar automacoes: {e}")
-        return summary
-
     # ==================== STATUS E EXPIRACAO ====================
     def set_product_status(self, product_id, new_status, reason, username, source="MANUAL"):
         """Atualiza status do produto e grava historico."""
         try:
+            scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
-                "SELECT status FROM products WHERE id = ?", (product_id,)
+                f"SELECT status FROM products WHERE id = ?{scope_sql}",
+                (product_id, *scope_params),
             )
             row = self.cursor.fetchone()
             if not row:
@@ -1676,13 +1551,16 @@ class Database:
                 """,
                 (new_status, source, reason, now, user, product_id),
             )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return False
             self.cursor.execute(
                 """
                 INSERT INTO product_status_history
-                (product_id, old_status, new_status, reason, source, changed_at, changed_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (product_id, old_status, new_status, reason, source, changed_at, changed_by, owner_username)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (product_id, old_status, new_status, reason, source, now, user),
+                (product_id, old_status, new_status, reason, source, now, user, self._owner_value(user)),
             )
             self.conn.commit()
             return True
@@ -1700,8 +1578,10 @@ class Database:
             near_date = today + timedelta(days=NEAR_EXPIRY_DAYS)
             changes = []
 
+            scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
-                "SELECT id, status, status_source, expiry_date FROM products"
+                f"SELECT id, status, status_source, expiry_date FROM products WHERE 1=1{scope_sql}",
+                tuple(scope_params),
             )
             rows = self.cursor.fetchall()
 
@@ -1786,13 +1666,15 @@ class Database:
         approved_at=None,
         apply_stock=True,
     ):
+        scope_sql, scope_params = self._owner_filter()
         cursor.execute(
-            """
+            f"""
             SELECT existing_stock, sold_stock, unit_purchase_price,
                    sale_price, is_sold_by_weight
             FROM products WHERE id = ?
+            {scope_sql}
             """,
-            (product_id,),
+            (product_id, *scope_params),
         )
         product = cursor.fetchone()
         if not product:
@@ -1872,8 +1754,8 @@ class Database:
                 stock_before, stock_after, reason, note, supplier_name, invoice_number, evidence_path,
                 reference_table, reference_id, created_at, created_by,
                 created_role, terminal_id, approval_status, approved_by,
-                approved_at, applied
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                approved_at, applied, owner_username
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 product_id, movement_type, direction, qty, unit,
@@ -1881,7 +1763,7 @@ class Database:
                 stock_before, stock_after, reason, note, supplier_name, invoice_number, evidence_path,
                 reference_table, reference_id, now_str, created_by,
                 created_role, terminal_id, approval_status, approved_by,
-                approved_at, applied
+                approved_at, applied, self._owner_value(created_by)
             ),
         )
         return cursor.lastrowid
@@ -2211,7 +2093,8 @@ class Database:
         product_id,
         qty,
         unit_cost,
-        reason="ReposiÃƒÂ§ÃƒÂ£o de stock",
+        expiry_date=None,
+        reason="ReposiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o de stock",
         note="",
         evidence_path=None,
         created_by=None,
@@ -2220,7 +2103,7 @@ class Database:
         supplier_name=None,
         invoice_number=None,
     ):
-        """Registra reposiÃƒÂ§ÃƒÂ£o de stock e atualiza custo mÃƒÂ©dio."""
+        """Registra reposiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o de stock e atualiza custo mÃƒÆ’Ã‚Â©dio."""
         try:
             qty = float(qty)
             unit_cost = float(unit_cost)
@@ -2229,7 +2112,9 @@ class Database:
 
             self.cursor.execute(
                 """
-                SELECT existing_stock, unit_purchase_price, sale_price
+                SELECT description, category, existing_stock, unit_purchase_price, sale_price,
+                       barcode, is_sold_by_weight, expiry_date, package_quantity,
+                       units_per_package, allow_pack_sale, vat_rule_code
                 FROM products WHERE id = ?
                 """,
                 (product_id,),
@@ -2238,13 +2123,73 @@ class Database:
             if not product:
                 return None
 
-            stock_before = float(product[0])
-            old_cost = float(product[1] or 0)
-            sale_price = float(product[2] or 0)
+            (
+                description,
+                category,
+                _base_stock,
+                _base_cost,
+                base_sale_price,
+                barcode,
+                is_sold_by_weight,
+                base_expiry,
+                package_quantity,
+                units_per_package,
+                allow_pack_sale,
+                vat_rule_code,
+            ) = product
+
+            normalized_barcode = self._normalize_barcode_value(barcode)
+            normalized_base_expiry = self._normalize_expiry_value(base_expiry)
+            target_expiry = (
+                self._normalize_expiry_value(expiry_date)
+                if expiry_date not in (None, "")
+                else normalized_base_expiry
+            )
+
+            target_product_id = int(product_id)
+            if normalized_barcode and target_expiry != normalized_base_expiry:
+                sibling = self._find_existing_batch(normalized_barcode, target_expiry)
+                if sibling:
+                    target_product_id = int(sibling[0])
+                else:
+                    cloned_profit = float(base_sale_price or 0) - unit_cost
+                    target_product_id = self._insert_product_row(
+                        description=description,
+                        category=category,
+                        existing_stock=0.0,
+                        sold_stock=0.0,
+                        sale_price=float(base_sale_price or 0),
+                        total_purchase_price=0.0,
+                        unit_purchase_price=unit_cost,
+                        profit_per_unit=cloned_profit,
+                        barcode=normalized_barcode,
+                        expiry_date=target_expiry,
+                        is_sold_by_weight=bool(is_sold_by_weight),
+                        package_quantity=package_quantity,
+                        units_per_package=units_per_package,
+                        allow_pack_sale=allow_pack_sale,
+                        vat_rule_code=self._normalize_vat_rule_code(vat_rule_code),
+                    )
+
+            self.cursor.execute(
+                """
+                SELECT existing_stock, unit_purchase_price, sale_price
+                FROM products WHERE id = ?
+                """,
+                (target_product_id,),
+            )
+            target_product = self.cursor.fetchone()
+            if not target_product:
+                self.conn.rollback()
+                return None
+
+            stock_before = float(target_product[0] or 0.0)
+            old_cost = float(target_product[1] or 0.0)
+            sale_price = float(target_product[2] or 0.0)
 
             movement_id = self._record_stock_movement_tx(
                 self.cursor,
-                product_id,
+                target_product_id,
                 "RESTOCK",
                 qty,
                 "IN",
@@ -2284,7 +2229,7 @@ class Database:
                     profit_per_unit = ?
                 WHERE id = ?
                 """,
-                (new_unit_cost, new_total_purchase, profit_per_unit, product_id),
+                (new_unit_cost, new_total_purchase, profit_per_unit, target_product_id),
             )
 
             self.conn.commit()
@@ -2295,7 +2240,7 @@ class Database:
             return None
 
     def get_loss_records(self, start_dt, end_dt, limit=200):
-        """Lista detalhada de perdas no perÃƒÂ­odo."""
+        """Lista detalhada de perdas no perÃƒÆ’Ã‚Â­odo."""
         start = self._to_dt_str(start_dt, end=False)
         end = self._to_dt_str(end_dt, end=True)
         try:
@@ -2333,10 +2278,10 @@ class Database:
             print(f"Erro ao obter registros de perdas: {e}")
             return []
 
-    # ==================== NOVO: MÃƒâ€°TODOS DE CÃƒÂLCULO DE PERDAS ====================
+    # ==================== NOVO: MÃƒÆ’Ã¢â‚¬Â°TODOS DE CÃƒÆ’Ã‚ÂLCULO DE PERDAS ====================
     
     def get_restock_records(self, start_dt, end_dt, limit=300):
-        """Lista detalhada de reposiÃƒÂ§ÃƒÂµes no perÃƒÂ­odo."""
+        """Lista detalhada de reposiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes no perÃƒÆ’Ã‚Â­odo."""
         start = self._to_dt_str(start_dt, end=False)
         end = self._to_dt_str(end_dt, end=True)
         try:
@@ -2368,15 +2313,15 @@ class Database:
             )
             return self.cursor.fetchall()
         except sqlite3.Error as e:
-            print(f"Erro ao obter reposiÃƒÂ§ÃƒÂµes: {e}")
+            print(f"Erro ao obter reposiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes: {e}")
             return []
 
     def calculate_loss_metrics(self, start_dt, end_dt):
         """
-        Calcula todas as mÃƒÂ©tricas de perdas para um perÃƒÂ­odo
+        Calcula todas as mÃƒÆ’Ã‚Â©tricas de perdas para um perÃƒÆ’Ã‚Â­odo
         
         Returns:
-            Dict com todas as mÃƒÂ©tricas ou None em caso de erro
+            Dict com todas as mÃƒÆ’Ã‚Â©tricas ou None em caso de erro
         """
         start = self._to_dt_str(start_dt, end=False)
         end = self._to_dt_str(end_dt, end=True)
@@ -2491,14 +2436,14 @@ class Database:
             }
             
         except sqlite3.Error as e:
-            print(f"Erro ao calcular mÃƒÂ©tricas de perdas: {e}")
+            print(f"Erro ao calcular mÃƒÆ’Ã‚Â©tricas de perdas: {e}")
             return None
 
-    # ==================== NOVO: DETECÃƒâ€¡ÃƒÆ’O DE FRAUDE ====================
+    # ==================== NOVO: DETECÃƒÆ’Ã¢â‚¬Â¡ÃƒÆ’Ã†â€™O DE FRAUDE ====================
     
     def detect_fraud_patterns(self, days_lookback=30):
         """
-        Detecta padrÃƒÂµes suspeitos nos ÃƒÂºltimos X dias
+        Detecta padrÃƒÆ’Ã‚Âµes suspeitos nos ÃƒÆ’Ã‚Âºltimos X dias
         
         Returns:
             Lista de alertas ordenados por severidade
@@ -2508,7 +2453,7 @@ class Database:
         
         alerts = []
         
-        # 1. Utilizadores com perdas acima da mÃƒÂ©dia
+        # 1. Utilizadores com perdas acima da mÃƒÆ’Ã‚Â©dia
         try:
             start = self._to_dt_str(start_date, end=False)
             end = self._to_dt_str(end_date, end=True)
@@ -2548,7 +2493,7 @@ class Database:
                             'alert_type': 'HIGH_LOSS_USER',
                             'severity': severity,
                             'title': f'Utilizador com perdas elevadas: {user}',
-                            'description': f'{user} registou perdas de {cost:.2f} MZN ({percentage_above:.1f}% acima da mÃƒÂ©dia)',
+                            'description': f'{user} registou perdas de {cost:.2f} MZN ({percentage_above:.1f}% acima da mÃƒÆ’Ã‚Â©dia)',
                             'related_user': user,
                             'related_product_id': None,
                             'data': {
@@ -2605,7 +2550,7 @@ class Database:
         except Exception as e:
             print(f"Erro ao detectar produtos com perdas repetidas: {e}")
         
-        # 3. Perdas fora do horÃƒÂ¡rio (22h-6h)
+        # 3. Perdas fora do horÃƒÆ’Ã‚Â¡rio (22h-6h)
         try:
             self.cursor.execute(
                 f"""
@@ -2638,8 +2583,8 @@ class Database:
                 alerts.append({
                     'alert_type': 'OFF_HOURS_LOSS',
                     'severity': 2,
-                    'title': f'Perda fora do horÃƒÂ¡rio: {user}',
-                    'description': f'Perda registada ÃƒÂ s {time_str} por {user} ({movement_type}, {cost:.2f} MZN)',
+                    'title': f'Perda fora do horÃƒÆ’Ã‚Â¡rio: {user}',
+                    'description': f'Perda registada ÃƒÆ’Ã‚Â s {time_str} por {user} ({movement_type}, {cost:.2f} MZN)',
                     'related_user': user,
                     'related_product_id': product_id,
                     'data': {
@@ -2651,9 +2596,9 @@ class Database:
                     }
                 })
         except Exception as e:
-            print(f"Erro ao detectar perdas fora do horÃƒÂ¡rio: {e}")
+            print(f"Erro ao detectar perdas fora do horÃƒÆ’Ã‚Â¡rio: {e}")
         
-        # 4. Perdas sem evidÃƒÂªncia (acima de 50% do limite)
+        # 4. Perdas sem evidÃƒÆ’Ã‚Âªncia (acima de 50% do limite)
         try:
             high_value_threshold = LOSS_VALUE_LIMIT_MZN * 0.5
             
@@ -2684,7 +2629,7 @@ class Database:
                 alerts.append({
                     'alert_type': 'NO_EVIDENCE',
                     'severity': 2,
-                    'title': f'Perda sem evidÃƒÂªncia: {cost:.2f} MZN',
+                    'title': f'Perda sem evidÃƒÆ’Ã‚Âªncia: {cost:.2f} MZN',
                     'description': f'{user} registou {movement_type} de {cost:.2f} MZN sem foto/comprovativo',
                     'related_user': user,
                     'related_product_id': product_id,
@@ -2696,14 +2641,14 @@ class Database:
                     }
                 })
         except Exception as e:
-            print(f"Erro ao detectar perdas sem evidÃƒÂªncia: {e}")
+            print(f"Erro ao detectar perdas sem evidÃƒÆ’Ã‚Âªncia: {e}")
         
         return sorted(alerts, key=lambda x: x['severity'], reverse=True)
 
-    # ==================== NOVO: APROVAÃƒâ€¡Ãƒâ€¢ES PENDENTES ====================
+    # ==================== NOVO: APROVAÃƒÆ’Ã¢â‚¬Â¡ÃƒÆ’Ã¢â‚¬Â¢ES PENDENTES ====================
     
     def get_pending_approvals(self):
-        """Obter todas as perdas pendentes de aprovaÃƒÂ§ÃƒÂ£o"""
+        """Obter todas as perdas pendentes de aprovaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o"""
         try:
             loss_types = list(LOSS_TYPES)
             placeholders = ",".join(["?"] * len(loss_types))
@@ -2739,7 +2684,7 @@ class Database:
             return self.cursor.fetchall()
             
         except sqlite3.Error as e:
-            print(f"Erro ao obter aprovaÃƒÂ§ÃƒÂµes pendentes: {e}")
+            print(f"Erro ao obter aprovaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes pendentes: {e}")
             return []
 
     @staticmethod
@@ -2765,6 +2710,63 @@ class Database:
 
         return units, 1
 
+    def _insert_product_row(
+        self,
+        description,
+        category,
+        existing_stock,
+        sold_stock,
+        sale_price,
+        total_purchase_price,
+        unit_purchase_price,
+        profit_per_unit,
+        barcode,
+        expiry_date,
+        is_sold_by_weight,
+        package_quantity,
+        units_per_package,
+        allow_pack_sale,
+        vat_rule_code,
+        date_added=None,
+    ):
+        self.cursor.execute(
+            """
+            INSERT INTO products (
+                description, category, existing_stock, sold_stock, sale_price,
+                total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
+                expiry_date, date_added, is_sold_by_weight, package_quantity,
+                units_per_package, allow_pack_sale, vat_rule_code, owner_username
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                description,
+                category,
+                float(existing_stock),
+                float(sold_stock),
+                float(sale_price),
+                float(total_purchase_price),
+                float(unit_purchase_price),
+                float(profit_per_unit),
+                barcode,
+                expiry_date,
+                date_added or self._now_str(),
+                1 if is_sold_by_weight else 0,
+                package_quantity,
+                units_per_package,
+                allow_pack_sale,
+                vat_rule_code,
+                self._owner_value(),
+            ),
+        )
+        product_id = self.cursor.lastrowid
+        sku = self._build_sku(product_id, description)
+        self.cursor.execute(
+            "UPDATE products SET sku = ? WHERE id = ?",
+            (sku, product_id),
+        )
+        return product_id
+
     def add_product(
         self,
         description,
@@ -2784,58 +2786,109 @@ class Database:
     ):
         """Adicionar um novo produto ao banco de dados"""
         try:
+            incoming_stock = float(existing_stock)
+            sale_price = float(sale_price)
+            total_purchase_price = float(total_purchase_price)
+            unit_purchase_price = float(unit_purchase_price)
             profit_per_unit = sale_price - unit_purchase_price
-            date_added = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            date_added = self._now_str()
+            normalized_barcode = self._normalize_barcode_value(barcode)
+            normalized_expiry = self._normalize_expiry_value(expiry_date)
             normalized_vat_rule = self._normalize_vat_rule_code(vat_rule_code)
             normalized_units, normalized_allow = self._normalize_pack_sale_fields(
                 is_sold_by_weight,
                 units_per_package,
                 allow_pack_sale,
             )
-    
-            self.cursor.execute(
-                '''
-                INSERT INTO products (
-                    description, category, existing_stock, sold_stock, sale_price,
-                    total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
-                    expiry_date, date_added, is_sold_by_weight, package_quantity,
-                    units_per_package, allow_pack_sale, vat_rule_code
+
+            existing_batch = self._find_existing_batch(normalized_barcode, normalized_expiry)
+            if existing_batch:
+                product_id, current_stock, current_sold_stock, current_unit_cost = existing_batch
+                current_stock = float(current_stock or 0.0)
+                current_sold_stock = float(current_sold_stock or 0.0)
+                current_unit_cost = float(current_unit_cost or 0.0)
+                merged_stock = current_stock + incoming_stock
+
+                if merged_stock <= 0 or current_stock <= 0:
+                    merged_unit_cost = unit_purchase_price
+                else:
+                    merged_unit_cost = (
+                        (current_stock * current_unit_cost) + (incoming_stock * unit_purchase_price)
+                    ) / merged_stock
+
+                merged_total_purchase = merged_unit_cost * merged_stock
+                merged_profit_per_unit = sale_price - merged_unit_cost
+
+                self.cursor.execute(
+                    """
+                    UPDATE products
+                    SET description = ?,
+                        category = ?,
+                        existing_stock = ?,
+                        sold_stock = ?,
+                        sale_price = ?,
+                        total_purchase_price = ?,
+                        unit_purchase_price = ?,
+                        profit_per_unit = ?,
+                        barcode = ?,
+                        expiry_date = ?,
+                        is_sold_by_weight = ?,
+                        package_quantity = ?,
+                        units_per_package = ?,
+                        allow_pack_sale = ?,
+                        vat_rule_code = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        description,
+                        category,
+                        merged_stock,
+                        current_sold_stock,
+                        sale_price,
+                        merged_total_purchase,
+                        merged_unit_cost,
+                        merged_profit_per_unit,
+                        normalized_barcode,
+                        normalized_expiry,
+                        1 if is_sold_by_weight else 0,
+                        package_quantity,
+                        normalized_units,
+                        normalized_allow,
+                        normalized_vat_rule,
+                        product_id,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''',
-                (
-                    description,
-                    category,
-                    float(existing_stock),
-                    float(sold_stock),
-                    sale_price,
-                    total_purchase_price,
-                    unit_purchase_price,
-                    profit_per_unit,
-                    barcode,
-                    expiry_date,
-                    date_added,
-                    1 if is_sold_by_weight else 0,
-                    package_quantity,
-                    normalized_units,
-                    normalized_allow,
-                    normalized_vat_rule,
-                ),
-            )
-            product_id = self.cursor.lastrowid
-            sku = self._build_sku(product_id, description)
-            self.cursor.execute(
-                "UPDATE products SET sku = ? WHERE id = ?",
-                (sku, product_id),
+                self.conn.commit()
+                tipo = "KG" if is_sold_by_weight else "UNIDADE"
+                print(f"Lote existente fundido com sucesso! ID: {product_id} | Tipo: {tipo}")
+                return product_id
+
+            product_id = self._insert_product_row(
+                description=description,
+                category=category,
+                existing_stock=incoming_stock,
+                sold_stock=float(sold_stock),
+                sale_price=sale_price,
+                total_purchase_price=total_purchase_price,
+                unit_purchase_price=unit_purchase_price,
+                profit_per_unit=profit_per_unit,
+                barcode=normalized_barcode,
+                expiry_date=normalized_expiry,
+                is_sold_by_weight=is_sold_by_weight,
+                package_quantity=package_quantity,
+                units_per_package=normalized_units,
+                allow_pack_sale=normalized_allow,
+                vat_rule_code=normalized_vat_rule,
+                date_added=date_added,
             )
             self.conn.commit()
             tipo = "KG" if is_sold_by_weight else "UNIDADE"
-            print(f"Ã¢Å“â€¦ Produto adicionado com sucesso! ID: {product_id} | Tipo: {tipo}")
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Produto adicionado com sucesso! ID: {product_id} | Tipo: {tipo}")
             
             return product_id
             
         except (sqlite3.Error, ValueError) as e:
-            print(f"Ã¢ÂÅ’ Erro ao adicionar produto: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao adicionar produto: {e}")
             import traceback
             traceback.print_exc()
             self.conn.rollback()
@@ -2860,14 +2913,41 @@ class Database:
         vat_rule_code=DEFAULT_VAT_RULE_CODE,
     ):
         """Atualizar produto existente"""
+        return self._update_product_impl(
+            id=id,
+            description=description,
+            category=category,
+            existing_stock=existing_stock,
+            sold_stock=sold_stock,
+            sale_price=sale_price,
+            total_purchase_price=total_purchase_price,
+            unit_purchase_price=unit_purchase_price,
+            barcode=barcode,
+            expiry_date=expiry_date,
+            is_sold_by_weight=is_sold_by_weight,
+            package_quantity=package_quantity,
+            units_per_package=units_per_package,
+            allow_pack_sale=allow_pack_sale,
+            vat_rule_code=vat_rule_code,
+        )
         try:
+            sale_price = float(sale_price)
+            total_purchase_price = float(total_purchase_price)
+            unit_purchase_price = float(unit_purchase_price)
             profit_per_unit = sale_price - unit_purchase_price
+            normalized_barcode = self._normalize_barcode_value(barcode)
+            normalized_expiry = self._normalize_expiry_value(expiry_date)
             normalized_vat_rule = self._normalize_vat_rule_code(vat_rule_code)
             normalized_units, normalized_allow = self._normalize_pack_sale_fields(
                 is_sold_by_weight,
                 units_per_package,
                 allow_pack_sale,
             )
+            if self._find_existing_batch(normalized_barcode, normalized_expiry, exclude_id=id):
+                raise ValueError(
+                    "Ja existe um lote com este codigo de barras e validade. Use a reposicao "
+                    "para somar stock ou informe uma validade diferente."
+                )
             self.cursor.execute(
                 """UPDATE products SET 
                    description = ?, category = ?, existing_stock = ?, sold_stock = ?, 
@@ -2876,34 +2956,36 @@ class Database:
                    units_per_package = ?, allow_pack_sale = ?, vat_rule_code = ?
                    WHERE id = ?""", 
                 (description, category, float(existing_stock), float(sold_stock), sale_price, 
-                 total_purchase_price, unit_purchase_price, profit_per_unit, barcode, expiry_date,
+                 total_purchase_price, unit_purchase_price, profit_per_unit, normalized_barcode, normalized_expiry,
                  1 if is_sold_by_weight else 0, package_quantity, normalized_units, normalized_allow, normalized_vat_rule, id)
             )
             self.conn.commit()
             
             tipo = "KG" if is_sold_by_weight else "UNIDADE"
-            print(f"Ã¢Å“â€¦ Produto {id} atualizado com sucesso! | Tipo: {tipo}")
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Produto {id} atualizado com sucesso! | Tipo: {tipo}")
             
         except (sqlite3.Error, ValueError) as e:
-            print(f"Ã¢ÂÅ’ Erro ao atualizar produto: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao atualizar produto: {e}")
             import traceback
             traceback.print_exc()
             self.conn.rollback()
     
     def delete_product(self, id, username=None):
-        """Excluir produto (hard delete) e arquivar histÃƒÂ³rico"""
+        """Excluir produto (hard delete) e arquivar histÃƒÆ’Ã‚Â³rico"""
         try:
             user = username or "SYSTEM"
+            scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
-                """
+                f"""
                 SELECT id, description, category, existing_stock, sold_stock, sale_price,
                        total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                        expiry_date, date_added, is_sold_by_weight, package_quantity,
                        status, status_source, status_reason, status_updated_at, status_updated_by,
-                       sku, units_per_package, allow_pack_sale, vat_rule_code
+                       sku, units_per_package, allow_pack_sale, vat_rule_code, owner_username
                 FROM products WHERE id = ?
+                {scope_sql}
                 """,
-                (id,),
+                (id, *scope_params),
             )
             row = self.cursor.fetchone()
             if not row:
@@ -2917,9 +2999,9 @@ class Database:
                     total_purchase_price, unit_purchase_price, profit_per_unit, barcode,
                     expiry_date, date_added, is_sold_by_weight, package_quantity,
                     status, status_source, status_reason, status_updated_at, status_updated_by,
-                    sku, units_per_package, allow_pack_sale, vat_rule_code,
+                    sku, units_per_package, allow_pack_sale, vat_rule_code, owner_username,
                     deleted_at, deleted_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (*row, deleted_at, user),
             )
@@ -2989,6 +3071,9 @@ class Database:
                 WHERE 1=1
             """
             params = []
+            scope_sql, scope_params = self._owner_filter("p")
+            query += scope_sql
+            params.extend(scope_params)
             search = (search_text or "").strip().lower()
             if search:
                 query += """
@@ -3028,8 +3113,9 @@ class Database:
             return []
 
     def get_product(self, id):
-        """Obter um produto especÃƒÂ­fico"""
+        """Obter um produto especÃƒÆ’Ã‚Â­fico"""
         try:
+            scope_sql, scope_params = self._owner_filter("p")
             self.cursor.execute(""" 
                 SELECT 
                     p.id, p.description, p.existing_stock, p.sold_stock, 
@@ -3057,12 +3143,92 @@ class Database:
                     p.allow_pack_sale,
                     p.vat_rule_code
                 FROM products p
-                WHERE p.id = ?""", (id,))
+                WHERE p.id = ?""" + scope_sql, (id, *scope_params))
             return self.cursor.fetchone()
         except sqlite3.Error as e:
-            print(f"Ã¢ÂÅ’ Erro ao obter produto: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao obter produto: {e}")
             return None
     
+    @classmethod
+    def _group_products_for_sale_catalog(cls, rows):
+        grouped = {}
+        ordered_keys = []
+        for row in rows or []:
+            if not row:
+                continue
+            catalog_key = cls._catalog_identity_from_sale_row(row)
+            stock_value = float(row[2] or 0.0)
+            current = grouped.get(catalog_key)
+            if current is None:
+                grouped[catalog_key] = {
+                    "id": row[0],
+                    "description": row[1],
+                    "stock": stock_value,
+                    "sale_price": row[3],
+                    "barcode": row[4] if len(row) > 4 else None,
+                    "is_sold_by_weight": bool(row[5]) if len(row) > 5 else False,
+                    "expiry_date": row[6] if len(row) > 6 else None,
+                    "status": row[7] if len(row) > 7 else None,
+                    "units_per_package": row[8] if len(row) > 8 else None,
+                    "allow_pack_sale": bool(row[9]) if len(row) > 9 else False,
+                    "vat_rule_code": row[10] if len(row) > 10 else DEFAULT_VAT_RULE_CODE,
+                    "catalog_key": catalog_key,
+                    "lot_count": 1,
+                }
+                ordered_keys.append(catalog_key)
+                continue
+
+            current["stock"] += stock_value
+            current["lot_count"] += 1
+
+        result = []
+        for key in ordered_keys:
+            item = grouped[key]
+            result.append(
+                (
+                    item["id"],
+                    item["description"],
+                    item["stock"],
+                    item["sale_price"],
+                    item["barcode"],
+                    1 if item["is_sold_by_weight"] else 0,
+                    item["expiry_date"],
+                    item["status"],
+                    item["units_per_package"],
+                    1 if item["allow_pack_sale"] else 0,
+                    item["vat_rule_code"],
+                    item["catalog_key"],
+                    item["lot_count"],
+                )
+            )
+        return result
+
+    @staticmethod
+    def _catalog_identity_from_sale_row(row):
+        barcode = str(row[4] if len(row) > 4 and row[4] is not None else "").strip().lower()
+        if barcode:
+            return f"bc:{barcode}"
+        description = " ".join(str(row[1] if len(row) > 1 and row[1] is not None else "").split()).lower()
+        if description:
+            sale_price = round(float(row[3] or 0.0), 4)
+            is_weight = 1 if (len(row) > 5 and bool(row[5])) else 0
+            units_per_package = (
+                int(float(row[8] or 0))
+                if len(row) > 8 and row[8] not in (None, "")
+                else 0
+            )
+            allow_pack_sale = 1 if (len(row) > 9 and bool(row[9])) else 0
+            vat_rule = (
+                str(row[10] or DEFAULT_VAT_RULE_CODE).strip().upper()
+                if len(row) > 10
+                else DEFAULT_VAT_RULE_CODE
+            )
+            return (
+                f"desc:{description}|w:{is_weight}|p:{sale_price:.4f}|"
+                f"u:{units_per_package}|a:{allow_pack_sale}|v:{vat_rule}"
+            )
+        return f"id:{int(row[0])}"
+
     def get_products_for_sale(self):
         """Obter produtos disponiveis para venda."""
         return self.get_products_for_sale_page(limit=None, offset=0, refresh_statuses=True)
@@ -3089,6 +3255,9 @@ class Database:
                   AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
             """
             params = []
+            scope_sql, scope_params = self._owner_filter()
+            query += scope_sql
+            params.extend(scope_params)
             search = (search_text or "").strip().lower()
             if search:
                 query += """
@@ -3101,7 +3270,9 @@ class Database:
                 like = f"%{search}%"
                 params.extend([like, like, like])
 
-            query += " ORDER BY description ASC"
+            query += (
+                f" ORDER BY LOWER(COALESCE(description, '')) ASC, {self._expiry_order_clause()}"
+            )
             if limit:
                 query += " LIMIT ? OFFSET ?"
                 params.extend([int(limit), max(0, int(offset or 0))])
@@ -3117,6 +3288,41 @@ class Database:
             print(f"Erro ao obter produtos para venda: {e}")
             return []
 
+    def get_products_for_sale_catalog_page(
+        self,
+        search_text="",
+        limit=200,
+        offset=0,
+        refresh_statuses=False,
+    ):
+        """Lista paginada agregando lotes irmaos para a tela de vendas."""
+        started_at = perf_counter()
+        try:
+            rows = self.get_products_for_sale_page(
+                search_text=search_text,
+                limit=None,
+                offset=0,
+                refresh_statuses=refresh_statuses,
+            ) or []
+            grouped_rows = self._group_products_for_sale_catalog(rows)
+            off = max(0, int(offset or 0))
+            if limit:
+                paged_rows = grouped_rows[off:off + int(limit)]
+            else:
+                paged_rows = grouped_rows[off:]
+            perf_log(
+                "db.get_products_for_sale_catalog_page",
+                started_at,
+                f"rows={len(paged_rows)} total={len(grouped_rows)} limit={limit} offset={offset}",
+            )
+            return paged_rows
+        except sqlite3.Error as e:
+            print(f"Erro ao obter catalogo de produtos para venda: {e}")
+            return []
+        except Exception as e:
+            print(f"Erro geral ao obter catalogo de produtos para venda: {e}")
+            return []
+
     def get_products_for_sale_ids(self, product_ids):
         """Obtem snapshot de produtos por IDs para validacao de stock."""
         try:
@@ -3130,7 +3336,9 @@ class Database:
                 FROM products
                 WHERE id IN ({placeholders})
             """
-            return self._readonly_fetchall(query, ids)
+            scope_sql, scope_params = self._owner_filter()
+            query += scope_sql
+            return self._readonly_fetchall(query, [*ids, *scope_params])
         except Exception as e:
             print(f"Erro ao obter produtos por IDs: {e}")
             return []
@@ -3138,7 +3346,8 @@ class Database:
     def get_products_by_weight(self):
         """Obter apenas produtos vendidos por peso (kg)"""
         try:
-            self.cursor.execute(""" 
+            scope_sql, scope_params = self._owner_filter("p")
+            self.cursor.execute(f""" 
                 SELECT 
                     p.id, p.description, p.existing_stock, p.sold_stock, 
                     p.sale_price, p.total_purchase_price, p.unit_purchase_price, 
@@ -3166,118 +3375,127 @@ class Database:
                     p.vat_rule_code
                 FROM products p
                 WHERE p.is_sold_by_weight = 1
+                {scope_sql}
                 ORDER BY p.description ASC
-            """)
+            """, tuple(scope_params))
             results = self.cursor.fetchall()
-            print(f"Ã¢Å¡â€“Ã¯Â¸Â Produtos vendidos por KG: {len(results)}")
+            print(f"ÃƒÂ¢Ã…Â¡Ã¢â‚¬â€œÃƒÂ¯Ã‚Â¸Ã‚Â Produtos vendidos por KG: {len(results)}")
             return results
             
         except sqlite3.Error as e:
-            print(f"Ã¢ÂÅ’ Erro ao obter produtos por peso: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao obter produtos por peso: {e}")
             return []
     
     def get_product_by_barcode(self, barcode):
-        """Buscar produto pelo cÃƒÂ³digo de barras - VERSÃƒÆ’O ROBUSTA COM SUPORTE A KG"""
+        """Buscar produto pelo cÃƒÆ’Ã‚Â³digo de barras - VERSÃƒÆ’Ã†â€™O ROBUSTA COM SUPORTE A KG"""
         try:
             self.refresh_auto_statuses()
-            barcode_clean = barcode.strip() if barcode else ""
+            barcode_clean = self._normalize_barcode_value(barcode)
             
-            print(f"\nÃ°Å¸â€Â DB: Buscando cÃƒÂ³digo de barras...")
-            print(f"   CÃƒÂ³digo recebido: '{barcode}' (tamanho: {len(barcode)})")
-            print(f"   CÃƒÂ³digo limpo: '{barcode_clean}' (tamanho: {len(barcode_clean)})")
+            print(f"\nÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â DB: Buscando cÃƒÆ’Ã‚Â³digo de barras...")
+            print(f"   CÃƒÆ’Ã‚Â³digo recebido: '{barcode}'")
+            print(f"   CÃƒÆ’Ã‚Â³digo limpo: '{barcode_clean or ''}'")
             
             if not barcode_clean:
-                print(f"   Ã¢Å¡Â Ã¯Â¸Â CÃƒÂ³digo vazio apÃƒÂ³s limpeza!")
+                print(f"   ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â CÃƒÆ’Ã‚Â³digo vazio apÃƒÆ’Ã‚Â³s limpeza!")
                 return None
-            
-            # ESTRATÃƒâ€°GIA 1: Busca EXATA
-            self.cursor.execute(""" 
+
+            self.cursor.execute(
+                f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
                        expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
-                WHERE barcode = ? AND existing_stock > 0
+                WHERE barcode IS NOT NULL
+                  AND TRIM(barcode) != ''
+                  AND LOWER(TRIM(barcode)) = LOWER(TRIM(?))
+                  AND existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
                   AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
-            """, (barcode_clean,))
-            
+                  {self._owner_filter()[0]}
+                ORDER BY {self._expiry_order_clause()}
+                LIMIT 1
+                """,
+                (barcode_clean, *self._owner_filter()[1]),
+            )
             result = self.cursor.fetchone()
-            
+
             if result:
-                tipo = "Ã¢Å¡â€“Ã¯Â¸Â KG" if result[5] else "Ã°Å¸â€œÂ¦ UNIDADE"
-                print(f"Ã¢Å“â€¦ Encontrado com busca EXATA!")
+                tipo = "ÃƒÂ¢Ã…Â¡Ã¢â‚¬â€œÃƒÂ¯Ã‚Â¸Ã‚Â KG" if result[5] else "ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¦ UNIDADE"
+                print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Encontrado com FEFO!")
                 print(f"   ID: {result[0]} | Nome: {result[1]} | Tipo: {tipo}")
                 return result
             
-            # ESTRATÃƒâ€°GIA 2: Busca com TRIM
-            self.cursor.execute(""" 
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
-                FROM products
-                WHERE TRIM(barcode) = ? AND existing_stock > 0
-                  AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
-                  AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
-            """, (barcode_clean,))
+            print(f"\nÃƒÂ¢Ã‚ÂÃ…â€™ CÃƒÆ’Ã‚Â³digo '{barcode_clean}' NÃƒÆ’Ã†â€™O ENCONTRADO no banco de dados")
             
-            result = self.cursor.fetchone()
-            
-            if result:
-                tipo = "Ã¢Å¡â€“Ã¯Â¸Â KG" if result[5] else "Ã°Å¸â€œÂ¦ UNIDADE"
-                print(f"Ã¢Å“â€¦ Encontrado com busca TRIM!")
-                print(f"   ID: {result[0]} | Nome: {result[1]} | Tipo: {tipo}")
-                return result
-            
-            # ESTRATÃƒâ€°GIA 3: Busca case-insensitive
-            self.cursor.execute(""" 
-                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
-                FROM products
-                WHERE LOWER(TRIM(barcode)) = LOWER(?) AND existing_stock > 0
-                  AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
-                  AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
-            """, (barcode_clean,))
-            
-            result = self.cursor.fetchone()
-            
-            if result:
-                tipo = "Ã¢Å¡â€“Ã¯Â¸Â KG" if result[5] else "Ã°Å¸â€œÂ¦ UNIDADE"
-                print(f"Ã¢Å“â€¦ Encontrado com busca case-insensitive!")
-                print(f"   ID: {result[0]} | Nome: {result[1]} | Tipo: {tipo}")
-                return result
-            
-            print(f"\nÃ¢ÂÅ’ CÃƒÂ³digo '{barcode_clean}' NÃƒÆ’O ENCONTRADO no banco de dados")
-            
-            # Listar cÃƒÂ³digos disponÃƒÂ­veis para debug
-            self.cursor.execute("SELECT barcode FROM products WHERE barcode IS NOT NULL AND barcode != ''")
+            # Listar cÃƒÆ’Ã‚Â³digos disponÃƒÆ’Ã‚Â­veis para debug
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                "SELECT barcode FROM products WHERE barcode IS NOT NULL AND barcode != ''" + scope_sql,
+                tuple(scope_params),
+            )
             available_barcodes = self.cursor.fetchall()
             if available_barcodes:
-                print(f"\nÃ°Å¸â€œâ€¹ CÃƒÂ³digos disponÃƒÂ­veis no banco ({len(available_barcodes)}):")
+                print(f"\nÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã¢â‚¬Â¹ CÃƒÆ’Ã‚Â³digos disponÃƒÆ’Ã‚Â­veis no banco ({len(available_barcodes)}):")
                 for bc in available_barcodes[:5]:  # Mostrar apenas 5 primeiros
                     print(f"   - '{bc[0]}'")
             
             return None
             
         except sqlite3.Error as e:
-            print(f"Ã¢ÂÅ’ Erro SQL ao buscar cÃƒÂ³digo de barras: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro SQL ao buscar cÃƒÆ’Ã‚Â³digo de barras: {e}")
             import traceback
             traceback.print_exc()
             return None
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro geral ao buscar cÃƒÂ³digo de barras: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro geral ao buscar cÃƒÆ’Ã‚Â³digo de barras: {e}")
             import traceback
             traceback.print_exc()
             return None
-    
-    # ==================== MÃƒâ€°TODOS PARA VENDAS ====================
+
+    def get_products_by_barcode(self, barcode, include_expired=False, include_zero_stock=False):
+        """Lista lotes irmaos pelo barcode em ordem FEFO."""
+        try:
+            barcode_clean = self._normalize_barcode_value(barcode)
+            if not barcode_clean:
+                return []
+
+            query = f"""
+                SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
+                FROM products
+                WHERE barcode IS NOT NULL
+                  AND TRIM(barcode) != ''
+                  AND LOWER(TRIM(barcode)) = LOWER(TRIM(?))
+            """
+            params = [barcode_clean]
+            scope_sql, scope_params = self._owner_filter()
+            query += scope_sql
+            params.extend(scope_params)
+
+            if not include_zero_stock:
+                query += " AND existing_stock > 0"
+
+            if not include_expired:
+                query += " AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))"
+
+            query += f" ORDER BY {self._expiry_order_clause()}"
+            self.cursor.execute(query, tuple(params))
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao listar produtos por codigo de barras: {e}")
+            return []
+
+    # ==================== MÃƒÆ’Ã¢â‚¬Â°TODOS PARA VENDAS ====================
     
     def find_product_by_barcode_fast(self, barcode):
         """Consulta read-only otimizada para leituras frequentes na tela de vendas."""
         try:
-            barcode_clean = (barcode or "").strip()
+            barcode_clean = self._normalize_barcode_value(barcode)
             if not barcode_clean:
                 return None
 
             rows = self._readonly_fetchall(
-                """
+                f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
                        expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
                 FROM products
@@ -3287,16 +3505,11 @@ class Database:
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
                   AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
                   AND LOWER(TRIM(barcode)) = LOWER(TRIM(?))
-                ORDER BY
-                  CASE
-                    WHEN barcode = ? THEN 0
-                    WHEN TRIM(barcode) = ? THEN 1
-                    ELSE 2
-                  END,
-                  id DESC
+                  {self._owner_filter()[0]}
+                ORDER BY {self._expiry_order_clause()}
                 LIMIT 1
                 """,
-                (barcode_clean, barcode_clean, barcode_clean),
+                (barcode_clean, *self._owner_filter()[1]),
             )
             return rows[0] if rows else None
         except sqlite3.Error as e:
@@ -3325,11 +3538,13 @@ class Database:
             created_by = username or "SYSTEM"
             created_role = role or "manager"
 
-            self.cursor.execute("""
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(f"""
                 SELECT description, existing_stock, sold_stock, is_sold_by_weight, unit_purchase_price, vat_rule_code
                 FROM products
                 WHERE id = ?
-            """, (product_id,))
+                {scope_sql}
+            """, (product_id, *scope_params))
 
             product_info = self.cursor.fetchone()
 
@@ -3397,9 +3612,10 @@ class Database:
                     vat_taxable_ratio,
                     net_total,
                     vat_amount,
-                    gross_total
+                    gross_total,
+                    owner_username
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 product_id,
                 quantity,
@@ -3417,6 +3633,7 @@ class Database:
                 vat_data["net_total"],
                 vat_data["vat_amount"],
                 vat_data["gross_total"],
+                self._owner_value(created_by),
             ))
             sale_id = self.cursor.lastrowid
 
@@ -3498,10 +3715,14 @@ class Database:
                 GROUP BY sale_id
             ) sr ON sr.sale_id = s.id
         """
+        scope_sql, scope_params = self._owner_filter("s")
         if where_clause:
-            query += f" WHERE {where_clause}"
+            query += f" WHERE {where_clause}{scope_sql}"
+            final_params = [*(params or ()), *scope_params]
+        else:
+            query += f" WHERE 1=1{scope_sql}"
+            final_params = list(scope_params)
         query += " ORDER BY s.sale_date DESC, s.id DESC"
-        final_params = list(params or ())
         if limit:
             query += " LIMIT ? OFFSET ?"
             final_params.extend([int(limit), max(0, int(offset or 0))])
@@ -3636,11 +3857,11 @@ class Database:
         try:
             return self._query_sales_with_returns(limit=limit, offset=offset)
         except sqlite3.Error as e:
-            print(f"Ã¢ÂÅ’ Erro ao obter vendas: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao obter vendas: {e}")
             return []
     
     def get_sales_by_date(self, date_str, limit=None, offset=0):
-        """Buscar vendas por data especÃƒÂ­fica"""
+        """Buscar vendas por data especÃƒÆ’Ã‚Â­fica"""
         try:
             date_obj = datetime.strptime(date_str, "%d/%m/%Y")
             formatted_date = date_obj.strftime("%Y-%m-%d")
@@ -3652,11 +3873,11 @@ class Database:
                 offset=offset,
             )
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por data: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao buscar vendas por data: {e}")
             return []
 
     def get_sales_by_date_range(self, start_date, end_date, limit=None, offset=0):
-        """Buscar vendas por perÃƒÂ­odo (intervalo de datas)"""
+        """Buscar vendas por perÃƒÆ’Ã‚Â­odo (intervalo de datas)"""
         try:
             start_obj = datetime.strptime(start_date, "%d/%m/%Y")
             end_obj = datetime.strptime(end_date, "%d/%m/%Y")
@@ -3671,11 +3892,11 @@ class Database:
                 offset=offset,
             )
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por perÃƒÂ­odo: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao buscar vendas por perÃƒÆ’Ã‚Â­odo: {e}")
             return []
 
     def get_sales_by_month(self, month, year, limit=None, offset=0):
-        """Buscar vendas por mÃƒÂªs especÃƒÂ­fico"""
+        """Buscar vendas por mÃƒÆ’Ã‚Âªs especÃƒÆ’Ã‚Â­fico"""
         try:
             return self._query_sales_with_returns(
                 "strftime('%m', s.sale_date) = ? AND strftime('%Y', s.sale_date) = ?",
@@ -3684,11 +3905,11 @@ class Database:
                 offset=offset,
             )
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por mÃƒÂªs: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao buscar vendas por mÃƒÆ’Ã‚Âªs: {e}")
             return []
 
     def get_sales_by_year(self, year, limit=None, offset=0):
-        """Buscar vendas por ano especÃƒÂ­fico"""
+        """Buscar vendas por ano especÃƒÆ’Ã‚Â­fico"""
         try:
             return self._query_sales_with_returns(
                 "strftime('%Y', s.sale_date) = ?",
@@ -3697,7 +3918,7 @@ class Database:
                 offset=offset,
             )
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao buscar vendas por ano: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao buscar vendas por ano: {e}")
             return []
 
     def get_today_sales(self):
@@ -3710,11 +3931,11 @@ class Database:
                 (today,),
             )
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao buscar vendas de hoje: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao buscar vendas de hoje: {e}")
             return []
 
     def get_sales_statistics_by_date(self, date_str):
-        """Obter estatÃƒÂ­sticas de vendas por data especÃƒÂ­fica"""
+        """Obter estatÃƒÆ’Ã‚Â­sticas de vendas por data especÃƒÆ’Ã‚Â­fica"""
         try:
             date_obj = datetime.strptime(date_str, "%d/%m/%Y")
             formatted_date = date_obj.strftime("%Y-%m-%d")
@@ -3733,7 +3954,7 @@ class Database:
             
             return self.cursor.fetchone()
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao obter estatÃƒÂ­sticas por data: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao obter estatÃƒÆ’Ã‚Â­sticas por data: {e}")
             return None
 
     def get_monthly_sales_summary(self, month, year):
@@ -3753,10 +3974,10 @@ class Database:
             
             return self.cursor.fetchall()
         except Exception as e:
-            print(f"Ã¢ÂÅ’ Erro ao obter resumo mensal: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao obter resumo mensal: {e}")
             return []
     
-    # ==================== MÃƒâ€°TODOS PARA GERENTES ====================
+    # ==================== MÃƒÆ’Ã¢â‚¬Â°TODOS PARA GERENTES ====================
 
     def get_all_managers(self):
         """Obter todos os gerentes"""
@@ -3764,11 +3985,11 @@ class Database:
             self.cursor.execute("SELECT username FROM users WHERE role = 'manager'")
             return [manager[0] for manager in self.cursor.fetchall()]
         except sqlite3.Error as e:
-            print(f"Ã¢ÂÅ’ Erro ao buscar gerentes: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao buscar gerentes: {e}")
             return []
     
     def delete_manager(self, username):
-        """Excluir um gerente especÃƒÂ­fico"""
+        """Excluir um gerente especÃƒÆ’Ã‚Â­fico"""
         try:
             self.cursor.execute("SELECT username FROM users WHERE role = 'manager'")
             current_managers = self.cursor.fetchall()
@@ -3780,13 +4001,13 @@ class Database:
             manager = self.cursor.fetchone()
             
             if not manager:
-                return False, "Gerente nÃƒÂ£o encontrado"
+                return False, "Gerente nÃƒÆ’Ã‚Â£o encontrado"
             
             self.cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'manager'")
             manager_count = self.cursor.fetchone()[0]
             
             if manager_count <= 1:
-                return False, "NÃƒÂ£o ÃƒÂ© possÃƒÂ­vel excluir o ÃƒÂºltimo gerente"
+                return False, "NÃƒÆ’Ã‚Â£o ÃƒÆ’Ã‚Â© possÃƒÆ’Ã‚Â­vel excluir o ÃƒÆ’Ã‚Âºltimo gerente"
             
             self.cursor.execute(
                 "DELETE FROM users WHERE username = ? AND role = 'manager'", 
@@ -3794,16 +4015,16 @@ class Database:
             )
             self.conn.commit()
             
-            print(f"Ã¢Å“â€¦ Gerente '{username}' excluÃƒÂ­do com sucesso!")
-            return True, "Gerente excluÃƒÂ­do com sucesso"
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Gerente '{username}' excluÃƒÆ’Ã‚Â­do com sucesso!")
+            return True, "Gerente excluÃƒÆ’Ã‚Â­do com sucesso"
         
         except sqlite3.Error as e:
             self.conn.rollback()
-            print(f"Ã¢ÂÅ’ Erro ao excluir gerente: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao excluir gerente: {e}")
             return False, f"Erro ao excluir gerente: {str(e)}"
         except Exception as e:
             self.conn.rollback()
-            print(f"Ã¢ÂÅ’ Erro inesperado: {e}")
+            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro inesperado: {e}")
             return False, f"Erro inesperado: {str(e)}"
     
     def get_products_with_barcodes(self):
@@ -3851,14 +4072,18 @@ class Database:
     def get_products_for_losses(self):
         """Obter produtos para tela de perdas"""
         try:
+            scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
-                """
+                f"""
                 SELECT id, description, existing_stock, sale_price,
                        unit_purchase_price, barcode, is_sold_by_weight,
                        expiry_date, status, vat_rule_code
                 FROM products
                 WHERE existing_stock > 0
-                """
+                {scope_sql}
+                ORDER BY LOWER(COALESCE(description, '')) ASC, {self._expiry_order_clause()}
+                """,
+                tuple(scope_params),
             )
             return self.cursor.fetchall()
         except sqlite3.Error as e:
@@ -3868,13 +4093,18 @@ class Database:
     def get_products_for_restock(self, include_velocity=False, velocity_days=14):
         """Obter produtos para tela de reposicao"""
         try:
+            scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
-                """
+                f"""
                 SELECT id, description, existing_stock, sale_price,
                        unit_purchase_price, barcode, is_sold_by_weight,
                        expiry_date, status, vat_rule_code
                 FROM products
-                """
+                WHERE 1=1
+                {scope_sql}
+                ORDER BY LOWER(COALESCE(description, '')) ASC, {self._expiry_order_clause()}
+                """,
+                tuple(scope_params),
             )
             rows = self.cursor.fetchall()
             if not include_velocity:
@@ -3919,8 +4149,9 @@ class Database:
     def get_products_for_stock_control(self, include_velocity=False, velocity_days=14):
         """Obter produtos para painel unificado de controlo de stock."""
         try:
+            scope_sql, scope_params = self._owner_filter("p")
             self.cursor.execute(
-                """
+                f"""
                 SELECT
                     p.id,
                     p.description,
@@ -3936,6 +4167,8 @@ class Database:
                 LEFT JOIN stock_movements sm
                     ON sm.product_id = p.id
                    AND sm.applied = 1
+                WHERE 1=1
+                {scope_sql}
                 GROUP BY
                     p.id,
                     p.description,
@@ -3946,7 +4179,8 @@ class Database:
                     p.is_sold_by_weight,
                     p.expiry_date,
                     p.status
-                """
+                """,
+                tuple(scope_params),
             )
             rows = self.cursor.fetchall()
 
@@ -4018,6 +4252,10 @@ class Database:
                 "sm.created_at BETWEEN ? AND ?",
             ]
             params = [start, end]
+            owner = self._active_owner()
+            if owner:
+                where.append("COALESCE(sm.owner_username, '') = ?")
+                params.append(owner)
 
             if direction in ("IN", "OUT"):
                 where.append("sm.direction = ?")
@@ -4075,7 +4313,11 @@ class Database:
     def get_products_for_filter(self):
         """Obter lista simples de produtos para filtros"""
         try:
-            self.cursor.execute("SELECT id, description FROM products ORDER BY description")
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                "SELECT id, description FROM products WHERE 1=1" + scope_sql + " ORDER BY description",
+                tuple(scope_params),
+            )
             return self.cursor.fetchall()
         except sqlite3.Error as e:
             print(f"Erro ao obter produtos para filtro: {e}")
@@ -4084,9 +4326,11 @@ class Database:
     def get_categories(self):
         """Obter lista de categorias distintas"""
         try:
+            scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
                 "SELECT DISTINCT category FROM products "
-                "WHERE category IS NOT NULL AND category != '' ORDER BY category"
+                "WHERE category IS NOT NULL AND category != ''" + scope_sql + " ORDER BY category",
+                tuple(scope_params),
             )
             return [row[0] for row in self.cursor.fetchall()]
         except sqlite3.Error as e:
@@ -4117,6 +4361,9 @@ class Database:
             start_date,
             end_date,
         ]
+        scope_sql, scope_params = self._owner_filter("p")
+        query += scope_sql
+        params.extend(scope_params)
 
         if product_id:
             query += " AND p.id = ?"
@@ -4414,6 +4661,7 @@ class Database:
         month_key = now.strftime("%m")
         year_key = now.strftime("%Y")
         low_threshold = 5
+        owner = self._active_owner()
 
         def _empty_snapshot():
             return {
@@ -4468,16 +4716,32 @@ class Database:
             insights = self.get_admin_insights() or {}
             expiry_levels = insights.get("expiry_levels") or {}
 
-            self.cursor.execute("SELECT COUNT(*) FROM products")
+            product_scope_sql, product_scope_params = self._owner_filter()
+            self.cursor.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT {self._catalog_identity_sql()} AS catalog_key
+                    FROM products
+                    WHERE 1=1 {product_scope_sql}
+                    GROUP BY catalog_key
+                )
+                """,
+                tuple(product_scope_params),
+            )
             total_products = int(self.cursor.fetchone()[0] or 0)
 
             self.cursor.execute(
-                "SELECT COUNT(*) FROM products WHERE existing_stock > 0 AND existing_stock <= ?",
-                (low_threshold,),
+                "SELECT COUNT(*) FROM products WHERE existing_stock > 0 AND existing_stock <= ?"
+                + product_scope_sql,
+                (low_threshold, *product_scope_params),
             )
             critical_stock_count = int(self.cursor.fetchone()[0] or 0)
 
-            self.cursor.execute("SELECT COUNT(*) FROM products WHERE existing_stock <= 0")
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM products WHERE existing_stock <= 0" + product_scope_sql,
+                tuple(product_scope_params),
+            )
             out_of_stock_count = int(self.cursor.fetchone()[0] or 0)
 
             self.cursor.execute("SELECT COUNT(*) FROM users")
@@ -4486,13 +4750,16 @@ class Database:
             self.cursor.execute(
                 "SELECT COUNT(DISTINCT supplier_name) FROM stock_movements "
                 "WHERE supplier_name IS NOT NULL AND TRIM(supplier_name) != ''"
+                + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
+                (owner,) if owner else (),
             )
             active_suppliers = int(self.cursor.fetchone()[0] or 0)
 
             self.cursor.execute(
                 "SELECT COUNT(*), COALESCE(SUM(total_price), 0) "
-                "FROM sales WHERE DATE(sale_date) = ?",
-                (today_iso,),
+                "FROM sales WHERE DATE(sale_date) = ?"
+                + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
+                (today_iso, owner) if owner else (today_iso,),
             )
             sales_today_count, revenue_today = self.cursor.fetchone()
             sales_today_count = int(sales_today_count or 0)
@@ -4500,15 +4767,18 @@ class Database:
 
             self.cursor.execute(
                 "SELECT COALESCE(SUM(total_price), 0) "
-                "FROM sales WHERE strftime('%m', sale_date) = ? AND strftime('%Y', sale_date) = ?",
-                (month_key, year_key),
+                "FROM sales WHERE strftime('%m', sale_date) = ? AND strftime('%Y', sale_date) = ?"
+                + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
+                (month_key, year_key, owner) if owner else (month_key, year_key),
             )
             revenue_month = round(_safe_float(self.cursor.fetchone()[0]), 2)
 
             self.cursor.execute(
                 "SELECT id, description, existing_stock, is_sold_by_weight "
                 "FROM products WHERE existing_stock <= 0 "
-                "ORDER BY LOWER(description) ASC LIMIT 6"
+                + product_scope_sql
+                + " ORDER BY LOWER(description) ASC LIMIT 6",
+                tuple(product_scope_params),
             )
             out_of_stock_items = [
                 {
@@ -4524,8 +4794,9 @@ class Database:
                 "SELECT DATE(sale_date) AS sale_day, COUNT(*) AS sales_count, "
                 "COALESCE(SUM(total_price), 0) AS revenue "
                 "FROM sales WHERE DATE(sale_date) BETWEEN ? AND ? "
-                "GROUP BY DATE(sale_date) ORDER BY DATE(sale_date) ASC",
-                (start_iso, today_iso),
+                + ("AND COALESCE(owner_username, '') = ? " if owner else "")
+                + "GROUP BY DATE(sale_date) ORDER BY DATE(sale_date) ASC",
+                (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
             )
             sales_map = {
                 str(row[0]): {
@@ -4541,8 +4812,9 @@ class Database:
                 "COALESCE(SUM(CASE WHEN direction = 'OUT' THEN qty ELSE 0 END), 0) AS qty_out "
                 "FROM stock_movements "
                 "WHERE applied = 1 AND DATE(created_at) BETWEEN ? AND ? "
-                "GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC",
-                (start_iso, today_iso),
+                + ("AND COALESCE(owner_username, '') = ? " if owner else "")
+                + "GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC",
+                (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
             )
             stock_map = {
                 str(row[0]): {
@@ -4560,9 +4832,10 @@ class Database:
                 "LEFT JOIN products p ON s.product_id = p.id "
                 "LEFT JOIN products_archive pa ON s.product_id = pa.id "
                 "WHERE DATE(s.sale_date) BETWEEN ? AND ? "
-                "GROUP BY s.product_id "
+                + ("AND COALESCE(s.owner_username, '') = ? " if owner else "")
+                + "GROUP BY s.product_id "
                 "ORDER BY total_revenue DESC, total_qty DESC LIMIT 5",
-                (start_iso, today_iso),
+                (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
             )
             top_products = [
                 {
@@ -4581,9 +4854,10 @@ class Database:
                 "LEFT JOIN products p ON s.product_id = p.id "
                 "LEFT JOIN products_archive pa ON s.product_id = pa.id "
                 "WHERE DATE(s.sale_date) = ? "
-                "GROUP BY s.product_id "
+                + ("AND COALESCE(s.owner_username, '') = ? " if owner else "")
+                + "GROUP BY s.product_id "
                 "ORDER BY total_revenue DESC, total_qty DESC LIMIT 1",
-                (today_iso,),
+                (today_iso, owner) if owner else (today_iso,),
             )
             row = self.cursor.fetchone()
             top_product_today = None
@@ -4597,8 +4871,9 @@ class Database:
             self.cursor.execute(
                 "SELECT strftime('%H', sale_date) AS hour_key, COALESCE(SUM(total_price), 0) AS total_revenue "
                 "FROM sales WHERE DATE(sale_date) = ? "
-                "GROUP BY hour_key ORDER BY total_revenue DESC LIMIT 1",
-                (today_iso,),
+                + ("AND COALESCE(owner_username, '') = ? " if owner else "")
+                + "GROUP BY hour_key ORDER BY total_revenue DESC LIMIT 1",
+                (today_iso, owner) if owner else (today_iso,),
             )
             row = self.cursor.fetchone()
             peak_hour = None
@@ -4761,6 +5036,9 @@ class Database:
             "FROM user_logs WHERE 1=1"
         )
         params = []
+        scope_sql, scope_params = self._owner_filter()
+        query += scope_sql
+        params.extend(scope_params)
 
         if user_filter:
             query += " AND username LIKE ?"
@@ -4790,7 +5068,11 @@ class Database:
     def clear_user_logs(self):
         """Apagar todos os logs"""
         try:
-            self.cursor.execute("DELETE FROM user_logs")
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                "DELETE FROM user_logs WHERE 1=1" + scope_sql,
+                tuple(scope_params),
+            )
             self.conn.commit()
             return True
         except sqlite3.Error as e:
@@ -5019,6 +5301,81 @@ class Database:
     def get_admin_insights_ai(self):
         """Placeholder para compatibilidade: retorna insights base"""
         return self.get_admin_insights()
+
+    def _update_product_impl(
+        self,
+        id,
+        description,
+        category,
+        existing_stock,
+        sold_stock,
+        sale_price,
+        total_purchase_price,
+        unit_purchase_price,
+        barcode=None,
+        expiry_date=None,
+        is_sold_by_weight=False,
+        package_quantity=None,
+        units_per_package=None,
+        allow_pack_sale=False,
+        vat_rule_code=DEFAULT_VAT_RULE_CODE,
+    ):
+        """Atualizar produto existente"""
+        try:
+            sale_price = float(sale_price)
+            total_purchase_price = float(total_purchase_price)
+            unit_purchase_price = float(unit_purchase_price)
+            profit_per_unit = sale_price - unit_purchase_price
+            normalized_barcode = self._normalize_barcode_value(barcode)
+            normalized_expiry = self._normalize_expiry_value(expiry_date)
+            normalized_vat_rule = self._normalize_vat_rule_code(vat_rule_code)
+            normalized_units, normalized_allow = self._normalize_pack_sale_fields(
+                is_sold_by_weight,
+                units_per_package,
+                allow_pack_sale,
+            )
+            if self._find_existing_batch(normalized_barcode, normalized_expiry, exclude_id=id):
+                raise ValueError(
+                    "Ja existe um lote com este codigo de barras e validade. Use a reposicao "
+                    "para somar stock ou informe uma validade diferente."
+                )
+
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                """UPDATE products SET
+                   description = ?, category = ?, existing_stock = ?, sold_stock = ?,
+                   sale_price = ?, total_purchase_price = ?, unit_purchase_price = ?,
+                   profit_per_unit = ?, barcode = ?, expiry_date = ?, is_sold_by_weight = ?, package_quantity = ?,
+                   units_per_package = ?, allow_pack_sale = ?, vat_rule_code = ?
+                   WHERE id = ?""" + scope_sql,
+                (
+                    description,
+                    category,
+                    float(existing_stock),
+                    float(sold_stock),
+                    sale_price,
+                    total_purchase_price,
+                    unit_purchase_price,
+                    profit_per_unit,
+                    normalized_barcode,
+                    normalized_expiry,
+                    1 if is_sold_by_weight else 0,
+                    package_quantity,
+                    normalized_units,
+                    normalized_allow,
+                    normalized_vat_rule,
+                    id,
+                    *scope_params,
+                ),
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return False
+            self.conn.commit()
+            return True
+        except (sqlite3.Error, ValueError):
+            self.conn.rollback()
+            raise
 
     # ==================== CONTEXT MANAGER ====================
     

@@ -1,3 +1,19 @@
+<AdminHoverCard@HoverCard>:
+    hover_bg_mix: 0.05
+    hover_line_mix: 0.24
+    hover_elevation_delta: 1.2
+    hover_accent_color: app.theme_tokens["primary"]
+
+<AdminActionButton@HoverTooltipRaisedButton>:
+    press_enabled: True
+    hover_bg_mix: 0.12
+    hover_line_mix: 0.22
+    hover_elevation_delta: 2
+    press_bg_mix: 0.18
+    press_line_mix: 0.34
+    press_elevation_delta: 0.8
+    hover_accent_color: [1, 1, 1, 1]
+
 <AdminScreen>:
     product_table: product_table
     search_input: search_input
@@ -10,29 +26,25 @@
             padding: 0
             spacing: 0
 
-            # =====================================================
             # HEADER - Navegação Principal
-            # =====================================================
             MDTopAppBar:
                 id: header_bar
-                title: "Produtos"
+                title: "Gestao de produtos"
                 md_bg_color: app.theme_tokens['primary']
                 specific_text_color: app.theme_tokens['on_primary']
                 elevation: 4
                 size_hint_y: None
                 height: max(dp(56), root.height * 0.07)
-                left_action_items: [["view-dashboard-outline", lambda x: root.go_home(), "Pagina inicial"]]
-                right_action_items: [["package-variant-plus", lambda x: root.open_restock_screen(), "Reposicao"], ["alert-circle", lambda x: root.open_losses_screen(), "Perdas"], ["chart-bar", lambda x: root.generate_report(), "Relatorios"], ["cog", lambda x: root.go_to_definitions(), "Definicoes"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
+                left_action_items: [["view-dashboard-outline", lambda x: root.go_home(), "Pagina inicial (Alt+1)"]]
+                right_action_items: [["package-variant-plus", lambda x: root.open_restock_screen(), "Reposicao (Alt+2)"], ["alert-circle", lambda x: root.open_losses_screen(), "Perdas (Alt+3)"], ["chart-bar", lambda x: root.generate_report(), "Relatorios (Alt+4)"], ["cog", lambda x: root.go_to_definitions(), "Definicoes (Alt+S)"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
 
-            # =====================================================
             # BARRA DE FERRAMENTAS COMPACTA
-            # =====================================================
-            MDCard:
+            AdminHoverCard:
                 id: toolbar_card
                 size_hint_y: None
                 height: max(dp(70), root.height * 0.08)
-                padding: [dp(16), dp(10)]
-                spacing: dp(8)
+                padding: [dp(18), dp(10)]
+                spacing: dp(10)
                 elevation: 2
                 md_bg_color: app.theme_tokens['card']
                 radius: [0, 0, 0, 0]
@@ -41,70 +53,85 @@
                     id: toolbar_row
                     spacing: dp(10)
 
-                    # Campo de Pesquisa Compacto
-                    MDTextField:
+                    TooltipTextField:
                         id: search_input
                         hint_text: "Pesquisar produto..."
+                        tooltip_text: "Pesquisar produto (/ ou Ctrl+F)"
                         mode: "rectangle"
-                        size_hint_x: 0.33
+                        size_hint_x: 0.29
                         icon_left: "magnify"
                         on_text: root.queue_filter(self.text)
                         font_size: sp(14)
 
                     # Filtro de Categorias
-                    MDRaisedButton:
+                    AdminActionButton:
                         id: category_spinner
                         text: "Todas as Categorias"
-                        size_hint_x: 0.20
+                        tooltip_text: "Abrir categorias (Alt+C)"
+                        size_hint_x: 0.18
                         md_bg_color: app.theme_tokens['card_alt']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['text_primary']
+                        hover_accent_color: app.theme_tokens['primary']
                         elevation: 1
                         on_release: root.show_category_menu(self)
                         font_size: sp(13)
 
-                    # Botão Filtrar Tipo
-                    MDRaisedButton:
+                    AdminActionButton:
                         id: filter_btn
                         text: "Filtrar"
                         icon: "filter-variant"
+                        tooltip_text: "Alternar filtro KG/unidade/todos (Alt+F)"
                         md_bg_color: app.theme_tokens['warning']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
+                        hover_accent_color: [1, 1, 1, 1]
                         size_hint_x: None
                         width: dp(48)
                         on_release: root.toggle_kg_products()
                         font_size: sp(13)
 
-                    # Botão Adicionar
-                    MDRaisedButton:
+                    AdminActionButton:
                         id: add_btn
                         text: "Adicionar"
                         icon: "plus-circle"
+                        tooltip_text: "Adicionar produto (Ctrl+N)"
                         md_bg_color: app.theme_tokens['success']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
-                        size_hint_x: 0.14
+                        hover_accent_color: [1, 1, 1, 1]
+                        size_hint_x: 0.13
                         on_release: root.add_product()
+                        font_size: sp(13)
+
+                    AdminActionButton:
+                        id: shopping_list_btn
+                        text: "Lista de Compras"
+                        icon: "cart-outline"
+                        tooltip_text: "Ver lista de compras"
+                        md_bg_color: app.theme_tokens['info']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        hover_accent_color: [1, 1, 1, 1]
+                        size_hint_x: 0.18
+                        disabled: root.shopping_list_busy
+                        on_release: root.open_shopping_list_preview()
                         font_size: sp(13)
 
                     
 
-            # =====================================================
             # TABELA DE PRODUTOS MELHORADA
-            # =====================================================
             MDBoxLayout:
                 size_hint_y: 1
                 padding: [dp(12), dp(8), dp(12), dp(12)]
 
-                MDCard:
+                AdminHoverCard:
                     orientation: 'vertical'
                     spacing: 0
                     elevation: 3
                     md_bg_color: app.theme_tokens['card']
                     radius: [dp(6), dp(6), dp(6), dp(6)]
 
-                    # ScrollView horizontal para manter tabela legivel em telas pequenas
                     ScrollView:
                         id: table_scroll_x
                         size_hint_y: 1
@@ -122,18 +149,17 @@
                             width: max(root.width, dp(980))
                             size_hint_y: 1
 
-                            # Header da Tabela
                             MDBoxLayout:
                                 id: table_header
                                 size_hint_y: None
                                 height: max(dp(44), root.height * 0.052)
                                 size_hint_x: None
                                 width: table_scroll_content.width
-                                md_bg_color: app.theme_tokens['primary']
-                                padding: [dp(6), 0]
+                                md_bg_color: app.theme_tokens['surface_alt']
+                                padding: [dp(8), 0]
                                 canvas.after:
                                     Color:
-                                        rgba: 0.12, 0.22, 0.38, 1
+                                        rgba: app.theme_tokens['divider']
                                     Line:
                                         width: 1
                                         rectangle: self.x, self.y, self.width, self.height
@@ -144,17 +170,17 @@
                                     size_hint_x: 0.06
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
-                                    text: "Nome DO PRODUTO"
+                                    text: "PRODUTO"
                                     bold: True
                                     size_hint_x: 0.20
                                     halign: "left"
                                     padding: [dp(10), 0]
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -163,7 +189,7 @@
                                     size_hint_x: 0.09
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -172,7 +198,7 @@
                                     size_hint_x: 0.09
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -181,7 +207,7 @@
                                     size_hint_x: 0.07
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -190,7 +216,7 @@
                                     size_hint_x: 0.11
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -199,7 +225,7 @@
                                     size_hint_x: 0.11
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -208,7 +234,7 @@
                                     size_hint_x: 0.13
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
                                 MDLabel:
@@ -217,15 +243,13 @@
                                     size_hint_x: 0.14
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['on_primary']
+                                    text_color: app.theme_tokens['text_secondary']
                                     font_style: "Subtitle2"
 
-                            # Linha separadora do Header
                             MDSeparator:
-                                height: dp(2)
-                                color: 0.12, 0.22, 0.38, 1
+                                height: dp(1)
+                                color: app.theme_tokens['divider']
 
-                            # ScrollView vertical com Dados dos Produtos
                             ScrollView:
                                 size_hint_y: 1
                                 do_scroll_x: False
@@ -251,7 +275,6 @@
             size_hint: 1, 1
             pos: 0, 0
         
-        # Botão da Lâmpada (AI) com animação
         DraggableTooltipFloatingActionButton:
             id: ai_button
             icon: "assets/icon/idea.ico"
@@ -269,7 +292,7 @@
             radius: [dp(12)]
             elevation: 1
             pos: ai_button.right - (self.width * 0.55), ai_button.top - (self.height * 0.45)
-            opacity: 0  # Começa invisível
+            opacity: 0
 
             MDLabel:
                 id: ai_badge_label
@@ -282,7 +305,7 @@
                 bold: True
 
         # Ações rápidas ao lado da lâmpada (toggle + scroll)
-        TooltipIconButton:
+        HoverTooltipIconButton:
             id: ai_toggle_button
             icon: "chevron-left" if root.quick_actions_open else "chevron-right"
             size_hint: None, None
@@ -317,7 +340,7 @@
                 padding: [dp(4), 0, dp(4), 0]
                 spacing: dp(8)
 
-                TooltipIconButton:
+                HoverTooltipIconButton:
                     icon: "alert-circle"
                     on_release: root.show_fraud_alerts()
                     md_bg_color: [0.9, 0.3, 0.3, 1]
@@ -325,7 +348,7 @@
                     text_color: [1, 1, 1, 1]
                     hint_text: "Alertas de Fraude"
 
-                TooltipIconButton:
+                HoverTooltipIconButton:
                     icon: "chart-line"
                     on_release: root.show_loss_metrics()
                     md_bg_color: [0.2, 0.5, 0.8, 1]
@@ -333,7 +356,7 @@
                     text_color: [1, 1, 1, 1]
                     hint_text: "Métricas de Perdas"
 
-                TooltipIconButton:
+                HoverTooltipIconButton:
                     icon: "check-circle"
                     on_release: root.show_pending_approvals()
                     md_bg_color: [0.9, 0.7, 0.1, 1]

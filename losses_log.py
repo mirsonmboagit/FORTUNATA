@@ -1,3 +1,4 @@
 # Auto-generated loss log entries
 LOGS = []
 LOGS.append({'timestamp': '2026-04-01T09:07:56', 'movement_id': 33, 'product_id': 9, 'product_name': 'LAVA LOICA MAX-400G', 'barcode': '8886950074658', 'loss_type': 'DAMAGE', 'qty': 35.0, 'unit': 'UN', 'reason': 'Produto danificado durante armazenamento', 'note': '', 'evidence_path': None, 'user': 'mirson', 'role': 'manager', 'unit_cost': 70.0, 'unit_price': 99.0, 'total_cost': 2450.0, 'total_price': 3465.0, 'stock_before': 37.0, 'stock_after': 2.0})
+LOGS.append({'timestamp': '2026-05-09T17:24:00', 'movement_id': 63, 'product_id': 16, 'product_name': 'COCACOLA - BONAQUA', 'barcode': '5449000045478', 'loss_type': 'EXPIRED', 'qty': 26.0, 'unit': 'UN', 'reason': 'Ajuste de inventário', 'note': '', 'evidence_path': None, 'user': 'joe', 'role': 'admin', 'unit_cost': 35.0, 'unit_price': 45.5, 'total_cost': 910.0, 'total_price': 1183.0, 'stock_before': 26.0, 'stock_after': 0.0})

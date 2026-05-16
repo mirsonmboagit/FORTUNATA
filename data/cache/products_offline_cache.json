@@ -1,38 +1,4 @@
 {
-  "6009670370004": {
-    "source": "Agregado",
-    "data": {
-      "barcode": "6009670370004",
-      "name": "Agua Namaacha-1,5L",
-      "price": "40.00",
-      "image": "http://www.ranxo.co.mz/wp-content/uploads/2021/03/15L-scaled.png",
-      "category": "Agua",
-      "source": "UPCitemdb",
-      "is_new": true,
-      "source_chain": [
-        "Agregado"
-      ]
-    },
-    "timestamp": "2026-04-03T12:22:42.994261"
-  },
-  "6001068323005": {
-    "source": "Open Food Facts",
-    "data": {
-      "barcode": "6001068323005",
-      "name": "Ricoffy",
-      "brand": "Nescafé",
-      "category": "Sweetened Beverages",
-      "sold_by_weight": true,
-      "quantity": "250 g",
-      "image": "https://images.openfoodfacts.org/images/products/600/106/832/3005/front_en.33.400.jpg",
-      "source_chain": [
-        "Open Food Facts"
-      ],
-      "source_url": "https://world.openfoodfacts.org/product/6001068323005",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001068323005"
-    },
-    "timestamp": "2026-04-04T10:09:36.426464"
-  },
   "6001299026973": {
     "source": "Banco Local",
     "data": {
@@ -50,83 +16,125 @@
       "product_id": 11,
       "source": "local",
       "source_chain": [
-        "Banco Local",
-        "Open Food Facts"
+        "Banco Local"
       ],
       "brand": "Clover ULTRA",
       "image": "https://images.openfoodfacts.org/images/products/600/129/902/6973/front_en.7.400.jpg",
       "source_url": "https://world.openfoodfacts.org/product/6001299026973",
       "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001299026973"
     },
-    "timestamp": "2026-04-04T10:09:39.279169"
+    "timestamp": "2026-04-21T20:17:14.764825"
   },
-  "5000112664560": {
-    "source": "Open Food Facts",
+  "8886950074658": {
+    "source": "Banco Local",
     "data": {
-      "barcode": "5000112664560",
-      "name": "Fanta",
-      "brand": "Coca Cola",
-      "category": "Carbonated Drinks",
+      "barcode": "8886950074658",
+      "name": "LAVA LOICA MAX-400G",
+      "price": 99.0,
+      "cost": 99.0,
+      "stock": 64.0,
+      "is_weight": 0,
       "sold_by_weight": false,
-      "quantity": "330 ml",
-      "image": "https://images.openfoodfacts.org/images/products/500/011/266/4560/front_tr.15.400.jpg",
+      "expiry_date": "2027-02-17",
+      "status": "ATIVO",
+      "category": "Higiene & Limpeza",
+      "quantity": "400g",
+      "product_id": 9,
+      "source": "local",
       "source_chain": [
-        "Open Food Facts"
-      ],
-      "source_url": "https://world.openfoodfacts.org/product/5000112664560",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5000112664560"
+        "Banco Local"
+      ]
     },
-    "timestamp": "2026-04-04T11:03:25.255268"
+    "timestamp": "2026-04-23T11:33:33.374329"
   },
-  "6005363482054": {
+  "6009710390160": {
     "source": "Open Food Facts",
     "data": {
-      "barcode": "6005363482054",
-      "name": "Maizena",
-      "category": "Cornmeal",
-      "image": "https://images.openfoodfacts.org/images/products/600/536/348/2054/front_fr.10.400.jpg",
+      "barcode": "6009710390160",
+      "name": "Rama",
+      "brand": "Rama",
+      "category": "50 63 Blended Fat With Vegetable And Animal Origins",
+      "sold_by_weight": false,
+      "image": "https://images.openfoodfacts.org/images/products/600/971/039/0160/front_en.4.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009710390160",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009710390160",
       "source_chain": [
         "Open Food Facts"
-      ],
-      "source_url": "https://world.openfoodfacts.org/product/6005363482054",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6005363482054"
+      ]
     },
-    "timestamp": "2026-04-04T10:09:43.505171"
+    "timestamp": "2026-04-20T15:48:36.120512"
   },
-  "6009522301262": {
+  "5603675000069": {
+    "source": "Banco Local",
+    "data": {
+      "barcode": "5603675000069",
+      "name": "SPRAY ACTY MULTIUSO-750ML",
+      "price": 120.0,
+      "cost": 120.0,
+      "stock": 25.0,
+      "is_weight": 0,
+      "sold_by_weight": false,
+      "expiry_date": "2029-02-17",
+      "status": "ATIVO",
+      "category": "Higiene & Limpeza",
+      "quantity": "750ml",
+      "product_id": 10,
+      "source": "local",
+      "source_chain": [
+        "Banco Local"
+      ]
+    },
+    "timestamp": "2026-04-23T15:16:39.541350"
+  },
+  "5449000045478": {
     "source": "Open Food Facts",
     "data": {
-      "barcode": "6009522301262",
-      "name": "Mayonaise",
-      "brand": "Cross and Blackwell",
-      "category": "Mayonnaises",
+      "barcode": "5449000045478",
+      "name": "BonAqua",
+      "brand": "CocaCola",
+      "category": "Stilles Wasser",
+      "sold_by_weight": false,
+      "quantity": "1,5 l",
+      "image": "https://images.openfoodfacts.org/images/products/544/900/004/5478/front_pt.5.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/5449000045478",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000045478",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-05-09T16:59:47.981651"
+  },
+  "6009678261472": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "6009678261472",
+      "name": "MAQ washin powder",
+      "brand": "Bliss Brand",
       "sold_by_weight": true,
-      "quantity": "750g",
-      "image": "https://images.openfoodfacts.org/images/products/600/952/230/1262/front_en.34.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/6009522301262",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009522301262",
+      "quantity": "2kg",
+      "image": "https://images.openfoodfacts.org/images/products/600/967/826/1472/front_en.5.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009678261472",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009678261472",
       "source_chain": [
         "Open Food Facts"
       ]
     },
-    "timestamp": "2026-04-04T11:22:12.857361"
+    "timestamp": "2026-05-09T17:10:47.025663"
   },
-  "5449000147417": {
+  "5449000664525": {
     "source": "Open Food Facts",
     "data": {
-      "barcode": "5449000147417",
-      "name": "Cappy PULPY",
-      "brand": "Coca cola",
-      "category": "Orange Based Beverages",
+      "barcode": "5449000664525",
+      "name": "Fanta pomme",
+      "brand": "Fanta",
       "sold_by_weight": false,
-      "quantity": "1L",
-      "image": "https://images.openfoodfacts.org/images/products/544/900/014/7417/front_en.73.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/5449000147417",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000147417",
+      "image": "https://images.openfoodfacts.org/images/products/544/900/066/4525/front_fr.8.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/5449000664525",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000664525",
       "source_chain": [
         "Open Food Facts"
       ]
     },
-    "timestamp": "2026-04-04T11:25:02.742408"
+    "timestamp": "2026-05-10T14:46:21.868260"
   }
 }

@@ -214,12 +214,30 @@
                             hint_text: "Quantidade *"
                             mode: "rectangle"
                             input_filter: "float"
+                            multiline: False
+                            on_text_validate: root._advance_restock_form()
                             text: "1"
 
                         MDTextField:
                             id: note_input
                             hint_text: "Observacao"
                             mode: "rectangle"
+                            multiline: False
+                            on_text_validate: root.register_movement()
+
+                    MDBoxLayout:
+                        id: entry_expiry_row
+                        orientation: "horizontal"
+                        size_hint_y: None
+                        height: dp(52)
+                        spacing: dp(8)
+
+                        MDTextField:
+                            id: expiry_input
+                            hint_text: "Validade do lote DD/MM/AAAA"
+                            mode: "rectangle"
+                            multiline: False
+                            on_text_validate: root._advance_restock_form()
 
                     MDBoxLayout:
                         id: entry_cost_row
@@ -233,6 +251,8 @@
                             hint_text: "Custo unitario *"
                             mode: "rectangle"
                             input_filter: "float"
+                            multiline: False
+                            on_text_validate: root._focus_field("note_input", select_all=True)
 
                     MDBoxLayout:
                         id: entry_supplier_row

@@ -1,0 +1,270 @@
+@startuml
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam monochrome true
+hide circle
+
+title Diagrama de Classes - Tabelas do Sistema
+
+package "Base de Dados SQLite" {
+  class Usuario <<users>> {
+    +id: INTEGER <<PK>>
+    +username: TEXT <<UNIQUE, NOT NULL>>
+    +password: TEXT <<NOT NULL>>
+    +role: TEXT <<NOT NULL>>
+    +email: TEXT
+    +phone: TEXT
+    +data_owner: TEXT
+  }
+
+  class RecuperacaoSenha <<password_resets>> {
+    +id: INTEGER <<PK>>
+    +username: TEXT <<FK, UNIQUE, NOT NULL>>
+    +code_hash: TEXT <<NOT NULL>>
+    +expires_at: TEXT <<NOT NULL>>
+    +attempts: INTEGER
+    +last_sent_at: TEXT
+    +created_at: TEXT <<NOT NULL>>
+  }
+
+  class PerguntasSeguranca <<user_security_questions>> {
+    +username: TEXT <<PK, FK>>
+    +q1_hash: BLOB <<NOT NULL>>
+    +q2_hash: BLOB <<NOT NULL>>
+    +q3_hash: BLOB <<NOT NULL>>
+    +q4_hash: BLOB <<NOT NULL>>
+    +attempts: INTEGER
+    +lock_until: TEXT
+    +updated_at: TEXT
+  }
+
+  class RegraIVA <<vat_rules>> {
+    +code: TEXT <<PK, NOT NULL>>
+    +effective_from: TEXT <<PK, NOT NULL>>
+    +label: TEXT <<NOT NULL>>
+    +short_label: TEXT
+    +rate_percent: REAL
+    +taxable_ratio: REAL
+    +effective_to: TEXT
+    +legal_reference: TEXT
+    +description: TEXT
+    +price_mode: TEXT
+  }
+
+  class Produto <<products>> {
+    +id: INTEGER <<PK>>
+    +description: TEXT <<NOT NULL>>
+    +category: TEXT
+    +existing_stock: REAL <<NOT NULL>>
+    +sold_stock: REAL
+    +sale_price: REAL <<NOT NULL>>
+    +total_purchase_price: REAL <<NOT NULL>>
+    +unit_purchase_price: REAL <<NOT NULL>>
+    +profit_per_unit: REAL <<NOT NULL>>
+    +barcode: TEXT
+    +expiry_date: TEXT
+    +date_added: TEXT <<NOT NULL>>
+    +is_sold_by_weight: INTEGER
+    +package_quantity: TEXT
+    +status: TEXT
+    +status_source: TEXT
+    +status_reason: TEXT
+    +status_updated_at: TEXT
+    +status_updated_by: TEXT
+    +sku: TEXT
+    +units_per_package: INTEGER
+    +allow_pack_sale: INTEGER
+    +vat_rule_code: TEXT
+    +owner_username: TEXT
+  }
+
+  class ProdutoArquivado <<products_archive>> {
+    +id: INTEGER <<PK>>
+    +description: TEXT <<NOT NULL>>
+    +category: TEXT
+    +existing_stock: REAL <<NOT NULL>>
+    +sold_stock: REAL
+    +sale_price: REAL <<NOT NULL>>
+    +total_purchase_price: REAL <<NOT NULL>>
+    +unit_purchase_price: REAL <<NOT NULL>>
+    +profit_per_unit: REAL <<NOT NULL>>
+    +barcode: TEXT
+    +expiry_date: TEXT
+    +date_added: TEXT <<NOT NULL>>
+    +is_sold_by_weight: INTEGER
+    +package_quantity: TEXT
+    +status: TEXT
+    +status_source: TEXT
+    +status_reason: TEXT
+    +status_updated_at: TEXT
+    +status_updated_by: TEXT
+    +sku: TEXT
+    +units_per_package: INTEGER
+    +allow_pack_sale: INTEGER
+    +vat_rule_code: TEXT
+    +deleted_at: TEXT
+    +deleted_by: TEXT
+    +owner_username: TEXT
+  }
+
+  class LogUsuario <<user_logs>> {
+    +id: INTEGER <<PK>>
+    +username: TEXT
+    +role: TEXT
+    +action: TEXT <<NOT NULL>>
+    +details: TEXT
+    +timestamp: TEXT <<NOT NULL>>
+    +owner_username: TEXT
+  }
+
+  class Venda <<sales>> {
+    +id: INTEGER <<PK>>
+    +product_id: INTEGER <<FK, NOT NULL>>
+    +quantity: REAL <<NOT NULL>>
+    +sale_price: REAL <<NOT NULL>>
+    +total_price: REAL <<NOT NULL>>
+    +is_promotional: INTEGER
+    +sale_date: TEXT <<NOT NULL>>
+    +created_by: TEXT
+    +created_role: TEXT
+    +terminal_id: TEXT
+    +vat_rule_code: TEXT
+    +vat_label: TEXT
+    +vat_rate_percent: REAL
+    +vat_taxable_ratio: REAL
+    +net_total: REAL
+    +vat_amount: REAL
+    +gross_total: REAL
+    +owner_username: TEXT
+  }
+
+  class DevolucaoVenda <<sales_returns>> {
+    +id: INTEGER <<PK>>
+    +sale_id: INTEGER <<FK, NOT NULL>>
+    +product_id: INTEGER <<FK, NOT NULL>>
+    +returned_qty: REAL <<NOT NULL>>
+    +sale_price: REAL <<NOT NULL>>
+    +total_refund: REAL <<NOT NULL>>
+    +reason: TEXT
+    +created_at: TEXT <<NOT NULL>>
+    +created_by: TEXT
+    +created_role: TEXT
+    +terminal_id: TEXT
+    +stock_movement_id: INTEGER <<FK>>
+    +owner_username: TEXT
+  }
+
+  class MovimentoStock <<stock_movements>> {
+    +id: INTEGER <<PK>>
+    +product_id: INTEGER <<FK, NOT NULL>>
+    +movement_type: TEXT <<NOT NULL>>
+    +direction: TEXT <<NOT NULL>>
+    +qty: REAL <<NOT NULL>>
+    +unit: TEXT <<NOT NULL>>
+    +unit_cost: REAL <<NOT NULL>>
+    +unit_price: REAL <<NOT NULL>>
+    +total_cost: REAL <<NOT NULL>>
+    +total_price: REAL <<NOT NULL>>
+    +stock_before: REAL
+    +stock_after: REAL
+    +reason: TEXT
+    +note: TEXT
+    +supplier_name: TEXT
+    +invoice_number: TEXT
+    +evidence_path: TEXT
+    +reference_table: TEXT
+    +reference_id: INTEGER
+    +created_at: TEXT <<NOT NULL>>
+    +created_by: TEXT
+    +created_role: TEXT
+    +terminal_id: TEXT
+    +approval_status: TEXT
+    +approved_by: TEXT
+    +approved_at: TEXT
+    +applied: INTEGER
+    +owner_username: TEXT
+  }
+
+  class HistoricoStatusProduto <<product_status_history>> {
+    +id: INTEGER <<PK>>
+    +product_id: INTEGER <<FK, NOT NULL>>
+    +old_status: TEXT
+    +new_status: TEXT
+    +reason: TEXT
+    +source: TEXT
+    +changed_at: TEXT
+    +changed_by: TEXT
+    +owner_username: TEXT
+  }
+
+  class AlertaFraude <<fraud_alerts>> {
+    +id: INTEGER <<PK>>
+    +alert_type: TEXT <<NOT NULL>>
+    +severity: INTEGER <<NOT NULL>>
+    +title: TEXT <<NOT NULL>>
+    +description: TEXT <<NOT NULL>>
+    +related_user: TEXT
+    +related_product_id: INTEGER <<FK>>
+    +related_movement_id: INTEGER <<FK>>
+    +data_json: TEXT
+    +status: TEXT
+    +created_at: TEXT <<NOT NULL>>
+    +reviewed_by: TEXT
+    +reviewed_at: TEXT
+    +resolution_note: TEXT
+    +owner_username: TEXT
+  }
+
+  class EstadoAutomacao <<automation_state>> {
+    +state_key: TEXT <<PK>>
+    +state_value: TEXT
+    +updated_at: TEXT <<NOT NULL>>
+  }
+
+  class InconsistenciaStock <<stock_reconciliation_issues>> {
+    +id: INTEGER <<PK>>
+    +check_run_at: TEXT <<NOT NULL>>
+    +product_id: INTEGER <<FK>>
+    +issue_type: TEXT <<NOT NULL>>
+    +movement_id: INTEGER <<FK>>
+    +stock_before: REAL
+    +stock_after: REAL
+    +expected_stock_after: REAL
+    +current_stock: REAL
+    +diff_qty: REAL
+    +details: TEXT
+    +owner_username: TEXT
+  }
+}
+
+Usuario "1" -- "0..1" RecuperacaoSenha : username
+Usuario "1" -- "0..1" PerguntasSeguranca : username
+Usuario "1" .. "0..*" LogUsuario : username
+
+Produto "1" -- "0..*" Venda : product_id
+Produto "1" -- "0..*" MovimentoStock : product_id
+Produto "1" -- "0..*" HistoricoStatusProduto : product_id
+Produto "1" -- "0..*" DevolucaoVenda : product_id
+Produto "0..1" -- "0..*" AlertaFraude : related_product_id
+Produto "0..1" -- "0..*" InconsistenciaStock : product_id
+
+Venda "1" -- "0..*" DevolucaoVenda : sale_id
+MovimentoStock "0..1" -- "0..*" DevolucaoVenda : stock_movement_id
+MovimentoStock "0..1" -- "0..*" AlertaFraude : related_movement_id
+MovimentoStock "0..1" -- "0..*" InconsistenciaStock : movement_id
+
+RegraIVA "1" .. "0..*" Produto : vat_rule_code
+RegraIVA "1" .. "0..*" ProdutoArquivado : vat_rule_code
+RegraIVA "1" .. "0..*" Venda : vat_rule_code
+
+Produto ..> ProdutoArquivado : arquivamento
+
+note bottom
+O diagrama inclui todas as tabelas persistentes criadas em database.py.
+A tabela products_temp nao foi incluida por ser usada apenas temporariamente
+durante migracao interna e removida no proprio processo.
+end note
+
+@enduml

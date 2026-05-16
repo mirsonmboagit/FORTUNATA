@@ -3,14 +3,20 @@ import os
 import sys
 from threading import Thread
 from time import perf_counter
+from utils.app_config import get_app_settings, save_app_settings as persist_app_settings
+from utils.paths import APP_SETTINGS_FILE, ROOT_DIR, asset_path, ensure_runtime_dirs, set_project_cwd
 from utils.logging_setup import configure_runtime_logging
 
+# Prepara caminhos, pastas e logs antes de carregar o Kivy.
+set_project_cwd()
+ensure_runtime_dirs()
 configure_runtime_logging()
 
 from kivymd.app import MDApp
 from kivy.config import Config
 
-Config.set('kivy', 'window_icon', 'assets/icon/icon4.ico')
+# Configuracao basica da janela.
+Config.set('kivy', 'window_icon', str(asset_path('icon', 'icon4.ico')))
 Config.set('kivy', 'exit_on_escape', '0')
 # Forca modo janela: fullscreen estava a causar cliques desalinhados
 # e quebra de layout em varias telas no ambiente atual.
@@ -20,16 +26,19 @@ Config.set('graphics', 'minimum_height', '420')
 
 from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.properties import DictProperty
+from kivy.properties import DictProperty, StringProperty
 from kivy.core.text import LabelBase
 from kivy.clock import Clock
 
 from utils.theme import get_theme_tokens
+from utils.i18n import language_label, language_options, language_short, normalize_language, translate
+from utils.i18n_runtime import install_i18n_hooks, localize_widget_tree
 
 
 if sys.platform.startswith('win'):
     try:
         import ctypes
+        # Define o identificador da app no Windows.
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             'MerceariaApp.SistemaEstoque.1.0'
         )
@@ -38,23 +47,24 @@ if sys.platform.startswith('win'):
 
 os.environ["KIVY_NO_WM_PEN"] = "1"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = str(ROOT_DIR)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 # Fontes customizadas
-logo_font_path = os.path.join(BASE_DIR, 'assets','fonts', 'h2.ttf')
-main_font_path = os.path.join(BASE_DIR, 'assets','fonts', 'yahoo.ttf')
-joe_font_path = os.path.join(BASE_DIR, 'assets','fonts', 'joe.ttf')
+logo_font_path = asset_path('fonts', 'h2.ttf')
+main_font_path = asset_path('fonts', 'yahoo.ttf')
+joe_font_path = asset_path('fonts', 'joe.ttf')
 
 if os.path.exists(logo_font_path):
-    LabelBase.register(name='LogoFont', fn_regular=logo_font_path)
+    LabelBase.register(name='LogoFont', fn_regular=str(logo_font_path))
 if os.path.exists(main_font_path):
-    LabelBase.register(name='MainFont', fn_regular=main_font_path)
+    LabelBase.register(name='MainFont', fn_regular=str(main_font_path))
 if os.path.exists(joe_font_path):
-    LabelBase.register(name='JoeFont', fn_regular=joe_font_path)
+    LabelBase.register(name='JoeFont', fn_regular=str(joe_font_path))
 
 
+# Limites usados para abrir a janela em tamanho seguro.
 DEFAULT_WINDOW_MIN_WIDTH = int(dp(920))
 DEFAULT_WINDOW_MIN_HEIGHT = int(dp(560))
 WINDOW_IDEAL_WIDTH = int(dp(1280))
@@ -137,7 +147,9 @@ except Exception:
 
 
 class BaseApp(MDApp):
+    # Base comum usada pelas apps de admin e manager.
     theme_tokens = DictProperty({})
+    language = StringProperty("pt")
     theme_settings_key = "theme_style"
 
     def __init__(self, **kwargs):
@@ -149,48 +161,60 @@ class BaseApp(MDApp):
         self._ai_banners_shown = False
         self._ai_banners_last_key = None
         self.base_dir = BASE_DIR
-        self._app_settings_path = os.path.join(self.base_dir, "app_settings.json")
+        self._app_settings_path = str(APP_SETTINGS_FILE)
         self.ai_enabled = True
         self.smart_monitor_enabled = True
         self.auto_banners_enabled = True
         self.theme_style = "Light"
+        self.language = "pt"
         self._automation_ev = None
         self._automation_running = False
+        self._optional_warmup_ev = None
+        self._optional_warmup_started = False
         self._screen_warmup_ev = None
         self._screen_warmup_queue = []
         self._startup_started_at = perf_counter()
         self._ignored_early_close = False
         self._load_app_settings()
         self.apply_theme(self.theme_style, persist=False)
+        install_i18n_hooks()
 
-        # Configuração do tema KivyMD
-        self.theme_cls.primary_palette = "Orange"
+        # Mantemos o tema base do KivyMD alinhado com os tokens da app para
+        # evitar que dialogs e componentes padrao aparecam em laranja quando
+        # o resto da interface usa azul/verde como linguagem principal.
+        self.theme_cls.primary_palette = "Blue"
         self.theme_cls.primary_hue = "700"
-        self.theme_cls.accent_palette = "DeepOrange"
+        self.theme_cls.accent_palette = "BlueGray"
         self.theme_cls.accent_hue = "500"
 
     def _load_app_settings(self):
+        # Carrega preferencias salvas e usa valores seguros se houver erro.
         try:
-            if os.path.exists(self._app_settings_path):
-                with open(self._app_settings_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.ai_enabled = bool(data.get("ai_enabled", True))
-                self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
-                self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
-                theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
-                theme_style = data.get(theme_key, data.get("theme_style", self.theme_style))
-                if theme_style in ("Light", "Dark"):
-                    self.theme_style = theme_style
+            data = get_app_settings(force_reload=True)
+            self.ai_enabled = bool(data.get("ai_enabled", True))
+            self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
+            self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
+            self.language = normalize_language(data.get("language", self.language))
+            theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
+            theme_style = data.get(theme_key, data.get("theme_style", self.theme_style))
+            if theme_style in ("Light", "Dark"):
+                self.theme_style = theme_style
         except Exception:
             self.ai_enabled = True
             self.smart_monitor_enabled = True
             self.auto_banners_enabled = True
             self.theme_style = "Light"
+            self.language = "pt"
 
     def apply_theme(self, style, persist=True):
+        # Aplica o tema visual e atualiza os tokens usados nas telas.
         style = "Dark" if style == "Dark" else "Light"
         self.theme_style = style
         self.theme_cls.theme_style = style
+        self.theme_cls.primary_palette = "Blue"
+        self.theme_cls.primary_hue = "400" if style == "Dark" else "700"
+        self.theme_cls.accent_palette = "BlueGray"
+        self.theme_cls.accent_hue = "400" if style == "Dark" else "500"
         self.theme_tokens = get_theme_tokens(style)
         if persist:
             self.save_app_settings()
@@ -198,36 +222,60 @@ class BaseApp(MDApp):
     def save_app_settings(self):
         try:
             theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
-            data = {}
-            if os.path.exists(self._app_settings_path):
-                try:
-                    with open(self._app_settings_path, "r", encoding="utf-8") as f:
-                        data = json.load(f) or {}
-                except Exception:
-                    data = {}
-            data.update({
-                "ai_enabled": bool(self.ai_enabled),
-                "smart_monitor_enabled": bool(self.smart_monitor_enabled),
-                "auto_banners_enabled": bool(self.auto_banners_enabled),
-                theme_key: self.theme_style,
-            })
-            with open(self._app_settings_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            persist_app_settings(
+                {
+                    "ai_enabled": bool(self.ai_enabled),
+                    "smart_monitor_enabled": bool(self.smart_monitor_enabled),
+                    "auto_banners_enabled": bool(self.auto_banners_enabled),
+                    "language": normalize_language(getattr(self, "language", "pt")),
+                    theme_key: self.theme_style,
+                }
+            )
         except Exception:
             pass
+
+    def set_language(self, language_code, persist=True):
+        # Troca o idioma e atualiza os textos da interface.
+        self.language = normalize_language(language_code)
+        if persist:
+            self.save_app_settings()
+        Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
+        return self.language
+
+    def t(self, key, _language=None, **kwargs):
+        return translate(key, _language or self.language, **kwargs)
+
+    def language_options(self):
+        return language_options()
+
+    def language_label(self, code=None, include_short=False):
+        return language_label(self.language if code is None else code, include_short=include_short)
+
+    def language_short(self, code=None):
+        return language_short(self.language if code is None else code)
+
+    def refresh_language(self, root=None):
+        target = root or getattr(self, "root", None)
+        localize_widget_tree(target, self.language)
 
     def on_start(self):
         if self.title:
             Window.set_title(self.title)
-        if os.path.exists('assets/icon/icon4.ico'):
-            Window.set_icon('assets/icon/icon4.ico')
+        icon_path = asset_path('icon', 'icon4.ico')
+        if icon_path.exists():
+            Window.set_icon(str(icon_path))
         Window.bind(on_request_close=self._handle_window_request_close)
+        Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
         self._start_automation_tasks()
+        self._queue_optional_dependency_warmup()
 
     def on_stop(self):
         if self._automation_ev:
             self._automation_ev.cancel()
             self._automation_ev = None
+        if self._optional_warmup_ev:
+            self._optional_warmup_ev.cancel()
+            self._optional_warmup_ev = None
         if self._screen_warmup_ev:
             self._screen_warmup_ev.cancel()
             self._screen_warmup_ev = None
@@ -273,6 +321,41 @@ class BaseApp(MDApp):
             self._automation_ev.cancel()
         # Checagem leve a cada minuto; execução real respeita intervalos internos do DB.
         self._automation_ev = Clock.schedule_interval(self._run_automation_tasks, 60)
+
+    def _queue_optional_dependency_warmup(self):
+        if self._optional_warmup_started or self._optional_warmup_ev is not None:
+            return
+        self._optional_warmup_ev = Clock.schedule_once(
+            lambda _dt: self._warmup_optional_dependencies(),
+            0.9,
+        )
+
+    def _warmup_optional_dependencies(self):
+        self._optional_warmup_ev = None
+        if self._optional_warmup_started:
+            return
+        self._optional_warmup_started = True
+
+        def worker():
+            try:
+                import importlib
+
+                for module_name in ("reportlab.platypus", "PIL.Image", "fitz"):
+                    try:
+                        importlib.import_module(module_name)
+                    except Exception:
+                        pass
+
+                try:
+                    from utils.vision import get_vision_dependencies
+
+                    get_vision_dependencies()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        Thread(target=worker, daemon=True).start()
 
     def warmup_screens(self, screen_names, delay=0.14):
         ensure_screen = getattr(self, "ensure_screen", None)

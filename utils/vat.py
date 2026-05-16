@@ -93,6 +93,7 @@ VAT_RULE_CHOICES = (
 
 
 def normalize_reference_date(value=None):
+    # Converte entradas diferentes para uma data valida.
     if value is None:
         return date.today()
     if isinstance(value, datetime):
@@ -152,7 +153,20 @@ def _rules_source(rules=None):
     return [rule for rule in normalized if rule.get("code")]
 
 
+def _latest_rule_for_code(code, rules=None):
+    wanted = (code or DEFAULT_VAT_RULE_CODE or "").strip().upper()
+    candidates = [rule for rule in _rules_source(rules) if rule["code"] == wanted]
+    if not candidates:
+        return None
+    return sorted(
+        candidates,
+        key=lambda item: normalize_reference_date(item["effective_from"]),
+        reverse=True,
+    )[0]
+
+
 def resolve_vat_rule(rule_code=None, reference_date=None, rules=None):
+    # Escolhe a regra de IVA ativa na data informada.
     code = (rule_code or DEFAULT_VAT_RULE_CODE or "").strip().upper()
     ref_date = normalize_reference_date(reference_date)
     source_rules = _rules_source(rules)
@@ -179,22 +193,37 @@ def resolve_vat_rule(rule_code=None, reference_date=None, rules=None):
     return resolved
 
 
-def get_vat_choice(code):
+def get_vat_choice(code, rules=None):
     wanted = (code or DEFAULT_VAT_RULE_CODE or "").strip().upper()
+    latest_rule = _latest_rule_for_code(wanted, rules=rules)
     for choice in VAT_RULE_CHOICES:
         if choice["code"] == wanted:
-            return dict(choice)
+            merged = dict(choice)
+            if latest_rule:
+                live_label = str(latest_rule.get("label") or "").strip()
+                live_hint = str(latest_rule.get("description") or "").strip()
+                if live_label:
+                    merged["label"] = live_label
+                if live_hint:
+                    merged["hint"] = live_hint
+            return merged
+    if latest_rule:
+        return {
+            "code": wanted,
+            "label": str(latest_rule.get("label") or wanted).strip() or wanted,
+            "hint": str(latest_rule.get("description") or "").strip(),
+        }
     return dict(VAT_RULE_CHOICES[0])
 
 
-def get_vat_choice_label(code):
-    choice = get_vat_choice(code)
+def get_vat_choice_label(code, rules=None):
+    choice = get_vat_choice(code, rules=rules)
     return choice["label"]
 
 
-def describe_vat_choice(code, reference_date=None):
-    choice = get_vat_choice(code)
-    rule = resolve_vat_rule(code, reference_date=reference_date)
+def describe_vat_choice(code, reference_date=None, rules=None):
+    choice = get_vat_choice(code, rules=rules)
+    rule = resolve_vat_rule(code, reference_date=reference_date, rules=rules)
     rate = float(rule.get("rate_percent") or 0.0)
     if rule.get("code") != choice["code"]:
         return f"{choice['label']} | Sem vigencia nesta data; aplica taxa geral."
@@ -206,6 +235,7 @@ def describe_vat_choice(code, reference_date=None):
 
 
 def compute_vat_breakdown(unit_price, quantity=1.0, rule_code=None, reference_date=None, rules=None):
+    # Calcula base, imposto e total para a venda.
     rule = resolve_vat_rule(rule_code, reference_date=reference_date, rules=rules)
     qty = float(quantity or 0.0)
     price = float(unit_price or 0.0)
@@ -235,8 +265,8 @@ def compute_vat_breakdown(unit_price, quantity=1.0, rule_code=None, reference_da
 
     return {
         "rule_code": rule["code"],
-        "rule_label": rule.get("label") or get_vat_choice_label(rule["code"]),
-        "short_label": rule.get("short_label") or get_vat_choice_label(rule["code"]),
+        "rule_label": rule.get("label") or get_vat_choice_label(rule["code"], rules=rules),
+        "short_label": rule.get("short_label") or get_vat_choice_label(rule["code"], rules=rules),
         "legal_reference": rule.get("legal_reference") or "",
         "reference_date": rule.get("reference_date"),
         "price_mode": price_mode or VAT_PRICE_MODE_INCLUSIVE,

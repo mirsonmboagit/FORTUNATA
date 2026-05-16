@@ -101,3 +101,88 @@ def get_vision_dependencies():
             "ou mantenha um ambiente de backup valido dentro do projeto."
         )
         raise RuntimeError(_ERROR) from exc
+
+
+def open_optimized_camera_capture(cv2, camera_index, *, width=480, height=360, preview_fps=20):
+    """Abre a camera com backend e buffer mais estaveis para preview em tempo real."""
+    backend_candidates = []
+    if os.name == "nt":
+        directshow_backend = getattr(cv2, "CAP_DSHOW", None)
+        if directshow_backend is not None:
+            backend_candidates.append(directshow_backend)
+        media_foundation_backend = getattr(cv2, "CAP_MSMF", None)
+        if media_foundation_backend is not None:
+            backend_candidates.append(media_foundation_backend)
+    backend_candidates.append(getattr(cv2, "CAP_ANY", 0))
+
+    tried_default_open = False
+    for backend in backend_candidates:
+        capture = None
+        try:
+            capture = cv2.VideoCapture(camera_index, backend)
+        except TypeError:
+            if tried_default_open:
+                continue
+            capture = cv2.VideoCapture(camera_index)
+            tried_default_open = True
+        except Exception:
+            capture = None
+
+        if capture is None:
+            continue
+        if capture.isOpened():
+            try:
+                fourcc_builder = getattr(cv2, "VideoWriter_fourcc", None)
+                if callable(fourcc_builder):
+                    capture.set(cv2.CAP_PROP_FOURCC, fourcc_builder(*"MJPG"))
+            except Exception:
+                pass
+            try:
+                buffer_size_prop = getattr(cv2, "CAP_PROP_BUFFERSIZE", None)
+                if buffer_size_prop is not None:
+                    capture.set(buffer_size_prop, 1)
+            except Exception:
+                pass
+            try:
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
+            except Exception:
+                pass
+            try:
+                capture.set(cv2.CAP_PROP_FPS, max(int(preview_fps), 24))
+            except Exception:
+                pass
+            return capture
+
+        try:
+            capture.release()
+        except Exception:
+            pass
+    return None
+
+
+def build_barcode_decode_frame(cv2, frame, *, alpha=1.12, beta=8, scale=1.0):
+    """Prepara uma versao mais leve do frame so para o decode."""
+    scan_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    scan_frame = cv2.convertScaleAbs(scan_frame, alpha=float(alpha), beta=float(beta))
+    scale = float(scale)
+    if 0 < scale < 1:
+        scan_frame = cv2.resize(
+            scan_frame,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_AREA,
+        )
+    return scan_frame
+
+
+def normalize_barcode_value(raw_data):
+    """Normaliza o texto lido pelo pyzbar sem caracteres nao imprimiveis."""
+    if raw_data is None:
+        return ""
+    try:
+        text = raw_data.decode("utf-8", errors="ignore")
+    except Exception:
+        text = str(raw_data)
+    return "".join(char for char in text if char.isprintable()).strip()

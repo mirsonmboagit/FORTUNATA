@@ -1332,10 +1332,18 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         btn_text.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
 
         item_count = sum(len(items) for _, items in details_sections) if details_sections else 0
+        try:
+            raw_count = int(banner_data.get("count") or 0)
+        except Exception:
+            raw_count = 0
+        visible_messages = len([msg for msg in messages if str(msg or "").strip()])
+        hidden_count = max(raw_count - visible_messages, 0)
+        if hidden_count <= 0:
+            hidden_count = max(item_count - 5, 0)
         badge_new = None
-        if item_count > 5:
+        if hidden_count > 0:
             badge_new = MDLabel(
-                text=f"+{item_count}",
+                text=f"+{hidden_count}",
                 theme_text_color="Custom",
                 text_color=(1, 1, 1, 1),
                 font_size=dp(10),
@@ -1635,7 +1643,7 @@ def _build_details_box(sections):
         details_height = _fit_scroll_content(
             details_scroll,
             details_content,
-            max_height=dp(168),
+            max_height=dp(136),
             min_height=dp(40),
         )
         details_box._target_height = details_height + dp(20)

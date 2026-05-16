@@ -1,11 +1,14 @@
 from kivy.uix.screenmanager import ScreenManager
+from kivy.clock import Clock
 
 from app_base import BaseApp
 from database.provider import get_db
 from user.login import AdminLoginScreen
+from utils.paths import asset_path
 
 
 class AdminApp(BaseApp):
+    # App do administrador: login e telas carregadas sob demanda.
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._screen_manager = None
@@ -13,7 +16,7 @@ class AdminApp(BaseApp):
 
     def build(self):
         self.title = 'MERCEARIA - ADMIN'
-        self.icon = 'assets/icon/icon4.ico'
+        self.icon = str(asset_path('icon', 'admin.ico'))
 
         self.db = get_db()
 
@@ -23,6 +26,7 @@ class AdminApp(BaseApp):
             db=self.db,
             name='login',
         ))
+        # Cada tela pesada e criada apenas quando for necessaria.
         self._screen_factories = {
             'admin_home': self._build_admin_home_screen,
             'admin': self._build_admin_screen,
@@ -35,9 +39,11 @@ class AdminApp(BaseApp):
             'restock_history': self._build_restock_history_screen,
         }
         sm.current = 'login'
+        Clock.schedule_once(lambda _dt: self.refresh_language(sm), 0)
         return sm
 
     def ensure_screen(self, name):
+        # Reutiliza a tela se ela ja existir no ScreenManager.
         manager = self._screen_manager or self.root
         if manager is None:
             return None
@@ -50,6 +56,7 @@ class AdminApp(BaseApp):
         if screen is None:
             return None
         manager.add_widget(screen)
+        Clock.schedule_once(lambda _dt, target=screen: self.refresh_language(target), 0)
         return screen
 
     def _build_admin_home_screen(self):

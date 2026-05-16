@@ -3,23 +3,21 @@ from kivy.clock import Clock
 from kivy.factory import Factory
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty, NumericProperty, StringProperty
-from kivymd.uix.button import MDFloatingActionButton, MDIconButton
+from kivymd.uix.button import MDFlatButton, MDFloatingActionButton, MDIconButton, MDRaisedButton
+from kivymd.uix.textfield import MDTextField
 from kivymd.uix.tooltip import MDTooltip
 
 DEFAULT_TOOLTIP_DELAY = 0.18
 
 
-class TooltipCleanupBehavior:
-    hint_text = StringProperty("")
-
+class _TooltipCleanupBase:
     def __init__(self, **kwargs):
         kwargs.setdefault("tooltip_display_delay", DEFAULT_TOOLTIP_DELAY)
         super().__init__(**kwargs)
         available_properties = set(self.properties())
         bindings = {}
         for property_name, callback in (
-            ("hint_text", self._sync_tooltip_text),
-            ("text", self._sync_tooltip_text),
+            *self._tooltip_text_bindings(),
             ("parent", self._handle_tooltip_context_change),
             ("disabled", self._handle_tooltip_context_change),
         ):
@@ -29,10 +27,16 @@ class TooltipCleanupBehavior:
             self.bind(**bindings)
         self._sync_tooltip_text()
 
+    def _tooltip_text_bindings(self):
+        return ()
+
+    def _tooltip_fallback_text(self):
+        return ""
+
     def _sync_tooltip_text(self, *_args):
         if self.tooltip_text:
             return
-        fallback = (self.hint_text or getattr(self, "text", "") or "").strip()
+        fallback = str(self._tooltip_fallback_text() or "").strip()
         if fallback:
             self.tooltip_text = fallback
 
@@ -67,12 +71,56 @@ class TooltipCleanupBehavior:
         self._tooltip = None
 
 
+class TooltipCleanupBehavior(_TooltipCleanupBase):
+    hint_text = StringProperty("")
+
+    def _tooltip_text_bindings(self):
+        return (
+            ("hint_text", self._sync_tooltip_text),
+            ("text", self._sync_tooltip_text),
+        )
+
+    def _tooltip_fallback_text(self):
+        return self.hint_text or getattr(self, "text", "") or ""
+
+
+class TooltipTextCleanupBehavior(_TooltipCleanupBase):
+    tooltip_fallback_text = StringProperty("")
+
+    def _tooltip_text_bindings(self):
+        return (
+            ("tooltip_fallback_text", self._sync_tooltip_text),
+            ("hint_text", self._sync_tooltip_text),
+            ("text", self._sync_tooltip_text),
+        )
+
+    def _tooltip_fallback_text(self):
+        return (
+            self.tooltip_fallback_text
+            or getattr(self, "hint_text", "")
+            or getattr(self, "text", "")
+            or ""
+        )
+
+
 class TooltipIconButton(TooltipCleanupBehavior, MDIconButton, MDTooltip):
     """MDIconButton com tooltip curto para desktop."""
 
 
 class TooltipFloatingActionButton(TooltipCleanupBehavior, MDFloatingActionButton, MDTooltip):
     """MDFloatingActionButton com tooltip curto para desktop."""
+
+
+class TooltipTextField(TooltipTextCleanupBehavior, MDTextField, MDTooltip):
+    """MDTextField com tooltip no hover para desktop."""
+
+
+class TooltipRaisedButton(TooltipTextCleanupBehavior, MDRaisedButton, MDTooltip):
+    """MDRaisedButton com tooltip no hover para desktop."""
+
+
+class TooltipFlatButton(TooltipTextCleanupBehavior, MDFlatButton, MDTooltip):
+    """MDFlatButton com tooltip no hover para desktop."""
 
 
 class DraggableTooltipFloatingActionButton(TooltipFloatingActionButton):
@@ -152,4 +200,7 @@ class DraggableTooltipFloatingActionButton(TooltipFloatingActionButton):
 
 Factory.register("TooltipIconButton", cls=TooltipIconButton)
 Factory.register("TooltipFloatingActionButton", cls=TooltipFloatingActionButton)
+Factory.register("TooltipTextField", cls=TooltipTextField)
+Factory.register("TooltipRaisedButton", cls=TooltipRaisedButton)
+Factory.register("TooltipFlatButton", cls=TooltipFlatButton)
 Factory.register("DraggableTooltipFloatingActionButton", cls=DraggableTooltipFloatingActionButton)

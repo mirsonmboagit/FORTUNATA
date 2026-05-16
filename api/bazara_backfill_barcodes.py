@@ -13,6 +13,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from api.api_bazara import BazaraAPI
+from utils.paths import CACHE_DIR
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
 
 GRAPHQL_URL = "https://bazara.co.mz/graphql"
@@ -234,7 +235,7 @@ def _emit_progress(on_progress, stats, message=None):
 
 
 def backfill_barcodes(delay=0.2, limit=None, on_progress=None):
-    cache_file = Path(getattr(BazaraAPI, "OFFLINE_CACHE_FILE", "data/cache/bazara_offline_cache.json"))
+    cache_file = Path(getattr(BazaraAPI, "OFFLINE_CACHE_FILE", CACHE_DIR / "bazara_offline_cache.json"))
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     if not cache_file.exists():
         print("Cache Bazara nao encontrado.")

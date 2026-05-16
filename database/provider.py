@@ -1,22 +1,15 @@
-import json
-import os
+from utils.app_config import get_database_path, get_runtime_config
 
 _MISSING = object()
 
 
 def _load_config():
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(base_dir, "config.json")
-    if not os.path.exists(config_path):
-        return {}
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
+    # Carrega a configuracao atual do backend.
+    return get_runtime_config(force_reload=True)
 
 
 class HybridDatabase:
+    # Usa API quando estiver disponivel e SQLite local como fallback.
     def __init__(self, config=None, remote_db=None, local_db=None):
         config = dict(config or _load_config())
         self.config = config
@@ -24,7 +17,7 @@ class HybridDatabase:
         from database.client import DatabaseClient
         from database.database import Database
 
-        db_path = config.get("db_path")
+        db_path = config.get("db_path") or str(get_database_path())
         self.remote_db = remote_db if remote_db is not None else DatabaseClient(config=config)
         if local_db is not None:
             self.local_db = local_db
@@ -59,7 +52,42 @@ class HybridDatabase:
         return self._remote_available()
 
     def get_connection_label(self):
-        return "Hibrido" if self._remote_available() else "Local"
+        return self.get_connection_status().get("label") or "Local"
+
+    def get_connection_status(self, force=False):
+        # Resume o estado da ligacao para mostrar na interface.
+        remote_status = {}
+        getter = getattr(self.remote_db, "get_health_status", None)
+        if callable(getter):
+            try:
+                remote_status = getter(force=force) or {}
+            except Exception as exc:
+                remote_status = {"ok": False, "error": str(exc)}
+
+        remote_available = bool(remote_status.get("ok")) if remote_status else self._remote_available()
+        error = str(remote_status.get("error") or self._remote_last_error() or "").strip()
+
+        if remote_available:
+            return {
+                "mode": "hybrid",
+                "label": "API",
+                "remote_available": True,
+                "error": "",
+                "message": "API local ativa. O fallback SQLite continua disponivel.",
+                "base_url": remote_status.get("base_url") or self.config.get("api_base_url") or "",
+            }
+
+        message = "API indisponivel. Sistema em modo local."
+        if error:
+            message = f"{message} {error}"
+        return {
+            "mode": "local",
+            "label": "Local",
+            "remote_available": False,
+            "error": error,
+            "message": message,
+            "base_url": remote_status.get("base_url") or self.config.get("api_base_url") or "",
+        }
 
     def last_error(self):
         if self._last_error:
@@ -79,6 +107,16 @@ class HybridDatabase:
                     self._last_error = str(exc)
         return None
 
+    def set_active_user(self, username=None, role=None):
+        for db in (self.remote_db, self.local_db):
+            setter = getattr(db, "set_active_user", None)
+            if callable(setter):
+                try:
+                    setter(username, role)
+                except Exception:
+                    pass
+        return None
+
     def setup(self):
         return None
 
@@ -90,6 +128,7 @@ class HybridDatabase:
         return False
 
     def _call_remote(self, remote_callable, *args, **kwargs):
+        # Tenta executar no backend remoto e guarda o erro se falhar.
         try:
             result = remote_callable(*args, **kwargs)
         except Exception as exc:
@@ -118,6 +157,7 @@ class HybridDatabase:
         return result
 
     def _dispatch(self, method_name, *args, **kwargs):
+        # Encaminha cada metodo para API ou banco local.
         remote_callable = getattr(self.remote_db, method_name, None)
         local_callable = getattr(self.local_db, method_name, None)
 
@@ -180,7 +220,7 @@ def get_db():
         from database.client import DatabaseClient
         return DatabaseClient(config=cfg)
     from database.database import Database
-    db_path = cfg.get("db_path")
+    db_path = cfg.get("db_path") or str(get_database_path())
     if db_path:
         return Database(db_path=db_path)
     return Database()

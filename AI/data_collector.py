@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 from collections import defaultdict
@@ -10,6 +9,8 @@ from datetime import date, datetime, timedelta
 from statistics import mean, pstdev
 from threading import Lock
 from typing import Any, Callable
+
+from utils.app_config import get_database_path
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -107,20 +108,7 @@ class IntelligenceDataCollector:
     def _resolve_db_path(self, db: Any | None) -> str:
         if getattr(db, "db_path", None):
             return os.path.abspath(str(db.db_path))
-
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        server_config = os.path.join(root_dir, "server", "config.json")
-        if os.path.exists(server_config):
-            try:
-                with open(server_config, "r", encoding="utf-8") as handle:
-                    cfg = json.load(handle) or {}
-                db_path = cfg.get("db_path")
-                if db_path:
-                    return os.path.abspath(db_path)
-            except Exception:
-                pass
-
-        return os.path.join(root_dir, "database", "inventory.db")
+        return os.path.abspath(str(get_database_path()))
 
     def _connect(self) -> sqlite3.Connection:
         if not os.path.exists(self.db_path):

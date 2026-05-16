@@ -1,23 +1,10 @@
-import json
 import logging
 import os
-from pathlib import Path
+
+from utils.app_config import get_app_config
 
 
 _LOGGING_CONFIGURED = False
-
-
-def _load_project_config():
-    base_dir = Path(__file__).resolve().parent.parent
-    config_path = base_dir / "config.json"
-    if not config_path.exists():
-        return {}
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
-
 
 def _resolve_level(level_name, fallback):
     if not level_name:
@@ -31,7 +18,7 @@ def configure_runtime_logging():
     if _LOGGING_CONFIGURED:
         return
 
-    cfg = _load_project_config()
+    cfg = get_app_config()
     app_env = (
         os.getenv("APP_ENV")
         or cfg.get("app_env")

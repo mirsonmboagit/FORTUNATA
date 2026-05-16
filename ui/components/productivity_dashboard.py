@@ -9,6 +9,8 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.label import MDLabel
+from ui.components.chart_hover import MatplotlibHoverController
+from ui.components.hover_widgets import HoverCard
 
 FigureCanvasKivyAgg = None
 Figure = None
@@ -85,6 +87,91 @@ def _format_short_date(value):
     return text
 
 
+def _parse_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _format_long_date(value):
+    parsed = _parse_date(value)
+    if parsed is None:
+        return str(value or "--")
+    weekday_names = (
+        "Segunda",
+        "Terca",
+        "Quarta",
+        "Quinta",
+        "Sexta",
+        "Sabado",
+        "Domingo",
+    )
+    return f"{weekday_names[parsed.weekday()]}, {parsed.strftime('%d/%m/%Y')}"
+
+
+def _describe_period_pace(current_sales, average_sales, is_best=False):
+    current_sales = int(current_sales or 0)
+    average_sales = float(average_sales or 0.0)
+    if current_sales <= 0:
+        return "Dia sem movimento registado neste periodo."
+    if is_best:
+        return "Melhor dia do periodo em volume de vendas."
+    if average_sales <= 0:
+        return "Primeira referencia valida do periodo."
+
+    variance_ratio = (current_sales - average_sales) / average_sales
+    if variance_ratio >= 0.18:
+        return f"Ritmo {abs(variance_ratio) * 100:.0f}% acima da media do periodo."
+    if variance_ratio <= -0.18:
+        return f"Ritmo {abs(variance_ratio) * 100:.0f}% abaixo da media do periodo."
+    return "Desempenho alinhado com a media do periodo."
+
+
+def _describe_terminal_performance(item, position, summary=None):
+    item = item or {}
+    summary = summary or {}
+    sales_count = int(item.get("sales_count") or 0)
+    if sales_count <= 0:
+        return "Sem vendas registadas no periodo."
+    if int(position) == 0:
+        return "Lider do periodo em numero de vendas."
+
+    item_margin = item.get("margin_percent")
+    avg_margin = summary.get("avg_margin_percent")
+    if item_margin is not None and avg_margin is not None:
+        if float(item_margin) <= (float(avg_margin) - 5.0):
+            return "Margem abaixo da media do periodo; vale rever descontos ou mix."
+
+    avg_discount = float(summary.get("avg_discount_percent") or 0.0)
+    item_discount = float(item.get("discount_percent") or 0.0)
+    if sales_count >= 5 and (
+        (avg_discount > 0 and item_discount > (avg_discount * 1.25))
+        or (avg_discount <= 0 and item_discount >= 5.0)
+    ):
+        return "Desconto medio acima do padrao do periodo."
+
+    avg_ticket = float(summary.get("avg_ticket") or 0.0)
+    item_ticket = float(item.get("avg_ticket") or 0.0)
+    if avg_ticket > 0:
+        diff_ratio = (item_ticket - avg_ticket) / avg_ticket
+        if diff_ratio >= 0.12:
+            return "Ticket medio acima do padrao do periodo."
+        if diff_ratio <= -0.12:
+            return "Ticket medio abaixo da media do periodo."
+
+    return "Operacao consistente no periodo."
+
+
 def _set_label_text_color(label, color):
     label.theme_text_color = "Custom"
     label.text_color = color
@@ -111,16 +198,23 @@ class ProductivityKpiStrip(MDGridLayout):
             ("terminals", "Caixas Ativos", _theme("info", (0.12, 0.55, 0.72, 1))),
         ]
         for key, title, accent in specs:
-            card = MDCard(
+            card = HoverCard(
                 orientation="vertical",
                 size_hint_y=None,
                 height=dp(106),
                 padding=[dp(16), dp(14), dp(16), dp(14)],
                 spacing=dp(6),
-                radius=[dp(12)],
+                radius=[dp(14)],
                 elevation=1,
                 md_bg_color=_theme("card_alt", (0.96, 0.97, 0.98, 1)),
             )
+            card.hover_accent_color = accent
+            card.hover_bg_mix = 0.10
+            card.hover_line_mix = 0.24
+            card.hover_elevation_delta = 1.9
+            card.hover_duration = 0.12
+            card.line_color = (*accent[:3], 0.10)
+            card.line_width = 1.0
             title_label = MDLabel(
                 text=title,
                 font_style="Caption",
@@ -187,12 +281,13 @@ class ProductivityKpiStrip(MDGridLayout):
 
         for data in cards.values():
             data["card"].md_bg_color = _theme("card_alt", (0.96, 0.97, 0.98, 1))
+            data["card"].line_color = (*data["accent"][:3], 0.10)
             _set_label_text_color(data["title"], _theme("text_secondary", (0.45, 0.48, 0.52, 1)))
             _set_label_text_color(data["value"], data["accent"])
             _set_label_text_color(data["subtitle"], _theme("text_secondary", (0.45, 0.48, 0.52, 1)))
 
 
-class _BaseChartCard(MDCard):
+class _BaseChartCard(HoverCard):
     def __init__(self, title, subtitle, height=dp(320), **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
@@ -202,7 +297,14 @@ class _BaseChartCard(MDCard):
         self.spacing = dp(8)
         self.radius = [dp(12)]
         self.elevation = 1
+        self.hover_bg_mix = 0.07
+        self.hover_line_mix = 0.28
+        self.hover_elevation_delta = 1.8
+        self.hover_duration = 0.12
+        self.hover_accent_color = _theme("primary", (0.15, 0.52, 0.76, 1))
         self.md_bg_color = _theme("card", (1, 1, 1, 1))
+        self.line_color = (*_theme("divider", (0.82, 0.85, 0.9, 1))[:3], 0.22)
+        self.line_width = 1.0
 
         self.title_label = MDLabel(
             text=title,
@@ -220,6 +322,7 @@ class _BaseChartCard(MDCard):
         self.content_box = MDBoxLayout(orientation="vertical")
         self._canvas_widget = None
         self._figure = None
+        self._hover_controller = MatplotlibHoverController(_theme)
 
         self.add_widget(self.title_label)
         self.add_widget(self.subtitle_label)
@@ -228,10 +331,12 @@ class _BaseChartCard(MDCard):
 
     def _apply_theme(self):
         self.md_bg_color = _theme("card", (1, 1, 1, 1))
+        self.line_color = (*_theme("divider", (0.82, 0.85, 0.9, 1))[:3], 0.22)
         _set_label_text_color(self.title_label, _theme("text_primary", (0.2, 0.2, 0.2, 1)))
         _set_label_text_color(self.subtitle_label, _theme("text_secondary", (0.45, 0.48, 0.52, 1)))
 
     def _clear_content(self):
+        self._hover_controller.detach()
         if self._figure is not None:
             try:
                 self._figure.clear()
@@ -253,7 +358,7 @@ class _BaseChartCard(MDCard):
         _set_label_text_color(label, _theme("text_secondary", (0.45, 0.48, 0.52, 1)))
         self.content_box.add_widget(label)
 
-    def set_figure(self, figure):
+    def set_figure(self, figure, hover_items=None):
         if not _ensure_matplotlib():
             self.set_state_text("Graficos indisponiveis no momento.")
             return
@@ -262,6 +367,7 @@ class _BaseChartCard(MDCard):
         self._figure = figure
         self._canvas_widget = FigureCanvasKivyAgg(figure)
         self.content_box.add_widget(self._canvas_widget)
+        self._hover_controller.attach(self._canvas_widget, figure, hover_items or [])
 
 
 class DailyProductivityChart(_BaseChartCard):
@@ -296,7 +402,11 @@ class DailyProductivityChart(_BaseChartCard):
         labels = [_format_short_date(item.get("date")) for item in series]
         values = [int(item.get("sales_count") or 0) for item in series]
         revenues = [float(item.get("revenue") or 0.0) for item in series]
+        quantities = [float(item.get("quantity") or 0.0) for item in series]
+        active_terminals = [int(item.get("active_terminals") or 0) for item in series]
         x_values = list(range(len(series)))
+        avg_sales = sum(values) / max(len(series), 1)
+        total_revenue = float(summary.get("total_revenue") or 0.0)
 
         figure = Figure(figsize=(6.4, 3.2), dpi=100)
         figure.patch.set_facecolor(bg_color)
@@ -336,10 +446,10 @@ class DailyProductivityChart(_BaseChartCard):
         ax.spines["bottom"].set_color((*divider[:3], 0.8))
 
         best_day = summary.get("best_day") or {}
+        best_day_key = str(best_day.get("date") or "")
         if best_day:
-            best_date = str(best_day.get("date") or "")
             for index, item in enumerate(series):
-                if str(item.get("date") or "") == best_date:
+                if str(item.get("date") or "") == best_day_key:
                     bars[index].set_color(success)
                     ax.annotate(
                         "Pico",
@@ -355,6 +465,7 @@ class DailyProductivityChart(_BaseChartCard):
 
         max_value = max(values) if values else 0
         ax.set_ylim(0, max(max_value * 1.2, 4))
+        hover_items = []
         for index, bar in enumerate(bars):
             ax.text(
                 bar.get_x() + (bar.get_width() / 2.0),
@@ -366,12 +477,43 @@ class DailyProductivityChart(_BaseChartCard):
                 fontsize=8,
                 fontweight="bold",
             )
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (
+                        bar.get_x() + (bar.get_width() / 2.0),
+                        bar.get_height(),
+                    ),
+                    "accent_color": bar_colors[index],
+                    "title": _format_long_date(series[index].get("date")),
+                    "lines": [
+                        f"{values[index]} vendas | {_format_mzn(revenues[index])}",
+                        (
+                            f"Ticket medio: {_format_mzn(revenues[index] / values[index])}"
+                            if values[index] > 0
+                            else "Ticket medio: 0.00 MZN"
+                        )
+                        + f" | Quantidade: {_format_quantity(quantities[index])}",
+                        (
+                            f"Caixas ativos: {active_terminals[index]} | "
+                            f"{((revenues[index] / total_revenue) * 100.0):.1f}% da receita do periodo"
+                            if total_revenue > 0
+                            else f"Caixas ativos: {active_terminals[index]} | Sem peso de receita no periodo"
+                        ),
+                    ],
+                    "footer": _describe_period_pace(
+                        values[index],
+                        avg_sales,
+                        is_best=str(series[index].get("date") or "") == best_day_key,
+                    ),
+                }
+            )
         if revenues:
             self.subtitle_label.text = (
                 f"{len(series)} dias | Receita acumulada {_format_mzn(sum(revenues))}"
             )
         figure.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.2)
-        self.set_figure(figure)
+        self.set_figure(figure, hover_items=hover_items)
 
 
 class TerminalRankingChart(_BaseChartCard):
@@ -403,6 +545,11 @@ class TerminalRankingChart(_BaseChartCard):
         labels = [str(item.get("terminal_id") or "CAIXA-PRINCIPAL") for item in top_items]
         values = [int(item.get("sales_count") or 0) for item in top_items]
         revenues = [float(item.get("revenue") or 0.0) for item in top_items]
+        avg_tickets = [float(item.get("avg_ticket") or 0.0) for item in top_items]
+        margins = [item.get("margin_percent") for item in top_items]
+        discounts = [float(item.get("discount_percent") or 0.0) for item in top_items]
+        active_days = [int(item.get("active_days") or 0) for item in top_items]
+        total_revenue = sum(revenues)
 
         figure = Figure(figsize=(4.2, 3.2), dpi=100)
         figure.patch.set_facecolor(bg_color)
@@ -427,6 +574,7 @@ class TerminalRankingChart(_BaseChartCard):
 
         max_value = max(values) if values else 0
         ax.set_xlim(0, max(max_value * 1.25, 4))
+        hover_items = []
         for index, bar in enumerate(bars):
             ax.text(
                 bar.get_width() + max(max_value * 0.03, 0.2),
@@ -437,13 +585,36 @@ class TerminalRankingChart(_BaseChartCard):
                 color=label_color,
                 fontsize=8.5,
             )
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (
+                        bar.get_width(),
+                        bar.get_y() + (bar.get_height() / 2.0),
+                    ),
+                    "accent_color": bar_colors[index],
+                    "title": str(labels[index]),
+                    "lines": [
+                        f"Posicao #{index + 1} | {values[index]} vendas",
+                        f"Receita: {_format_mzn(revenues[index])} | Ticket medio: {_format_mzn(avg_tickets[index])}",
+                        f"Margem: {_format_percent(margins[index])} | Desconto medio: {_format_percent(discounts[index])}",
+                        (
+                            f"Dias ativos: {active_days[index]} | "
+                            f"{((revenues[index] / total_revenue) * 100.0):.1f}% da receita do periodo"
+                            if total_revenue > 0
+                            else f"Dias ativos: {active_days[index]} | Sem peso de receita no periodo"
+                        ),
+                    ],
+                    "footer": _describe_terminal_performance(top_items[index], index, summary),
+                }
+            )
 
         self.subtitle_label.text = f"Top {len(top_items)} caixas ativos no período"
         figure.subplots_adjust(left=0.2, right=0.97, top=0.9, bottom=0.14)
-        self.set_figure(figure)
+        self.set_figure(figure, hover_items=hover_items)
 
 
-class ProductivityInsightsCard(MDCard):
+class ProductivityInsightsCard(HoverCard):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
@@ -454,7 +625,14 @@ class ProductivityInsightsCard(MDCard):
         self.spacing = dp(8)
         self.radius = [dp(12)]
         self.elevation = 1
+        self.hover_bg_mix = 0.08
+        self.hover_line_mix = 0.24
+        self.hover_elevation_delta = 1.6
+        self.hover_duration = 0.12
+        self.hover_accent_color = _theme("info", (0.18, 0.58, 0.86, 1))
         self.md_bg_color = _theme("card_alt", (0.96, 0.97, 0.98, 1))
+        self.line_color = (*_theme("info", (0.18, 0.58, 0.86, 1))[:3], 0.10)
+        self.line_width = 1.0
 
         self.title_label = MDLabel(
             text="Insights Inteligentes",
@@ -476,6 +654,7 @@ class ProductivityInsightsCard(MDCard):
 
     def _apply_theme(self):
         self.md_bg_color = _theme("card_alt", (0.96, 0.97, 0.98, 1))
+        self.line_color = (*_theme("info", (0.18, 0.58, 0.86, 1))[:3], 0.10)
         _set_label_text_color(self.title_label, _theme("text_primary", (0.2, 0.2, 0.2, 1)))
 
     def set_items(self, items):
@@ -528,7 +707,7 @@ class ProductivityDashboard(MDCard):
         self.header_box.add_widget(self.subtitle_label)
 
         self.kpi_strip = ProductivityKpiStrip()
-        self.state_card = MDCard(
+        self.state_card = HoverCard(
             orientation="vertical",
             size_hint_y=None,
             height=dp(86),
@@ -536,6 +715,13 @@ class ProductivityDashboard(MDCard):
             radius=[dp(10)],
             elevation=0,
         )
+        self.state_card.hover_bg_mix = 0.07
+        self.state_card.hover_line_mix = 0.22
+        self.state_card.hover_elevation_delta = 1.2
+        self.state_card.hover_duration = 0.12
+        self.state_card.hover_accent_color = _theme("primary", (0.15, 0.52, 0.76, 1))
+        self.state_card.line_color = (*_theme("divider", (0.82, 0.85, 0.9, 1))[:3], 0.14)
+        self.state_card.line_width = 1.0
         self.state_label = MDLabel(
             text="Selecione um período para visualizar os gráficos de produtividade",
             halign="center",

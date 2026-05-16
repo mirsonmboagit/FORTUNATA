@@ -8,6 +8,7 @@ from collections import defaultdict
 from kivy.app import App
 from database.provider import get_db
 from utils.env_loader import load_dotenv
+from utils.i18n import normalize_language, translate
 
 load_dotenv()
 
@@ -18,6 +19,23 @@ _AI_CACHE = {"ts": 0, "data": None}
 _AI_FAILURE_CACHE = {"ts": 0}
 _QA_CACHE = {"ts": 0, "key": None, "data": None}
 _QA_API_FAILURE_CACHE = {"ts": 0, "reason": "", "until": 0, "key_sig": ""}
+
+
+def _current_language_code():
+    app = App.get_running_app()
+    if app and getattr(app, "language", None):
+        return normalize_language(getattr(app, "language"))
+    try:
+        from utils.app_config import get_app_settings
+
+        return normalize_language(get_app_settings().get("language"))
+    except Exception:
+        return "pt"
+
+
+def _current_ai_response_language():
+    code = _current_language_code()
+    return translate("ai.response_language_name", code, default="portugues")
 
 
 def _get_ai_key_and_model():
@@ -274,8 +292,10 @@ def _generate_ai_insights(payload):
         return None
 
     context = _get_business_context()
+    language_name = _current_ai_response_language()
     
     prompt = (
+        f"Responda em {language_name}.\n"
         f"Você é um gestor experiente de mercearia em Moçambique, "
         f"conversando com o dono do negócio. {context['saudacao']}!\n\n"
         
@@ -1111,8 +1131,9 @@ def _build_api_overlay(question, snapshot, local_answer, is_business_question=Tr
         return [], "API Gemini nao configurada. Defina GEMINI_API_KEY e GEMINI_MODEL."
 
     if not is_business_question:
+        language_name = _current_ai_response_language()
         prompt = (
-            "Responda em portugues, de forma humana, curta e direta.\n"
+            f"Responda em {language_name}, de forma humana, curta e direta.\n"
             "Regras: sem markdown, sem listas longas, maximo 3 frases curtas.\n"
             f"Pergunta: {question}"
         )
@@ -1149,10 +1170,14 @@ def _build_api_overlay(question, snapshot, local_answer, is_business_question=Tr
         "acoes_locais": local_answer.get("actions", [])[:5],
     }
 
+    language_name = _current_ai_response_language()
+
     prompt = (
+        f"Responda em {language_name}.\n"
         "Atue como analista de gestao comercial. "
         "Com base no JSON, responda em JSON puro com:\n"
         "{'resumo':'texto curto', 'insights':['...'], 'acoes':['...']}\n"
+        f"Os valores textuais devem estar em {language_name}. "
         "Sem markdown, sem codigo, tom humano e direto, maximo 2 insights e 1 acao.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )

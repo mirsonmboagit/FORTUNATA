@@ -16,6 +16,7 @@ from api.api_bazara import BazaraAPI
 from api.api_openfoodfacts import OpenFoodFactsAPI
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
 from api.api_ranxo import RanxoAPI
+from utils.paths import CACHE_DIR
 
 
 class APIManager:
@@ -67,7 +68,7 @@ class APIManager:
         # Cache em arquivo (persistente)
         self.cache_file = self._get_cache_file_path()
         self.offline_cache = self._load_offline_cache()
-        self.offline_cache_duration = timedelta(days=30)  # Cache offline dura 30 dias
+        self.offline_cache_duration = timedelta(days=90)  # Cache offline dura 90 dias
 
         # Cache separado para Open Food Facts
         self.openfoodfacts_cache_file = self._get_openfoodfacts_cache_file_path()
@@ -90,17 +91,16 @@ class APIManager:
         }
 
     def _get_cache_file_path(self):
+        # Caminho do cache offline dos produtos.
         """Retorna caminho do arquivo de cache."""
         # Criar diretório de cache se não existir
-        cache_dir = Path("data/cache")
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir / "products_offline_cache.json"
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        return CACHE_DIR / "products_offline_cache.json"
 
     def _get_openfoodfacts_cache_file_path(self):
         """Retorna caminho do arquivo de cache do Open Food Facts."""
-        cache_dir = Path("data/cache")
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return cache_dir / "openfoodfacts_cache.json"
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        return CACHE_DIR / "openfoodfacts_cache.json"
 
     def _load_offline_cache(self):
         """Carrega cache do arquivo JSON."""
@@ -180,6 +180,7 @@ class APIManager:
             print(f"[APIManager] Removidas {len(expired_keys)} entradas expiradas do cache")
 
     def search(self, barcode: str, force_external=False):
+        # Inicia a busca sem bloquear a tela.
         """
         Inicia a busca.
         
@@ -200,6 +201,7 @@ class APIManager:
         on_complete: Callable | None = None,
         force_external: bool = False,
     ):
+        # Primeiro usa cache/banco e depois tenta completar com APIs externas.
         """
         Busca enriquecida: preenche rapidamente com cache/banco e completa
         campos faltantes consultando todas as APIs em paralelo.

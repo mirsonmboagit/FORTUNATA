@@ -103,5 +103,73 @@
       ]
     },
     "timestamp": "2026-04-04T11:25:02.744405"
+  },
+  "6009710390160": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "6009710390160",
+      "name": "Rama",
+      "brand": "Rama",
+      "category": "50 63 Blended Fat With Vegetable And Animal Origins",
+      "sold_by_weight": false,
+      "image": "https://images.openfoodfacts.org/images/products/600/971/039/0160/front_en.4.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009710390160",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009710390160",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-04-20T15:48:36.123023"
+  },
+  "5449000045478": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "5449000045478",
+      "name": "BonAqua",
+      "brand": "CocaCola",
+      "category": "Stilles Wasser",
+      "sold_by_weight": false,
+      "quantity": "1,5 l",
+      "image": "https://images.openfoodfacts.org/images/products/544/900/004/5478/front_pt.5.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/5449000045478",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000045478",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-05-09T16:59:47.982656"
+  },
+  "6009678261472": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "6009678261472",
+      "name": "MAQ washin powder",
+      "brand": "Bliss Brand",
+      "sold_by_weight": true,
+      "quantity": "2kg",
+      "image": "https://images.openfoodfacts.org/images/products/600/967/826/1472/front_en.5.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009678261472",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009678261472",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-05-09T17:10:47.029851"
+  },
+  "5449000664525": {
+    "source": "Open Food Facts",
+    "data": {
+      "barcode": "5449000664525",
+      "name": "Fanta pomme",
+      "brand": "Fanta",
+      "sold_by_weight": false,
+      "image": "https://images.openfoodfacts.org/images/products/544/900/066/4525/front_fr.8.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/5449000664525",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000664525",
+      "source_chain": [
+        "Open Food Facts"
+      ]
+    },
+    "timestamp": "2026-05-10T14:46:21.869275"
   }
 }

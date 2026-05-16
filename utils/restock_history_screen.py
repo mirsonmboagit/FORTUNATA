@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from collections import deque
+from pathlib import Path
 from threading import Thread
 from time import perf_counter
 
@@ -16,7 +17,7 @@ from kivymd.uix.screen import MDScreen
 from database.provider import get_db
 
 
-Builder.load_file("utils/restock_history_screen.kv")
+Builder.load_file(str(Path(__file__).with_name("restock_history_screen.kv")))
 
 
 def _theme_color(name, fallback):

@@ -563,6 +563,7 @@ class SalesHistoryScreen(MDScreen):
         self.sales_history_report = None
         self.pdf_viewer = None
         self._exporting_sales = False
+        self._refund_in_progress = False
         self._pending_enter_filter = None
         self.back_target = "admin_home"
         super().__init__(**kwargs)
@@ -1460,23 +1461,42 @@ class SalesHistoryScreen(MDScreen):
         content.add_widget(qty_input)
         content.add_widget(reason_input)
 
+        cancel_btn = MDFlatButton(text="CANCELAR")
+        confirm_btn = MDRaisedButton(text="CONFIRMAR")
         dialog = MDDialog(
             title="Estornar Venda",
             type="custom",
             content_cls=content,
-            buttons=[
-                MDFlatButton(text="CANCELAR", on_release=lambda _x: dialog.dismiss()),
-                MDRaisedButton(
-                    text="CONFIRMAR",
-                    on_release=lambda _x: self._submit_refund(
-                        dialog, sale_data, qty_input, reason_input
-                    ),
-                ),
-            ],
+            buttons=[cancel_btn, confirm_btn],
+        )
+        cancel_btn.bind(on_release=lambda _x: dialog.dismiss())
+        confirm_btn.bind(
+            on_release=lambda _x: self._submit_refund(
+                dialog,
+                sale_data,
+                qty_input,
+                reason_input,
+                cancel_btn,
+                confirm_btn,
+            )
         )
         dialog.open()
 
-    def _submit_refund(self, dialog, sale_data, qty_input, reason_input):
+    def _set_refund_form_state(self, qty_input, reason_input, cancel_btn, confirm_btn, busy):
+        busy = bool(busy)
+        if qty_input is not None:
+            qty_input.disabled = busy
+        if reason_input is not None:
+            reason_input.disabled = busy
+        if cancel_btn is not None:
+            cancel_btn.disabled = busy
+        if confirm_btn is not None:
+            confirm_btn.disabled = busy
+            confirm_btn.text = "A PROCESSAR..." if busy else "CONFIRMAR"
+
+    def _submit_refund(self, dialog, sale_data, qty_input, reason_input, cancel_btn=None, confirm_btn=None):
+        if self._refund_in_progress:
+            return
         try:
             qty = float((qty_input.text or "").strip())
         except Exception:
@@ -1499,34 +1519,71 @@ class SalesHistoryScreen(MDScreen):
         role     = getattr(app, "current_role", None) or "manager"
         reason   = (reason_input.text or "").strip()
         sale_id  = sale_data.get("sale_id")
+        self._refund_in_progress = True
+        self._set_refund_form_state(qty_input, reason_input, cancel_btn, confirm_btn, True)
 
-        result = self.db.refund_sale_item(
-            sale_id,
-            qty,
-            reason=reason,
-            username=username,
-            role=role,
-        )
-        if not (isinstance(result, dict) and result.get("ok")):
-            message = (
-                result.get("message")
-                if isinstance(result, dict)
-                else "Falha ao registar estorno."
-            )
-            self._show_message_dialog("Erro", message)
-            return
-
-        try:
-            if username:
-                total_refund = float(result.get("total_refund", 0) or 0)
-                self.db.log_action(
-                    username,
-                    role,
-                    "REFUND_SALE",
-                    f"Venda #{sale_id} | Qtd {qty:.2f} | {total_refund:.2f} MT",
+        def worker():
+            try:
+                result = self.db.refund_sale_item(
+                    sale_id,
+                    qty,
+                    reason=reason,
+                    username=username,
+                    role=role,
                 )
-        except Exception:
-            pass
+                if not (isinstance(result, dict) and result.get("ok")):
+                    message = (
+                        result.get("message")
+                        if isinstance(result, dict)
+                        else "Falha ao registar estorno."
+                    )
+                    payload = {"ok": False, "message": message}
+                else:
+                    if username:
+                        try:
+                            total_refund = float(result.get("total_refund", 0) or 0)
+                            self.db.log_action(
+                                username,
+                                role,
+                                "REFUND_SALE",
+                                f"Venda #{sale_id} | Qtd {qty:.2f} | {total_refund:.2f} MT",
+                            )
+                        except Exception:
+                            pass
+                    payload = {"ok": True}
+            except Exception as exc:
+                payload = {"ok": False, "message": str(exc) or "Falha ao registar estorno."}
+
+            Clock.schedule_once(
+                lambda _dt, data=payload: self._apply_refund_result(
+                    dialog,
+                    data,
+                    qty,
+                    qty_input,
+                    reason_input,
+                    cancel_btn,
+                    confirm_btn,
+                ),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_refund_result(
+        self,
+        dialog,
+        result,
+        qty,
+        qty_input,
+        reason_input,
+        cancel_btn,
+        confirm_btn,
+    ):
+        self._refund_in_progress = False
+        self._set_refund_form_state(qty_input, reason_input, cancel_btn, confirm_btn, False)
+        if not (result or {}).get("ok"):
+            self._show_message_dialog("Erro", (result or {}).get("message") or "Falha ao registar estorno.")
+            return
 
         dialog.dismiss()
         self._invalidate_all_sales_cache()

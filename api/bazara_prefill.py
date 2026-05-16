@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from api.api_bazara import BazaraAPI
+from utils.paths import CACHE_DIR
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
 
 GRAPHQL_URL = "https://bazara.co.mz/graphql"
@@ -337,7 +338,7 @@ def prefill_bazara_cache(
     on_progress=None,
     fetch_pages=True,
 ):
-    cache_file = getattr(BazaraAPI, "OFFLINE_CACHE_FILE", "data/cache/bazara_offline_cache.json")
+    cache_file = getattr(BazaraAPI, "OFFLINE_CACHE_FILE", CACHE_DIR / "bazara_offline_cache.json")
     cache_file = Path(cache_file)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
 

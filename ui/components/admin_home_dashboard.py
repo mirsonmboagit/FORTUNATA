@@ -3,8 +3,9 @@ from datetime import datetime
 from kivy.app import App
 from kivy.metrics import dp
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
+from ui.components.chart_hover import MatplotlibHoverController
+from ui.components.hover_widgets import HoverCard
 
 FigureCanvasKivyAgg = None
 Figure = None
@@ -62,7 +63,7 @@ def _format_short_date(value):
         return text
 
 
-class _BaseChartCard(MDCard):
+class _BaseChartCard(HoverCard):
     def __init__(self, title, subtitle, height=dp(320), **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
@@ -72,6 +73,9 @@ class _BaseChartCard(MDCard):
         self.spacing = dp(8)
         self.radius = [dp(12)]
         self.elevation = 1
+        self.hover_bg_mix = 0.06
+        self.hover_line_mix = 0.24
+        self.hover_elevation_delta = 1.5
         self.md_bg_color = _theme("card", (1, 1, 1, 1))
 
         self.title_label = MDLabel(
@@ -90,6 +94,7 @@ class _BaseChartCard(MDCard):
         self.content_box = MDBoxLayout(orientation="vertical")
         self._canvas_widget = None
         self._figure = None
+        self._hover_controller = MatplotlibHoverController(_theme)
 
         self.add_widget(self.title_label)
         self.add_widget(self.subtitle_label)
@@ -102,6 +107,7 @@ class _BaseChartCard(MDCard):
         _set_label_text_color(self.subtitle_label, _theme("text_secondary", (0.45, 0.48, 0.52, 1)))
 
     def _clear_content(self):
+        self._hover_controller.detach()
         if self._figure is not None:
             try:
                 self._figure.clear()
@@ -123,7 +129,7 @@ class _BaseChartCard(MDCard):
         _set_label_text_color(label, _theme("text_secondary", (0.45, 0.48, 0.52, 1)))
         self.content_box.add_widget(label)
 
-    def set_figure(self, figure):
+    def set_figure(self, figure, hover_items=None):
         if not _ensure_matplotlib():
             self.set_state_text("Graficos indisponiveis no momento.")
             return
@@ -132,6 +138,7 @@ class _BaseChartCard(MDCard):
         self._figure = figure
         self._canvas_widget = FigureCanvasKivyAgg(figure)
         self.content_box.add_widget(self._canvas_widget)
+        self._hover_controller.attach(self._canvas_widget, figure, hover_items or [])
 
 
 class SalesTrendChart(_BaseChartCard):
@@ -218,6 +225,7 @@ class SalesTrendChart(_BaseChartCard):
 
         max_value = max(values) if values else 0
         ax.set_ylim(0, max(max_value * 1.2, 4))
+        hover_items = []
         for index, bar in enumerate(bars):
             ax.text(
                 bar.get_x() + (bar.get_width() / 2.0),
@@ -229,11 +237,25 @@ class SalesTrendChart(_BaseChartCard):
                 fontsize=8,
                 fontweight="bold",
             )
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (
+                        bar.get_x() + (bar.get_width() / 2.0),
+                        bar.get_height(),
+                    ),
+                    "text": (
+                        f"Dia: {labels[index]}\n"
+                        f"Receita: {_format_mzn(values[index])}\n"
+                        f"Vendas: {counts[index]}"
+                    ),
+                }
+            )
         self.subtitle_label.text = (
             f"{sum(counts)} vendas | Receita acumulada {_format_mzn(sum(values))}"
         )
         figure.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.2)
-        self.set_figure(figure)
+        self.set_figure(figure, hover_items=hover_items)
 
 
 class StockFlowChart(_BaseChartCard):
@@ -277,8 +299,8 @@ class StockFlowChart(_BaseChartCard):
         width = 0.36
         left_positions = [pos - (width / 2.0) for pos in positions]
         right_positions = [pos + (width / 2.0) for pos in positions]
-        ax.bar(left_positions, in_values, width=width, color=success, label="Entradas")
-        ax.bar(right_positions, out_values, width=width, color=danger, label="Saidas")
+        in_bars = ax.bar(left_positions, in_values, width=width, color=success, label="Entradas")
+        out_bars = ax.bar(right_positions, out_values, width=width, color=danger, label="Saidas")
 
         ax.set_xticks(positions)
         ax.set_xticklabels(labels, rotation=0)
@@ -299,4 +321,27 @@ class StockFlowChart(_BaseChartCard):
             f"Entradas {sum(in_values):.1f} | Saidas {sum(out_values):.1f}"
         )
         figure.subplots_adjust(left=0.09, right=0.98, top=0.88, bottom=0.2)
-        self.set_figure(figure)
+        hover_items = []
+        for index, bar in enumerate(in_bars):
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (
+                        bar.get_x() + (bar.get_width() / 2.0),
+                        bar.get_height(),
+                    ),
+                    "text": f"Dia: {labels[index]}\nEntradas: {in_values[index]:.1f}",
+                }
+            )
+        for index, bar in enumerate(out_bars):
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (
+                        bar.get_x() + (bar.get_width() / 2.0),
+                        bar.get_height(),
+                    ),
+                    "text": f"Dia: {labels[index]}\nSaidas: {out_values[index]:.1f}",
+                }
+            )
+        self.set_figure(figure, hover_items=hover_items)

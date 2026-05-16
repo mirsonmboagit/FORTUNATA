@@ -68,8 +68,22 @@ from AI.engine import executar_analise
 from database.client import DatabaseClient
 from database.database import Database
 from database.provider import HybridDatabase, uses_remote_backend
+from utils.app_config import get_api_config, get_app_config, get_app_settings
+from utils.paths import (
+    API_CONFIG_FILE,
+    APP_CONFIG_FILE,
+    APP_SETTINGS_FILE,
+    CACHE_DIR,
+    DB_FILE,
+    LOGS_DIR,
+    RECEIPTS_DIR,
+    REPORTS_DIR,
+    TEMP_DIR,
+    ensure_runtime_dirs,
+)
 from utils.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
 from utils.security_questions import check_answer, hash_answer, normalize_answer
+from utils.vat import describe_vat_choice, get_vat_choice_label
 
 try:
     import requests
@@ -346,7 +360,7 @@ def load_proactive_controller_module():
     fake_monitor_module = types.ModuleType("AI.monitor")
 
     class StubMonitor:
-        def __init__(self, db, alert_manager, interval_seconds=30.0):
+        def __init__(self, db, alert_manager, interval_seconds=900.0):
             self.db = db
             self.alert_manager = alert_manager
             self.interval_seconds = interval_seconds
@@ -597,6 +611,38 @@ class TestesBaseDeDados(TemporaryDatabaseTestCase):
         self.assertAlmostEqual(sale_details_after[6], 1.0)
         self.assertAlmostEqual(sale_details_after[7], 2.0)
 
+    def test_regras_de_iva_editadas_afetam_novos_calculos(self):
+        rules = list(self.quiet(self.db.get_vat_rules) or [])
+        payload = []
+        for row in rules:
+            payload.append(
+                {
+                    "code": row[0],
+                    "label": "Taxa geral ajustada" if row[0] == "STANDARD" else row[1],
+                    "short_label": "IVA 18.5%" if row[0] == "STANDARD" else row[2],
+                    "rate_percent": 18.5 if row[0] == "STANDARD" and str(row[5]) == "2023-01-01" else row[3],
+                    "taxable_ratio": row[4],
+                    "effective_from": row[5],
+                    "effective_to": row[6],
+                    "legal_reference": row[7],
+                    "description": row[8],
+                    "price_mode": row[9] if len(row) > 9 else "INCLUSIVE",
+                }
+            )
+
+        self.assertTrue(self.quiet(self.db.replace_vat_rules, payload))
+
+        breakdown = self.quiet(
+            self.db.calculate_vat_breakdown,
+            118.5,
+            quantity=1,
+            vat_rule_code="STANDARD",
+            reference_date="2026-04-06",
+        )
+        self.assertAlmostEqual(breakdown["rate_percent"], 18.5)
+        self.assertEqual(breakdown["short_label"], "IVA 18.5%")
+        self.assertEqual(breakdown["rule_label"], "Taxa geral ajustada")
+
     def test_relatorio_pdf_de_perdas_e_gerado(self):
         from datetime import timedelta
         from pdfs.loss_report import LossReport
@@ -671,6 +717,57 @@ class TestesFuncoesPrincipais(BaseProjectTestCase):
         self.assertTrue(check_answer("joao   da silva", hashed))
         self.assertTrue(check_answer("JOAO DA SILVA", memoryview(hashed)))
         self.assertFalse(check_answer("Maria", hashed))
+
+    def test_descricao_de_iva_respeita_regras_fornecidas(self):
+        custom_rules = [
+            {
+                "code": "STANDARD",
+                "label": "Taxa geral personalizada",
+                "short_label": "IVA 18.5%",
+                "rate_percent": 18.5,
+                "taxable_ratio": 1.0,
+                "effective_from": "2023-01-01",
+                "effective_to": None,
+                "description": "Regra ajustada pelo administrador.",
+                "price_mode": "INCLUSIVE",
+            },
+            {
+                "code": "TEMP_ESSENTIAL_2025",
+                "label": "Essenciais temporarios",
+                "short_label": "Isento 2025",
+                "rate_percent": 0.0,
+                "taxable_ratio": 0.0,
+                "effective_from": "2023-01-01",
+                "effective_to": "2025-12-31",
+                "description": "Isencao temporaria.",
+                "price_mode": "INCLUSIVE",
+            },
+        ]
+
+        self.assertEqual(
+            get_vat_choice_label("STANDARD", rules=custom_rules),
+            "Taxa geral personalizada",
+        )
+        self.assertIn(
+            "18.50%",
+            describe_vat_choice("STANDARD", reference_date="2026-04-06", rules=custom_rules),
+        )
+        self.assertIn(
+            "Essenciais temporarios",
+            describe_vat_choice(
+                "TEMP_ESSENTIAL_2025",
+                reference_date="2026-04-06",
+                rules=custom_rules,
+            ),
+        )
+        self.assertIn(
+            "Sem vigencia",
+            describe_vat_choice(
+                "TEMP_ESSENTIAL_2025",
+                reference_date="2026-04-06",
+                rules=custom_rules,
+            ),
+        )
 
     def test_motor_de_analise_gera_alertas_relevantes(self):
         snapshot = {
@@ -878,6 +975,24 @@ class TestesInterfaceSimulada(BaseProjectTestCase):
 
 
 class TestesModeloHibrido(BaseProjectTestCase):
+    def test_config_centralizada_resolve_paths_e_ficheiros_principais(self):
+        ensure_runtime_dirs()
+        app_cfg = get_app_config(force_reload=True)
+        api_cfg = get_api_config(force_reload=True)
+        settings = get_app_settings(force_reload=True)
+
+        self.assertTrue(APP_CONFIG_FILE.exists())
+        self.assertTrue(API_CONFIG_FILE.exists())
+        self.assertTrue(APP_SETTINGS_FILE.exists())
+        self.assertEqual(Path(app_cfg["db_path"]), DB_FILE.resolve())
+        self.assertEqual(Path(app_cfg["reports_dir"]), REPORTS_DIR.resolve())
+        self.assertEqual(Path(app_cfg["receipts_dir"]), RECEIPTS_DIR.resolve())
+        self.assertEqual(Path(app_cfg["cache_dir"]), CACHE_DIR.resolve())
+        self.assertEqual(Path(app_cfg["logs_dir"]), LOGS_DIR.resolve())
+        self.assertEqual(Path(app_cfg["temp_dir"]), TEMP_DIR.resolve())
+        self.assertEqual(int(api_cfg["port"]), 8080)
+        self.assertIn("theme_style", settings)
+
     def test_hibrido_usa_remoto_quando_api_esta_saudavel(self):
         class RemoteStub:
             def __init__(self):
@@ -888,6 +1003,9 @@ class TestesModeloHibrido(BaseProjectTestCase):
 
             def last_error(self):
                 return ""
+
+            def get_health_status(self, force=False):
+                return {"ok": True, "label": "API", "base_url": "http://127.0.0.1:8080"}
 
             def get_categories(self):
                 self.calls += 1
@@ -909,7 +1027,10 @@ class TestesModeloHibrido(BaseProjectTestCase):
         self.assertEqual(db.get_categories(), ["Remoto"])
         self.assertEqual(remote.calls, 1)
         self.assertEqual(local.calls, 0)
-        self.assertEqual(db.get_connection_label(), "Hibrido")
+        self.assertEqual(db.get_connection_label(), "API")
+        status = db.get_connection_status(force=True)
+        self.assertTrue(status["remote_available"])
+        self.assertEqual(status["mode"], "hybrid")
 
     def test_hibrido_cai_para_local_quando_api_esta_indisponivel(self):
         class RemoteStub:
@@ -921,6 +1042,9 @@ class TestesModeloHibrido(BaseProjectTestCase):
 
             def last_error(self):
                 return "API offline"
+
+            def get_health_status(self, force=False):
+                return {"ok": False, "label": "Local", "error": "API offline"}
 
             def get_categories(self):
                 self.calls += 1
@@ -944,6 +1068,9 @@ class TestesModeloHibrido(BaseProjectTestCase):
         self.assertEqual(local.calls, 1)
         self.assertEqual(db.db_path, "fallback.sqlite")
         self.assertEqual(db.get_connection_label(), "Local")
+        status = db.get_connection_status(force=True)
+        self.assertFalse(status["remote_available"])
+        self.assertIn("modo local", status["message"].lower())
 
     def test_helper_reconhece_hibrido_com_remoto_ativo(self):
         class RemoteStub:
@@ -1030,6 +1157,22 @@ class TestesModeloHibrido(BaseProjectTestCase):
             first_calls,
             "Durante o cooldown nao deveria repetir healthcheck",
         )
+
+    def test_database_client_health_status_expoe_mensagem_clara(self):
+        class HealthSession:
+            def get(self, url, headers=None, timeout=None):
+                raise RuntimeError("offline")
+
+            def close(self):
+                return None
+
+        client = DatabaseClient(config={"api_base_url": "http://fake.local", "timeout": 1})
+        client._session = HealthSession()
+
+        status = client.get_health_status(force=True)
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["label"], "Local")
+        self.assertIn("offline", status["error"])
 
 
 class TestesErrosEExcecoes(TemporaryDatabaseTestCase):

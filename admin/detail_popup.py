@@ -294,6 +294,23 @@ class DetailPopup(Popup):
             ("% de Lucro", fmt_pct(profit_pct), "info"),
         ]
 
+        lot_count = 1
+        source_ids = ()
+        if len(data) > 27:
+            try:
+                lot_count = max(1, int(data[27]))
+            except Exception:
+                lot_count = 1
+        if len(data) > 28 and data[28]:
+            try:
+                source_ids = tuple(int(value) for value in data[28])
+            except Exception:
+                source_ids = tuple(data[28]) if isinstance(data[28], (list, tuple)) else ()
+        if lot_count > 1:
+            rows_data.insert(1, ("Lotes Agrupados", str(lot_count), "info"))
+            if source_ids:
+                rows_data.insert(2, ("IDs dos Lotes", ", ".join(str(value) for value in source_ids), None))
+
         if price_pct not in (None, "NENHUMA"):
             rows_data.append(("% Margem Preco", fmt_pct(price_pct), None))
 

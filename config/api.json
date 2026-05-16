@@ -1,0 +1,10 @@
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "runner": "waitress",
+  "threads": 8,
+  "connection_limit": 100,
+  "channel_timeout": 120,
+  "cleanup_interval": 30,
+  "ident": "loja-api"
+}

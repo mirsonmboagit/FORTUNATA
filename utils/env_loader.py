@@ -3,15 +3,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
-def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+from utils.paths import ENV_FILE, LEGACY_ENV_FILE, resolve_path
 
 
 def _resolve_dotenv_path(dotenv_path=None) -> Path:
     if dotenv_path:
-        return Path(dotenv_path).expanduser().resolve()
-    return _project_root() / ".env"
+        return resolve_path(dotenv_path)
+    return ENV_FILE
 
 
 def _strip_quotes(value: str) -> str:
@@ -50,9 +48,20 @@ def _load_dotenv_fallback(dotenv_path=None, override=False) -> bool:
 
 
 def load_dotenv(dotenv_path=None, override=False, **kwargs):
+    env_path = _resolve_dotenv_path(dotenv_path)
     try:
         from dotenv import load_dotenv as _real_load_dotenv
 
-        return _real_load_dotenv(dotenv_path=dotenv_path, override=override, **kwargs)
+        loaded = _real_load_dotenv(dotenv_path=env_path, override=override, **kwargs)
+        if not loaded and dotenv_path is None and LEGACY_ENV_FILE.exists():
+            return _real_load_dotenv(
+                dotenv_path=LEGACY_ENV_FILE,
+                override=override,
+                **kwargs,
+            )
+        return loaded
     except Exception:
-        return _load_dotenv_fallback(dotenv_path=dotenv_path, override=override)
+        loaded = _load_dotenv_fallback(dotenv_path=env_path, override=override)
+        if not loaded and dotenv_path is None and LEGACY_ENV_FILE.exists():
+            return _load_dotenv_fallback(dotenv_path=LEGACY_ENV_FILE, override=override)
+        return loaded

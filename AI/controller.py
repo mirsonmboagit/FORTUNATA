@@ -11,6 +11,7 @@ from .monitor import IntelligenceMonitor
 from ui.components import intelligent_banner as intelligent_banner_module
 
 IntelligentBannerCenter = intelligent_banner_module.IntelligentBannerCenter
+DEFAULT_INTELLIGENCE_INTERVAL_SECONDS = 15 * 60.0
 
 
 def _build_history_banner_data(
@@ -55,7 +56,7 @@ def _get_banner_notification_total(
 class SharedIntelligenceHub:
     """Servico compartilhado por todas as telas para evitar trabalho duplicado."""
 
-    def __init__(self, db: Any, interval_seconds: float = 30.0) -> None:
+    def __init__(self, db: Any, interval_seconds: float = DEFAULT_INTELLIGENCE_INTERVAL_SECONDS) -> None:
         self.alert_manager = AlertManager()
         self.monitor = IntelligenceMonitor(
             db=db,
@@ -107,7 +108,10 @@ class SharedIntelligenceHub:
             listener(dict(payload))
 
 
-def get_shared_intelligence_hub(db: Any, interval_seconds: float = 30.0) -> SharedIntelligenceHub:
+def get_shared_intelligence_hub(
+    db: Any,
+    interval_seconds: float = DEFAULT_INTELLIGENCE_INTERVAL_SECONDS,
+) -> SharedIntelligenceHub:
     app = App.get_running_app()
     if app is None:
         raise RuntimeError("Nenhuma instancia de App ativa para monitorizacao inteligente.")
@@ -126,7 +130,7 @@ class ProactiveIntelligenceController:
         screen: Any,
         db: Any,
         history_title: str,
-        interval_seconds: float = 30.0,
+        interval_seconds: float = DEFAULT_INTELLIGENCE_INTERVAL_SECONDS,
         banner_columns: int = 1,
         auto_batch_size: int | None = None,
         auto_stagger_seconds: float = 2.0,

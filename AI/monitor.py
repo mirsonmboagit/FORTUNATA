@@ -13,6 +13,7 @@ from .engine import executar_analise
 
 
 PayloadCallback = Callable[[dict[str, Any]], None]
+DEFAULT_INTELLIGENCE_INTERVAL_SECONDS = 15 * 60.0
 
 
 class IntelligenceMonitor:
@@ -22,7 +23,7 @@ class IntelligenceMonitor:
         self,
         db: Any | None,
         alert_manager: AlertManager | None = None,
-        interval_seconds: float = 30.0,
+        interval_seconds: float = DEFAULT_INTELLIGENCE_INTERVAL_SECONDS,
     ) -> None:
         self.collector = IntelligenceDataCollector(db=db, default_ttl=max(10.0, interval_seconds * 0.6))
         self.alert_manager = alert_manager or AlertManager()
