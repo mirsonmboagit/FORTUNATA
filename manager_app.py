@@ -17,7 +17,7 @@ class ManagerApp(BaseApp):
         self._screen_factories = {}
 
     def build(self):
-        self.title = 'MERCEARIA - MANAGER'
+        self.title = f"{self.system_name} - MANAGER"
         self.icon = str(asset_path('icon', 'manager.ico'))
 
         self.db = get_db()

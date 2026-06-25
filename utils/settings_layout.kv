@@ -1083,6 +1083,13 @@
                             adaptive_height: True
 
                             SettingsActionCard:
+                                icon_name: 'store'
+                                title_text: 'Nome do sistema'
+                                subtitle_text: root.system_name
+                                accent_color: app.theme_tokens['success']
+                                on_press: root.open_system_name_settings()
+
+                            SettingsActionCard:
                                 id: language_card
                                 icon_name: 'translate'
                                 title_text: app.t('settings.language.title', app.language)
@@ -1227,6 +1234,13 @@
                                 subtitle_text: 'Procura codigos em falta nos dados importados da Bazara.'
                                 accent_color: app.theme_tokens['primary']
                                 on_press: root.backfill_bazara_barcodes()
+
+                            SettingsActionCard:
+                                icon_name: 'barcode-scan'
+                                title_text: 'Gerador de barcodes'
+                                subtitle_text: 'Cria um codigo repetido em PDF ou atribui direto a produtos sem codigo.'
+                                accent_color: app.theme_tokens['success']
+                                on_press: root.open_barcode_generator()
 
                             SettingsActionCard:
                                 icon_name: 'database-sync'

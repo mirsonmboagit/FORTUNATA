@@ -102,6 +102,7 @@ class LoginScreen(MDScreen):
         self._register_username = None
         self._register_password = None
         self._register_confirm = None
+        self._register_answer_fields = []
         self._register_feedback = None
         self._register_content_container = None
         self._register_submit_button = None
@@ -1203,9 +1204,11 @@ class LoginScreen(MDScreen):
             self._register_content_container.height = content_height
 
     def _set_register_busy(self, busy):
-        if not any((self._register_username, self._register_password, self._register_confirm)):
+        if not any((self._register_username, self._register_password, self._register_confirm, self._register_answer_fields)):
             return
-        for field in (self._register_username, self._register_password, self._register_confirm):
+        fields = [self._register_username, self._register_password, self._register_confirm]
+        fields.extend(self._register_answer_fields or [])
+        for field in fields:
             if field is not None:
                 field.disabled = bool(busy)
         if self._register_submit_button is not None:
@@ -1359,10 +1362,63 @@ class LoginScreen(MDScreen):
             height=dp(64),
         )
         self._register_confirm.line_color_focus = accent
-        self._register_confirm.bind(on_text_validate=self._submit_register)
         content.add_widget(self._register_confirm)
 
-        for field in (self._register_username, self._register_password, self._register_confirm):
+        questions_title = MDBoxLayout(
+            orientation='horizontal',
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(32),
+        )
+        questions_icon = MDIcon(
+            icon='shield-question-outline',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=accent,
+            size_hint_x=None,
+            width=dp(22),
+        )
+        questions_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        questions_title.add_widget(questions_icon)
+        questions_title.add_widget(self._register_text_label(
+            'Perguntas de recuperacao',
+            "text_primary",
+            "Subtitle2",
+            True,
+        ))
+        content.add_widget(questions_title)
+
+        self._register_answer_fields = []
+        for index, question in enumerate(QUESTIONS, start=1):
+            content.add_widget(self._register_text_label(question, "text_secondary", "Caption"))
+            field = MDTextField(
+                hint_text=f'Resposta {index}',
+                helper_text='Usada para recuperar a senha',
+                helper_text_mode='on_focus',
+                icon_right='key-variant',
+                password=True,
+                mode='rectangle',
+                size_hint_y=None,
+                height=dp(64),
+            )
+            field.line_color_focus = accent
+            self._register_answer_fields.append(field)
+            content.add_widget(field)
+
+        self._register_confirm.bind(on_text_validate=lambda *args: self._focus_register_field(
+            self._register_answer_fields[0] if self._register_answer_fields else None
+        ))
+        for index, field in enumerate(self._register_answer_fields):
+            if index + 1 < len(self._register_answer_fields):
+                next_field = self._register_answer_fields[index + 1]
+                field.bind(on_text_validate=lambda *args, target=next_field: self._focus_register_field(target))
+            else:
+                field.bind(on_text_validate=self._submit_register)
+
+        register_fields = [self._register_username, self._register_password, self._register_confirm]
+        register_fields.extend(self._register_answer_fields)
+        for field in register_fields:
             field.bind(text=self._clear_register_feedback)
 
         self._register_feedback = MDLabel(
@@ -1400,7 +1456,7 @@ class LoginScreen(MDScreen):
         shield_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         security_note.add_widget(shield_icon)
         security_note.add_widget(self._register_text_label(
-            'Depois de criar, entre com este usuario e senha na tela de login.',
+            'As respostas ficam protegidas e serao pedidas se esquecer a senha.',
             "text_secondary",
             "Caption",
         ))
@@ -1453,6 +1509,7 @@ class LoginScreen(MDScreen):
         self._register_username = None
         self._register_password = None
         self._register_confirm = None
+        self._register_answer_fields = []
         self._register_feedback = None
         self._register_content_container = None
         self._register_submit_button = None
@@ -1464,6 +1521,7 @@ class LoginScreen(MDScreen):
         username = self._register_username.text.strip() if self._register_username else ''
         password = self._register_password.text.strip() if self._register_password else ''
         confirm = self._register_confirm.text.strip() if self._register_confirm else ''
+        answers = [field.text.strip() for field in (self._register_answer_fields or [])]
 
         if not username:
             self._set_register_feedback('Informe o nome de usuario.')
@@ -1490,6 +1548,13 @@ class LoginScreen(MDScreen):
         if password != confirm:
             self._set_register_feedback('As senhas nao coincidem.')
             self._focus_register_field(self._register_confirm)
+            return
+        if not answers or any(not answer for answer in answers):
+            self._set_register_feedback('Responda as perguntas de recuperacao.')
+            for field in self._register_answer_fields or []:
+                if not field.text.strip():
+                    self._focus_register_field(field)
+                    break
             return
 
         role = ''
@@ -1530,12 +1595,16 @@ class LoginScreen(MDScreen):
                     if has_admin:
                         return {"status": "admin_exists"}
                     return {"status": "create_failed"}
+                if not self.db.set_security_questions(username, answers):
+                    return {"status": "questions_failed"}
             else:
                 created = self.db.create_user(username, password, 'manager')
                 if not created and self._db_last_error():
                     return None
                 if not created:
                     return {"status": "create_failed"}
+                if not self.db.set_security_questions(username, answers):
+                    return {"status": "questions_failed"}
                 try:
                     self.db.log_action(
                         username,
@@ -1569,6 +1638,9 @@ class LoginScreen(MDScreen):
                     self._set_register_feedback('Nao foi possivel criar o admin.')
                 else:
                     self._set_register_feedback('Nao foi possivel criar a conta.')
+                return
+            if status == "questions_failed":
+                self._set_register_feedback('Conta criada, mas nao foi possivel salvar as perguntas de recuperacao.')
                 return
 
             self._close_register_dialog()

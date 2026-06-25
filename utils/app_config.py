@@ -64,22 +64,23 @@ API_DEFAULTS = {
     "connection_limit": 100,
     "channel_timeout": 120,
     "cleanup_interval": 30,
-    "ident": "loja-api",
+    "ident": "sige-mpe-api",
 }
 
 SERVICE_DEFAULTS = {
-    "name": "LojaAPI",
-    "display_name": "Loja API Local",
-    "description": "API local Flask/Waitress para o sistema de loja.",
+    "name": "SIGEMPEAPI",
+    "display_name": "SIGE MPE API Local",
+    "description": "API local Flask/Waitress para o SIGE MPE.",
     "nssm_path": "nssm.exe",
     "python_executable": "python",
     "entrypoint": "server/run_api.py",
     "working_directory": ".",
-    "stdout_log": "logs/lojaapi-stdout.log",
-    "stderr_log": "logs/lojaapi-stderr.log",
+    "stdout_log": "logs/sigempeapi-stdout.log",
+    "stderr_log": "logs/sigempeapi-stderr.log",
 }
 
 APP_SETTINGS_DEFAULTS = {
+    "system_name": "SIGE MPE",
     "ai_enabled": True,
     "auto_banners_enabled": True,
     "smart_monitor_enabled": True,

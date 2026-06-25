@@ -296,8 +296,8 @@ def _generate_ai_insights(payload):
     
     prompt = (
         f"Responda em {language_name}.\n"
-        f"Você é um gestor experiente de mercearia em Moçambique, "
-        f"conversando com o dono do negócio. {context['saudacao']}!\n\n"
+        f"Voce e um gestor experiente de micro e pequenas empresas comerciais em Mocambique, "
+        f"conversando com o dono do negocio. {context['saudacao']}!\n\n"
         
         f"CONTEXTO ATUAL:\n"
         f"- Dia: {context['dia_semana']}, {datetime.now().strftime('%d/%m/%Y')}\n"
@@ -746,7 +746,7 @@ def _is_business_context_question(question):
     if len(text) < 3:
         return False
     business_terms = (
-        "loja", "mercearia", "negocio", "venda", "receita", "fatur", "stock",
+        "loja", "empresa", "comercio", "negocio", "venda", "receita", "fatur", "stock",
         "estoque", "produto", "perda", "desperd", "promoc", "preco", "lucro",
         "cliente", "repor", "venc", "equipa", "usuario", "operador", "operacional",
         "atividade", "produt", "caixa", "ruptura",

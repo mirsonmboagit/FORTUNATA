@@ -1,4 +1,5 @@
 import sys
+import logging
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -15,16 +16,21 @@ configure_runtime_logging()
 
 from server.app import app, start_background_services
 
+LOGGER = logging.getLogger(__name__)
+
 
 def main():
     api_cfg = get_api_config(force_reload=True)
     host = api_cfg.get("host") or "0.0.0.0"
     port = int(api_cfg.get("port") or 8080)
     runner = str(api_cfg.get("runner") or "waitress").strip().lower()
+    LOGGER.info("starting sige-mpe-api runner=%s host=%s port=%s", runner, host, port)
     start_background_services(app)
+    LOGGER.info("background services ready")
 
     if runner == "flask":
-        print(f"[loja-api] flask em http://{host}:{port}")
+        LOGGER.info("starting flask server on http://%s:%s", host, port)
+        print(f"[sige-mpe-api] flask em http://{host}:{port}", flush=True)
         app.run(host=host, port=port)
         return
 
@@ -36,7 +42,8 @@ def main():
             "ou altere 'runner' para 'flask' em config/api.json durante o desenvolvimento."
         ) from exc
 
-    print(f"[loja-api] waitress em http://{host}:{port}")
+    LOGGER.info("starting waitress server on http://%s:%s", host, port)
+    print(f"[sige-mpe-api] waitress em http://{host}:{port}", flush=True)
     serve(
         app,
         host=host,
@@ -45,7 +52,7 @@ def main():
         connection_limit=int(api_cfg.get("connection_limit") or 100),
         channel_timeout=int(api_cfg.get("channel_timeout") or 120),
         cleanup_interval=int(api_cfg.get("cleanup_interval") or 30),
-        ident=str(api_cfg.get("ident") or "loja-api"),
+        ident=str(api_cfg.get("ident") or "sige-mpe-api"),
     )
 
 

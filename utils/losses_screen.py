@@ -234,7 +234,6 @@ class LossesScreen(MDScreen):
         self.clear_form()
         self.update_ui_state()
         self._update_responsive_layout()
-        self._schedule_scanner_auto_start()
         app = App.get_running_app()
         warmup = getattr(app, "warmup_screens", None) if app else None
         if callable(warmup):
@@ -262,18 +261,11 @@ class LossesScreen(MDScreen):
 
     def _schedule_scanner_auto_start(self, delay=None):
         self._cancel_scanner_auto_start()
-        if self.scanning:
-            return
-        delay = self.SCANNER_AUTO_START_DELAY_SECONDS if delay is None else max(0, float(delay))
-        self._scanner_auto_start_ev = Clock.schedule_once(self._auto_start_scanner, delay)
+        return
 
     def _auto_start_scanner(self, _dt):
         self._scanner_auto_start_ev = None
-        if self.manager and self.manager.current != self.name:
-            return
-        if self.scanning:
-            return
-        self.start_scanner()
+        return
 
     def _ensure_scanner_panel_geometry(self, reset=False):
         if not hasattr(self, "ids") or "scanner_preview_card" not in self.ids:

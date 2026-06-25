@@ -19,7 +19,7 @@ function Find-ReleaseRoot {
 
     $current = (Resolve-Path $StartDir).Path
     while ($true) {
-        if ((Test-Path (Join-Path $current "MerceariaAdmin.exe")) -or (Test-Path (Join-Path $current "config\app.json"))) {
+        if ((Test-Path (Join-Path $current "SIGEMPEAdmin.exe")) -or (Test-Path (Join-Path $current "config\app.json"))) {
             return $current
         }
         $parent = Split-Path $current -Parent
@@ -32,7 +32,7 @@ function Find-ReleaseRoot {
 
 $sourceRoot = Find-ReleaseRoot $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-    $InstallDir = Join-Path $env:LOCALAPPDATA "MerceariaAdmin"
+    $InstallDir = Join-Path $env:LOCALAPPDATA "SIGEMPEAdmin"
 }
 
 $resolvedInstallDir = $InstallDir
@@ -55,10 +55,10 @@ if (-not (Test-Path $configureScript)) {
 
 & $configureScript -Role Client -ServerHost $ServerHost -Port $Port -ApiKey $ApiKey -InstallDir $resolvedInstallDir
 
-$exePath = Join-Path $resolvedInstallDir "MerceariaAdmin.exe"
+$exePath = Join-Path $resolvedInstallDir "SIGEMPEAdmin.exe"
 if ((-not $NoShortcut) -and (Test-Path $exePath)) {
     $desktop = [Environment]::GetFolderPath("Desktop")
-    $shortcutPath = Join-Path $desktop "Mercearia Admin.lnk"
+    $shortcutPath = Join-Path $desktop "SIGE MPE Admin.lnk"
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $exePath

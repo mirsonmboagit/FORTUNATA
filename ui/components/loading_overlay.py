@@ -61,6 +61,7 @@ class ScreenLoadingOverlay(FloatLayout):
             pos_hint={"center_x": 0.5},
             active=False,
         )
+
         self._title_label = MDLabel(
             text="A carregar...",
             halign="center",

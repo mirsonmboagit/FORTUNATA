@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Thread
 from time import perf_counter
 
 from kivy.app import App
@@ -14,7 +13,6 @@ from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.label import MDLabel
-from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.snackbar import MDSnackbar
 from kivymd.uix.textfield import MDTextField
@@ -41,12 +39,20 @@ class RestockScreen(MDScreen):
     MOVEMENTS_RENDER_BATCH_SIZE = 60
     LOW_STOCK_THRESHOLD = 5
     PRODUCT_COL_HINTS = [0.08, 0.24, 0.11, 0.09, 0.09, 0.13, 0.14, 0.12]
-    MOVEMENT_COL_HINTS = [0.13, 0.13, 0.10, 0.11, 0.20, 0.10, 0.11, 0.12]
+    MOVEMENT_COL_HINTS = [0.12, 0.12, 0.09, 0.10, 0.18, 0.09, 0.09, 0.11, 0.10]  # last=DEL
     OUT_TYPES = [
         ("AJUSTE", "ADJUSTMENT"),
         ("DANIFICADO", "DAMAGE"),
         ("EXPIRADO", "EXPIRED"),
         ("ROUBO", "THEFT"),
+    ]
+    # Filter options for movement modal — rendered as buttons
+    MOVEMENT_FILTERS = [
+        ("TODOS", "ALL"),
+        ("ENTRADAS", "IN"),
+        ("SAIDAS", "OUT"),
+        ("REPOSICAO", "RESTOCK"),
+        ("PERDAS", "LOSS"),
     ]
 
     def __init__(self, db=None, **kwargs):
@@ -67,7 +73,6 @@ class RestockScreen(MDScreen):
         self._products_render_ev = None
         self._products_render_rows = []
         self._products_render_index = 0
-        self._type_menu = None
         self._enter_refresh_ev = None
         self._last_refresh_at = 0.0
         self._refresh_running = False
@@ -77,15 +82,17 @@ class RestockScreen(MDScreen):
         self._pending_movements_limit = None
         self._movement_load_callbacks = []
         self._last_movements_loaded_at = 0.0
+        self._last_movements_limit = 0
         self._movements_dialog = None
-        self._movements_filter_menu = None
-        self._movements_filter_btn = None
+        self._movements_filter_btns = {}        # key -> MDRaisedButton/MDFlatButton
+        self._movements_delete_btn = None       # "ELIMINAR VISÍVEIS" global button
         self._movements_print_btn = None
         self._movements_total_label = None
         self._movements_table_container = None
         self._movements_modal_rows = []
         self._movements_modal_title = ""
-        self._movements_filter_key = "ALL"
+        self._movements_modal_limit = 200
+        self._movements_filter_key = ""
         self._movements_render_ev = None
         self._movements_render_rows = []
         self._movements_render_index = 0
@@ -119,6 +126,8 @@ class RestockScreen(MDScreen):
         self._expiry_alerts_by_id = {}
         self._movement_submitting = False
         self._loading_controller = getattr(self, "_loading_controller", None)
+        # Out-type dropdown replaced with inline buttons
+        self._out_type_btns = {}
         Clock.schedule_once(self.init_screen, 0.1)
 
     def init_screen(self, _dt):
@@ -133,7 +142,7 @@ class RestockScreen(MDScreen):
         role = getattr(app, "current_role", None)
         if role != "admin":
             actor = getattr(app, "current_user", None) or "desconhecido"
-            self._log_action_async(
+            self._log_action(
                 actor,
                 role or "guest",
                 "ACCESS_DENIED",
@@ -143,20 +152,17 @@ class RestockScreen(MDScreen):
             self._redirect_after_denied()
             return
         if not self.products:
-            self.load_products_async(force=True)
+            self.load_products()
         elif (perf_counter() - self._last_products_loaded_at) >= self.REFRESH_SECONDS:
-            self.load_products_async(force=True)
+            self.load_products()
         self._apply_mode_ui()
         Clock.schedule_once(lambda dt: self._focus_field("search_input"), 0.05)
 
-    def _log_action_async(self, actor, role, action, details):
-        def worker():
-            try:
-                self.db.log_action(actor, role, action, details)
-            except Exception:
-                pass
-
-        Thread(target=worker, daemon=True).start()
+    def _log_action(self, actor, role, action, details):
+        try:
+            self.db.log_action(actor, role, action, details)
+        except Exception:
+            pass
 
     def on_leave(self):
         if self._enter_refresh_ev:
@@ -165,7 +171,6 @@ class RestockScreen(MDScreen):
         self._stop_products_render()
         self._dismiss_stock_form_dialog()
         self._dismiss_movements_dialog()
-        self._dismiss_type_menu()
         self._clear_loading_overlay()
 
     def _ensure_loading_overlay(self):
@@ -178,8 +183,8 @@ class RestockScreen(MDScreen):
         controller = self._ensure_loading_overlay()
         if active:
             controller.show(key, message, detail)
-            return
-        controller.hide(key)
+        else:
+            controller.hide(key)
 
     def _clear_loading_overlay(self):
         if getattr(self, "_loading_controller", None) is not None:
@@ -208,24 +213,19 @@ class RestockScreen(MDScreen):
             pass
 
     def open_restock_history(self, *args):
-        self._open_movements_modal("Historico de Movimentos", self.movements)
-        self.load_movements_async(
-            limit=600,
-            force=True,
-            on_loaded=lambda rows: self._refresh_open_movements_modal("Historico de Movimentos", rows),
-        )
+        self._open_movements_modal_async("Historico de Movimentos", limit=600)
 
     def open_recent_movements_modal(self, *args):
-        self._open_movements_modal("Movimentos Recentes", self.movements)
-        self.load_movements_async(
-            limit=200,
-            force=True,
-            on_loaded=lambda rows: self._refresh_open_movements_modal("Movimentos Recentes", rows),
-        )
+        self._open_movements_modal_async("Movimentos Recentes", limit=200)
+
+    def _open_movements_modal_async(self, title, limit=200):
+        self._movements_modal_limit = int(limit or 200)
+        self._open_movements_modal(title, [])
 
     def prepare_open_from_admin(self, mode):
         self.set_mode(mode)
-        self.load_products_async(force=not bool(self.products))
+        if not self.products:
+            self.load_products()
 
     def request_enter_refresh(self, force=False, delay=None):
         delay = self.ENTER_REFRESH_DELAY_SECONDS if delay is None else max(0, float(delay))
@@ -256,13 +256,9 @@ class RestockScreen(MDScreen):
 
         started_at = perf_start()
         self._refresh_running = True
-        pending = {"products": True, "movements": True}
-
-        def finish_piece(kind):
-            pending[kind] = False
-            if pending["products"] or pending["movements"]:
-                return
-            self._refresh_running = False
+        try:
+            self.load_products()
+            self.load_movements(limit=200)
             self._refresh_selected_product()
             self._update_sync_label()
             self._last_refresh_at = perf_counter()
@@ -271,44 +267,30 @@ class RestockScreen(MDScreen):
                 started_at,
                 f"products={len(self.products)} movements={len(self.movements)} mode={self.current_mode}",
             )
-            if self._pending_refresh:
-                self._pending_refresh = False
-                Clock.schedule_once(lambda dt: self.force_refresh(silent=True, force=True), 0.05)
-
-        try:
-            self.load_products_async(force=True, on_loaded=lambda rows: finish_piece("products"))
-            self.load_movements_async(limit=200, force=True, on_loaded=lambda rows: finish_piece("movements"))
             return True
         except Exception as exc:
-            self._refresh_running = False
             if not silent:
                 self._show_dialog("Erro", f"Falha ao atualizar dados de stock: {exc}")
             return False
+        finally:
+            self._refresh_running = False
+            if self._pending_refresh:
+                self._pending_refresh = False
+                Clock.schedule_once(lambda dt: self.force_refresh(silent=True, force=True), 0.05)
 
     def _update_sync_label(self):
         if "sync_label" in self.ids:
             self.ids.sync_label.text = f"Ult. sync: {datetime.now().strftime('%H:%M:%S')}"
 
-    def _refresh_open_movements_modal(self, title, rows):
-        if self._movements_dialog is None:
-            return
-        dialog_title = getattr(self._movements_dialog, "title", "") or ""
-        if dialog_title != title:
-            return
-        self._movements_modal_rows = list(rows or [])
-        self._refresh_movements_modal_table()
-
     def _ensure_pdf_viewer(self):
         if self.pdf_viewer is None:
             from pdfs.pdf_viewer import PDFViewer
-
             self.pdf_viewer = PDFViewer(error_callback=lambda message: self._show_dialog("Erro", message))
         return self.pdf_viewer
 
     def _ensure_stock_movements_report(self):
         if self.stock_movements_report is None:
             from pdfs.stock_movements_report import StockMovementsReport
-
             self.stock_movements_report = StockMovementsReport()
         return self.stock_movements_report
 
@@ -375,7 +357,7 @@ class RestockScreen(MDScreen):
             row_id="out_type_row",
             visible=not is_in,
             target_height=dp(52),
-            field_ids=("movement_type_field", "movement_type_btn"),
+            field_ids=("movement_type_field",),
         )
         self._sync_stock_form_modal_from_hidden()
 
@@ -414,46 +396,49 @@ class RestockScreen(MDScreen):
             if field_id in self.ids:
                 self.ids[field_id].disabled = not visible
 
-    def _dismiss_type_menu(self):
-        if self._type_menu:
-            self._type_menu.dismiss()
-            self._type_menu = None
-
     def open_movement_type_menu(self):
-        if self.current_mode != "OUT":
-            return
-        self._dismiss_type_menu()
-        caller = self._modal_movement_type_btn or self.ids.get("movement_type_btn")
-        if not caller:
-            return
-        items = []
-        for label, _code in self.OUT_TYPES:
-            items.append(
-                {
-                    "viewclass": "OneLineListItem",
-                    "text": label,
-                    "height": dp(42),
-                    "on_release": lambda selected=label: self._select_out_type(selected),
-                }
-            )
-
-        self._type_menu = MDDropdownMenu(
-            caller=caller,
-            items=items,
-            width_mult=3,
-            max_height=dp(220),
-            position="bottom",
-            hor_growth="left",
-            ver_growth="down",
-        )
-        self._type_menu.open()
+        """No-op: out-type is now selected via inline buttons in the KV layout."""
+        pass
 
     def _select_out_type(self, label):
+        """Called by inline out-type buttons."""
         if "movement_type_field" in self.ids:
             self.ids.movement_type_field.text = label
         if self._modal_movement_type_field:
             self._modal_movement_type_field.text = label
-        self._dismiss_type_menu()
+        # Highlight active button
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.15, 0.35, 0.65, 1])
+        card = tokens.get("card", [1, 1, 1, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_primary = tokens.get("text_primary", [0.2, 0.2, 0.2, 1])
+        for btn_label, btn in self._out_type_btns.items():
+            active = (btn_label == label)
+            btn.md_bg_color = primary if active else card
+            btn.text_color = on_primary if active else text_primary
+
+    def _build_out_type_buttons(self, container):
+        """Build inline out-type selector buttons and store refs."""
+        self._out_type_btns = {}
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.15, 0.35, 0.65, 1])
+        card = tokens.get("card", [1, 1, 1, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_primary = tokens.get("text_primary", [0.2, 0.2, 0.2, 1])
+        current = "AJUSTE"
+        for label, _code in self.OUT_TYPES:
+            active = (label == current)
+            btn = MDRaisedButton(
+                text=label,
+                md_bg_color=primary if active else card,
+                text_color=on_primary if active else text_primary,
+                size_hint=(None, None),
+                height=dp(36),
+                width=dp(110),
+                on_release=lambda _b, lbl=label: self._select_out_type(lbl),
+            )
+            self._out_type_btns[label] = btn
+            container.add_widget(btn)
 
     # ---------- Stock register modal ----------
     def open_stock_register_modal(self, *args):
@@ -575,6 +560,7 @@ class RestockScreen(MDScreen):
         self._modal_entry_supplier_row.add_widget(self._modal_invoice_input)
         form_box.add_widget(self._modal_entry_supplier_row)
 
+        # Out-type: inline buttons instead of dropdown
         self._modal_out_type_row = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -587,14 +573,7 @@ class RestockScreen(MDScreen):
             readonly=True,
             text="AJUSTE",
         )
-        self._modal_movement_type_btn = MDFlatButton(
-            text="TIPO",
-            size_hint_x=None,
-            width=dp(90),
-            on_release=lambda _btn: self.open_movement_type_menu(),
-        )
         self._modal_out_type_row.add_widget(self._modal_movement_type_field)
-        self._modal_out_type_row.add_widget(self._modal_movement_type_btn)
         form_box.add_widget(self._modal_out_type_row)
 
         form_box.add_widget(
@@ -655,7 +634,6 @@ class RestockScreen(MDScreen):
         if self._stock_form_dialog:
             self._stock_form_dialog.dismiss()
             self._stock_form_dialog = None
-        self._dismiss_type_menu()
         self._modal_title_label = None
         self._modal_selected_product_label = None
         self._modal_selected_stock_label = None
@@ -738,7 +716,7 @@ class RestockScreen(MDScreen):
             self._modal_out_type_row,
             not is_in,
             dp(52),
-            (self._modal_movement_type_field, self._modal_movement_type_btn),
+            (self._modal_movement_type_field,),
         )
         if self.ids and "submit_btn" in self.ids:
             self.ids.submit_btn.disabled = self._movement_submitting
@@ -779,77 +757,8 @@ class RestockScreen(MDScreen):
         self.register_movement()
         self._sync_stock_form_modal_from_hidden()
 
-    # ---------- Data load ----------
-    def load_products_async(self, force=False, on_loaded=None):
-        stale = (perf_counter() - self._last_products_loaded_at) >= self.REFRESH_SECONDS
-        if callable(on_loaded):
-            self._product_load_callbacks.append(on_loaded)
-        if not force and self.products and not stale:
-            self._drain_product_load_callbacks(self.products)
-            return
-        if self._products_loading:
-            self._pending_products_load = True
-            return
-
-        token = self._products_load_token + 1
-        self._products_load_token = token
-        self._products_loading = True
-        self._set_loading_overlay(
-            "products",
-            True,
-            "A carregar produtos para reposicao...",
-            "Estamos a atualizar o stock, a velocidade de venda e os alertas de vencimento.",
-        )
-
-        def worker():
-            rows = []
-            try:
-                rows = self.db.get_products_for_stock_control(include_velocity=True, velocity_days=14) or []
-            except Exception:
-                rows = []
-
-            if not rows:
-                try:
-                    fallback = self.db.get_products_for_restock(include_velocity=True, velocity_days=14) or []
-                    rows = [self._normalize_product_row(r) for r in fallback]
-                except Exception:
-                    rows = []
-            else:
-                rows = [self._normalize_product_row(r) for r in rows]
-
-            Clock.schedule_once(
-                lambda dt, data=rows, tok=token: self._apply_loaded_products_async(data, tok),
-                0,
-            )
-
-        Thread(target=worker, daemon=True).start()
-
-    def _apply_loaded_products_async(self, rows, token):
-        if token != self._products_load_token:
-            return
-
-        self._products_loading = False
-        self._set_loading_overlay("products", False)
-        self._last_products_loaded_at = perf_counter()
-        self.products = list(rows or [])
-        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
-        self._apply_search_now()
-        self._drain_product_load_callbacks(self.products)
-
-        if self._pending_products_load:
-            self._pending_products_load = False
-            Clock.schedule_once(lambda dt: self.load_products_async(force=True), 0.05)
-
-    def _drain_product_load_callbacks(self, rows):
-        callbacks = list(self._product_load_callbacks)
-        self._product_load_callbacks.clear()
-        for callback in callbacks:
-            try:
-                callback(list(rows or []))
-            except Exception:
-                pass
-
-    def load_products(self):
+    # ---------- Data load (SYNCHRONOUS — no threading) ----------
+    def _fetch_products_for_restock(self):
         rows = []
         try:
             rows = self.db.get_products_for_stock_control(include_velocity=True, velocity_days=14) or []
@@ -864,13 +773,9 @@ class RestockScreen(MDScreen):
                 rows = []
         else:
             rows = [self._normalize_product_row(r) for r in rows]
+        return rows
 
-        self.products = rows
-        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
-        self._last_products_loaded_at = perf_counter()
-        self._apply_search_now()
-
-    def load_movements(self, limit=200):
+    def _fetch_movements_for_restock(self, limit=200):
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
         rows = []
@@ -888,90 +793,71 @@ class RestockScreen(MDScreen):
 
         if not rows:
             rows = self._fallback_movements(start_dt, end_dt)
+        return rows
 
+    def load_products(self):
+        rows = self._fetch_products_for_restock()
+        self.products = rows
+        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
+        self._last_products_loaded_at = perf_counter()
+        self._apply_search_now()
+        # Drain any queued callbacks
+        callbacks = list(self._product_load_callbacks)
+        self._product_load_callbacks.clear()
+        for cb in callbacks:
+            try:
+                cb(list(rows))
+            except Exception:
+                pass
+        return rows
+
+    def load_movements(self, limit=200, update_table=True):
+        rows = self._fetch_movements_for_restock(limit=limit)
         self.movements = rows
-        self._show_movements(rows)
         self._last_movements_loaded_at = perf_counter()
+        self._last_movements_limit = int(limit or 200)
+        if update_table:
+            self._show_movements(rows)
+        # Drain callbacks
+        callbacks = list(self._movement_load_callbacks)
+        self._movement_load_callbacks.clear()
+        for cb in callbacks:
+            try:
+                cb(list(rows))
+            except Exception:
+                pass
+        return rows
+
+    # Keep async signatures as thin wrappers for compatibility with callers
+    def load_products_async(self, force=False, on_loaded=None):
+        stale = (perf_counter() - self._last_products_loaded_at) >= self.REFRESH_SECONDS
+        if callable(on_loaded):
+            self._product_load_callbacks.append(on_loaded)
+        if not force and self.products and not stale:
+            callbacks = list(self._product_load_callbacks)
+            self._product_load_callbacks.clear()
+            for cb in callbacks:
+                try:
+                    cb(list(self.products))
+                except Exception:
+                    pass
+            return
+        self.load_products()
 
     def load_movements_async(self, limit=200, force=False, on_loaded=None):
         stale = (perf_counter() - self._last_movements_loaded_at) >= self.REFRESH_SECONDS
         if callable(on_loaded):
             self._movement_load_callbacks.append(on_loaded)
         if not force and self.movements and not stale:
-            self._drain_movement_load_callbacks(self.movements)
+            callbacks = list(self._movement_load_callbacks)
+            self._movement_load_callbacks.clear()
+            for cb in callbacks:
+                try:
+                    cb(list(self.movements))
+                except Exception:
+                    pass
             return
-        if self._movements_loading:
-            self._pending_movements_limit = max(int(limit or 200), int(self._pending_movements_limit or 0))
-            return
-
-        token = self._movements_load_token + 1
-        self._movements_load_token = token
-        self._movements_loading = True
-        self._set_loading_overlay(
-            "movements",
-            True,
-            "A carregar historico de movimentos...",
-            "Estamos a preparar entradas, saidas e vendas relacionadas com o stock.",
-        )
-        requested_limit = int(limit or 200)
-
-        def worker():
-            end_dt = datetime.now()
-            start_dt = end_dt - timedelta(days=365)
-            rows = []
-            try:
-                rows = self.db.get_stock_movements(
-                    start_dt,
-                    end_dt,
-                    direction=None,
-                    product_id=None,
-                    include_sales=True,
-                    limit=requested_limit,
-                ) or []
-            except Exception:
-                rows = []
-
-            if not rows:
-                rows = self._fallback_movements(start_dt, end_dt)
-
-            Clock.schedule_once(
-                lambda dt, data=rows, tok=token, req_limit=requested_limit: self._apply_loaded_movements_async(
-                    data,
-                    tok,
-                    req_limit,
-                ),
-                0,
-            )
-
-        Thread(target=worker, daemon=True).start()
-
-    def _apply_loaded_movements_async(self, rows, token, requested_limit):
-        if token != self._movements_load_token:
-            return
-
-        self._movements_loading = False
-        self._set_loading_overlay("movements", False)
-        self._last_movements_loaded_at = perf_counter()
-        self.movements = list(rows or [])
-        self._show_movements(self.movements)
-        self._drain_movement_load_callbacks(self.movements)
-
-        if self._pending_movements_limit:
-            next_limit = self._pending_movements_limit
-            self._pending_movements_limit = None
-            Clock.schedule_once(
-                lambda dt, queued_limit=next_limit: self.load_movements_async(limit=queued_limit, force=True),
-                0.05,
-            )
-
-    def _drain_movement_load_callbacks(self, rows):
-        callbacks = list(self._movement_load_callbacks)
-        self._movement_load_callbacks.clear()
-        for callback in callbacks:
-            try:
-                callback(list(rows or []))
-            except Exception:
-                pass
+        self.load_movements(limit=limit)
 
     def _fallback_movements(self, start_dt, end_dt):
         try:
@@ -985,26 +871,9 @@ class RestockScreen(MDScreen):
             update_day = str(created_at or "")[:10] if created_at else None
             normalized.append(
                 (
-                    idx,
-                    created_at,
-                    created_at,
-                    None,
-                    update_day,
-                    "IN",
-                    "RESTOCK",
-                    None,
-                    product_name,
-                    qty,
-                    unit,
-                    unit_cost,
-                    total_cost,
-                    None,
-                    None,
-                    "Reposicao de stock",
-                    note,
-                    created_by,
-                    None,
-                    None,
+                    idx, created_at, created_at, None, update_day, "IN", "RESTOCK",
+                    None, product_name, qty, unit, unit_cost, total_cost, None, None,
+                    "Reposicao de stock", note, created_by, None, None,
                 )
             )
         return normalized
@@ -1038,7 +907,6 @@ class RestockScreen(MDScreen):
         if not query:
             self._show_products(self.products)
             return
-
         self._show_products(self._filter_products(query))
 
     def _filter_products(self, query):
@@ -1079,8 +947,6 @@ class RestockScreen(MDScreen):
             )
             return
 
-        # Antes a tabela inteira era reconstruida num unico frame, o que travava
-        # a abertura da tela e os primeiros cliques. Agora os widgets entram em lotes.
         self._products_render_rows = list(rows or [])
         self._products_render_index = 0
         self._render_next_products_batch(0)
@@ -1124,18 +990,8 @@ class RestockScreen(MDScreen):
         on_primary = tokens.get("on_primary", [1, 1, 1, 1])
 
         (
-            pid,
-            name,
-            stock,
-            _price,
-            _cost,
-            _barcode,
-            is_weight,
-            exp_date,
-            _status,
-            avg_daily,
-            days_left,
-            last_update,
+            pid, name, stock, _price, _cost, _barcode, is_weight,
+            exp_date, _status, avg_daily, days_left, last_update,
         ) = self._unpack_product(raw)
         expiry_alert = self._get_expiry_alert(raw)
 
@@ -1173,20 +1029,12 @@ class RestockScreen(MDScreen):
         expiry_day = self._format_dt(exp_date, with_time=False) if exp_date else "--"
         expiry_text = f"{expiry_day} | {expiry_alert.get('short_label', '--')}" if exp_date else "Sem validade"
         self._add_cell(
-            row,
-            expiry_text,
-            self.PRODUCT_COL_HINTS[5],
-            halign="center",
-            color=expiry_color,
-            bold=bool(expiry_alert.get("is_alert")),
-            shorten=True,
+            row, expiry_text, self.PRODUCT_COL_HINTS[5], halign="center",
+            color=expiry_color, bold=bool(expiry_alert.get("is_alert")), shorten=True,
         )
         self._add_cell(
-            row,
-            self._format_dt(last_update, with_time=True),
-            self.PRODUCT_COL_HINTS[6],
-            halign="center",
-            color=text_secondary,
+            row, self._format_dt(last_update, with_time=True),
+            self.PRODUCT_COL_HINTS[6], halign="center", color=text_secondary,
         )
 
         action = MDBoxLayout(size_hint_x=self.PRODUCT_COL_HINTS[7], size_hint_y=None, height=dp(30))
@@ -1227,7 +1075,6 @@ class RestockScreen(MDScreen):
         expiry_text = self._format_expiry_input(_exp) or "sem validade"
         self.ids.selected_product_label.text = f"Produto: {name or '--'} (ID {pid}) | Validade base: {expiry_text}"
         self.ids.selected_stock_label.text = f"Stock atual: {stock_text} {unit}"
-        # Prefill do campo de preco/custo com o preco atual do produto.
         current_price = self._to_float(_price)
         if current_price <= 0:
             current_price = self._to_float(_cost)
@@ -1301,26 +1148,9 @@ class RestockScreen(MDScreen):
 
         for idx, raw in enumerate(rows):
             (
-                _mid,
-                _created_at,
-                entry_date,
-                exit_date,
-                update_day,
-                direction,
-                movement_type,
-                _product_id,
-                product_name,
-                qty,
-                unit,
-                _unit_cost,
-                _total_cost,
-                _stock_before,
-                _stock_after,
-                _reason,
-                _note,
-                created_by,
-                _supplier,
-                _invoice,
+                _mid, _created_at, entry_date, exit_date, update_day, direction, movement_type,
+                _product_id, product_name, qty, unit, _unit_cost, _total_cost, _stock_before,
+                _stock_after, _reason, _note, created_by, _supplier, _invoice,
             ) = self._normalize_movement_row(raw)
 
             bg = row_even if idx % 2 == 0 else row_odd
@@ -1355,19 +1185,17 @@ class RestockScreen(MDScreen):
 
     def _dismiss_movements_dialog(self):
         self._stop_movements_render()
-        if self._movements_filter_menu:
-            self._movements_filter_menu.dismiss()
-            self._movements_filter_menu = None
         if self._movements_dialog:
             self._movements_dialog.dismiss()
             self._movements_dialog = None
-        self._movements_filter_btn = None
+        self._movements_filter_btns = {}
+        self._movements_delete_btn = None
         self._movements_print_btn = None
         self._movements_total_label = None
         self._movements_table_container = None
         self._movements_modal_rows = []
         self._movements_modal_title = ""
-        self._movements_filter_key = "ALL"
+        self._movements_filter_key = ""
         self._movements_row_cache = []
         self._movements_empty_label = None
         self._movement_pdf_busy = False
@@ -1376,45 +1204,87 @@ class RestockScreen(MDScreen):
         self._dismiss_movements_dialog()
         self._movements_modal_rows = list(rows or [])
         self._movements_modal_title = title
-        self._movements_filter_key = "ALL"
+        self._movements_filter_key = ""
+        tokens = self._theme_tokens()
 
         content = MDBoxLayout(
             orientation="vertical",
             spacing=dp(8),
             size_hint_y=None,
-            height=dp(450),
+            height=dp(490),
         )
-        controls = MDBoxLayout(
+
+        # ── Filter buttons row ──────────────────────────────────────────
+        filter_row = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(32),
-            spacing=dp(8),
+            height=dp(40),
+            spacing=dp(6),
         )
+        self._movements_filter_btns = {}
+        for label, key in self.MOVEMENT_FILTERS:
+            btn = MDRaisedButton(
+                text=label,
+                size_hint=(None, None),
+                height=dp(34),
+                width=dp(96),
+                on_release=lambda _b, k=key, lbl=label: self._set_movements_filter(k, lbl),
+            )
+            self._movements_filter_btns[key] = btn
+            filter_row.add_widget(btn)
+        self._update_filter_btn_styles()
+
         self._movements_total_label = MDLabel(
-            text=f"Total de registos: {len(self._movements_modal_rows)}",
+            text=f"Total: {len(self._movements_modal_rows)} — selecione um filtro",
             theme_text_color="Secondary",
             valign="middle",
         )
-        controls.add_widget(self._movements_total_label)
-        self._movements_filter_btn = MDFlatButton(
-            text="FILTRAR: TODOS",
-            on_release=lambda _btn: self.open_movements_filter_menu(),
+        filter_row.add_widget(self._movements_total_label)
+        content.add_widget(filter_row)
+
+        action_row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(38),
+            spacing=dp(8),
+            padding=[0, 0, 0, dp(2)],
         )
-        controls.add_widget(self._movements_filter_btn)
+        action_row.add_widget(
+            MDLabel(
+                text="As acoes aplicam-se apenas aos movimentos visiveis no filtro actual.",
+                theme_text_color="Secondary",
+                font_style="Caption",
+                valign="middle",
+            )
+        )
+
+        self._movements_delete_btn = MDRaisedButton(
+            text="ELIMINAR VISIVEIS",
+            size_hint=(None, None),
+            size=(dp(166), dp(34)),
+            disabled=True,
+            md_bg_color=tokens.get("error", [0.78, 0.12, 0.12, 1]),
+            text_color=tokens.get("on_error", [1, 1, 1, 1]),
+            on_release=lambda _btn: self.confirm_delete_visible_movements(),
+        )
+
         self._movements_print_btn = MDRaisedButton(
             text="IMPRIMIR PDF",
             size_hint=(None, None),
-            size=(dp(132), dp(32)),
+            size=(dp(132), dp(34)),
+            disabled=not bool(self._movements_modal_rows),
             on_release=lambda _btn: self.print_movements_pdf(),
         )
-        controls.add_widget(self._movements_print_btn)
-        content.add_widget(controls)
+        action_row.add_widget(self._movements_print_btn)
+        action_row.add_widget(self._movements_delete_btn)
+        content.add_widget(action_row)
 
+        # ── Column header ───────────────────────────────────────────────
         header = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
             height=dp(28),
-            md_bg_color=self._theme_tokens().get("primary", [0.15, 0.35, 0.65, 1]),
+            md_bg_color=tokens.get("primary", [0.15, 0.35, 0.65, 1]),
             padding=[dp(6), 0],
             spacing=dp(4),
         )
@@ -1427,12 +1297,13 @@ class RestockScreen(MDScreen):
             ("QTD", self.MOVEMENT_COL_HINTS[5], "center"),
             ("DIR", self.MOVEMENT_COL_HINTS[6], "center"),
             ("USUARIO", self.MOVEMENT_COL_HINTS[7], "right"),
+            ("DEL", self.MOVEMENT_COL_HINTS[8], "center"),
         ]
-        on_primary = self._theme_tokens().get("on_primary", [1, 1, 1, 1])
-        for label, hint, align in header_titles:
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        for lbl, hint, align in header_titles:
             header.add_widget(
                 MDLabel(
-                    text=label,
+                    text=lbl,
                     size_hint_x=hint,
                     halign=align,
                     bold=True,
@@ -1456,67 +1327,70 @@ class RestockScreen(MDScreen):
             title=title,
             type="custom",
             content_cls=content,
-            size_hint=(0.88, 0.82),
+            size_hint=(0.88, 0.84),
             buttons=[MDFlatButton(text="FECHAR", on_release=lambda _btn: self._dismiss_movements_dialog())],
         )
         self._movements_dialog = dialog
         dialog.open()
 
-    def open_movements_filter_menu(self):
-        if not self._movements_filter_btn:
-            return
-        if self._movements_filter_menu:
-            self._movements_filter_menu.dismiss()
-            self._movements_filter_menu = None
-
-        options = [
-            ("TODOS", "ALL"),
-            ("ENTRADAS", "IN"),
-            ("SAIDAS", "OUT"),
-            ("REPOSICAO", "RESTOCK"),
-            ("PERDAS", "LOSS"),
-        ]
-        items = []
-        for label, key in options:
-            items.append(
-                {
-                    "viewclass": "OneLineListItem",
-                    "text": label,
-                    "height": dp(42),
-                    "on_release": lambda selected_key=key, selected_label=label: self._set_movements_filter(
-                        selected_key, selected_label
-                    ),
-                }
-            )
-
-        self._movements_filter_menu = MDDropdownMenu(
-            caller=self._movements_filter_btn,
-            items=items,
-            width_mult=3.4,
-            max_height=dp(240),
-            position="bottom",
-            hor_growth="left",
-            ver_growth="down",
-        )
-        self._movements_filter_menu.open()
+    def _update_filter_btn_styles(self):
+        """Highlight the active filter button, dim the rest."""
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.15, 0.35, 0.65, 1])
+        surface = tokens.get("surface_alt", [0.93, 0.94, 0.96, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_primary = tokens.get("text_primary", [0.2, 0.2, 0.2, 1])
+        for key, btn in self._movements_filter_btns.items():
+            active = (key == self._movements_filter_key)
+            btn.md_bg_color = primary if active else surface
+            btn.text_color = on_primary if active else text_primary
 
     def _set_movements_filter(self, filter_key, filter_label):
+        # ── Step 1: visual feedback is INSTANT (same frame) ──────────────
         self._movements_filter_key = filter_key
-        if self._movements_filter_btn:
-            self._movements_filter_btn.text = f"FILTRAR: {filter_label}"
-        if self._movements_filter_menu:
-            self._movements_filter_menu.dismiss()
-            self._movements_filter_menu = None
-        self._apply_movements_filter_visibility()
-        if not self._movements_row_cache:
-            self._refresh_movements_modal_table()
+        self._update_filter_btn_styles()
+
+        # ── Step 2: if rows already built → just toggle visibility ───────
+        if self._movements_row_cache:
+            self._apply_movements_filter_visibility()
+            return
+
+        # ── Step 3: rows not yet built → defer heavy work one frame ──────
+        # The button is already highlighted; schedule the rest so the UI
+        # can redraw before we block on the DB query or row construction.
+        Clock.schedule_once(self._load_and_render_movements_deferred, 0)
+
+    def _load_and_render_movements_deferred(self, _dt=None):
+        """Called one frame after the filter button press so the UI redraws first."""
+        rows = self._get_movements_for_modal(getattr(self, "_movements_modal_limit", 200))
+        self._movements_modal_rows = list(rows or [])
+        self._movements_row_cache = []
+        self._movements_empty_label = None
+        if self._movements_table_container:
+            self._movements_table_container.clear_widgets()
+        if self._movements_print_btn:
+            self._movements_print_btn.disabled = not bool(self._movements_modal_rows)
+        self._refresh_movements_modal_table()
+
+    def _get_movements_for_modal(self, limit=200):
+        limit = int(limit or 200)
+        fresh = (perf_counter() - self._last_movements_loaded_at) < self.REFRESH_SECONDS
+        if self.movements and fresh and int(self._last_movements_limit or 0) >= limit:
+            return list(self.movements[:limit])
+        return self.load_movements(limit=limit, update_table=False)
 
     def _refresh_movements_modal_table(self):
         if not self._movements_table_container:
             return
         table = self._movements_table_container
+
+        # Cache already built — just toggle visibility, no reconstruction
         if self._movements_row_cache:
-            self._apply_movements_filter_visibility()
+            if self._movements_filter_key:
+                self._apply_movements_filter_visibility()
+            else:
+                if self._movements_total_label:
+                    self._movements_total_label.text = f"Total: {len(self._movements_modal_rows)}"
             return
 
         self._stop_movements_render()
@@ -1525,8 +1399,13 @@ class RestockScreen(MDScreen):
         table.clear_widgets()
 
         if not self._movements_modal_rows:
+            hint_text = (
+                "Selecione um filtro para ver os movimentos."
+                if not self._movements_filter_key
+                else "Sem movimentos para este filtro"
+            )
             self._movements_empty_label = MDLabel(
-                text="Sem movimentos no periodo",
+                text=hint_text,
                 theme_text_color="Secondary",
                 halign="center",
                 size_hint_y=None,
@@ -1534,14 +1413,18 @@ class RestockScreen(MDScreen):
             )
             table.add_widget(self._movements_empty_label)
             if self._movements_total_label:
-                self._movements_total_label.text = "Total de registos: 0 | Exibindo: 0"
+                self._movements_total_label.text = "Total: 0"
             return
 
+        # Render first batch immediately so rows appear fast,
+        # then continue in subsequent frames for the rest
         self._movements_render_rows = list(self._movements_modal_rows)
         self._movements_render_index = 0
-        self._render_next_movements_batch(0)
+        self._render_next_movements_batch(0)   # first batch now
         if self._movements_render_index < len(self._movements_render_rows):
-            self._movements_render_ev = Clock.schedule_interval(self._render_next_movements_batch, 0)
+            self._movements_render_ev = Clock.schedule_interval(
+                self._render_next_movements_batch, 0
+            )
 
     def _stop_movements_render(self):
         if self._movements_render_ev:
@@ -1554,6 +1437,11 @@ class RestockScreen(MDScreen):
             return False
         if self._movements_render_index >= len(self._movements_render_rows):
             self._stop_movements_render()
+            # Final update of totals after all rows are rendered
+            if self._movements_filter_key:
+                self._apply_movements_filter_visibility()
+            elif self._movements_total_label:
+                self._movements_total_label.text = f"Total: {len(self._movements_modal_rows)}"
             return False
 
         start = self._movements_render_index
@@ -1564,10 +1452,15 @@ class RestockScreen(MDScreen):
             start_index=start,
         )
         self._movements_render_index = end
-        self._apply_movements_filter_visibility()
+
+        # Apply filter visibility on each batch so filtered rows hide as they appear
+        if self._movements_filter_key:
+            self._apply_movements_filter_visibility()
 
         if self._movements_render_index >= len(self._movements_render_rows):
             self._stop_movements_render()
+            if not self._movements_filter_key and self._movements_total_label:
+                self._movements_total_label.text = f"Total: {len(self._movements_modal_rows)}"
             return False
         return True
 
@@ -1603,8 +1496,12 @@ class RestockScreen(MDScreen):
 
         if self._movements_total_label:
             self._movements_total_label.text = (
-                f"Total de registos: {len(self._movements_modal_rows)} | Exibindo: {visible_count}"
+                f"Total: {len(self._movements_modal_rows)} | Exibindo: {visible_count}"
             )
+
+        # Enable/disable global delete button based on visible rows
+        if self._movements_delete_btn:
+            self._movements_delete_btn.disabled = (visible_count == 0)
 
         if visible_count == 0:
             if not self._movements_empty_label:
@@ -1622,12 +1519,10 @@ class RestockScreen(MDScreen):
                 self._movements_table_container.remove_widget(self._movements_empty_label)
 
     def _get_movements_filter_label(self):
-        if not self._movements_filter_btn:
-            return "TODOS"
-        text = str(self._movements_filter_btn.text or "").strip()
-        if ":" in text:
-            return text.split(":", 1)[1].strip() or "TODOS"
-        return text or "TODOS"
+        for label, key in self.MOVEMENT_FILTERS:
+            if key == self._movements_filter_key:
+                return label
+        return "TODOS"
 
     def _get_filtered_movement_rows(self):
         filtered_rows = []
@@ -1643,26 +1538,9 @@ class RestockScreen(MDScreen):
         prepared = []
         for raw in rows or []:
             (
-                _mid,
-                _created_at,
-                entry_date,
-                exit_date,
-                update_day,
-                direction,
-                movement_type,
-                _product_id,
-                product_name,
-                qty,
-                unit,
-                _unit_cost,
-                _total_cost,
-                _stock_before,
-                _stock_after,
-                _reason,
-                _note,
-                created_by,
-                _supplier,
-                _invoice,
+                _mid, _created_at, entry_date, exit_date, update_day, direction, movement_type,
+                _product_id, product_name, qty, unit, _unit_cost, _total_cost, _stock_before,
+                _stock_after, _reason, _note, created_by, _supplier, _invoice,
             ) = self._normalize_movement_row(raw)
 
             qty_val = self._to_float(qty)
@@ -1688,6 +1566,7 @@ class RestockScreen(MDScreen):
         return prepared
 
     def print_movements_pdf(self):
+        """Gera e abre PDF de movimentos (sincrono — sem thread)."""
         if self._movement_pdf_busy:
             return
 
@@ -1701,43 +1580,26 @@ class RestockScreen(MDScreen):
         prepared_rows = self._prepare_movement_rows_for_pdf(filtered_rows)
 
         self._set_movements_print_busy(True)
-
-        def worker():
-            try:
-                report = self._ensure_stock_movements_report()
-                pdf_path = report.generate(
-                    prepared_rows,
-                    {
-                        "title": title,
-                        "filter_label": filter_label,
-                        "record_count": len(prepared_rows),
-                        "source_label": "Tela de reposicao de stock",
-                    },
-                )
-                return {"status": "ok", "pdf_path": pdf_path}
-            except Exception as exc:
-                return {"status": "error", "message": str(exc)}
-
-        def apply_result(result):
+        try:
+            report = self._ensure_stock_movements_report()
+            pdf_path = report.generate(
+                prepared_rows,
+                {
+                    "title": title,
+                    "filter_label": filter_label,
+                    "record_count": len(prepared_rows),
+                    "source_label": "Tela de reposicao de stock",
+                },
+            )
             self._set_movements_print_busy(False)
-            status = (result or {}).get("status")
-            if status == "ok":
-                pdf_path = result.get("pdf_path")
+            try:
                 printed = self._ensure_pdf_viewer().print_pdf(pdf_path)
-                if printed:
-                    self._show_movements_pdf_success(pdf_path, printed=True)
-                else:
-                    self._show_movements_pdf_success(pdf_path, printed=False)
-                return
-
-            message = (result or {}).get("message") or "Erro ao gerar PDF dos movimentos."
-            self._show_dialog("Erro", message)
-
-        def finish_worker():
-            result = worker()
-            Clock.schedule_once(lambda dt, payload=result: apply_result(payload), 0)
-
-        Thread(target=finish_worker, daemon=True).start()
+                self._show_movements_pdf_success(pdf_path, printed=bool(printed))
+            except Exception as exc:
+                self._show_dialog("Erro", str(exc) or "Erro ao enviar PDF para impressao.")
+        except Exception as exc:
+            self._set_movements_print_busy(False)
+            self._show_dialog("Erro", str(exc) or "Erro ao gerar PDF dos movimentos.")
 
     def _show_movements_pdf_success(self, pdf_path, printed=True):
         filename = str(pdf_path or "").split("\\")[-1].split("/")[-1]
@@ -1770,26 +1632,9 @@ class RestockScreen(MDScreen):
 
         for idx, raw in enumerate(rows):
             (
-                _mid,
-                _created_at,
-                entry_date,
-                exit_date,
-                update_day,
-                direction,
-                movement_type,
-                _product_id,
-                product_name,
-                qty,
-                unit,
-                _unit_cost,
-                _total_cost,
-                _stock_before,
-                _stock_after,
-                _reason,
-                _note,
-                created_by,
-                _supplier,
-                _invoice,
+                mid, _created_at, entry_date, exit_date, update_day, direction, movement_type,
+                _product_id, product_name, qty, unit, _unit_cost, _total_cost, _stock_before,
+                _stock_after, _reason, _note, created_by, _supplier, _invoice,
             ) = self._normalize_movement_row(raw)
 
             absolute_idx = start_index + idx
@@ -1799,7 +1644,7 @@ class RestockScreen(MDScreen):
                 size_hint_y=None,
                 height=dp(34),
                 padding=[dp(6), 0],
-                spacing=dp(6),
+                spacing=dp(4),
                 md_bg_color=bg,
             )
 
@@ -1820,11 +1665,183 @@ class RestockScreen(MDScreen):
             self._add_cell(row, qty_text, self.MOVEMENT_COL_HINTS[5], "center", text_secondary)
             self._add_cell(row, direction or "-", self.MOVEMENT_COL_HINTS[6], "center", direction_color, bold=True)
             self._add_cell(row, created_by or "-", self.MOVEMENT_COL_HINTS[7], "right", text_secondary, shorten=True)
+
+            # ── Delete button ───────────────────────────────────────────
+            del_cell = MDBoxLayout(
+                size_hint_x=self.MOVEMENT_COL_HINTS[8],
+                size_hint_y=None,
+                height=dp(34),
+                padding=[dp(2), dp(3)],
+            )
+            del_btn = MDRaisedButton(
+                text="X",
+                md_bg_color=[0.75, 0.1, 0.1, 1],
+                text_color=[1, 1, 1, 1],
+                size_hint=(1, None),
+                height=dp(26),
+                on_release=lambda _b, r=row, m=mid, pn=product_name: self.confirm_delete_movement(m, pn, r),
+            )
+            del_cell.add_widget(del_btn)
+            row.add_widget(del_cell)
+
             row._movement_direction = direction
             row._movement_type = movement_type
+            row._movement_id = mid
+            row._movement_raw = raw
 
             table.add_widget(row)
             self._movements_row_cache.append(row)
+
+    # ---------- Delete movements ----------
+
+    def confirm_delete_movement(self, movement_id, product_name, row_widget):
+        """Diálogo de confirmação para eliminar um único movimento."""
+        if movement_id is None:
+            self._show_dialog("Erro", "Este movimento não tem ID e não pode ser eliminado.")
+            return
+        product_label = str(product_name or "-")
+        dialog_ref = {}
+
+        def dismiss_dialog(_button):
+            dialog_ref["dialog"].dismiss()
+
+        def delete_movement(_button, mid=movement_id, row=row_widget):
+            dialog_ref["dialog"].dismiss()
+            self._do_delete_movement(mid, row)
+
+        dialog = MDDialog(
+            title="Eliminar Movimento",
+            text=f"Tem a certeza que quer eliminar permanentemente o movimento de\n[b]{product_label}[/b]?\n\nEsta acção não pode ser desfeita.",
+            buttons=[
+                MDFlatButton(text="CANCELAR", on_release=dismiss_dialog),
+                MDRaisedButton(
+                    text="ELIMINAR",
+                    md_bg_color=[0.75, 0.1, 0.1, 1],
+                    text_color=[1, 1, 1, 1],
+                    on_release=delete_movement,
+                ),
+            ],
+        )
+        dialog_ref["dialog"] = dialog
+        dialog.open()
+
+    def _do_delete_movement(self, movement_id, row_widget=None):
+        """Elimina um movimento da BD e remove a sua linha do modal."""
+        try:
+            app = App.get_running_app()
+            deleted_by = getattr(app, "current_user", None) or "admin"
+            if not self.db.delete_stock_movement(movement_id, deleted_by=deleted_by):
+                raise RuntimeError("Movimento nao encontrado ou ja eliminado.")
+        except Exception as exc:
+            self._show_dialog("Erro", f"Falha ao eliminar movimento: {exc}")
+            return
+
+        # Remove from in-memory lists
+        self._movements_modal_rows = [
+            r for r in self._movements_modal_rows
+            if self._normalize_movement_row(r)[0] != movement_id
+        ]
+        self.movements = [
+            r for r in self.movements
+            if self._normalize_movement_row(r)[0] != movement_id
+        ]
+
+        # Hide and remove the row widget immediately — no full rebuild
+        if row_widget is not None and row_widget in self._movements_row_cache:
+            self._movements_row_cache.remove(row_widget)
+            if row_widget.parent is self._movements_table_container:
+                self._movements_table_container.remove_widget(row_widget)
+
+        self._apply_movements_filter_visibility()
+        self.show_feedback("Movimento eliminado com sucesso.", "success")
+
+    def confirm_delete_visible_movements(self):
+        """Diálogo de confirmação para eliminar todos os movimentos visíveis."""
+        visible_rows = [
+            r for r in self._movements_row_cache
+            if self._movement_matches_filter(
+                getattr(r, "_movement_direction", ""),
+                getattr(r, "_movement_type", ""),
+            ) and getattr(r, "_movement_id", None) is not None
+        ]
+        count = len(visible_rows)
+        if count == 0:
+            self._show_dialog("Aviso", "Não há movimentos visíveis para eliminar.")
+            return
+
+        filter_label = self._get_movements_filter_label()
+        dialog_ref = {}
+
+        def dismiss_dialog(_button):
+            dialog_ref["dialog"].dismiss()
+
+        def delete_visible_rows(_button, rows=list(visible_rows)):
+            dialog_ref["dialog"].dismiss()
+            self._do_delete_visible_movements(rows)
+
+        dialog = MDDialog(
+            title="Eliminar Movimentos Visíveis",
+            text=(
+                f"Vai eliminar permanentemente [b]{count} movimento(s)[/b] "
+                f"com o filtro '[b]{filter_label}[/b]'.\n\nEsta acção não pode ser desfeita."
+            ),
+            buttons=[
+                MDFlatButton(text="CANCELAR", on_release=dismiss_dialog),
+                MDRaisedButton(
+                    text=f"ELIMINAR {count}",
+                    md_bg_color=[0.75, 0.1, 0.1, 1],
+                    text_color=[1, 1, 1, 1],
+                    on_release=delete_visible_rows,
+                ),
+            ],
+        )
+        dialog_ref["dialog"] = dialog
+        dialog.open()
+
+    def _do_delete_visible_movements(self, visible_rows):
+        """Elimina em lote os movimentos visíveis da BD e actualiza o modal."""
+        errors = []
+        deleted_ids = set()
+        for row_widget in visible_rows:
+            mid = getattr(row_widget, "_movement_id", None)
+            if mid is None:
+                continue
+            try:
+                app = App.get_running_app()
+                deleted_by = getattr(app, "current_user", None) or "admin"
+                if not self.db.delete_stock_movement(mid, deleted_by=deleted_by):
+                    raise RuntimeError("Movimento nao encontrado ou ja eliminado.")
+                deleted_ids.add(mid)
+            except Exception as exc:
+                errors.append(str(exc))
+
+        # Remove from in-memory lists
+        self._movements_modal_rows = [
+            r for r in self._movements_modal_rows
+            if self._normalize_movement_row(r)[0] not in deleted_ids
+        ]
+        self.movements = [
+            r for r in self.movements
+            if self._normalize_movement_row(r)[0] not in deleted_ids
+        ]
+
+        # Remove row widgets immediately
+        for row_widget in visible_rows:
+            if getattr(row_widget, "_movement_id", None) in deleted_ids:
+                if row_widget in self._movements_row_cache:
+                    self._movements_row_cache.remove(row_widget)
+                if row_widget.parent is self._movements_table_container:
+                    self._movements_table_container.remove_widget(row_widget)
+
+        self._apply_movements_filter_visibility()
+
+        if errors:
+            self._show_dialog(
+                "Concluído com erros",
+                f"{len(deleted_ids)} eliminado(s). {len(errors)} erro(s): {'; '.join(errors[:3])}",
+            )
+        else:
+            self.show_feedback(f"{len(deleted_ids)} movimento(s) eliminado(s) com sucesso.", "success")
 
     # ---------- Submit ----------
     def register_movement(self):
@@ -1836,18 +1853,8 @@ class RestockScreen(MDScreen):
             return
 
         (
-            pid,
-            name,
-            stock,
-            _sale_price,
-            _cost,
-            _barcode,
-            is_weight,
-            _exp,
-            _status,
-            _avg,
-            _days,
-            _last_update,
+            pid, name, stock, _sale_price, _cost, _barcode, is_weight,
+            _exp, _status, _avg, _days, _last_update,
         ) = self._unpack_product(self.selected_product)
 
         qty_text = self.ids.qty_input.text.strip()
@@ -1880,13 +1887,11 @@ class RestockScreen(MDScreen):
             if unit_cost <= 0:
                 self._show_dialog("Erro", "Custo unitario deve ser maior que zero.")
                 return
-
             try:
                 expiry_iso = self._parse_expiry_input(self.ids.expiry_input.text)
             except ValueError as exc:
                 self._show_dialog("Erro", str(exc))
                 return
-
             supplier = self.ids.supplier_input.text.strip() or None
             invoice = self.ids.invoice_input.text.strip() or None
         else:
@@ -1904,68 +1909,53 @@ class RestockScreen(MDScreen):
             return
 
         self._set_movement_busy(True)
-
-        def worker():
-            try:
-                if is_in:
-                    movement_id = self.db.restock_product(
-                        pid,
-                        qty,
-                        unit_cost,
-                        expiry_date=expiry_iso,
-                        reason="Reposicao de stock",
-                        note=note,
-                        created_by=user,
-                        created_role=role,
-                        supplier_name=supplier,
-                        invoice_number=invoice,
-                    )
-                    if not movement_id:
-                        return {"ok": False, "message": "Falha ao registar entrada de stock."}
-                    return {"ok": True, "direction": "IN"}
-
+        try:
+            if is_in:
+                movement_id = self.db.restock_product(
+                    pid, qty, unit_cost,
+                    expiry_date=expiry_iso,
+                    reason="Reposicao de stock",
+                    note=note,
+                    created_by=user,
+                    created_role=role,
+                    supplier_name=supplier,
+                    invoice_number=invoice,
+                )
+                result = {"ok": bool(movement_id), "direction": "IN",
+                          "message": "Falha ao registar entrada de stock." if not movement_id else ""}
+            else:
                 movement_id = self.db.record_stock_movement(
-                    pid,
-                    movement_code,
-                    qty,
-                    "OUT",
+                    pid, movement_code, qty, "OUT",
                     reason="Saida manual de stock",
                     note=note,
                     created_by=user,
                     created_role=role,
                 )
-                if not movement_id:
-                    return {"ok": False, "message": "Falha ao registar saida de stock."}
-                return {"ok": True, "direction": "OUT"}
-            except Exception as exc:
-                return {"ok": False, "message": str(exc)}
+                result = {"ok": bool(movement_id), "direction": "OUT",
+                          "message": "Falha ao registar saida de stock." if not movement_id else ""}
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc)}
 
-        def apply_result(result):
-            self._set_movement_busy(False)
-            if not result.get("ok"):
-                self._show_dialog("Erro", result.get("message") or "Falha ao registar movimento.")
-                return
+        self._set_movement_busy(False)
 
-            if result.get("direction") == "IN":
-                self.ids.entry_date_field.text = now.strftime("%d/%m/%Y %H:%M")
-                self.ids.exit_date_field.text = "--"
-                self.show_feedback(f"Entrada registada para {name}.", "success")
-            else:
-                self.ids.entry_date_field.text = "--"
-                self.ids.exit_date_field.text = now.strftime("%d/%m/%Y %H:%M")
-                self.show_feedback(f"Saida registada para {name}.", "success")
+        if not result.get("ok"):
+            self._show_dialog("Erro", result.get("message") or "Falha ao registar movimento.")
+            return
 
-            self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
-            self.ids.qty_input.text = "1"
-            self.ids.note_input.text = ""
-            self.force_refresh()
-            Clock.schedule_once(lambda dt: self._focus_field("qty_input", select_all=True), 0)
+        if result.get("direction") == "IN":
+            self.ids.entry_date_field.text = now.strftime("%d/%m/%Y %H:%M")
+            self.ids.exit_date_field.text = "--"
+            self.show_feedback(f"Entrada registada para {name}.", "success")
+        else:
+            self.ids.entry_date_field.text = "--"
+            self.ids.exit_date_field.text = now.strftime("%d/%m/%Y %H:%M")
+            self.show_feedback(f"Saida registada para {name}.", "success")
 
-        def finish_worker():
-            result = worker()
-            Clock.schedule_once(lambda dt, payload=result: apply_result(payload), 0)
-
-        Thread(target=finish_worker, daemon=True).start()
+        self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
+        self.ids.qty_input.text = "1"
+        self.ids.note_input.text = ""
+        self.force_refresh()
+        Clock.schedule_once(lambda dt: self._focus_field("qty_input", select_all=True), 0)
 
     def clear_form(self):
         self.selected_product = None
@@ -2056,7 +2046,6 @@ class RestockScreen(MDScreen):
             pad = (None,) * (9 - len(row))
             base = tuple(row) + pad
             return base + (0.0, None, None)
-        # len(row) == 10
         return tuple(row) + (None, None)
 
     def _unpack_product(self, row):
@@ -2088,26 +2077,8 @@ class RestockScreen(MDScreen):
     def _normalize_movement_row(self, row):
         if not row:
             return (
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                0.0,
-                "UN",
-                0.0,
-                0.0,
-                None,
-                None,
-                "",
-                "",
-                "",
-                None,
-                None,
+                None, None, None, None, None, None, None, None, None,
+                0.0, "UN", 0.0, 0.0, None, None, "", "", "", None, None,
             )
         row = tuple(row)
         if len(row) >= 20:

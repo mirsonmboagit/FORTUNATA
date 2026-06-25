@@ -7,6 +7,8 @@ import time
 import unicodedata
 from typing import Any
 
+from utils.system_identity import DEFAULT_SYSTEM_NAME
+
 
 def _import_win32print():
     try:
@@ -104,7 +106,7 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
     width = 32 if int(paper_width_mm or 80) <= 58 else 42
     lines: list[str] = []
 
-    lines.append(_center(receipt_data.get("store_name") or "MERCEARIA", width))
+    lines.append(_center(receipt_data.get("store_name") or DEFAULT_SYSTEM_NAME, width))
     lines.append(_center("RECIBO DE VENDA", width))
     receipt_code = _plain_text(receipt_data.get("receipt_code") or "")
     if receipt_code:
@@ -120,8 +122,9 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
         qty_text = _plain_text(item.get("qty_text") or "-")
         unit_price = _money(item.get("unit_price"))
         line_total = _money(item.get("line_total"))
-        lines.append(_left_right(f"{qty_text} x {unit_price}", line_total, width))
+        lines.append(_left_right(f"Qtd: {qty_text}", line_total, width))
         detail_parts = [
+            f"Preco unit.: {unit_price}",
             _plain_text(item.get("sale_mode_label") or ""),
             _plain_text(item.get("vat_tag") or ""),
         ]
@@ -135,7 +138,7 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
     if receipt_data.get("paid_amount") is not None:
         lines.append(_left_right("Pago", _money(receipt_data.get("paid_amount")), width))
     if receipt_data.get("change_amount") is not None:
-        lines.append(_left_right("Troco", _money(receipt_data.get("change_amount")), width))
+        lines.append(_left_right("Valor devolvido", _money(receipt_data.get("change_amount")), width))
     lines.append(_line(width, "="))
     lines.append(_left_right("TOTAL", _money(receipt_data.get("total")), width))
     lines.append(_line(width, "="))

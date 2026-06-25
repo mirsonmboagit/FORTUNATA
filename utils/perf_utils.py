@@ -3,13 +3,15 @@ import sys
 from time import perf_counter
 
 
-def _env_flag(name):
+def _env_flag(name, legacy_name=None):
     value = str(os.environ.get(name, "")).strip().lower()
+    if not value and legacy_name:
+        value = str(os.environ.get(legacy_name, "")).strip().lower()
     return value in {"1", "true", "yes", "on"}
 
 
 def _is_server_process():
-    if _env_flag("MERCEARIA_SERVER_MODE"):
+    if _env_flag("SIGEMPE_SERVER_MODE", "MERCEARIA_SERVER_MODE"):
         return True
     argv = " ".join(str(arg).strip().lower() for arg in sys.argv[1:] if arg)
     if not argv:
@@ -26,7 +28,7 @@ def _is_server_process():
 
 
 def should_log_perf():
-    if _env_flag("MERCEARIA_PERF_LOGS"):
+    if _env_flag("SIGEMPE_PERF_LOGS", "MERCEARIA_PERF_LOGS"):
         return True
     if _is_server_process():
         return False
@@ -40,7 +42,7 @@ def should_log_perf():
 
 
 def should_log_debug():
-    return _env_flag("MERCEARIA_DEBUG_LOGS") or should_log_perf()
+    return _env_flag("SIGEMPE_DEBUG_LOGS", "MERCEARIA_DEBUG_LOGS") or should_log_perf()
 
 
 def perf_start():

@@ -27,6 +27,7 @@ class DatabaseClient:
         "get_categories": 30.0,
         "get_vat_rules": 30.0,
         "get_productivity_report_data": 15.0,
+        "get_cash_user_report_data": 15.0,
         "get_admin_home_snapshot": 20.0,
     }
     _MUTATING_RPC_PREFIXES = (
@@ -723,6 +724,9 @@ class DatabaseClient:
             return rows[off:off + int(limit)]
         return rows[off:]
 
+    def get_recent_sales(self, limit=50):
+        return self.get_all_sales(limit=limit, offset=0)
+
     def get_sale_details(self, sale_id):
         return self._rpc("get_sale_details", sale_id)
 
@@ -800,13 +804,17 @@ class DatabaseClient:
     def get_categories(self):
         return self._rpc("get_categories") or []
 
-    def get_report_data(self, start_date, end_date, product_id=None, category=None):
+    def get_sales_users_for_filter(self):
+        return self._rpc("get_sales_users_for_filter") or []
+
+    def get_report_data(self, start_date, end_date, product_id=None, category=None, seller=None):
         return self._rpc(
             "get_report_data",
             start_date,
             end_date,
             product_id=product_id,
             category=category,
+            seller=seller,
         ) or []
 
     def get_productivity_report_data(self, start_date, end_date):
@@ -814,6 +822,14 @@ class DatabaseClient:
             "get_productivity_report_data",
             start_date,
             end_date,
+        ) or {}
+
+    def get_cash_user_report_data(self, start_date, end_date, seller=None):
+        return self._rpc(
+            "get_cash_user_report_data",
+            start_date,
+            end_date,
+            seller=seller,
         ) or {}
 
     def get_admin_home_snapshot(self, lookback_days=7):
@@ -846,6 +862,9 @@ class DatabaseClient:
 
     def approve_stock_movement(self, movement_id, approved_by):
         return self._rpc("approve_stock_movement", movement_id, approved_by)
+
+    def delete_stock_movement(self, movement_id, deleted_by=None):
+        return self._rpc("delete_stock_movement", movement_id, deleted_by=deleted_by)
 
     def log_action(self, username, role, action, details=""):
         return self._rpc("log_action", username, role, action, details)

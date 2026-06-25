@@ -135,6 +135,7 @@ class ProactiveIntelligenceController:
         auto_batch_size: int | None = None,
         auto_stagger_seconds: float = 2.0,
         auto_present_enabled: bool = False,
+        auto_present_as_history: bool = False,
     ) -> None:
         self.screen = screen
         self.history_title = history_title
@@ -142,11 +143,13 @@ class ProactiveIntelligenceController:
         self.auto_batch_size = max(1, int(auto_batch_size)) if auto_batch_size else None
         self.auto_stagger_seconds = max(0.0, float(auto_stagger_seconds or 0.0))
         self.auto_present_enabled = bool(auto_present_enabled)
+        self.auto_present_as_history = bool(auto_present_as_history)
         self.hub = get_shared_intelligence_hub(db=db, interval_seconds=interval_seconds)
         self._listener = self._apply_payload
         self._banner_center: IntelligentBannerCenter | None = None
         self._last_payload: dict[str, Any] = {}
         self._auto_presented_once = False
+        self._last_auto_present_key = ""
         self._last_notification_key = ""
 
     def start(self) -> None:
@@ -201,6 +204,7 @@ class ProactiveIntelligenceController:
         self.hub.set_enabled(enabled)
         if not enabled:
             self._auto_presented_once = False
+            self._last_auto_present_key = ""
             self.clear(reset_memory=True)
             self._update_badge(0)
         else:
@@ -224,6 +228,12 @@ class ProactiveIntelligenceController:
         banner_insights = payload.get("banner_insights", {}) or {}
         center = self._ensure_banner_center()
         center.set_history(payload.get("history", []))
+        history_banner_data = _build_history_banner_data(
+            active_items=payload.get("active_alerts", []),
+            history_items=payload.get("history", []),
+            insights=banner_insights,
+        )
+        auto_present_key = _get_banner_notification_key(history_banner_data)
         has_auto_content = (
             self.auto_present_enabled
             and self._auto_banners_enabled()
@@ -236,16 +246,25 @@ class ProactiveIntelligenceController:
             elif display_alerts:
                 should_auto_show = True
         if should_auto_show:
-            center.show_alerts(
-                display_alerts,
-                insights=banner_insights,
-            )
-            self._auto_presented_once = True
-        history_banner_data = _build_history_banner_data(
-            active_items=payload.get("active_alerts", []),
-            history_items=payload.get("history", []),
-            insights=banner_insights,
-        )
+            if auto_present_key != self._last_auto_present_key or not self._auto_presented_once:
+                if self.auto_present_as_history and history_banner_data:
+                    show_history = getattr(center, "_show_history_banners", None)
+                    if callable(show_history):
+                        center.current_insights = dict(banner_insights)
+                        show_history(history_banner_data)
+                    else:
+                        center.show_alerts(
+                            display_alerts,
+                            insights=banner_insights,
+                            auto_dismiss_seconds=None,
+                        )
+                else:
+                    center.show_alerts(
+                        display_alerts,
+                        insights=banner_insights,
+                    )
+                self._last_auto_present_key = auto_present_key
+                self._auto_presented_once = True
         notification_key = _get_banner_notification_key(history_banner_data)
         notification_total = _get_banner_notification_total(history_banner_data, payload=payload)
         app = App.get_running_app()

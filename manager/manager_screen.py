@@ -21,6 +21,7 @@ from kivy.properties import ListProperty, NumericProperty, StringProperty
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.modalview import ModalView
+from kivy.uix.scrollview import ScrollView as KivyScrollView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 
 from kivymd.uix.boxlayout import MDBoxLayout
@@ -47,6 +48,7 @@ from ui.components.tooltip_widgets import (
 )
 from utils.device_config import get_device_settings
 from utils.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
+from utils.system_identity import get_system_name
 from utils.thermal_printer import print_pdf_with_system, print_thermal_receipt
 from utils.vat import compute_vat_breakdown
 from utils.vision import get_vision_dependencies
@@ -84,7 +86,6 @@ def _format_sale_expiry_date(value):
 
 
 def _sale_catalog_key_from_product(product):
-    # Cria uma chave estavel para juntar lotes do mesmo produto.
     barcode = str(product[4] if len(product) > 4 and product[4] is not None else "").strip().lower()
     if barcode:
         return f"bc:{barcode}"
@@ -119,7 +120,6 @@ def _calculate_promo(product):
 
 
 def _unpack_sale_product(product):
-    # Converte a linha do banco num dicionario usado pela venda.
     return {
         "id": product[0],
         "name": str(product[1] or "").strip(),
@@ -138,7 +138,6 @@ def _unpack_sale_product(product):
 
 
 class QuickProductCard(MDCard):
-    # Cartao usado na lista rapida de produtos.
     def __init__(self, product_data=None, add_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.product_data = product_data
@@ -224,14 +223,23 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
         kwargs.setdefault("tooltip_display_delay", 0.18)
         kwargs.setdefault("orientation", "vertical")
         kwargs.setdefault("padding", [0, 0, 0, 0])
+        kwargs.setdefault("spacing", 0)
         super().__init__(**kwargs)
 
         with self.canvas.before:
             self._bg_color_instruction = Color(rgba=self.md_bg_color)
-            self._bg_rect = RoundedRectangle(pos=self.pos, size=self.size, radius=self._normalized_radius())
+            self._bg_rect = RoundedRectangle(
+                pos=self.pos, size=self.size, radius=self._normalized_radius()
+            )
         with self.canvas.after:
             self._border_color_instruction = Color(rgba=self.border_color)
-            self._border_line = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, self._normalized_radius()[0]), width=self.border_width)
+            self._border_line = Line(
+                rounded_rectangle=(
+                    self.x, self.y, self.width, self.height,
+                    self._normalized_radius()[0]
+                ),
+                width=self.border_width,
+            )
         self.bind(
             pos=self._sync_bg,
             size=self._sync_bg,
@@ -241,6 +249,11 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
             border_width=self._sync_bg,
         )
 
+        anchor = AnchorLayout(
+            anchor_x="center",
+            anchor_y="center",
+            size_hint=(1, 1),
+        )
         glyph = MDIcon(
             icon=icon,
             halign="center",
@@ -248,9 +261,11 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
             font_size=icon_font_size or sp(14),
             theme_text_color="Custom",
             text_color=icon_color or [1, 1, 1, 1],
+            size_hint=(None, None),
         )
         glyph.bind(size=lambda inst, value: setattr(inst, "text_size", value))
-        self.add_widget(glyph)
+        anchor.add_widget(glyph)
+        self.add_widget(anchor)
 
     def _normalized_radius(self):
         if len(self.radius) == 1:
@@ -263,12 +278,13 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
         self._bg_rect.size = self.size
         self._bg_rect.radius = self._normalized_radius()
         self._border_color_instruction.rgba = self.border_color
-        self._border_line.rounded_rectangle = (self.x, self.y, self.width, self.height, self._normalized_radius()[0])
+        self._border_line.rounded_rectangle = (
+            self.x, self.y, self.width, self.height, self._normalized_radius()[0]
+        )
         self._border_line.width = self.border_width
 
 
 class FloatingScannerPanel(MDCard):
-    # Painel flutuante da camera/leitor.
     min_panel_width = NumericProperty(dp(220))
     min_panel_height = NumericProperty(dp(220))
     drag_bar_height = NumericProperty(dp(34))
@@ -404,11 +420,60 @@ Factory.register("NoticeBannerCard", cls=NoticeBannerCard)
 Builder.load_file(os.path.join(CURRENT_DIR, "sales_screen.kv"))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ATALHOS DE TECLADO — referência completa
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#  NAVEGAÇÃO NO CARRINHO
+#  ─────────────────────────────────────────────────────────────────────────────
+#  Seta Baixo              → Seleccionar item seguinte no carrinho
+#  Seta Cima               → Seleccionar item anterior no carrinho
+#  Seta Direita            → Aumentar quantidade do item selecionado
+#  Seta Esquerda           → Diminuir quantidade do item selecionado
+#  Enter na pesquisa       → Adicionar produto unico/exato
+#  Delete / Backspace      → Remover item seleccionado do carrinho
+#  Escape                  → Desseleccionar item / fechar painel aberto
+#
+#  PESQUISA E SCANNER
+#  ─────────────────────────────────────────────────────────────────────────────
+#  Ctrl + F                → Focar campo de pesquisa
+#  Ctrl + L                → Limpar pesquisa
+#  Ctrl + B                → Ligar/Desligar scanner de câmara
+#  Ctrl + K                → Trocar câmara (próxima disponível)
+#
+#  VENDA
+#  ─────────────────────────────────────────────────────────────────────────────
+#  Ctrl + Enter            → Finalizar venda (grava directamente)
+#  Ctrl + 0                → Cancelar/Limpar carrinho
+#  Ctrl + S                → Suspender / Retomar venda
+#  Ctrl + P                → Imprimir / Emitir recibo
+#  Ctrl + Q                → Ver vendas recentes (histórico rápido)
+#
+#  MÉTODO DE PAGAMENTO
+#  ─────────────────────────────────────────────────────────────────────────────
+#  Alt + 1                 → Dinheiro
+#  Alt + 2                 → Cartão
+#  Alt + 3                 → M-Pesa
+#  Alt + D                 → Focar campo de desconto
+#  Alt + V                 → Focar campo de valor pago
+#  Alt + E                 → Preencher valor pago com total exacto
+#
+#  NAVEGAÇÃO ENTRE ECRÃS
+#  ─────────────────────────────────────────────────────────────────────────────
+#  Ctrl + H                → Histórico de vendas completo
+#  Ctrl + D                → Registo de perdas
+#  Ctrl + R                → Atualizar produtos
+#  Ctrl + G                → Página anterior de produtos
+#  Ctrl + J                → Página seguinte de produtos
+#  Ctrl + Backspace        → Sair / Voltar ao login
+# ══════════════════════════════════════════════════════════════════════════════
+
+
 class SalesScreen(MDScreen):
-    # Tela principal de vendas do gerente.
     PRODUCTS_PAGE_SIZE = 80
     PRODUCTS_CACHE_SECONDS = 8
     STOCK_SYNC_INTERVAL_SECONDS = 15
+    SALE_EDIT_WINDOW_SECONDS = 10 * 60
     NOTICE_KEYS = ("one", "two", "three")
 
     operator_name = StringProperty("Operador")
@@ -420,7 +485,6 @@ class SalesScreen(MDScreen):
         super().__init__(**kwargs)
         self.db = db or get_db()
         self.back_target = "manager"
-        # Estado do carrinho, busca e leitura de codigos.
         self.cart_items = []
         self.total_amount = 0.0
         self.discount_amount = 0.0
@@ -472,6 +536,11 @@ class SalesScreen(MDScreen):
         self.scanner_sound_error = None
         self.pdf_viewer = None
         self.receipt_report = ReceiptReport()
+        # ── seleção no carrinho ──────────────────────────────────────────
+        self._selected_cart_index = -1
+        self._cart_row_widgets = []
+        # ── diálogo de vendas recentes ───────────────────────────────────
+        self._recent_sales_dialog = None
         Clock.schedule_once(self._post_init, 0.05)
 
     def _post_init(self, *_args):
@@ -495,7 +564,6 @@ class SalesScreen(MDScreen):
         self._refresh_notice_widgets()
 
     def on_enter(self):
-        # Os atalhos ficam ativos apenas enquanto o manager estiver em foco.
         self._refresh_device_settings()
         self._bind_keyboard_shortcuts()
         self._refresh_header_meta()
@@ -547,42 +615,110 @@ class SalesScreen(MDScreen):
         self._keyboard_shortcuts_bound = False
 
     def _has_open_modal(self):
-        # Evita que os atalhos concorram com dialogs modais da operacao.
         return any(isinstance(child, ModalView) for child in Window.children)
 
     @staticmethod
-    def _normalize_key_name(key, codepoint=""):
+    def _normalize_key_name(key, codepoint="", scancode=None):
         if isinstance(key, (tuple, list)):
             numeric_key = key[0] if len(key) > 0 else None
             string_key = str(key[1] or "").strip().lower() if len(key) > 1 else ""
             if string_key:
-                return string_key
-            key = numeric_key
+                key = string_key
+            else:
+                key = numeric_key
+
+        aliases = {
+            "arrowleft": "left",
+            "arrow_left": "left",
+            "cursor_left": "left",
+            "leftarrow": "left",
+            "left_arrow": "left",
+            "arrowright": "right",
+            "arrow_right": "right",
+            "cursor_right": "right",
+            "rightarrow": "right",
+            "right_arrow": "right",
+            "arrowup": "up",
+            "arrow_up": "up",
+            "cursor_up": "up",
+            "uparrow": "up",
+            "up_arrow": "up",
+            "arrowdown": "down",
+            "arrow_down": "down",
+            "cursor_down": "down",
+            "downarrow": "down",
+            "down_arrow": "down",
+            "return": "enter",
+            "numpadenter": "enter",
+            "numpad_enter": "enter",
+            "kp_enter": "enter",
+            "del": "delete",
+            "numpaddecimal": "delete",
+            "numpad_decimal": "delete",
+            "esc": "escape",
+        }
+
+        def clean_name(value):
+            name = str(value or "").strip().lower()
+            if not name:
+                return ""
+            name = name.replace(" ", "").replace("-", "_")
+            return aliases.get(name, name)
 
         if isinstance(key, str):
-            key_name = key.strip().lower()
+            key_name = clean_name(key)
             if key_name:
                 return key_name
 
-        key_name = str(codepoint or "").strip().lower()
+        key_name = clean_name(codepoint)
         if key_name:
             return key_name
 
-        # Mantemos apenas teclas especiais estaveis; o manager nao depende mais de F1..F6.
         special_keys = {
             13: "enter",
             27: "escape",
             271: "enter",
+            273: "up",
+            274: "down",
+            275: "right",
+            276: "left",
+            127: "delete",
+            8:   "backspace",
+            43:  "+",
+            45:  "-",
+            61:  "=",
         }
         if key in special_keys:
             return special_keys[key]
+        if scancode in special_keys:
+            return special_keys[scancode]
 
         try:
             if 32 <= int(key) <= 126:
                 return chr(int(key)).lower()
         except Exception:
             pass
+        try:
+            if 32 <= int(scancode) <= 126:
+                return chr(int(scancode)).lower()
+        except Exception:
+            pass
         return ""
+
+    @staticmethod
+    def _normalize_modifiers(modifiers):
+        normalized = set()
+        for modifier in modifiers or []:
+            name = str(modifier or "").strip().lower()
+            if name in ("lctrl", "rctrl", "control"):
+                name = "ctrl"
+            elif name in ("lalt", "ralt", "altgr", "option"):
+                name = "alt"
+            elif name in ("win", "cmd", "command"):
+                name = "meta"
+            if name:
+                normalized.add(name)
+        return normalized
 
     def _should_skip_duplicate_shortcut(self, signature):
         now = time.perf_counter()
@@ -604,6 +740,13 @@ class SalesScreen(MDScreen):
         return True
 
     def _close_transient_panels(self):
+        if self._recent_sales_dialog is not None:
+            try:
+                self._recent_sales_dialog.dismiss()
+            except Exception:
+                pass
+            self._recent_sales_dialog = None
+            return True
         if self._notice_overlay_visible:
             self.close_notice_overlay()
             return True
@@ -612,48 +755,112 @@ class SalesScreen(MDScreen):
             return True
         return False
 
-    def _dispatch_keyboard_shortcut(self, key, codepoint="", modifiers=None):
+    def _focused_text_field_id(self):
+        if not self.ids:
+            return ""
+        for fid in ("search_input", "discount_input", "paid_input"):
+            w = self.ids.get(fid)
+            if w is not None and getattr(w, "focus", False):
+                return fid
+        return ""
+
+    def _is_any_text_field_focused(self):
+        return bool(self._focused_text_field_id())
+
+    def _cart_keyboard_index(self):
+        if not self.cart_items:
+            self._selected_cart_index = -1
+            return -1
+        if 0 <= self._selected_cart_index < len(self.cart_items):
+            return self._selected_cart_index
+        self._select_cart_item(len(self.cart_items) - 1)
+        return self._selected_cart_index
+
+    def _dispatch_keyboard_shortcut(self, key, codepoint="", modifiers=None, scancode=None):
         if not self.manager or self.manager.current != self.name:
             return False
 
-        key_name = self._normalize_key_name(key, codepoint)
-        modifiers = {str(modifier or "").lower() for modifier in (modifiers or [])}
+        key_name = self._normalize_key_name(key, codepoint, scancode=scancode)
+        modifiers = self._normalize_modifiers(modifiers)
         signature = (key_name, tuple(sorted(modifiers)))
         if self._should_skip_duplicate_shortcut(signature):
             return False
 
-        if key_name == "escape" and self._close_transient_panels():
-            return True
+        # ── Escape ──────────────────────────────────────────────────────
+        if key_name == "escape":
+            if self._selected_cart_index >= 0 and not self._notice_overlay_visible and not self.scanning:
+                self._selected_cart_index = -1
+                self._update_cart_item_highlight()
+                return True
+            if self._close_transient_panels():
+                return True
+
         if self._has_open_modal():
             return False
 
-        # Preferimos combinacoes com Ctrl porque as teclas F variam entre teclados e modos Fn.
+        focused_field_id = self._focused_text_field_id()
+        text_focused = bool(focused_field_id)
+
+        # ════════════════════════════════════════════════════════════════
+        #  ATALHOS GLOBAIS (com modificadores — sempre activos)
+        # ════════════════════════════════════════════════════════════════
+
+        # Pesquisa e scanner
         if "ctrl" in modifiers and key_name == "f":
             return self._focus_text_field("search_input", select_all=True)
+        if "ctrl" in modifiers and key_name == "l":
+            self.clear_search()
+            return True
         if "ctrl" in modifiers and key_name == "b":
             self.toggle_scanner()
             return True
+        if "ctrl" in modifiers and key_name == "k":
+            self.switch_camera()
+            return True
+
+        # Navegação entre ecrãs
         if "ctrl" in modifiers and key_name == "h":
             self.open_sales_history()
-            return True
-        if "ctrl" in modifiers and key_name == "r":
-            self.refresh_products_panel()
             return True
         if "ctrl" in modifiers and key_name == "d":
             self.open_losses_screen()
             return True
+        if "ctrl" in modifiers and key_name == "r":
+            self.refresh_products_panel()
+            return True
+
+        # Paginação de produtos
+        if "ctrl" in modifiers and key_name == "g":
+            self.previous_products_page()
+            return True
+        if "ctrl" in modifiers and key_name == "j":
+            self.next_products_page()
+            return True
+
+        # Venda
         if "ctrl" in modifiers and key_name == "enter":
             self.finalize_sale()
+            return True
+        if "ctrl" in modifiers and key_name == "0":
+            if self.cart_items:
+                self.cancel_sale()
+                return True
+        if "ctrl" in modifiers and key_name == "s":
+            self.toggle_suspend_sale()
             return True
         if "ctrl" in modifiers and key_name == "p":
             self.emit_receipt(print_now=True, preview_after=False)
             return True
-        if "ctrl" in modifiers and key_name == "s":
-            self.toggle_suspend_sale()
+        # Ctrl+Q → Ver vendas recentes
+        if "ctrl" in modifiers and key_name == "q":
+            self.open_recent_sales_dialog()
             return True
-        if "ctrl" in modifiers and key_name == "l":
-            self.clear_search()
+        # Ctrl+Backspace → sair / voltar ao login
+        if "ctrl" in modifiers and key_name == "backspace":
+            self.return_to_login()
             return True
+
+        # Método de pagamento
         if "alt" in modifiers and key_name == "1":
             self.set_payment_method("cash")
             return True
@@ -663,16 +870,70 @@ class SalesScreen(MDScreen):
         if "alt" in modifiers and key_name == "3":
             self.set_payment_method("mobile")
             return True
+        if "alt" in modifiers and key_name == "4":
+            self.set_payment_method("emola")
+            return True
         if "alt" in modifiers and key_name == "d":
             return self._focus_text_field("discount_input", select_all=True)
         if "alt" in modifiers and key_name == "v":
             return self._focus_text_field("paid_input", select_all=True)
+        if "alt" in modifiers and key_name == "e":
+            self.fill_paid_with_exact_total()
+            return True
+
+        # ════════════════════════════════════════════════════════════════
+        #  NAVEGAÇÃO NO CARRINHO (sem modificadores; só se não há campo focado)
+        # ════════════════════════════════════════════════════════════════
+        if key_name == "enter" and not modifiers and self.ids:
+            search_input = self.ids.get("search_input")
+            if search_input is not None and getattr(search_input, "focus", False):
+                self.on_search_enter()
+                return True
+
+        cart_key_allowed = not text_focused or focused_field_id == "search_input"
+        if not modifiers and cart_key_allowed and self.cart_items:
+
+            if key_name == "down":
+                self._select_cart_item(
+                    min(self._selected_cart_index + 1, len(self.cart_items) - 1)
+                    if self._selected_cart_index >= 0 else 0
+                )
+                return True
+
+            if key_name == "up":
+                if self._selected_cart_index > 0:
+                    self._select_cart_item(self._selected_cart_index - 1)
+                elif self._selected_cart_index < 0:
+                    self._select_cart_item(len(self.cart_items) - 1)
+                return True
+
+            if key_name == "right":
+                index = self._cart_keyboard_index()
+                if 0 <= index < len(self.cart_items):
+                    self.increase_qty(index)
+                    return True
+
+            if key_name == "left":
+                index = self._cart_keyboard_index()
+                if 0 <= index < len(self.cart_items):
+                    self.decrease_qty(index)
+                    return True
+
+            if key_name in ("delete", "backspace"):
+                idx = self._cart_keyboard_index()
+                if 0 <= idx < len(self.cart_items):
+                    next_sel = idx - 1 if idx > 0 else (0 if len(self.cart_items) > 1 else -1)
+                    self._selected_cart_index = next_sel
+                    self.remove_from_cart(idx)
+                    return True
+
         return False
 
     def _handle_window_keyboard(self, _window, key, scancode=None, codepoint=None, modifiers=None):
         return self._dispatch_keyboard_shortcut(
             key,
             codepoint=codepoint or "",
+            scancode=scancode,
             modifiers=modifiers or [],
         )
 
@@ -686,8 +947,61 @@ class SalesScreen(MDScreen):
         return self._dispatch_keyboard_shortcut(
             key,
             codepoint=codepoint or "",
+            scancode=scancode,
             modifiers=modifiers or [],
         )
+
+    # ── Seleção de item no carrinho ──────────────────────────────────────
+
+    def _select_cart_item(self, index):
+        if not self.cart_items:
+            self._selected_cart_index = -1
+            return
+        clamped = max(0, min(index, len(self.cart_items) - 1))
+        self._selected_cart_index = clamped
+        self._update_cart_item_highlight()
+        self._scroll_cart_to_index(clamped)
+
+    def _update_cart_item_highlight(self):
+        for i, row in enumerate(self._cart_row_widgets):
+            try:
+                if i == self._selected_cart_index:
+                    row.md_bg_color = [0.10, 0.26, 0.40, 1]
+                else:
+                    row.md_bg_color = [0.13, 0.15, 0.20, 1] if i % 2 == 0 else [0.16, 0.18, 0.23, 1]
+            except Exception:
+                pass
+
+    def _scroll_cart_to_index(self, index):
+        if not self.ids or not self._cart_row_widgets:
+            return
+        try:
+            cart_list = self.ids.get("cart_list")
+            if cart_list is None:
+                return
+            parent = cart_list.parent
+            if not isinstance(parent, KivyScrollView):
+                return
+            if index < 0 or index >= len(self._cart_row_widgets):
+                return
+            row = self._cart_row_widgets[index]
+            list_h = cart_list.height
+            sv_h = parent.height
+            if list_h <= sv_h:
+                return
+            row_bottom = row.y - cart_list.y
+            row_top = row_bottom + row.height
+            scroll_range = list_h - sv_h
+            visible_bottom = (1.0 - parent.scroll_y) * scroll_range
+            visible_top = visible_bottom + sv_h
+            if row_bottom < visible_bottom:
+                parent.scroll_y = max(0.0, 1.0 - row_bottom / scroll_range)
+            elif row_top > visible_top:
+                parent.scroll_y = max(0.0, 1.0 - (row_top - sv_h) / scroll_range)
+        except Exception:
+            pass
+
+    # ────────────────────────────────────────────────────────────────────
 
     def _refresh_device_settings(self):
         try:
@@ -732,7 +1046,7 @@ class SalesScreen(MDScreen):
             self._reset_scanner_keyboard_buffer()
             return False
 
-        modifiers = {str(modifier or "").lower() for modifier in (modifiers or [])}
+        modifiers = self._normalize_modifiers(modifiers)
         if modifiers & {"ctrl", "alt", "meta", "super"}:
             self._reset_scanner_keyboard_buffer()
             return False
@@ -890,8 +1204,8 @@ class SalesScreen(MDScreen):
         palette = {
             "success": ([0.15, 0.33, 0.22, 1], [0.69, 0.96, 0.67, 1], [0.92, 0.99, 0.92, 1]),
             "warning": ([0.33, 0.24, 0.12, 1], [0.98, 0.76, 0.28, 1], [0.99, 0.95, 0.86, 1]),
-            "danger": ([0.35, 0.18, 0.18, 1], [0.99, 0.55, 0.55, 1], [1, 0.92, 0.92, 1]),
-            "info": ([0.16, 0.24, 0.36, 1], [0.50, 0.78, 1, 1], [0.91, 0.96, 1, 1]),
+            "danger":  ([0.35, 0.18, 0.18, 1], [0.99, 0.55, 0.55, 1], [1, 0.92, 0.92, 1]),
+            "info":    ([0.16, 0.24, 0.36, 1], [0.50, 0.78, 1, 1], [0.91, 0.96, 1, 1]),
         }
         bg, icon_color, text_color = palette.get(tone, palette["info"])
         if self.ids:
@@ -1188,7 +1502,7 @@ class SalesScreen(MDScreen):
             self._lookup_barcode_async(text, source="search")
             return
         self.set_search_feedback(
-            "Use Enter para produto unico/exato ou refine a pesquisa.",
+            "Use Enter para produto único/exato ou refine a pesquisa.",
             "info",
             "keyboard-return",
         )
@@ -1247,7 +1561,6 @@ class SalesScreen(MDScreen):
 
     @staticmethod
     def _aggregate_sale_lot_rows(rows):
-        # Junta lotes iguais para evitar produtos repetidos na venda.
         grouped = {}
         ordered_keys = []
         for row in rows or []:
@@ -1340,7 +1653,6 @@ class SalesScreen(MDScreen):
         return valid_rows
 
     def _sync_cart_with_live_stock(self):
-        # Atualiza o carrinho quando o stock muda no banco.
         changed = False
         for item in self.cart_items:
             catalog_key = str(item.get("catalog_key") or "").strip().lower()
@@ -1691,131 +2003,235 @@ class SalesScreen(MDScreen):
             return
         cart_list = self.ids.cart_list
         cart_list.clear_widgets()
+        self._cart_row_widgets = []
         self.total_amount = 0.0
         self.ids.cart_empty_label.opacity = 1 if not self.cart_items else 0
         self.ids.cart_count_label.text = f"{len(self.cart_items)} itens"
 
+        if self.cart_items and self._selected_cart_index >= len(self.cart_items):
+            self._selected_cart_index = len(self.cart_items) - 1
+        elif not self.cart_items:
+            self._selected_cart_index = -1
+
         for index, item in enumerate(self.cart_items):
+            is_selected = (index == self._selected_cart_index)
+            if is_selected:
+                row_bg = [0.10, 0.26, 0.40, 1]
+            elif index % 2 == 0:
+                row_bg = [0.13, 0.15, 0.20, 1]
+            else:
+                row_bg = [0.16, 0.18, 0.23, 1]
+
             row = MDCard(
                 orientation="horizontal",
                 size_hint_y=None,
-                height=dp(66),
-                padding=[dp(10), dp(6), dp(8), dp(6)],
+                height=dp(72),
+                padding=[dp(10), dp(6), dp(6), dp(6)],
                 spacing=dp(6),
                 radius=[dp(14)],
                 elevation=0,
-                md_bg_color=[0.13, 0.15, 0.20, 1] if index % 2 == 0 else [0.16, 0.18, 0.23, 1],
+                md_bg_color=row_bg,
+                ripple_behavior=True,
             )
+            row.bind(on_release=lambda _w, idx=index: self._select_cart_item(idx))
 
+            # ── Coluna: nome + badge modo ──────────────────────────────
             info_box = MDBoxLayout(
                 orientation="vertical",
-                spacing=dp(2),
-                size_hint_x=0.42,
+                spacing=dp(3),
+                size_hint_x=0.40,
+                padding=[0, dp(6), 0, dp(6)],
             )
+
             sale_mode = item.get("sale_mode", "unit")
-            mode_label = {
-                "unit": "Venda unitária",
-                "pack": f"Embalagem x {int(item.get('pack_units') or 1)}",
-                "weight": "Venda por peso",
-            }.get(sale_mode, "Venda")
-            if int(item.get("lot_count") or 1) > 1:
-                mode_label = f"{mode_label} | {int(item['lot_count'])} lotes FEFO"
-            info_box.add_widget(
-                MDLabel(
-                    text=item["name"],
-                    bold=True,
-                    theme_text_color="Custom",
-                    text_color=[0.97, 0.98, 1, 1],
-                    font_size=dp(11),
-                    shorten=True,
-                    shorten_from="right",
-                    size_hint_y=None,
-                    height=dp(18),
-                )
-            )
-            info_box.add_widget(
-                MDLabel(
-                    text=mode_label,
-                    font_size=dp(9),
-                    theme_text_color="Custom",
-                    text_color=[0.69, 0.73, 0.81, 1],
-                    shorten=True,
-                    shorten_from="right",
-                    size_hint_y=None,
-                    height=dp(16),
-                )
-            )
+            lot_count = int(item.get("lot_count") or 1)
 
-            qty_box = MDBoxLayout(
-                size_hint_x=0.22,
-                spacing=0,
-                padding=[0, dp(4), 0, dp(4)],
-            )
-            if item.get("is_weight"):
-                qty_box.add_widget(
-                    MDLabel(
-                        text=_format_qty(item.get("weight_kg"), True),
-                        halign="center",
-                        bold=True,
-                        theme_text_color="Custom",
-                        text_color=[0.98, 0.76, 0.28, 1],
-                    )
-                )
-            else:
-                qty_box.add_widget(
-                    MDLabel(
-                        text=_format_qty(item.get("qty")),
-                        halign="center",
-                        bold=True,
-                        theme_text_color="Custom",
-                        text_color=[0.90, 0.94, 1, 1],
-                        font_size=dp(11),
-                    )
-                )
+            badge_configs = {
+                "unit":   ([0.14, 0.24, 0.38, 1], [0.55, 0.78, 1.0,  1]),
+                "pack":   ([0.20, 0.14, 0.32, 1], [0.78, 0.55, 1.0,  1]),
+                "weight": ([0.28, 0.20, 0.08, 1], [1.0,  0.78, 0.28, 1]),
+            }
+            badge_bg, badge_fg = badge_configs.get(sale_mode, badge_configs["unit"])
+            mode_label_map = {
+                "unit":   "Unitário",
+                "pack":   f"Emb ×{int(item.get('pack_units') or 1)}",
+                "weight": "Por peso",
+            }
+            mode_text = mode_label_map.get(sale_mode, "Venda")
+            if lot_count > 1:
+                mode_text = f"{mode_text} · {lot_count}L"
 
-            price_label = MDLabel(
-                text=_format_money(item.get("price")),
-                halign="right",
-                size_hint_x=0.16,
-                theme_text_color="Custom",
-                text_color=[0.83, 0.88, 0.95, 1],
-                font_size=dp(10),
-            )
-            total_label = MDLabel(
-                text=_format_money(item.get("total")),
-                halign="right",
-                size_hint_x=0.14,
+            info_box.add_widget(MDLabel(
+                text=item["name"],
                 bold=True,
                 theme_text_color="Custom",
-                text_color=[0.56, 0.90, 0.54, 1],
-                font_size=dp(11),
-            )
-            remove_btn = CompactActionButton(
-                icon="close-thick",
+                text_color=[0.97, 0.98, 1, 1],
+                font_size=dp(11.5),
+                shorten=True,
+                shorten_from="right",
+                size_hint_y=None,
+                height=dp(20),
+            ))
+
+            badge_row = MDBoxLayout(size_hint_y=None, height=dp(18), spacing=dp(4))
+            badge_card = MDCard(
                 size_hint=(None, None),
-                size=(dp(22), dp(22)),
-                radius=[dp(11)],
-                icon_font_size=sp(11),
-                icon_color=[1, 0.88, 0.90, 1],
-                md_bg_color=[0.35, 0.14, 0.18, 1],
-                border_color=[0.94, 0.42, 0.47, 0.65],
-                border_width=dp(0.9),
-                hint_text="Remover item",
+                size=(dp(80), dp(18)),
+                radius=[dp(9)],
+                elevation=0,
+                md_bg_color=badge_bg,
+                padding=[dp(6), 0, dp(6), 0],
             )
-            remove_btn.bind(on_release=lambda _btn, idx=index: self.remove_from_cart(idx))
-            remove_box = AnchorLayout(
-                size_hint_x=0.06,
+            badge_card.add_widget(MDLabel(
+                text=mode_text,
+                font_size=dp(9),
+                bold=True,
+                theme_text_color="Custom",
+                text_color=badge_fg,
+                halign="left",
+                valign="middle",
+            ))
+            badge_row.add_widget(badge_card)
+            badge_row.add_widget(MDLabel())
+            info_box.add_widget(badge_row)
+
+            # ── Coluna: quantidade com botões ← → ──────────────────────
+            qty_box = MDBoxLayout(
+                size_hint_x=0.26,
+                spacing=dp(3),
+                padding=[dp(2), dp(10), dp(2), dp(10)],
+            )
+
+            if item.get("is_weight"):
+                qty_box.add_widget(MDLabel(
+                    text=_format_qty(item.get("weight_kg"), True),
+                    halign="center",
+                    bold=True,
+                    theme_text_color="Custom",
+                    text_color=[0.98, 0.76, 0.28, 1],
+                    font_size=dp(12),
+                ))
+            else:
+                dec_btn = CompactActionButton(
+                    icon="arrow-left",
+                    size_hint=(None, None),
+                    size=(dp(28), dp(28)),
+                    radius=[dp(14)],
+                    icon_font_size=sp(13),
+                    icon_color=[1, 0.82, 0.84, 1],
+                    md_bg_color=[0.34, 0.14, 0.18, 1],
+                    border_color=[0.88, 0.35, 0.40, 0.75],
+                    border_width=dp(1.1),
+                    hint_text="Diminuir  [← Seta]",
+                )
+                dec_btn.bind(on_release=lambda _b, idx=index: self.decrease_qty(idx))
+
+                qty_label = MDLabel(
+                    text=_format_qty(item.get("qty")),
+                    halign="center",
+                    bold=True,
+                    theme_text_color="Custom",
+                    text_color=[0.92, 0.96, 1, 1],
+                    font_size=dp(14),
+                )
+
+                inc_btn = CompactActionButton(
+                    icon="arrow-right",
+                    size_hint=(None, None),
+                    size=(dp(28), dp(28)),
+                    radius=[dp(14)],
+                    icon_font_size=sp(13),
+                    icon_color=[0.82, 1, 0.84, 1],
+                    md_bg_color=[0.10, 0.28, 0.14, 1],
+                    border_color=[0.35, 0.88, 0.40, 0.75],
+                    border_width=dp(1.1),
+                    hint_text="Aumentar  [→ Seta]",
+                )
+                inc_btn.bind(on_release=lambda _b, idx=index: self.increase_qty(idx))
+
+                dec_anchor = AnchorLayout(size_hint_x=None, width=dp(32), anchor_x="center", anchor_y="center")
+                dec_anchor.add_widget(dec_btn)
+                inc_anchor = AnchorLayout(size_hint_x=None, width=dp(32), anchor_x="center", anchor_y="center")
+                inc_anchor.add_widget(inc_btn)
+
+                qty_box.add_widget(dec_anchor)
+                qty_box.add_widget(qty_label)
+                qty_box.add_widget(inc_anchor)
+
+            # ── Coluna: preço unitário ─────────────────────────────────
+            price_col = MDBoxLayout(
+                orientation="vertical",
+                size_hint_x=0.17,
+                spacing=dp(1),
+                padding=[0, dp(8), 0, dp(8)],
+            )
+            price_col.add_widget(MDLabel(
+                text="preço",
+                halign="right",
+                font_size=dp(9),
+                theme_text_color="Custom",
+                text_color=[0.48, 0.54, 0.64, 1],
+            ))
+            price_col.add_widget(MDLabel(
+                text=_format_money(item.get("price")),
+                halign="right",
+                theme_text_color="Custom",
+                text_color=[0.75, 0.82, 0.92, 1],
+                font_size=dp(10.5),
+            ))
+
+            # ── Coluna: total da linha ─────────────────────────────────
+            total_col = MDBoxLayout(
+                orientation="vertical",
+                size_hint_x=0.17,
+                spacing=dp(1),
+                padding=[0, dp(8), 0, dp(8)],
+            )
+            total_col.add_widget(MDLabel(
+                text="total",
+                halign="right",
+                font_size=dp(9),
+                theme_text_color="Custom",
+                text_color=[0.48, 0.54, 0.64, 1],
+            ))
+            total_col.add_widget(MDLabel(
+                text=_format_money(item.get("total")),
+                halign="right",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=[0.55, 0.92, 0.55, 1],
+                font_size=dp(11.5),
+            ))
+
+            # ── Botão remover ──────────────────────────────────────────
+            remove_btn = CompactActionButton(
+                icon="delete-outline",
+                size_hint=(None, None),
+                size=(dp(26), dp(26)),
+                radius=[dp(13)],
+                icon_font_size=sp(13),
+                icon_color=[1, 0.82, 0.84, 1],
+                md_bg_color=[0.40, 0.10, 0.14, 1],
+                border_color=[0.96, 0.35, 0.42, 0.70],
+                border_width=dp(1.0),
+                hint_text="Remover  [Del]",
+            )
+            remove_btn.bind(on_release=lambda _b, idx=index: self.remove_from_cart(idx))
+            remove_anchor = AnchorLayout(
+                size_hint_x=None,
+                width=dp(30),
                 anchor_x="center",
                 anchor_y="center",
             )
-            remove_box.add_widget(remove_btn)
+            remove_anchor.add_widget(remove_btn)
 
             row.add_widget(info_box)
             row.add_widget(qty_box)
-            row.add_widget(price_label)
-            row.add_widget(total_label)
-            row.add_widget(remove_box)
+            row.add_widget(price_col)
+            row.add_widget(total_col)
+            row.add_widget(remove_anchor)
             cart_list.add_widget(row)
+            self._cart_row_widgets.append(row)
             self.total_amount += _safe_float(item.get("total"))
 
         self.recalculate_totals()
@@ -1886,6 +2302,7 @@ class SalesScreen(MDScreen):
             "cash": self.ids.pay_cash_btn,
             "card": self.ids.pay_card_btn,
             "mobile": self.ids.pay_mobile_btn,
+            "emola": self.ids.pay_emola_btn,
         }
         for key, button in mapping.items():
             button.md_bg_color = palette["selected"] if key == method else palette["default"]
@@ -1968,10 +2385,14 @@ class SalesScreen(MDScreen):
     def remove_from_cart(self, index):
         if 0 <= index < len(self.cart_items):
             self.cart_items.pop(index)
+            if self._selected_cart_index >= len(self.cart_items):
+                self._selected_cart_index = len(self.cart_items) - 1
             self.update_cart_display()
 
     def clear_cart(self):
         self.cart_items.clear()
+        self._selected_cart_index = -1
+        self._cart_row_widgets = []
         self.update_cart_display()
 
     def cancel_sale(self):
@@ -2014,6 +2435,588 @@ class SalesScreen(MDScreen):
         else:
             self.show_message("Não existe venda suspensa.")
         self._update_action_states()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  VER VENDAS RECENTES (diálogo de consulta/edição)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def open_recent_sales_dialog(self):
+        """
+        Abre um diálogo com as vendas recentes da base de dados (Ctrl+Q).
+        Permite visualizar detalhes e re-emitir recibos de vendas já gravadas.
+        Não há vendas pendentes — todas as vendas aqui listadas já foram gravadas.
+        """
+        if self._recent_sales_dialog is not None:
+            try:
+                self._recent_sales_dialog.dismiss()
+            except Exception:
+                pass
+            self._recent_sales_dialog = None
+
+        loading_label = MDLabel(
+            text="A carregar vendas recentes...",
+            halign="center",
+            theme_text_color="Secondary",
+            size_hint_y=None,
+            height=dp(48),
+        )
+        scroll = KivyScrollView(size_hint_y=None, height=dp(440))
+        container = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            padding=[dp(4), dp(4), dp(4), dp(4)],
+            size_hint_y=None,
+        )
+        container.bind(minimum_height=container.setter("height"))
+        container.add_widget(loading_label)
+        scroll.add_widget(container)
+
+        close_btn = MDFlatButton(text="FECHAR  [Esc]")
+        dialog = MDDialog(
+            title="Editar Vendas [Ctrl+Q]",
+            type="custom",
+            content_cls=scroll,
+            buttons=[close_btn],
+        )
+        self._recent_sales_dialog = dialog
+        close_btn.bind(on_release=lambda _b: dialog.dismiss())
+        dialog.open()
+
+        def load_worker():
+            rows = []
+            error = None
+            try:
+                # Tenta obter as últimas 50 vendas da base de dados
+                fetch_fn = getattr(self.db, "get_recent_sales", None)
+                if callable(fetch_fn):
+                    rows = fetch_fn(limit=100) or []
+                else:
+                    # Fallback: usa o historico normal de vendas.
+                    history_fn = getattr(self.db, "get_all_sales", None)
+                    if callable(history_fn):
+                        rows = history_fn(limit=100) or []
+            except Exception as exc:
+                error = str(exc)
+            Clock.schedule_once(
+                lambda _dt, data=rows, err=error: _apply_sales(data, err),
+                0,
+            )
+
+        def _apply_sales(rows, error):
+            container.clear_widgets()
+            editable_rows = [
+                row for row in (rows or [])
+                if self._is_recent_sale_row_editable(row)
+            ]
+            if error or not editable_rows:
+                msg = (
+                    "Não foi possível carregar as vendas."
+                    if error
+                    else "Nenhuma venda editável com menos de 10 minutos."
+                )
+                container.add_widget(MDLabel(
+                    text=msg,
+                    halign="center",
+                    theme_text_color="Secondary",
+                    size_hint_y=None,
+                    height=dp(60),
+                ))
+                return
+
+            for row in editable_rows:
+                self._build_recent_sale_row(container, row)
+
+        Thread(target=load_worker, daemon=True).start()
+
+    def _build_recent_sale_row(self, container, row):
+        """
+        Constrói uma linha no diálogo de vendas recentes.
+        O formato de 'row' depende do que a base de dados devolve.
+        Adaptável a diferentes esquemas.
+        """
+        try:
+            # Tenta extrair campos comuns — adapta conforme o esquema real
+            if isinstance(row, dict):
+                sale_id = row.get("id") or row.get("sale_id") or "—"
+                sold_at = str(row.get("sold_at") or row.get("sale_date") or row.get("created_at") or row.get("date") or "—")
+                product_name = str(row.get("product_name") or row.get("name") or "Produto")
+                qty = _safe_float(row.get("quantity") or row.get("qty") or 0)
+                total = _safe_float(row.get("total") or row.get("amount") or row.get("price") or 0)
+                operator = str(row.get("operator") or row.get("user") or row.get("username") or "—")
+                returned_qty = _safe_float(row.get("returned_qty") or 0)
+                available_qty = _safe_float(row.get("available_qty") or max(0.0, qty - returned_qty))
+                can_edit = self._is_sale_editable_for_cart(sold_at) and available_qty > 0
+            else:
+                # Assume tupla/lista: (id, product_name, qty, total, sold_at, operator, ...)
+                sale_id = row[0] if len(row) > 0 else "—"
+                product_name = str(row[1]) if len(row) > 1 else "Produto"
+                qty = _safe_float(row[2]) if len(row) > 2 else 0
+                total = _safe_float(row[4]) if len(row) > 4 else 0
+                sold_at = str(row[5]) if len(row) > 5 else "—"
+                operator = str(row[8]) if len(row) > 8 and row[8] else "—"
+                returned_qty = _safe_float(row[6]) if len(row) > 6 else 0
+                available_qty = _safe_float(row[7]) if len(row) > 7 else max(0.0, qty - returned_qty)
+                can_edit = self._is_sale_editable_for_cart(sold_at) and available_qty > 0
+
+            # Formata data/hora
+            try:
+                dt = datetime.fromisoformat(str(sold_at))
+                sold_at_fmt = dt.strftime("%d/%m %H:%M")
+            except Exception:
+                sold_at_fmt = str(sold_at)[:16]
+
+            row_card = MDCard(
+                orientation="horizontal",
+                size_hint_y=None,
+                height=dp(64),
+                padding=[dp(10), dp(6), dp(6), dp(6)],
+                spacing=dp(8),
+                radius=[dp(10)],
+                elevation=1,
+                md_bg_color=[0.12, 0.15, 0.20, 1],
+            )
+
+            # Info principal
+            info_col = MDBoxLayout(orientation="vertical", spacing=dp(2), size_hint_x=0.75)
+            info_col.add_widget(MDLabel(
+                text=f"{sold_at_fmt}  ·  {product_name}",
+                bold=True,
+                font_size=dp(11.5),
+                theme_text_color="Custom",
+                text_color=[0.90, 0.94, 1.0, 1],
+                size_hint_y=None,
+                height=dp(20),
+                shorten=True,
+                shorten_from="right",
+            ))
+            qty_text = f"{qty:.2f} kg" if qty != int(qty) else f"{int(qty)} un"
+            info_col.add_widget(MDLabel(
+                text=f"{qty_text}  ·  {_format_money(total)}  ·  {operator}",
+                font_size=dp(10),
+                theme_text_color="Custom",
+                text_color=[0.55, 0.75, 0.92, 1],
+                size_hint_y=None,
+                height=dp(18),
+            ))
+
+            # Botão de recibo (re-emitir se possível)
+            edit_btn = CompactActionButton(
+                icon="pencil-outline",
+                size_hint=(None, None),
+                size=(dp(32), dp(32)),
+                radius=[dp(8)],
+                icon_font_size=sp(14),
+                icon_color=[1.0, 0.92, 0.72, 1],
+                md_bg_color=[0.34, 0.25, 0.08, 1] if can_edit else [0.16, 0.16, 0.18, 1],
+                border_color=[0.95, 0.70, 0.28, 0.65],
+                border_width=dp(1.0),
+                disabled=not can_edit,
+                hint_text="Voltar ao carrinho para editar (ate 10 min)" if can_edit else "Edicao disponivel apenas ate 10 min",
+            )
+            edit_btn.bind(on_release=lambda _b, r=row: self._open_recent_sale_edit_dialog(r))
+
+            buttons_row = MDBoxLayout(size_hint=(None, None), size=(dp(32), dp(32)), spacing=dp(6))
+            buttons_row.add_widget(edit_btn)
+
+            btn_anchor = AnchorLayout(
+                size_hint_x=0.25,
+                anchor_x="center",
+                anchor_y="center",
+            )
+            btn_anchor.add_widget(buttons_row)
+
+            row_card.add_widget(info_col)
+            row_card.add_widget(btn_anchor)
+            container.add_widget(row_card)
+
+        except Exception:
+            traceback.print_exc()
+
+    def _recent_sale_to_dict(self, row):
+        if isinstance(row, dict):
+            qty = _safe_float(row.get("quantity") or row.get("qty") or 0)
+            returned = _safe_float(row.get("returned_qty") or 0)
+            sold_at = row.get("sold_at") or row.get("sale_date") or row.get("created_at") or row.get("date") or ""
+            return {
+                "sale_id": row.get("id") or row.get("sale_id"),
+                "product": row.get("product_name") or row.get("name") or "Produto",
+                "qty": qty,
+                "price": _safe_float(row.get("unit_price") or row.get("sale_price") or row.get("price") or 0),
+                "total": _safe_float(row.get("total") or row.get("amount") or 0),
+                "sold_at": sold_at,
+                "product_id": row.get("product_id"),
+                "operator": row.get("operator") or row.get("created_by") or row.get("user") or row.get("username") or "—",
+                "returned_qty": returned,
+                "available_qty": _safe_float(row.get("available_qty") or max(0.0, qty - returned)),
+            }
+
+        qty = _safe_float(row[2]) if len(row) > 2 else 0
+        returned = _safe_float(row[6]) if len(row) > 6 else 0
+        return {
+            "sale_id": row[0] if len(row) > 0 else None,
+            "product": row[1] if len(row) > 1 else "Produto",
+            "qty": qty,
+            "price": _safe_float(row[3]) if len(row) > 3 else 0,
+            "total": _safe_float(row[4]) if len(row) > 4 else 0,
+            "sold_at": row[5] if len(row) > 5 else "",
+            "product_id": row[11] if len(row) > 11 else None,
+            "operator": row[8] if len(row) > 8 and row[8] else "—",
+            "returned_qty": returned,
+            "available_qty": _safe_float(row[7]) if len(row) > 7 else max(0.0, qty - returned),
+        }
+
+    def _parse_sale_datetime(self, value):
+        text = str(value or "").strip()
+        if not text:
+            return None
+        for candidate in (text, text.replace("Z", "+00:00")):
+            try:
+                parsed = datetime.fromisoformat(candidate)
+                return parsed.replace(tzinfo=None)
+            except Exception:
+                pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+            try:
+                return datetime.strptime(text[:len(datetime.now().strftime(fmt))], fmt)
+            except Exception:
+                pass
+        return None
+
+    def _is_sale_editable_for_cart(self, sold_at):
+        sale_dt = self._parse_sale_datetime(sold_at)
+        if sale_dt is None:
+            return False
+        age_seconds = (datetime.now() - sale_dt).total_seconds()
+        return 0 <= age_seconds < self.SALE_EDIT_WINDOW_SECONDS
+
+    def _is_recent_sale_row_editable(self, row):
+        try:
+            sale = self._recent_sale_to_dict(row)
+            return (
+                bool(sale.get("sale_id"))
+                and bool(sale.get("product_id"))
+                and _safe_float(sale.get("available_qty")) > 0
+                and self._is_sale_editable_for_cart(sale.get("sold_at"))
+            )
+        except Exception:
+            return False
+
+    def _open_recent_sale_edit_dialog(self, row):
+        sale = self._recent_sale_to_dict(row)
+        available = _safe_float(sale.get("available_qty"))
+        if not self._is_recent_sale_row_editable(row):
+            self.show_message("Só é possível editar vendas feitas há menos de 10 minutos.")
+            return
+        if available <= 0:
+            self.show_message("Esta venda já não tem quantidade disponível para editar.")
+            return
+        self._return_recent_sale_to_cart(sale)
+
+    def _return_recent_sale_to_cart(self, sale):
+        if not self._is_sale_editable_for_cart(sale.get("sold_at")):
+            self.show_message("Só é possível editar vendas feitas há menos de 10 minutos.")
+            return
+        qty = _safe_float(sale.get("available_qty"))
+        if qty <= 0:
+            self.show_message("Esta venda já não tem quantidade disponível para editar.")
+            return
+        product_id = sale.get("product_id")
+        if not product_id:
+            self.show_message("Não foi possível identificar o produto desta venda.")
+            return
+
+        self.set_search_feedback("A devolver venda ao carrinho...", "info", "cart-arrow-down")
+
+        app = App.get_running_app()
+        username = getattr(app, "current_user", None) if app else None
+        role = getattr(app, "current_role", None) or "manager"
+        reason = "Edição rápida dentro de 10 minutos"
+
+        def worker():
+            try:
+                result = self.db.refund_sale_item(
+                    sale.get("sale_id"),
+                    qty,
+                    reason=reason,
+                    username=username,
+                    role=role,
+                    terminal_id=os.environ.get("COMPUTERNAME") or "POS",
+                )
+                product_rows = []
+                if isinstance(result, dict) and result.get("ok"):
+                    product_rows = self.db.get_products_for_sale_ids([product_id]) or []
+            except Exception as exc:
+                result = {"ok": False, "message": str(exc)}
+                product_rows = []
+            Clock.schedule_once(lambda _dt, res=result, rows=product_rows: apply_result(res, rows), 0)
+
+        def apply_result(result, product_rows):
+            ok = isinstance(result, dict) and bool(result.get("ok"))
+            if ok:
+                product_row = product_rows[0] if product_rows else None
+                if product_row is None:
+                    self.show_message("Venda estornada, mas o produto não voltou ao carrinho.")
+                else:
+                    self._append_refunded_sale_to_cart(sale, product_row, qty)
+                self.manual_refresh_stock(silent=True)
+                self._load_operational_snapshot()
+                if self._recent_sales_dialog:
+                    try:
+                        self._recent_sales_dialog.dismiss()
+                    except Exception:
+                        pass
+                    self._recent_sales_dialog = None
+                self.set_search_feedback("Venda voltou ao carrinho para edição", "success", "cart-arrow-down")
+                self.show_message("Venda voltou ao carrinho.")
+                return
+            self.show_message((result or {}).get("message") or "Falha ao editar venda.")
+
+        Thread(target=worker, daemon=True).start()
+
+    def _append_refunded_sale_to_cart(self, sale, product_row, qty_units):
+        info = _unpack_sale_product(product_row)
+        qty_units = _safe_float(qty_units)
+        price = _safe_float(sale.get("price"))
+        if price <= 0:
+            price, _promo = _calculate_promo(product_row)
+        is_weight = bool(info.get("is_weight"))
+        qty = qty_units
+        item = {
+            "id": info["id"],
+            "catalog_key": info["catalog_key"],
+            "name": info["name"],
+            "barcode": info["barcode"],
+            "qty": qty,
+            "qty_units": qty_units,
+            "pack_units": None,
+            "price": price,
+            "unit_price": price,
+            "total": round(qty_units * price, 2),
+            "max_stock": info["stock"],
+            "is_weight": is_weight,
+            "weight_kg": qty_units if is_weight else 0,
+            "sale_mode": "weight" if is_weight else "unit",
+            "promo_active": bool(product_row[8]) if len(product_row) > 8 else False,
+            "vat_rule_code": info["vat_rule_code"],
+            "lot_count": int(info.get("lot_count") or 1),
+        }
+        self.cart_items.append(item)
+        self._selected_cart_index = len(self.cart_items) - 1
+        self.update_cart_display()
+        self._focus_text_field("search_input", select_all=False)
+
+    def _view_sale_receipt(self, row):
+        """
+        Tenta gerar e mostrar o recibo de uma venda já gravada.
+        Fecha o diálogo de vendas recentes antes de abrir o PDF.
+        """
+        if self._recent_sales_dialog:
+            try:
+                self._recent_sales_dialog.dismiss()
+            except Exception:
+                pass
+            self._recent_sales_dialog = None
+
+        # Tenta construir um receipt_data mínimo a partir dos dados da linha
+        try:
+            if isinstance(row, dict):
+                product_name = str(row.get("product_name") or row.get("name") or "Produto")
+                qty = _safe_float(row.get("quantity") or row.get("qty") or 0)
+                total = _safe_float(row.get("total") or row.get("amount") or 0)
+                operator = str(row.get("operator") or row.get("user") or "Operador")
+                sold_at = str(row.get("sold_at") or row.get("created_at") or "")
+                unit_price = _safe_float(row.get("unit_price") or row.get("price") or (total / max(qty, 1)))
+            else:
+                product_name = str(row[1]) if len(row) > 1 else "Produto"
+                qty = _safe_float(row[2]) if len(row) > 2 else 1
+                total = _safe_float(row[4]) if len(row) > 4 else 0
+                sold_at = str(row[5]) if len(row) > 5 else ""
+                operator = str(row[8]) if len(row) > 8 and row[8] else "Operador"
+                unit_price = _safe_float(row[3]) if len(row) > 3 else total / max(qty, 1)
+
+            try:
+                dt = datetime.fromisoformat(sold_at)
+                issued_at = dt.strftime("%d/%m/%Y %H:%M")
+                receipt_code = dt.strftime("%Y%m%d%H%M%S")
+            except Exception:
+                issued_at = datetime.now().strftime("%d/%m/%Y %H:%M")
+                receipt_code = datetime.now().strftime("%Y%m%d%H%M%S")
+
+            receipt_data = {
+                "store_name": get_system_name(force_reload=True),
+                "receipt_code": receipt_code,
+                "issued_at": issued_at,
+                "operator": operator,
+                "items_count": 1,
+                "items": [
+                    {
+                        "name": product_name,
+                        "qty_text": f"{int(qty)} un" if qty == int(qty) else f"{qty:.2f} kg",
+                        "unit_price": unit_price,
+                        "line_total": total,
+                        "sale_mode_label": "Unidade",
+                        "vat_tag": "IVA Inc.",
+                    }
+                ],
+                "subtotal": round(total / 1.16, 2),
+                "vat_total": round(total - total / 1.16, 2),
+                "total": total,
+                "paid_amount": total,
+                "change_amount": 0.0,
+                "vat_note": "Recibo re-emitido. IVA considerado no preço final.",
+            }
+            settings = get_device_settings(force_reload=True)
+            paper_width = int(settings.get("receipt_paper_width_mm") or 80)
+
+            def worker():
+                path = None
+                error = None
+                try:
+                    path = self.receipt_report.generate(receipt_data, paper_width_mm=paper_width)
+                except Exception as exc:
+                    error = str(exc)
+                Clock.schedule_once(
+                    lambda _dt, p=path, e=error: _show(p, e),
+                    0,
+                )
+
+            def _show(path, error):
+                if error or not path:
+                    self.show_message("Não foi possível gerar o recibo desta venda.")
+                    return
+                self._ensure_pdf_viewer().view_pdf(path)
+                self.set_search_feedback("Recibo da venda anterior aberto", "info", "receipt")
+
+            Thread(target=worker, daemon=True).start()
+
+        except Exception:
+            traceback.print_exc()
+            self.show_message("Erro ao carregar dados do recibo.")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  FINALIZAR VENDA — grava directamente, sem fila de pendentes
+    # ══════════════════════════════════════════════════════════════════════
+
+    def finalize_sale(self, confirmed=False):
+        """
+        Grava a venda directamente na base de dados (Ctrl+Enter).
+        Não existe fila de pendentes — a venda é processada de imediato.
+        """
+        if self._sale_submitting:
+            return
+        if not self.cart_items:
+            self.show_message("O carrinho está vazio.")
+            return
+
+        paid_text = str(self.ids.paid_input.text or "").strip() if self.ids else ""
+        paid_amount = self.final_amount if not paid_text else _safe_float(paid_text)
+        if paid_amount + 1e-9 < self.final_amount:
+            self.show_message("Pagamento insuficiente.")
+            return
+
+        # Grava directamente
+        self._commit_sale_directly(
+            cart_snapshot=[dict(item) for item in self.cart_items],
+            discount_amount=self.discount_amount,
+            paid_amount=paid_amount,
+        )
+
+    def _commit_sale_directly(self, cart_snapshot, discount_amount, paid_amount):
+        subtotal = sum(_safe_float(i.get("total")) for i in cart_snapshot)
+        discount_amount = min(max(discount_amount, 0.0), subtotal)
+        final = max(subtotal - discount_amount, 0.0)
+        change_amount = max(0.0, round(paid_amount - final, 2))
+        receipt_data = self._build_receipt_data(cart_snapshot, discount_amount, paid_amount, change_amount)
+
+        app = App.get_running_app()
+        username = getattr(app, "current_user", None) if app else None
+        role = getattr(app, "current_role", None) or "manager"
+        terminal_id = os.environ.get("COMPUTERNAME") or "POS"
+        self._set_sale_busy(True)
+
+        def worker():
+            try:
+                allocation_plan = self._build_sale_commit_allocations(cart_snapshot, discount_amount)
+                conflicts = allocation_plan.get("conflicts") or []
+                live_map = allocation_plan.get("live_map") or {}
+                sale_allocations = allocation_plan.get("sale_allocations") or []
+                if conflicts:
+                    return {"status": "conflict", "conflicts": conflicts, "live_map": live_map}
+                for item in sale_allocations:
+                    result = self.db.add_sale(
+                        item["id"],
+                        item["qty_units"],
+                        item["effective_unit_price"],
+                        username,
+                        role,
+                        terminal_id=terminal_id,
+                        is_promotional=bool(item.get("promo_active")),
+                        vat_rule_code=item.get("vat_rule_code"),
+                    )
+                    if not result:
+                        raise RuntimeError(f"Falha ao gravar {item['name']}")
+                if username:
+                    try:
+                        details = (
+                            f"Itens: {len(cart_snapshot)} | Total: {final:.2f} MT | "
+                            f"Pagamento: {self._payment_method_label()}"
+                        )
+                        self.db.log_action(username, role, "SALE", details)
+                    except Exception:
+                        pass
+                return {"status": "ok", "receipt_data": receipt_data}
+            except Exception as exc:
+                return {"status": "error", "error": str(exc)}
+
+        def apply_result(_dt, result):
+            self._set_sale_busy(False)
+            status = str((result or {}).get("status") or "")
+            if status == "conflict":
+                conflicts = result.get("conflicts") or []
+                for item in self.cart_items:
+                    catalog_key = str(item.get("catalog_key") or "").strip().lower()
+                    live_product = (result.get("live_map") or {}).get(catalog_key)
+                    if live_product is None and item.get("id") is not None:
+                        live_product = self.products_dict.get(item.get("id"))
+                    if live_product is not None:
+                        live_info = _unpack_sale_product(live_product)
+                        item["max_stock"] = live_info["stock"]
+                        item["id"] = live_info["id"]
+                        item["lot_count"] = int(live_info.get("lot_count") or 1)
+                self.update_cart_display()
+                if conflicts:
+                    name, requested, available = conflicts[0]
+                    self.show_message(f"Stock alterado: {name} ({requested:.2f} > {available:.2f}).")
+                return
+            if status == "ok":
+                self._last_completed_receipt_data = result.get("receipt_data")
+                self.cart_items.clear()
+                self._selected_cart_index = -1
+                if self.ids:
+                    self.ids.paid_input.text = ""
+                    self.ids.discount_input.text = ""
+                self._suspended_sale = None
+                self.update_cart_display()
+                self.manual_refresh_stock(silent=True)
+                self._load_operational_snapshot()
+                self.set_search_feedback("Venda finalizada com sucesso", "success", "cash-check")
+                self.show_message("Venda finalizada com sucesso.")
+                try:
+                    self._refresh_device_settings()
+                    if bool(self._device_settings.get("receipt_auto_print", False)):
+                        self.emit_receipt(print_now=True, preview_after=False)
+                    else:
+                        self._focus_text_field("search_input", select_all=False)
+                except Exception:
+                    pass
+                return
+            self.show_message((result or {}).get("error") or "Erro ao finalizar venda.")
+
+        def commit_worker():
+            result = worker()
+            Clock.schedule_once(lambda _dt, payload=result: apply_result(0, payload), 0)
+
+        Thread(target=commit_worker, daemon=True).start()
 
     def _allocate_discount(self, cart_snapshot, discount_amount):
         items = [dict(item) for item in (cart_snapshot or [])]
@@ -2147,7 +3150,7 @@ class SalesScreen(MDScreen):
             note_parts.append("IVA considerado no preço final: " + ", ".join(unique_vats) + ".")
 
         return {
-            "store_name": "MERCEARIA",
+            "store_name": get_system_name(force_reload=True),
             "receipt_code": datetime.now().strftime("%Y%m%d%H%M%S"),
             "issued_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "operator": operator or "Operador",
@@ -2162,132 +3165,9 @@ class SalesScreen(MDScreen):
         }
 
     def _payment_method_label(self):
+        if self.payment_method == "emola":
+            return "E-MOLA"
         return {"cash": "Dinheiro", "card": "Cartão", "mobile": "M-Pesa"}.get(self.payment_method, "Dinheiro")
-
-    def finalize_sale(self):
-        if self._sale_submitting:
-            return
-        if not self.cart_items:
-            self.show_message("O carrinho está vazio.")
-            return
-
-        paid_text = str(self.ids.paid_input.text or "").strip() if self.ids else ""
-        paid_amount = self.final_amount if not paid_text else _safe_float(paid_text)
-        if paid_amount + 1e-9 < self.final_amount:
-            self.show_message("Pagamento insuficiente.")
-            return
-
-        discount_amount = self.discount_amount
-        change_amount = max(0.0, round(paid_amount - self.final_amount, 2))
-        cart_snapshot = [dict(item) for item in self.cart_items]
-        receipt_data = self._build_receipt_data(cart_snapshot, discount_amount, paid_amount, change_amount)
-
-        app = App.get_running_app()
-        username = getattr(app, "current_user", None) if app else None
-        role = getattr(app, "current_role", None) or "manager"
-        terminal_id = os.environ.get("COMPUTERNAME") or "POS"
-        self._set_sale_busy(True)
-
-        def worker():
-            try:
-                allocation_plan = self._build_sale_commit_allocations(cart_snapshot, discount_amount)
-                conflicts = allocation_plan.get("conflicts") or []
-                live_map = allocation_plan.get("live_map") or {}
-                sale_allocations = allocation_plan.get("sale_allocations") or []
-                if conflicts:
-                    actor = username or terminal_id or "desconhecido"
-                    try:
-                        summary = " | ".join(
-                            f"{name}: {requested:.2f}>{available:.2f}"
-                            for name, requested, available in conflicts[:3]
-                        )
-                        if len(conflicts) > 3:
-                            summary += f" | +{len(conflicts) - 3} item(ns)"
-                        self.db.log_action(
-                            actor,
-                            role,
-                            "RUPTURE_ATTEMPT",
-                            f"Tentativa de venda com stock insuficiente | {summary}",
-                        )
-                    except Exception:
-                        pass
-                    return {"status": "conflict", "conflicts": conflicts, "live_map": live_map}
-
-                for item in sale_allocations:
-                    result = self.db.add_sale(
-                        item["id"],
-                        item["qty_units"],
-                        item["effective_unit_price"],
-                        username,
-                        role,
-                        terminal_id=terminal_id,
-                        is_promotional=bool(item.get("promo_active")),
-                        vat_rule_code=item.get("vat_rule_code"),
-                    )
-                    if not result:
-                        raise RuntimeError(f"Falha ao gravar {item['name']}")
-
-                if username:
-                    try:
-                        details = (
-                            f"Itens: {len(cart_snapshot)} | Total: {self.final_amount:.2f} MT | "
-                            f"Pagamento: {self._payment_method_label()}"
-                        )
-                        self.db.log_action(username, role, "SALE", details)
-                    except Exception:
-                        pass
-                return {"status": "ok", "receipt_data": receipt_data}
-            except Exception as exc:
-                return {"status": "error", "error": str(exc)}
-
-        def apply_result(_dt, result):
-            self._set_sale_busy(False)
-            status = str((result or {}).get("status") or "")
-            if status == "conflict":
-                conflicts = result.get("conflicts") or []
-                for item in self.cart_items:
-                    catalog_key = str(item.get("catalog_key") or "").strip().lower()
-                    live_product = (result.get("live_map") or {}).get(catalog_key)
-                    if live_product is None and item.get("id") is not None:
-                        live_product = self.products_dict.get(item.get("id"))
-                    if live_product is not None:
-                        live_info = _unpack_sale_product(live_product)
-                        item["max_stock"] = live_info["stock"]
-                        item["id"] = live_info["id"]
-                        item["lot_count"] = int(live_info.get("lot_count") or 1)
-                self.update_cart_display()
-                if conflicts:
-                    name, requested, available = conflicts[0]
-                    self.show_message(f"Stock alterado: {name} ({requested:.2f} > {available:.2f}).")
-                return
-            if status == "ok":
-                self._last_completed_receipt_data = result.get("receipt_data")
-                self.cart_items.clear()
-                if self.ids:
-                    self.ids.paid_input.text = ""
-                    self.ids.discount_input.text = ""
-                self._suspended_sale = None
-                self.update_cart_display()
-                self.manual_refresh_stock(silent=True)
-                self._load_operational_snapshot()
-                self.set_search_feedback("Venda finalizada com sucesso", "success", "cash-check")
-                self.show_message("Venda finalizada com sucesso.")
-                try:
-                    self._refresh_device_settings()
-                    if bool(self._device_settings.get("receipt_auto_print", False)):
-                        self.emit_receipt(print_now=True, preview_after=False)
-                    else:
-                        self._focus_text_field("search_input", select_all=False)
-                except Exception:
-                    pass
-                return
-            self.show_message((result or {}).get("error") or "Erro ao finalizar venda.")
-
-        def commit_worker():
-            result = worker()
-            Clock.schedule_once(lambda _dt, payload=result: apply_result(0, payload), 0)
-
-        Thread(target=commit_worker, daemon=True).start()
 
     def emit_receipt(self, print_now=False, preview_after=True):
         if self._sale_submitting:
@@ -2307,7 +3187,7 @@ class SalesScreen(MDScreen):
             printed = False
             print_message = ""
             try:
-                path = self.receipt_report.generate(receipt_data)
+                path = self.receipt_report.generate(receipt_data, paper_width_mm=paper_width)
                 if print_now:
                     printed, print_message = print_thermal_receipt(
                         receipt_data,
@@ -2390,8 +3270,10 @@ class SalesScreen(MDScreen):
             self.ids.pay_cash_btn.disabled = self._sale_submitting
             self.ids.pay_card_btn.disabled = self._sale_submitting
             self.ids.pay_mobile_btn.disabled = self._sale_submitting
+            self.ids.pay_emola_btn.disabled = self._sale_submitting
             self.ids.paid_input.disabled = self._sale_submitting
             self.ids.discount_input.disabled = self._sale_submitting
+
             visible_results = len(getattr(self.ids.get("product_matches_rv"), "data", []) or [])
             self._sync_products_pagination_controls(visible_results)
         self.hold_button_text = "Retomar Venda" if (not has_cart and self._suspended_sale) else "Suspender Venda"
@@ -2408,8 +3290,6 @@ class SalesScreen(MDScreen):
         screen = self.manager.get_screen("sales_history")
         if hasattr(screen, "back_target"):
             screen.back_target = self.name or "manager"
-        if hasattr(screen, "request_enter_refresh"):
-            Clock.schedule_once(lambda _dt: screen.request_enter_refresh(force=False, delay=0.02), 0.02)
         self.stop_scanner()
         self.manager.current = "sales_history"
 
@@ -2699,9 +3579,7 @@ class SalesScreen(MDScreen):
                 "one",
                 "Stock sob controlo",
                 "Nao existem produtos em stock baixo neste momento.",
-                [
-                    "A reposicao atual parece equilibrada para a operacao.",
-                ],
+                ["A reposicao atual parece equilibrada para a operacao."],
             )
 
         if top_product:
@@ -2761,9 +3639,7 @@ class SalesScreen(MDScreen):
                 "three",
                 "Pico operacional",
                 "Ainda nao ha volume suficiente para identificar a hora de maior movimento.",
-                [
-                    "Volte a verificar este aviso depois de mais vendas registadas.",
-                ],
+                ["Volte a verificar este aviso depois de mais vendas registadas."],
             )
         Clock.schedule_once(self._refresh_notice_widgets, 0)
 

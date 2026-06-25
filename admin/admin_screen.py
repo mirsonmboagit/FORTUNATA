@@ -44,7 +44,6 @@ from utils.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
 
 
 def _get_detail_popup_class():
-    # Importa o popup de detalhes mesmo quando o modulo muda de contexto.
     try:
         from .detail_popup import DetailPopup
     except ImportError:
@@ -63,7 +62,6 @@ def _describe_loader_error(exc, prefix):
 
 
 def _build_unavailable_product_form_class(error):
-    # Mostra uma mensagem simples se o formulario de produto falhar ao carregar.
     message = _describe_loader_error(error, "Formulario de produto indisponivel")
 
     class UnavailableProductForm:
@@ -99,9 +97,6 @@ def _get_product_form_class():
 Builder.load_file(os.path.join(CURRENT_DIR, 'admin_screen.kv'))
 
 
-# ---------------------------------------------------------------------------
-# Proporcoes das colunas da tabela.
-# ---------------------------------------------------------------------------
 COL_HINTS = [0.06, 0.20, 0.09, 0.09, 0.07, 0.11, 0.11, 0.13, 0.14]
 LOSS_LABELS = {
     "DAMAGE": "Danificado",
@@ -109,6 +104,11 @@ LOSS_LABELS = {
     "THEFT": "Roubo",
     "ADJUSTMENT": "Ajuste",
 }
+
+# ── Tamanho do lote de widgets criados por frame durante render paginado ──
+_TABLE_BATCH_SIZE = 3
+# ── Intervalo entre lotes (segundos) — mantém o UI responsivo ──
+_TABLE_BATCH_INTERVAL = 0.016   # ~1 frame a 60 fps
 
 
 def _safe_float(value, default=0.0):
@@ -119,8 +119,7 @@ def _safe_float(value, default=0.0):
 
 
 class AdminScreen(Screen):
-    # Tela principal do administrador.
-    PRODUCTS_CACHE_SECONDS = 4
+    PRODUCTS_CACHE_SECONDS = 45
     LOSS_METRICS_LOOKBACK_DAYS = 365
     PRODUCTS_PAGE_SIZE = 18
     product_table = ObjectProperty(None)
@@ -129,6 +128,9 @@ class AdminScreen(Screen):
     products = ListProperty([])
     quick_actions_open = BooleanProperty(False)
     shopping_list_busy = BooleanProperty(False)
+
+    # ── Token para descartar resultados de filtros obsoletos ──────────────────
+    _filter_token = 0
 
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
@@ -139,8 +141,7 @@ class AdminScreen(Screen):
         self._filter_ev = None
         self._pending_search = ""
         self._compact_layout = None
-        
-        # Variáveis para controle de notificações e animação
+
         self.swing_event = None
         self.notification_count = 0
         self._ai_poll_ev = None
@@ -148,13 +149,17 @@ class AdminScreen(Screen):
         self._products_loading = False
         self._pending_products_load = False
         self._last_products_load_at = 0.0
+
+        # ── Render de tabela em lotes ────────────────────────────────────────
         self._table_render_ev = None
         self._table_render_token = 0
-        self._pending_table_rows = deque()
+        self._pending_table_rows = deque()   # deque de (idx, product) aguardando render
         self._table_row_height = dp(48)
         self._table_palette = {}
+
         self._current_display = []
         self._current_filtered_products = []
+        self._aggregated_products_cache = []
         self._product_page_index = 0
         self._display_ids_by_product_id = {}
         self._selected_lot_ids_by_catalog_key = {}
@@ -183,6 +188,10 @@ class AdminScreen(Screen):
         self._last_shortcut_at = 0.0
         self._shortcut_help_dialog = None
         self._loading_controller = getattr(self, "_loading_controller", None)
+
+        # ── Snackbar reutilizável ─────────────────────────────────────────────
+        self._snackbar = None
+
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
             db=self.db,
@@ -190,13 +199,13 @@ class AdminScreen(Screen):
             banner_columns=1,
             auto_batch_size=2,
             auto_stagger_seconds=2.0,
-            auto_present_enabled=False,
+            auto_present_enabled=True,
+            auto_present_as_history=True,
         )
-        
+
         Window.bind(on_resize=self._on_window_resize)
 
     def on_kv_post(self, base_widget):
-        # Finaliza controles que dependem dos ids carregados no KV.
         self._ensure_loading_overlay()
         Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
 
@@ -429,7 +438,6 @@ class AdminScreen(Screen):
         )
 
     def _run_async_action(self, key, task, on_success=None, busy_message=None, error_message=None):
-        # Executa tarefas demoradas fora da thread da interface.
         action_key = str(key or "")
         if action_key and action_key in self._async_actions:
             return False
@@ -481,7 +489,6 @@ class AdminScreen(Screen):
     # Lifecycle
     # ------------------------------------------------------------------
     def _on_window_resize(self, instance, width, height):
-        """Rebuild table rows so every cell re-measures at the new size."""
         self._update_responsive_layout(width)
         Clock.unschedule(self._deferred_rebuild)
         Clock.schedule_once(self._deferred_rebuild, 0.15)
@@ -490,7 +497,6 @@ class AdminScreen(Screen):
         self._render_current_product_page()
 
     def _update_responsive_layout(self, width=None):
-        # Ajusta botoes e tabela conforme a largura da janela.
         if not self.ids:
             return
         width = width or Window.width
@@ -550,35 +556,25 @@ class AdminScreen(Screen):
     # Sistema de Notificações e Animação de Abanar
     # ------------------------------------------------------------------
     def _init_badge(self, dt):
-        """Inicializa o badge de notificações"""
         if hasattr(self.ids, 'ai_badge'):
             self.ids.ai_badge.opacity = 0
 
     def add_notification(self):
-        """Adiciona uma nova notificação"""
         self.notification_count += 1
         self.update_notification_badge(self.notification_count)
 
     def clear_notifications(self):
-        """Limpa todas as notificações"""
         self.notification_count = 0
         self.update_notification_badge(0)
 
     def update_notification_badge(self, count):
-        """
-        Atualiza o badge e controla a animação de abanar
-        
-        Args:
-            count (int): Número de notificações
-        """
         self.notification_count = count
-        
+
         if not hasattr(self.ids, 'ai_badge') or not hasattr(self.ids, 'ai_badge_label'):
             return
-        
-        # Atualizar texto
+
         self.ids.ai_badge_label.text = str(count)
-        
+
         if count > 0:
             self._show_badge()
             self._start_swing_animation()
@@ -587,14 +583,12 @@ class AdminScreen(Screen):
             self._stop_swing_animation()
 
     def _show_badge(self):
-        """Mostra o badge com animação pop"""
         if not hasattr(self.ids, 'ai_badge'):
             return
-        
-        # Pop in animation
+
         self.ids.ai_badge.size = (dp(0), dp(0))
         self.ids.ai_badge.opacity = 1
-        
+
         anim = Animation(
             size=(dp(24), dp(24)),
             duration=0.3,
@@ -603,10 +597,9 @@ class AdminScreen(Screen):
         anim.start(self.ids.ai_badge)
 
     def _hide_badge(self):
-        """Esconde o badge com animação"""
         if not hasattr(self.ids, 'ai_badge'):
             return
-        
+
         anim = Animation(
             opacity=0,
             size=(dp(0), dp(0)),
@@ -615,40 +608,40 @@ class AdminScreen(Screen):
         anim.start(self.ids.ai_badge)
 
     def _start_swing_animation(self):
-        """Inicia animação de abanar/balançar a lâmpada"""
         if not hasattr(self.ids, 'ai_button'):
             return
-        
+
         self._stop_swing_animation()
-        
+
+        # ── CORRECAO: Animation reutilizada — criada uma única vez ───────────
         def swing_cycle(dt):
             if self.notification_count <= 0:
                 return False
             button = self.ids.ai_button
-            base_pos = tuple(button.pos)
-            self._ai_button_rest_pos = base_pos
+            bx, by = button.pos
+            self._ai_button_rest_pos = (bx, by)
+            d = dp(4)
 
             swing = (
-                Animation(pos=(base_pos[0] + dp(4), base_pos[1] + dp(4)), duration=0.15, transition='out_sine') +
-                Animation(pos=(base_pos[0] - dp(4), base_pos[1] - dp(3)), duration=0.3, transition='in_out_sine') +
-                Animation(pos=(base_pos[0] + dp(3), base_pos[1] + dp(2)), duration=0.25, transition='in_out_sine') +
-                Animation(pos=(base_pos[0] - dp(3), base_pos[1] - dp(2)), duration=0.25, transition='in_out_sine') +
-                Animation(pos=(base_pos[0] + dp(2), base_pos[1] + dp(1)), duration=0.2, transition='in_out_sine') +
-                Animation(pos=(base_pos[0] - dp(2), base_pos[1] - dp(1)), duration=0.2, transition='in_out_sine') +
-                Animation(pos=base_pos, duration=0.15, transition='out_sine')
+                Animation(pos=(bx + d,     by + d),     duration=0.15, transition='out_sine') +
+                Animation(pos=(bx - d,     by - d*0.75),duration=0.30, transition='in_out_sine') +
+                Animation(pos=(bx + d*0.75,by + d*0.5), duration=0.25, transition='in_out_sine') +
+                Animation(pos=(bx - d*0.75,by - d*0.5), duration=0.25, transition='in_out_sine') +
+                Animation(pos=(bx + d*0.5, by + d*0.25),duration=0.20, transition='in_out_sine') +
+                Animation(pos=(bx - d*0.5, by - d*0.25),duration=0.20, transition='in_out_sine') +
+                Animation(pos=(bx, by),                  duration=0.15, transition='out_sine')
             )
             swing.start(button)
             return True
-        
+
         self.swing_event = Clock.schedule_interval(swing_cycle, 2.5)
         swing_cycle(0)
-    
+
     def _stop_swing_animation(self):
-        """Para a animação de abanar"""
         if hasattr(self, 'swing_event') and self.swing_event:
             self.swing_event.cancel()
             self.swing_event = None
-        
+
         if hasattr(self.ids, 'ai_button'):
             button = self.ids.ai_button
             Animation.cancel_all(button)
@@ -694,9 +687,6 @@ class AdminScreen(Screen):
         return start_date, end_date
 
     def _build_loss_metric_card(self, title, value, subtitle, icon_name, tone):
-        from kivymd.uix.card import MDCard
-        from kivymd.uix.label import MDIcon
-
         app = App.get_running_app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
         tone_color = tokens.get(
@@ -758,9 +748,6 @@ class AdminScreen(Screen):
         return card
 
     def _build_loss_section_card(self, title, lines, icon_name="text-box-outline", tone="info"):
-        from kivymd.uix.card import MDCard
-        from kivymd.uix.label import MDIcon
-
         app = App.get_running_app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
         tone_color = tokens.get(
@@ -824,7 +811,6 @@ class AdminScreen(Screen):
 
     def _build_loss_metrics_content(self, metrics, start_date, end_date, detailed=False):
         from kivy.uix.scrollview import ScrollView
-        from kivymd.uix.gridlayout import MDGridLayout
 
         content = MDBoxLayout(
             orientation="vertical",
@@ -1098,7 +1084,6 @@ class AdminScreen(Screen):
             self.category_menu = None
 
     def show_category_menu(self, button):
-        """Show dropdown menu for category selection"""
         menu_items = [
             {
                 "text": "Todas as Categorias",
@@ -1120,21 +1105,24 @@ class AdminScreen(Screen):
             items=menu_items,
             width_mult=4,
         )
-        
+
         self.category_menu.open()
 
     def set_category(self, category):
-        """Set the selected category and filter products"""
         self.category_spinner.text = category if category != "Todas" else "Todas as Categorias"
         if self.category_menu:
             self.category_menu.dismiss()
         self.filter_products(self.search_input.text if self.search_input else "")
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORRECAO 1 — queue_filter
+    # Debounce de 0.35 s — elimina disparos enquanto o utilizador digita.
+    # ══════════════════════════════════════════════════════════════════════════
     def queue_filter(self, search_text):
         self._pending_search = search_text or ""
         if self._filter_ev:
             Clock.unschedule(self._filter_ev)
-        self._filter_ev = Clock.schedule_once(self._apply_queued_filter, 0.2)
+        self._filter_ev = Clock.schedule_once(self._apply_queued_filter, 0.35)
 
     def _apply_queued_filter(self, dt):
         self._filter_ev = None
@@ -1245,8 +1233,7 @@ class AdminScreen(Screen):
             self._selected_lot_ids_by_catalog_key.pop(catalog_key, None)
         else:
             self._selected_lot_ids_by_catalog_key[catalog_key] = normalized_id
-        source_rows = list(self._current_filtered_products or self.products or [])
-        self.update_product_table(source_rows, reset_page=False)
+        self._refresh_aggregated_products_async(reset_page=False)
         return True
 
     def _format_lot_menu_text(self, lot_row, position=None, is_current=False):
@@ -1304,7 +1291,6 @@ class AdminScreen(Screen):
         )
 
     def _representative_group_row(self, rows):
-        # Escolhe o lote que representa o grupo na tabela.
         def priority(row):
             status = str(row[16] if len(row) > 16 and row[16] is not None else "").strip().upper()
             if "EXPIR" in status:
@@ -1322,8 +1308,12 @@ class AdminScreen(Screen):
 
         return min(list(rows or []), key=priority)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORRECAO 2 — _aggregate_products_for_table
+    # Nunca chamado na thread principal fora de contextos de background.
+    # Mantido puro (sem side-effects) para poder ser chamado em threads.
+    # ══════════════════════════════════════════════════════════════════════════
     def _aggregate_products_for_table(self, rows):
-        # Junta lotes iguais para a lista ficar mais facil de ler.
         grouped = {}
         ordered_keys = []
         for row in list(rows or []):
@@ -1516,35 +1506,99 @@ class AdminScreen(Screen):
             return ""
         return self._display_ids_by_product_id.get(normalized, normalized)
 
-    # ------------------------------------------------------------------
-    # Search / filter
-    # ------------------------------------------------------------------
-    def filter_products(self, search_text):
-        category_text = self.category_spinner.text if self.category_spinner else "Todas as Categorias"
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORRECAO 3 — filter_products + _apply_filter_result
+    # Loop de filtro em thread de fundo. Token descarta resultados obsoletos.
+    # ══════════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _matches_weight_filter_mode(product, filter_mode):
+        sold_by_weight = bool(len(product) > 15 and product[15])
+        if filter_mode == 1:
+            return sold_by_weight
+        if filter_mode == 2:
+            return not sold_by_weight
+        return True
+
+    def filter_products(self, search_text, reset_page=True):
+        category_text = (
+            self.category_spinner.text if self.category_spinner else "Todas as Categorias"
+        )
         category = category_text if category_text != "Todas as Categorias" else "Todas"
         search_value = (search_text or "").strip().lower()
-        filtered = []
+        filter_mode = getattr(self, "filter_mode", 0)
 
-        for product in self.products:
-            display_id = self._get_display_id(product)
-            source_ids = self._get_group_source_ids(product)
-            search_match = (
-                search_value in str(display_id).lower() or
-                search_value in str(product[0]).lower() or
-                (len(product) > 1 and search_value in str(product[1]).lower()) or
-                (len(product) > 11 and search_value in str(product[11]).lower()) or
-                (len(product) > 12 and product[12] and search_value in str(product[12]).lower()) or
-                any(search_value in str(product_id).lower() for product_id in source_ids)
-            )
-            category_match = (
-                category in ('Todas', 'Todas as Categorias') or
-                (len(product) > 11 and category == product[11])
-            )
-            if search_match and category_match:
-                filtered.append(product)
+        # Usa somente cache já agregado. Se ainda não existe, dispara carga em
+        # background e evita agregação na thread principal.
+        source_products = list(self._aggregated_products_cache or [])
+        if not source_products and self.products and not self._products_loading:
+            self.load_products()
+        display_ids = dict(self._display_ids_by_product_id)
 
-        self._current_filtered_products = list(filtered)
-        self.update_product_table(filtered)
+        self._filter_token += 1
+        token = self._filter_token
+
+        def _worker():
+            filtered = []
+            for product in source_products:
+                pid = product[0] if product else None
+
+                try:
+                    normalized = int(pid)
+                except (TypeError, ValueError):
+                    normalized = None
+                display_id = (
+                    display_ids.get(normalized, normalized)
+                    if normalized is not None
+                    else ""
+                )
+
+                if len(product) > 28 and product[28]:
+                    source_ids = []
+                    for v in product[28]:
+                        try:
+                            source_ids.append(int(v))
+                        except (TypeError, ValueError):
+                            pass
+                elif pid is not None:
+                    try:
+                        source_ids = [int(pid)]
+                    except (TypeError, ValueError):
+                        source_ids = []
+                else:
+                    source_ids = []
+
+                if not search_value:
+                    search_match = True
+                else:
+                    search_match = (
+                        search_value in str(display_id).lower()
+                        or search_value in str(pid or "").lower()
+                        or (len(product) > 1  and search_value in str(product[1]  or "").lower())
+                        or (len(product) > 11 and search_value in str(product[11] or "").lower())
+                        or (len(product) > 12 and product[12]
+                            and search_value in str(product[12]).lower())
+                        or any(search_value in str(sid).lower() for sid in source_ids)
+                    )
+                category_match = (
+                    category in ("Todas", "Todas as Categorias")
+                    or (len(product) > 11 and category == product[11])
+                )
+                weight_match = AdminScreen._matches_weight_filter_mode(product, filter_mode)
+                if search_match and category_match and weight_match:
+                    filtered.append(product)
+
+            Clock.schedule_once(
+                lambda dt, f=filtered, tok=token, reset=reset_page:
+                self._apply_filter_result(f, tok, reset), 0
+            )
+
+        Thread(target=_worker, daemon=True).start()
+
+    def _apply_filter_result(self, filtered, token, reset_page=True):
+        if token != self._filter_token:
+            return
+        self._current_filtered_products = filtered
+        self.update_product_table(filtered, reset_page=reset_page, already_aggregated=True)
 
     def clear_search(self):
         if self.search_input is not None:
@@ -1559,7 +1613,11 @@ class AdminScreen(Screen):
 
     # ------------------------------------------------------------------
     # Data loading
-    # ------------------------------------------------------------------
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORRECAO 4 — load_products / _apply_loaded_products
+    # _aggregate_products_for_table e _rebuild_display_ids agora correm
+    # inteiramente na thread de fundo — zero trabalho pesado na thread principal.
+    # ══════════════════════════════════════════════════════════════════════════
     def load_products(self):
         if self._products_loading:
             self._pending_products_load = True
@@ -1568,12 +1626,6 @@ class AdminScreen(Screen):
         token = self._products_load_token + 1
         self._products_load_token = token
         self._products_loading = True
-        self._set_loading_overlay(
-            "products",
-            True,
-            "A carregar catalogo do admin...",
-            "Estamos a atualizar a lista de produtos, stock e alertas principais.",
-        )
 
         def worker():
             try:
@@ -1581,22 +1633,317 @@ class AdminScreen(Screen):
             except Exception as e:
                 print(f"Erro ao carregar produtos: {e}")
                 rows = []
-            Clock.schedule_once(lambda dt, data=rows, tok=token: self._apply_loaded_products(data, tok), 0)
+
+            # ── Trabalho pesado na thread de fundo ───────────────────────────
+            aggregated = []
+            display_ids = {}
+            expiry_alerts = {}
+            try:
+                selected_lots = dict(self._selected_lot_ids_by_catalog_key)
+                aggregated = AdminScreen._aggregate_products_for_table_static(rows, selected_lots)
+                display_ids = AdminScreen._rebuild_display_ids_static(aggregated)
+                expiry_alerts = {
+                    row[0]: evaluate_expiry_alert(row[13] if len(row) > 13 else None)
+                    for row in rows if row
+                }
+            except Exception as e:
+                print(f"Erro no pre-processamento de produtos: {e}")
+
+            Clock.schedule_once(
+                lambda dt, data=rows, agg=aggregated, dids=display_ids,
+                       alerts=expiry_alerts, tok=token:
+                self._apply_loaded_products(data, agg, dids, alerts, tok),
+                0
+            )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_loaded_products(self, rows, token):
+    def _refresh_aggregated_products_async(self, reset_page=True):
+        rows = list(self.products or [])
+        if not rows:
+            self.update_product_table([], reset_page=reset_page, already_aggregated=True)
+            return
+
+        token = self._products_load_token
+
+        def worker():
+            try:
+                aggregated = AdminScreen._aggregate_products_for_table_static(
+                    rows,
+                    dict(self._selected_lot_ids_by_catalog_key),
+                )
+            except Exception as exc:
+                print(f"Erro ao reagregar produtos: {exc}")
+                aggregated = []
+            Clock.schedule_once(
+                lambda dt, data=aggregated, tok=token:
+                self._apply_refreshed_aggregated_products(data, tok, reset_page),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_refreshed_aggregated_products(self, aggregated, token, reset_page):
+        if token != self._products_load_token:
+            return
+        self._aggregated_products_cache = list(aggregated or [])
+        self.filter_products(
+            self.search_input.text if self.search_input else self._pending_search,
+            reset_page=reset_page,
+        )
+
+    @staticmethod
+    def _aggregate_products_for_table_static(rows, selected_lot_ids_by_catalog_key=None):
+        """
+        Versão estática de _aggregate_products_for_table para uso em threads.
+        Recebe seleções de lote por cópia para não tocar estado da UI.
+        """
+        selected_lot_ids_by_catalog_key = dict(selected_lot_ids_by_catalog_key or {})
+
+        def _normalize_product_id(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _parse_group_date(value):
+            text = str(value or "").strip()
+            if not text:
+                return None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(text, fmt)
+                except ValueError:
+                    continue
+            try:
+                return datetime.fromisoformat(text)
+            except Exception:
+                return None
+
+        def _admin_catalog_key(product):
+            barcode = str(product[12] if len(product) > 12 and product[12] is not None else "").strip().lower()
+            if barcode:
+                return f"bc:{barcode}"
+            description = " ".join(str(product[1] if len(product) > 1 and product[1] is not None else "").split()).lower()
+            category = " ".join(str(product[11] if len(product) > 11 and product[11] is not None else "").split()).lower()
+            sale_price = round(_safe_float(product[4] if len(product) > 4 else 0.0), 4)
+            is_weight = 1 if (len(product) > 15 and bool(product[15])) else 0
+            units_per_package = (
+                int(_safe_float(product[23], 0))
+                if len(product) > 23 and product[23] not in (None, "")
+                else 0
+            )
+            allow_pack_sale = 1 if (len(product) > 24 and bool(product[24])) else 0
+            vat_rule = str(product[25] if len(product) > 25 and product[25] not in (None, "") else "STANDARD").strip().upper()
+            return (
+                f"desc:{description}|cat:{category}|w:{is_weight}|p:{sale_price:.4f}|"
+                f"u:{units_per_package}|a:{allow_pack_sale}|v:{vat_rule}"
+            )
+
+        def _lot_row_sort_key(product):
+            expiry_dt = _parse_group_date(product[13] if len(product) > 13 else "")
+            product_id = _normalize_product_id(product[0] if product else None) or 0
+            return (1 if expiry_dt is None else 0, expiry_dt or datetime.max, product_id)
+
+        def _representative_group_row(bucket_rows):
+            def priority(row):
+                status = str(row[16] if len(row) > 16 and row[16] is not None else "").strip().upper()
+                if "EXPIR" in status:
+                    status_rank = 0
+                elif "PERTO" in status:
+                    status_rank = 1
+                elif "ATIVO" in status:
+                    status_rank = 2
+                else:
+                    status_rank = 3
+                expiry_dt = _parse_group_date(row[13] if len(row) > 13 else "")
+                missing_expiry = 1 if expiry_dt is None else 0
+                row_id = _normalize_product_id(row[0] if row else None) or 0
+                return (status_rank, missing_expiry, expiry_dt or datetime.max, -row_id)
+            return min(list(bucket_rows or []), key=priority)
+
+        grouped = {}
+        ordered_keys = []
+        for row in list(rows or []):
+            if not row:
+                continue
+            catalog_key = _admin_catalog_key(row)
+            bucket = grouped.get(catalog_key)
+            if bucket is None:
+                bucket = {"rows": []}
+                grouped[catalog_key] = bucket
+                ordered_keys.append(catalog_key)
+            bucket["rows"].append(row)
+
+        aggregated = []
+        for catalog_key in ordered_keys:
+            bucket_rows = list(grouped[catalog_key]["rows"])
+            representative = _representative_group_row(bucket_rows)
+            ordered_bucket_rows = sorted(bucket_rows, key=_lot_row_sort_key)
+            source_ids = tuple(
+                pid for pid in (
+                    _normalize_product_id(row[0] if len(row) > 0 else None)
+                    for row in bucket_rows
+                )
+                if pid is not None
+            )
+            lot_count = len(source_ids) or 1
+
+            selected_lot_id = _normalize_product_id(selected_lot_ids_by_catalog_key.get(catalog_key))
+            selected_row = next(
+                (
+                    row for row in bucket_rows
+                    if _normalize_product_id(row[0] if len(row) > 0 else None) == selected_lot_id
+                ),
+                None,
+            )
+            selected_lot_position = None
+            if selected_lot_id is not None:
+                for idx, row in enumerate(ordered_bucket_rows, start=1):
+                    row_id = _normalize_product_id(row[0] if len(row) > 0 else None)
+                    if row_id == selected_lot_id:
+                        selected_lot_position = idx
+                        break
+            if selected_lot_id is not None and selected_row is None:
+                selected_lot_id = None
+                selected_lot_position = None
+
+            display_row = selected_row or representative
+            if selected_row is not None:
+                existing_stock = _safe_float(display_row[2])
+                sold_stock = _safe_float(display_row[3])
+                total_purchase_price = _safe_float(display_row[5])
+                unit_purchase_price = _safe_float(display_row[6])
+                sale_price = _safe_float(display_row[4])
+                profit_per_unit = _safe_float(display_row[7])
+                total_profit = _safe_float(display_row[8])
+                profit_percentage = _safe_float(display_row[9])
+                price_percentage = _safe_float(display_row[10])
+                expiry_value = display_row[13] if len(display_row) > 13 else ""
+                date_added = display_row[14] if len(display_row) > 14 else ""
+                barcode_value = display_row[12] if len(display_row) > 12 else ""
+                sku_value = display_row[22] if len(display_row) > 22 else ""
+            else:
+                existing_stock = sum(_safe_float(row[2]) for row in bucket_rows)
+                sold_stock = sum(_safe_float(row[3]) for row in bucket_rows)
+                total_purchase_price = sum(_safe_float(row[5]) for row in bucket_rows)
+                total_profit = sum(_safe_float(row[8]) for row in bucket_rows)
+                sold_cost_total = sum(_safe_float(row[6]) * _safe_float(row[3]) for row in bucket_rows)
+                if existing_stock > 1e-9:
+                    unit_purchase_price = total_purchase_price / existing_stock
+                elif sold_stock > 1e-9:
+                    unit_purchase_price = sold_cost_total / sold_stock
+                else:
+                    unit_purchase_price = _safe_float(representative[6])
+                sale_price = _safe_float(representative[4])
+                profit_per_unit = sale_price - unit_purchase_price
+                profit_percentage = ((total_profit * 100.0) / sold_cost_total) if sold_cost_total > 1e-9 else 0.0
+                price_percentage = ((sale_price - unit_purchase_price) / unit_purchase_price * 100.0) if unit_purchase_price > 1e-9 else 0.0
+
+                expiry_candidates = [
+                    row[13] for row in bucket_rows
+                    if len(row) > 13 and str(row[13] or "").strip()
+                ]
+                expiry_value = representative[13] if len(representative) > 13 else ""
+                if expiry_candidates:
+                    expiry_value = min(
+                        expiry_candidates,
+                        key=lambda v: _parse_group_date(v) or datetime.max,
+                    )
+
+                date_added_candidates = [
+                    row[14] for row in bucket_rows
+                    if len(row) > 14 and str(row[14] or "").strip()
+                ]
+                date_added = representative[14] if len(representative) > 14 else ""
+                if date_added_candidates:
+                    date_added = min(
+                        date_added_candidates,
+                        key=lambda v: _parse_group_date(v) or datetime.max,
+                    )
+
+                barcode_value = next(
+                    (row[12] for row in bucket_rows if len(row) > 12 and str(row[12] or "").strip()),
+                    representative[12] if len(representative) > 12 else "",
+                )
+                sku_value = next(
+                    (row[22] for row in bucket_rows if len(row) > 22 and str(row[22] or "").strip()),
+                    representative[22] if len(representative) > 22 else "",
+                )
+
+            aggregated.append((
+                display_row[0], display_row[1],
+                existing_stock, sold_stock, sale_price,
+                total_purchase_price, unit_purchase_price,
+                profit_per_unit, total_profit,
+                profit_percentage, price_percentage,
+                display_row[11], barcode_value,
+                expiry_value, date_added,
+                display_row[15], display_row[16], display_row[17],
+                display_row[18], display_row[19], display_row[20],
+                display_row[21], sku_value,
+                display_row[23], display_row[24], display_row[25],
+                catalog_key, lot_count, source_ids,
+                selected_lot_id, selected_lot_position,
+            ))
+        return aggregated
+
+    @staticmethod
+    def _rebuild_display_ids_static(aggregated_rows):
+        """Versão estática de _rebuild_display_ids para uso em threads."""
+        ordered_groups = []
+        seen = set()
+
+        def _get_source_ids(row):
+            if not row:
+                return ()
+            if len(row) > 28 and row[28]:
+                result = []
+                for v in row[28]:
+                    try:
+                        result.append(int(v))
+                    except (TypeError, ValueError):
+                        pass
+                return tuple(result) if result else ()
+            try:
+                pid = int(row[0])
+                return (pid,)
+            except (TypeError, ValueError):
+                return ()
+
+        for row in list(aggregated_rows or []):
+            source_ids = _get_source_ids(row)
+            if not source_ids:
+                continue
+            anchor_id = source_ids[0]
+            if anchor_id in seen:
+                continue
+            seen.add(anchor_id)
+            ordered_groups.append(source_ids)
+
+        ordered_groups.sort(key=lambda ids: min(ids) if ids else 0)
+        display_ids = {}
+        for idx, product_ids in enumerate(ordered_groups, start=1):
+            for product_id in product_ids:
+                display_ids[product_id] = idx
+        return display_ids
+
+    def _apply_loaded_products(self, rows, aggregated, display_ids, expiry_alerts, token):
         if token != self._products_load_token:
             return
         self._products_loading = False
-        self._set_loading_overlay("products", False)
         self._last_products_load_at = time.perf_counter()
         self.products = list(rows or [])
         self._prune_selected_lot_ids(self.products)
-        self._rebuild_display_ids(self._aggregate_products_for_table(self.products))
-        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
+
+        # Resultados já calculados na thread de fundo
+        self._aggregated_products_cache = aggregated
+        self._display_ids_by_product_id = display_ids
+        self._expiry_alerts_by_id = expiry_alerts
+
         self.filter_products(self.search_input.text if self.search_input else self._pending_search)
         self._show_expiry_dashboard_summary()
+
         if self._pending_products_load:
             self._pending_products_load = False
             Clock.schedule_once(lambda dt: self.load_products(), 0.05)
@@ -1667,7 +2014,6 @@ class AdminScreen(Screen):
     # Responsive sizing
     # ------------------------------------------------------------------
     def _row_height(self):
-        """Compute a single row height that scales with the window."""
         base_height = max(dp(46), Window.height * 0.054)
         return min(base_height, dp(62))
 
@@ -1676,20 +2022,55 @@ class AdminScreen(Screen):
         return getattr(app, "theme_tokens", {}) if app else {}
 
     # ------------------------------------------------------------------
-    # Table rendering com linhas separadoras PRETAS
-    # ------------------------------------------------------------------
-    def update_product_table(self, products_to_display=None, reset_page=True):
-        # Monta a tabela em lotes para manter a tela responsiva.
-        """Atualizar a tabela de produtos com separadores visuais pretos."""
+    # Table rendering — CORRECAO 5
+    # ══════════════════════════════════════════════════════════════════════════
+    # Render em lotes reais: a tabela é limpa, o primeiro lote é inserido
+    # imediatamente e os restantes chegam a cada ~16 ms via Clock.schedule_interval.
+    # Isto elimina o congelamento de "162 widgets num único frame".
+    # ══════════════════════════════════════════════════════════════════════════
+    def update_product_table(self, products_to_display=None, reset_page=True, already_aggregated=False):
         if products_to_display is None:
-            products_to_display = self.products
-        self._current_display = self._aggregate_products_for_table(products_to_display or [])
-        self._rebuild_display_ids(self._current_display)
+            products_to_display = self._aggregated_products_cache or self.products
+            already_aggregated = bool(self._aggregated_products_cache)
+
+        if already_aggregated:
+            self._current_display = list(products_to_display or [])
+        else:
+            self._aggregate_display_rows_async(products_to_display or [], reset_page=reset_page)
+            return
+
         if reset_page:
             self._product_page_index = 0
         self._render_current_product_page()
 
+    def _aggregate_display_rows_async(self, rows, reset_page=True):
+        token = self._products_load_token
+        source_rows = list(rows or [])
+
+        def worker():
+            try:
+                aggregated = AdminScreen._aggregate_products_for_table_static(
+                    source_rows,
+                    dict(self._selected_lot_ids_by_catalog_key),
+                )
+            except Exception as exc:
+                print(f"Erro ao preparar tabela de produtos: {exc}")
+                aggregated = []
+            Clock.schedule_once(
+                lambda dt, data=aggregated, tok=token:
+                self._apply_async_display_rows(data, tok, reset_page),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_async_display_rows(self, aggregated, token, reset_page):
+        if token != self._products_load_token:
+            return
+        self.update_product_table(aggregated, reset_page=reset_page, already_aggregated=True)
+
     def _render_current_product_page(self):
+        # Cancelar lote anterior se ainda estava em curso
         if self._table_render_ev:
             Clock.unschedule(self._table_render_ev)
             self._table_render_ev = None
@@ -1710,10 +2091,13 @@ class AdminScreen(Screen):
         if not self.product_table:
             return
 
+        # Limpar tabela e preparar fila de lotes
+        self.product_table.disabled = True
         self.product_table.clear_widgets()
+        self._pending_table_rows = deque()
 
         if not page_rows:
-            self._pending_table_rows = deque()
+            self.product_table.disabled = False
             return
 
         row_h = self._row_height()
@@ -1732,14 +2116,46 @@ class AdminScreen(Screen):
             "warning_color": tokens.get("warning", [0.75, 0.45, 0.10, 1]),
             "danger_color": tokens.get("danger", [0.8, 0.2, 0.2, 1]),
         }
-        self._pending_table_rows = deque(
-            (start_index + idx, product) for idx, product in enumerate(page_rows)
-        )
-        self._table_render_ev = Clock.schedule_interval(
-            lambda dt, tok=token: self._render_table_batch(dt, tok),
-            0
-        )
-        return
+
+        # Enfileirar todos os itens da página
+        for idx, product in enumerate(page_rows):
+            self._pending_table_rows.append((start_index + idx, product))
+
+        # Renderizar primeiro lote imediatamente (sem atraso perceptível)
+        self._render_table_batch(0, token)
+        if self._pending_table_rows:
+            self._table_render_ev = Clock.schedule_interval(
+                lambda dt, tok=token: self._render_table_batch(dt, tok),
+                _TABLE_BATCH_INTERVAL,
+            )
+
+    def _render_table_batch(self, dt, token):
+        """Renderiza _TABLE_BATCH_SIZE linhas por chamada. Retorna True para continuar."""
+        if token != self._table_render_token:
+            # Token obsoleto — cancelar silenciosamente
+            self._table_render_ev = None
+            return False
+
+        if not self._pending_table_rows:
+            # Todos os itens foram renderizados
+            if self.product_table:
+                self.product_table.disabled = False
+            self._table_render_ev = None
+            return False
+
+        batch_count = 0
+        while self._pending_table_rows and batch_count < _TABLE_BATCH_SIZE:
+            idx, product = self._pending_table_rows.popleft()
+            self._append_product_row(product, idx, self._table_row_height, self._table_palette)
+            batch_count += 1
+
+        if not self._pending_table_rows:
+            # Último lote — reativar tabela
+            if self.product_table:
+                self.product_table.disabled = False
+            self._table_render_ev = None
+
+        return bool(self._pending_table_rows)
 
     def _sync_product_pagination_controls(self, total_rows, visible_rows):
         if not self.ids:
@@ -1783,53 +2199,32 @@ class AdminScreen(Screen):
         self._render_current_product_page()
         return True
 
-
-    def _render_table_batch(self, dt, token):
-        if token != self._table_render_token:
-            return False
-        if not self._pending_table_rows:
-            self._table_render_ev = None
-            return False
-
-        batch_size = 8
-        for _ in range(min(batch_size, len(self._pending_table_rows))):
-            idx, product = self._pending_table_rows.popleft()
-            self._append_product_row(product, idx, self._table_row_height, self._table_palette)
-
-        if not self._pending_table_rows:
-            self._table_render_ev = None
-            return False
-        return True
-
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORRECAO 6 — _make_product_cell
+    # Instruções de canvas criadas UMA única vez; callback só actualiza
+    # coordenadas — zero alocações por evento pos/size.
+    # ══════════════════════════════════════════════════════════════════════════
     def _make_product_cell(self, col_idx, row_h, bg_color, border_color, align='center'):
         cell = MDBoxLayout(
             size_hint_x=COL_HINTS[col_idx],
             size_hint_y=None,
             height=row_h,
             md_bg_color=bg_color,
-            padding=[dp(6), 0] if align == 'center' else [dp(10), 0]
+            padding=[dp(6), 0] if align == 'center' else [dp(10), 0],
         )
 
-        def draw_borders(instance, *_):
-            instance.canvas.after.clear()
-            with instance.canvas.after:
-                Color(*border_color)
-                Line(
-                    points=[
-                        instance.x + instance.width,
-                        instance.y,
-                        instance.x + instance.width,
-                        instance.y + instance.height,
-                    ],
-                    width=1
-                )
-                Line(
-                    points=[instance.x, instance.y, instance.x + instance.width, instance.y],
-                    width=1
-                )
+        with cell.canvas.after:
+            Color(*border_color)
+            _right_line  = Line(width=1)
+            _bottom_line = Line(width=1)
 
-        cell.bind(pos=draw_borders, size=draw_borders)
-        draw_borders(cell)
+        def _update_borders(instance, *_):
+            x, y, w, h = instance.x, instance.y, instance.width, instance.height
+            _right_line.points  = [x + w, y,     x + w, y + h]
+            _bottom_line.points = [x,     y,     x + w, y    ]
+
+        cell.bind(pos=_update_borders, size=_update_borders)
+        _update_borders(cell)
         return cell
 
     def _append_product_row(self, product, idx, row_h, palette):
@@ -1996,7 +2391,7 @@ class AdminScreen(Screen):
         self.product_table.add_widget(cell)
 
     # ------------------------------------------------------------------
-    # Action buttons com Material Design
+    # Action buttons
     # ------------------------------------------------------------------
     def _open_product_details(self, product):
         if product:
@@ -2227,18 +2622,27 @@ class AdminScreen(Screen):
         )
 
     # ------------------------------------------------------------------
-    # Snackbar for notifications
+    # Snackbar — CORRECAO 7: objecto reutilizável, sem memory leaks
     # ------------------------------------------------------------------
     def show_snackbar(self, message):
-        MDSnackbar(
+        # Dismiss o anterior se ainda estiver visível
+        if self._snackbar is not None:
+            try:
+                self._snackbar.dismiss()
+            except Exception:
+                pass
+
+        snackbar = MDSnackbar(
             MDLabel(
-                text=message,
+                text=str(message),
                 theme_text_color="Custom",
                 text_color=[1, 1, 1, 1],
             ),
             pos=(dp(10), dp(10)),
             size_hint_x=0.5,
-        ).open()
+        )
+        self._snackbar = snackbar
+        snackbar.open()
 
     def _get_alert_key(self, insights):
         low_stock = sorted([item[0] for item in insights.get("low_stock", [])])
@@ -2406,7 +2810,6 @@ class AdminScreen(Screen):
         self._intelligence.refresh()
 
     def update_ai_badge(self, *args, insights=None):
-        """Atualiza o badge do botão de insights com animação de abanar"""
         insights = insights or self._cached_admin_insights or {}
         if not insights:
             self.update_notification_badge(0)
@@ -3021,55 +3424,30 @@ class AdminScreen(Screen):
         Clock.schedule_once(lambda dt: reports_screen.select_date_range(), 0.12)
 
     def toggle_kg_products(self):
-        if "kg-filter" in self._async_actions:
-            return
         if not hasattr(self, 'filter_mode'):
             self.filter_mode = 0
 
         self.filter_mode = (self.filter_mode + 1) % 3
 
         if self.filter_mode == 1:
-            def task():
-                return self.db.get_products_by_weight() or []
-
-            def on_success(kg_products):
-                if kg_products:
-                    self.update_product_table(kg_products)
-                    self.show_snackbar("Mostrando apenas produtos vendidos por KG")
-                    return
-                self.filter_mode = 2
-                unit_products = [p for p in self.products if not (len(p) > 15 and p[15])]
-                if unit_products:
-                    self.update_product_table(unit_products)
-                    self.show_snackbar("Mostrando apenas produtos vendidos por unidade")
-                    return
-                self.filter_mode = 0
-                self.update_product_table(self.products)
-                self.show_snackbar("Mostrando todos os produtos")
-
-            self._run_async_action(
-                "kg-filter",
-                task,
-                on_success=on_success,
-                busy_message="A carregar produtos por KG...",
-                error_message="Erro ao carregar filtro por KG",
-            )
+            message = "Mostrando apenas produtos vendidos por KG"
         elif self.filter_mode == 2:
-            unit_products = [p for p in self.products if not (len(p) > 15 and p[15])]
-            if unit_products:
-                self.update_product_table(unit_products)
-                self.show_snackbar("Mostrando apenas produtos vendidos por unidade")
-            else:
-                self.filter_mode = 0
-                self.update_product_table(self.products)
-                self.show_snackbar("Mostrando todos os produtos")
+            message = "Mostrando apenas produtos vendidos por unidade"
         else:
-            self.update_product_table(self.products)
-            self.show_snackbar("Mostrando todos os produtos")
+            message = "Mostrando todos os produtos"
 
+        if not self._aggregated_products_cache and not self.products:
+            self.load_products()
+            self.show_snackbar("A carregar produtos para aplicar filtro...")
+            return
+
+        self.filter_products(
+            self.search_input.text if self.search_input else self._pending_search,
+            reset_page=True,
+        )
+        self.show_snackbar(message)
 
     def open_losses_screen(self, *args):
-        """Abrir tela de perdas"""
         if not self.manager:
             return
         screen = self._set_back_target("losses", "admin")
@@ -3085,7 +3463,6 @@ class AdminScreen(Screen):
         Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
 
     def open_restock_screen(self, *args):
-        """Abrir tela de reposição de stock"""
         if not self.manager:
             return
         screen = self._set_back_target("restock", "admin")
@@ -3101,7 +3478,6 @@ class AdminScreen(Screen):
         Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
 
     def show_loss_metrics(self, *args):
-        """Mostrar metricas de perdas no periodo padrao do historico."""
         def task():
             start_date, end_date = self._get_default_loss_metrics_period()
             metrics = self.db.calculate_loss_metrics(start_date, end_date)
@@ -3185,7 +3561,6 @@ class AdminScreen(Screen):
         )
 
     def show_detailed_loss_report(self, metrics=None, start_date=None, end_date=None, *args):
-        """Mostrar relatorio detalhado de perdas"""
         try:
             if start_date is None or end_date is None:
                 start_date, end_date = self._get_default_loss_metrics_period(end_date)
@@ -3235,7 +3610,6 @@ class AdminScreen(Screen):
             print(f"Erro ao mostrar relatorio: {e}")
 
     def show_fraud_alerts(self, *args):
-        """Mostrar alertas de fraude"""
         def task():
             return self.db.detect_fraud_patterns(days_lookback=30)
 
@@ -3285,12 +3659,8 @@ class AdminScreen(Screen):
         )
 
     def show_all_fraud_alerts(self, alerts):
-        """Mostrar todos os alertas em detalhe"""
         try:
-            from kivymd.uix.boxlayout import MDBoxLayout
-            from kivymd.uix.label import MDLabel
             from kivy.uix.scrollview import ScrollView
-            from kivy.metrics import dp
 
             content = MDBoxLayout(
                 orientation='vertical',
@@ -3343,7 +3713,6 @@ class AdminScreen(Screen):
             print(f"Erro: {e}")
 
     def show_pending_approvals(self, *args):
-        """Mostrar aprovacoes pendentes"""
         def task():
             return self.db.get_pending_approvals()
 
@@ -3359,8 +3728,7 @@ class AdminScreen(Screen):
 
                 message += f"""ID #{mov_id} - {mov_type}
     Produto: {description}
-    Quantidade: {qty} {unit}
-    Custo: {cost:.2f} MZN
+    Quantidade: {qty} {unit} | Custo: {cost:.2f} MZN
     Por: {user}
     Motivo: {reason[:50]}...
     {'Com evidencia' if evidence else 'Sem evidencia'}
@@ -3395,14 +3763,8 @@ class AdminScreen(Screen):
         )
 
     def show_approval_details(self, pending_list):
-        """Mostrar detalhes das aprovacoes com opcao de aprovar/rejeitar"""
         try:
-            from kivymd.uix.boxlayout import MDBoxLayout
-            from kivymd.uix.label import MDLabel
-            from kivymd.uix.button import MDRaisedButton
             from kivy.uix.scrollview import ScrollView
-            from kivy.metrics import dp
-            from kivy.app import App
 
             app = App.get_running_app()
             current_user = getattr(app, "current_user", None)
@@ -3490,7 +3852,6 @@ class AdminScreen(Screen):
             print(f"Erro: {e}")
 
     def approve_loss(self, movement_id, approved_by):
-        """Aprovar perda"""
         try:
             success = self.db.approve_stock_movement(movement_id, approved_by)
 
@@ -3505,40 +3866,47 @@ class AdminScreen(Screen):
             self.show_snackbar("Erro ao aprovar")
 
     def reject_loss(self, movement_id):
-        """Rejeitar perda (marcar como rejeitada)"""
         try:
-            # Implementar lógica de rejeição
-            # Por enquanto, apenas mostrar mensagem
             self.show_snackbar(f"Perda #{movement_id} marcada para rejeição")
-            # TODO: Adicionar status REJECTED ao banco
         except Exception as e:
             print(f"Erro ao rejeitar: {e}")
 
-
-    # ==================== 3. MODIFICAR O METODO on_enter ====================
-
-    # Modificar o método on_enter existente para adicionar verificação de alertas:
-
+    # ------------------------------------------------------------------
+    # Lifecycle events
+    # ══════════════════════════════════════════════════════════════════════════
+    # CORRECAO 8 — on_enter
+    # As três operações de entrada são escalonadas com delays crescentes para
+    # evitar contenção de DB e manter o primeiro frame responsivo.
+    # ══════════════════════════════════════════════════════════════════════════
     def on_enter(self):
-        """Ao entrar na tela - VERSAO MODIFICADA"""
         self._bind_keyboard_shortcuts()
         stale = (time.perf_counter() - self._last_products_load_at) >= self.PRODUCTS_CACHE_SECONDS
         if (not self.products) or stale:
-            self.load_products()
-        Clock.schedule_once(self._init_badge, 0.1)
-        Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.15)
-        
-        # NOVO: Verificar alertas de fraude
-        Clock.schedule_once(self.check_fraud_alerts_on_enter, 0.3)
+            # Pequeno delay para deixar o frame de transição renderizar primeiro
+            Clock.schedule_once(lambda dt: self.load_products(), 0.15)
+        Clock.schedule_once(self._init_badge, 0.3)
+        # IA e fraud check com delays maiores para não competir com load de produtos
+        Clock.schedule_once(lambda dt: self._start_ai_polling(), 4.0)
+        Clock.schedule_once(self.check_fraud_alerts_on_enter, 8.0)
 
     def on_leave(self):
         self._unbind_keyboard_shortcuts()
         self._stop_ai_polling()
         self._clear_loading_overlay()
         self._dismiss_lot_menu()
+        if self._table_render_ev:
+            Clock.unschedule(self._table_render_ev)
+            self._table_render_ev = None
+        self._pending_table_rows = deque()
         self._alerts_refresh_token += 1
         self._ai_popup_token += 1
-        for attr_name in ("_lot_selector_dialog", "_shopping_list_dialog", "_loss_metrics_dialog", "_loss_details_dialog", "_shortcut_help_dialog"):
+        for attr_name in (
+            "_lot_selector_dialog",
+            "_shopping_list_dialog",
+            "_loss_metrics_dialog",
+            "_loss_details_dialog",
+            "_shortcut_help_dialog",
+        ):
             dialog = getattr(self, attr_name, None)
             if dialog is not None:
                 try:
@@ -3548,9 +3916,7 @@ class AdminScreen(Screen):
                 setattr(self, attr_name, None)
         self._shopping_list_payload = None
 
-
     def check_fraud_alerts_on_enter(self, dt):
-        """Verificar alertas de fraude ao entrar"""
         now = time.time()
         if now < self._fraud_check_until:
             return
@@ -3596,10 +3962,6 @@ class AdminScreen(Screen):
         self._last_fraud_log_count = 0
 
     def show_fraud_notification_popup(self, alert_count):
-        """Popup de notificacao de alertas criticos"""
-        from kivymd.uix.dialog import MDDialog
-        from kivymd.uix.button import MDFlatButton, MDRaisedButton
-
         dialog = MDDialog(
             title="ALERTAS CRITICOS",
             text=f"Detectados {alert_count} alertas de seguranca de alta prioridade!\n\nRecomenda-se revisao imediata.",
@@ -3617,11 +3979,7 @@ class AdminScreen(Screen):
         )
         dialog.open()
 
+
 if __name__ == "__main__":
     from admin_app import AdminApp
-
     AdminApp().run()
-
-
-   
-

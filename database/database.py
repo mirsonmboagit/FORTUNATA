@@ -695,7 +695,8 @@ class Database(DatabaseAutomationMixin):
                     sku TEXT,
                     units_per_package INTEGER,
                     allow_pack_sale INTEGER DEFAULT 0,
-                    vat_rule_code TEXT DEFAULT 'STANDARD'
+                    vat_rule_code TEXT DEFAULT 'STANDARD',
+                    owner_username TEXT
                 )''')
                 
                 # Copiar dados para tabela temporÃƒÆ’Ã‚Â¡ria
@@ -707,7 +708,7 @@ class Database(DatabaseAutomationMixin):
                        date_added, is_sold_by_weight,
                        package_quantity,
                        status, status_source, status_reason, status_updated_at, status_updated_by,
-                       sku, units_per_package, allow_pack_sale, vat_rule_code
+                       sku, units_per_package, allow_pack_sale, vat_rule_code, owner_username
                 FROM products
                 ''')
                 
@@ -780,6 +781,7 @@ class Database(DatabaseAutomationMixin):
                 )
                 '''
             )
+            ensure_column("sales_returns", "owner_username", "TEXT")
 
             # Atualizar status default para registros antigos
             self.cursor.execute(
@@ -959,6 +961,10 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_movements_type_date "
                 "ON stock_movements (movement_type, created_at)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_movements_owner_applied_date "
+                "ON stock_movements (owner_username, applied, created_at DESC)"
             )
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sales_returns_sale "
@@ -2011,6 +2017,46 @@ class Database(DatabaseAutomationMixin):
             return True
         except sqlite3.Error as e:
             print(f"Erro ao aprovar movimento: {e}")
+            self.conn.rollback()
+            return False
+
+    def delete_stock_movement(self, movement_id, deleted_by=None):
+        """Remove um movimento do historico visivel sem recalcular o stock atual."""
+        try:
+            movement_id = int(movement_id)
+        except (TypeError, ValueError):
+            return False
+
+        try:
+            where = ["id = ?", "applied = 1"]
+            params = [movement_id]
+            owner = self._active_owner()
+            if owner:
+                where.append("COALESCE(owner_username, '') = ?")
+                params.append(owner)
+
+            self.cursor.execute(
+                f"""
+                UPDATE stock_movements
+                SET applied = 0,
+                    approval_status = 'DELETED',
+                    note = CASE
+                        WHEN COALESCE(note, '') = '' THEN ?
+                        ELSE note || ' | ' || ?
+                    END
+                WHERE {" AND ".join(where)}
+                """,
+                (
+                    f"Movimento eliminado por {deleted_by or 'admin'} em {self._now_str()}",
+                    f"Movimento eliminado por {deleted_by or 'admin'} em {self._now_str()}",
+                    *params,
+                ),
+            )
+            changed = self.cursor.rowcount > 0
+            self.conn.commit()
+            return changed
+        except sqlite3.Error as e:
+            print(f"Erro ao eliminar movimento de stock: {e}")
             self.conn.rollback()
             return False
 
@@ -3705,7 +3751,8 @@ class Database(DatabaseAutomationMixin):
                 END AS available_qty,
                 s.created_by,
                 s.created_role,
-                COALESCE(s.is_promotional, 0) AS is_promotional
+                COALESCE(s.is_promotional, 0) AS is_promotional,
+                s.product_id
             FROM sales s
             LEFT JOIN products p ON s.product_id = p.id
             LEFT JOIN products_archive pa ON s.product_id = pa.id
@@ -3860,6 +3907,10 @@ class Database(DatabaseAutomationMixin):
             print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao obter vendas: {e}")
             return []
     
+    def get_recent_sales(self, limit=50):
+        """Obter as vendas mais recentes para consulta rapida."""
+        return self.get_all_sales(limit=limit, offset=0)
+
     def get_sales_by_date(self, date_str, limit=None, offset=0):
         """Buscar vendas por data especÃƒÆ’Ã‚Â­fica"""
         try:
@@ -4337,7 +4388,48 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao obter categorias: {e}")
             return []
 
-    def get_report_data(self, start_date, end_date, product_id=None, category=None):
+    def get_sales_users_for_filter(self):
+        """Listar utilizadores que registaram vendas para filtros de relatorio."""
+        try:
+            scope_sql, scope_params = self._owner_filter("s")
+            self.cursor.execute(f"""
+                SELECT DISTINCT COALESCE(NULLIF(TRIM(s.created_by), ''), 'Sistema') AS username
+                FROM sales s
+                WHERE 1=1
+                {scope_sql}
+                ORDER BY username COLLATE NOCASE
+            """, scope_params)
+            names = {
+                str(row[0] or "").strip()
+                for row in self.cursor.fetchall()
+                if str(row[0] or "").strip()
+            }
+            owner = self._active_owner()
+            if owner:
+                self.cursor.execute(
+                    """
+                    SELECT username FROM users
+                    WHERE role = 'manager'
+                      AND COALESCE(NULLIF(TRIM(data_owner), ''), username) = ?
+                    ORDER BY username COLLATE NOCASE
+                    """,
+                    (owner,),
+                )
+            else:
+                self.cursor.execute(
+                    "SELECT username FROM users WHERE role = 'manager' ORDER BY username COLLATE NOCASE"
+                )
+            names.update(
+                str(row[0] or "").strip()
+                for row in self.cursor.fetchall()
+                if str(row[0] or "").strip()
+            )
+            return sorted(names, key=lambda value: value.lower())
+        except sqlite3.Error as e:
+            print(f"Erro ao obter vendedores para filtro: {e}")
+            return []
+
+    def get_report_data(self, start_date, end_date, product_id=None, category=None, seller=None):
         """Obter dados agregados para relatorios"""
         query = """
         SELECT 
@@ -4361,6 +4453,13 @@ class Database(DatabaseAutomationMixin):
             start_date,
             end_date,
         ]
+        seller = str(seller or "").strip()
+        if seller:
+            query = query.replace(
+                "AND s.sale_date BETWEEN ? AND ?",
+                "AND s.sale_date BETWEEN ? AND ?\n           AND COALESCE(NULLIF(TRIM(s.created_by), ''), 'Sistema') = ?",
+            )
+            params.append(seller)
         scope_sql, scope_params = self._owner_filter("p")
         query += scope_sql
         params.extend(scope_params)
@@ -4378,6 +4477,8 @@ class Database(DatabaseAutomationMixin):
             p.id, p.description, p.existing_stock, p.sale_price,
             p.total_purchase_price, p.unit_purchase_price, p.category, p.expiry_date
         """
+        if seller:
+            query += "\nHAVING COALESCE(SUM(s.quantity), 0) > 0"
 
         try:
             self.cursor.execute(query, params)
@@ -4644,6 +4745,215 @@ class Database(DatabaseAutomationMixin):
             },
             "daily_series": daily_series,
             "terminal_series": terminal_series,
+        }
+
+    def get_cash_user_report_data(self, start_date, end_date, seller=None):
+        """Obter resumo de abertura/fechamento operacional por usuario e caixa."""
+        start_dt = _parse_datetime_value(start_date)
+        end_dt = _parse_datetime_value(end_date, end_of_day=True)
+
+        def _empty_payload():
+            return {
+                "summary": {
+                    "start_date": str(start_date or ""),
+                    "end_date": str(end_date or ""),
+                    "total_users": 0,
+                    "total_terminals": 0,
+                    "total_days": 0,
+                    "total_sales": 0,
+                    "total_revenue": 0.0,
+                    "total_quantity": 0.0,
+                    "avg_ticket": 0.0,
+                    "first_opening_at": None,
+                    "last_closing_at": None,
+                    "leader_user": None,
+                },
+                "user_series": [],
+                "session_rows": [],
+            }
+
+        if not start_dt or not end_dt:
+            return _empty_payload()
+
+        owner_sql, owner_params = self._owner_filter("s")
+        params = [
+            start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+        seller = str(seller or "").strip()
+        seller_sql = ""
+        if seller:
+            seller_sql = "AND COALESCE(NULLIF(TRIM(s.created_by), ''), 'Sistema') = ?"
+            params.append(seller)
+        params.extend(owner_params)
+
+        query = f"""
+        SELECT
+            DATE(s.sale_date) AS sale_day,
+            COALESCE(NULLIF(s.created_by, ''), 'Sistema') AS username,
+            COALESCE(NULLIF(s.created_role, ''), 'manager') AS role,
+            COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL') AS terminal_id,
+            MIN(s.sale_date) AS opening_at,
+            MAX(s.sale_date) AS closing_at,
+            COUNT(*) AS sales_count,
+            COALESCE(SUM(s.quantity), 0) AS quantity,
+            COALESCE(SUM(s.total_price), 0) AS revenue,
+            MIN(s.id) AS first_sale_id,
+            MAX(s.id) AS last_sale_id
+        FROM sales s
+        WHERE s.sale_date BETWEEN ? AND ?
+        {seller_sql}
+        {owner_sql}
+        GROUP BY
+            DATE(s.sale_date),
+            COALESCE(NULLIF(s.created_by, ''), 'Sistema'),
+            COALESCE(NULLIF(s.created_role, ''), 'manager'),
+            COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL')
+        ORDER BY sale_day ASC, username ASC, terminal_id ASC
+        """
+
+        try:
+            self.cursor.execute(query, params)
+            rows = self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Erro ao obter relatorio de caixa por usuario: {e}")
+            return _empty_payload()
+
+        session_rows = []
+        user_map = {}
+        terminals = set()
+        days = set()
+        total_sales = 0
+        total_revenue = 0.0
+        total_quantity = 0.0
+        first_opening_at = None
+        last_closing_at = None
+
+        for row in rows:
+            sale_day = str(row[0] or "")
+            username = str(row[1] or "Sistema")
+            role = str(row[2] or "manager")
+            terminal_id = str(row[3] or "CAIXA-PRINCIPAL")
+            opening_at = row[4]
+            closing_at = row[5]
+            sales_count = int(row[6] or 0)
+            quantity = _safe_float(row[7], 0.0)
+            revenue = _safe_float(row[8], 0.0)
+            first_sale_id = row[9]
+            last_sale_id = row[10]
+
+            terminals.add(terminal_id)
+            if sale_day:
+                days.add(sale_day)
+            total_sales += sales_count
+            total_revenue += revenue
+            total_quantity += quantity
+            if opening_at and (not first_opening_at or str(opening_at) < str(first_opening_at)):
+                first_opening_at = opening_at
+            if closing_at and (not last_closing_at or str(closing_at) > str(last_closing_at)):
+                last_closing_at = closing_at
+
+            session_rows.append(
+                {
+                    "date": sale_day,
+                    "username": username,
+                    "role": role,
+                    "terminal_id": terminal_id,
+                    "opening_at": opening_at,
+                    "closing_at": closing_at,
+                    "sales_count": sales_count,
+                    "quantity": round(quantity, 3),
+                    "revenue": round(revenue, 2),
+                    "avg_ticket": round(revenue / sales_count, 2) if sales_count > 0 else 0.0,
+                    "first_sale_id": first_sale_id,
+                    "last_sale_id": last_sale_id,
+                }
+            )
+
+            user_entry = user_map.setdefault(
+                username,
+                {
+                    "username": username,
+                    "role": role,
+                    "sales_count": 0,
+                    "revenue": 0.0,
+                    "quantity": 0.0,
+                    "terminals": set(),
+                    "active_days": set(),
+                    "first_opening_at": None,
+                    "last_closing_at": None,
+                },
+            )
+            user_entry["sales_count"] += sales_count
+            user_entry["revenue"] += revenue
+            user_entry["quantity"] += quantity
+            user_entry["terminals"].add(terminal_id)
+            if sale_day:
+                user_entry["active_days"].add(sale_day)
+            if opening_at and (
+                not user_entry["first_opening_at"]
+                or str(opening_at) < str(user_entry["first_opening_at"])
+            ):
+                user_entry["first_opening_at"] = opening_at
+            if closing_at and (
+                not user_entry["last_closing_at"]
+                or str(closing_at) > str(user_entry["last_closing_at"])
+            ):
+                user_entry["last_closing_at"] = closing_at
+
+        user_series = []
+        for user_entry in user_map.values():
+            sales_count = int(user_entry["sales_count"] or 0)
+            revenue = _safe_float(user_entry["revenue"], 0.0)
+            user_series.append(
+                {
+                    "username": user_entry["username"],
+                    "role": user_entry["role"],
+                    "sales_count": sales_count,
+                    "revenue": round(revenue, 2),
+                    "quantity": round(_safe_float(user_entry["quantity"]), 3),
+                    "avg_ticket": round(revenue / sales_count, 2) if sales_count > 0 else 0.0,
+                    "active_days": len(user_entry["active_days"]),
+                    "active_terminals": len(user_entry["terminals"]),
+                    "first_opening_at": user_entry["first_opening_at"],
+                    "last_closing_at": user_entry["last_closing_at"],
+                }
+            )
+
+        user_series.sort(
+            key=lambda item: (
+                -_safe_float(item.get("revenue")),
+                -int(item.get("sales_count") or 0),
+                str(item.get("username") or ""),
+            )
+        )
+
+        leader_user = None
+        if user_series:
+            leader = user_series[0]
+            leader_user = {
+                "username": leader.get("username"),
+                "sales_count": int(leader.get("sales_count") or 0),
+                "revenue": round(_safe_float(leader.get("revenue")), 2),
+            }
+
+        return {
+            "summary": {
+                "start_date": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_date": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "total_users": len(user_series),
+                "total_terminals": len(terminals),
+                "total_days": len(days),
+                "total_sales": total_sales,
+                "total_revenue": round(total_revenue, 2),
+                "total_quantity": round(total_quantity, 3),
+                "avg_ticket": round(total_revenue / total_sales, 2) if total_sales > 0 else 0.0,
+                "first_opening_at": first_opening_at,
+                "last_closing_at": last_closing_at,
+                "leader_user": leader_user,
+            },
+            "user_series": user_series,
+            "session_rows": session_rows,
         }
 
     def get_admin_home_snapshot(self, lookback_days=7):

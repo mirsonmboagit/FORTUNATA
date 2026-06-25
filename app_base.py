@@ -33,6 +33,7 @@ from kivy.clock import Clock
 from utils.theme import get_theme_tokens
 from utils.i18n import language_label, language_options, language_short, normalize_language, translate
 from utils.i18n_runtime import install_i18n_hooks, localize_widget_tree
+from utils.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
 
 
 if sys.platform.startswith('win'):
@@ -40,7 +41,7 @@ if sys.platform.startswith('win'):
         import ctypes
         # Define o identificador da app no Windows.
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            'MerceariaApp.SistemaEstoque.1.0'
+            'SIGEMPE.SistemaGestaoComercial.1.0'
         )
     except Exception:
         pass
@@ -150,6 +151,7 @@ class BaseApp(MDApp):
     # Base comum usada pelas apps de admin e manager.
     theme_tokens = DictProperty({})
     language = StringProperty("pt")
+    system_name = StringProperty(DEFAULT_SYSTEM_NAME)
     theme_settings_key = "theme_style"
 
     def __init__(self, **kwargs):
@@ -167,6 +169,7 @@ class BaseApp(MDApp):
         self.auto_banners_enabled = True
         self.theme_style = "Light"
         self.language = "pt"
+        self.system_name = DEFAULT_SYSTEM_NAME
         self._automation_ev = None
         self._automation_running = False
         self._optional_warmup_ev = None
@@ -183,9 +186,9 @@ class BaseApp(MDApp):
         # evitar que dialogs e componentes padrao aparecam em laranja quando
         # o resto da interface usa azul/verde como linguagem principal.
         self.theme_cls.primary_palette = "Blue"
-        self.theme_cls.primary_hue = "700"
+        self.theme_cls.primary_hue = "800"
         self.theme_cls.accent_palette = "BlueGray"
-        self.theme_cls.accent_hue = "500"
+        self.theme_cls.accent_hue = "600"
 
     def _load_app_settings(self):
         # Carrega preferencias salvas e usa valores seguros se houver erro.
@@ -195,6 +198,7 @@ class BaseApp(MDApp):
             self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
             self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
             self.language = normalize_language(data.get("language", self.language))
+            self.system_name = normalize_system_name(data.get("system_name", self.system_name))
             theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
             theme_style = data.get(theme_key, data.get("theme_style", self.theme_style))
             if theme_style in ("Light", "Dark"):
@@ -205,6 +209,7 @@ class BaseApp(MDApp):
             self.auto_banners_enabled = True
             self.theme_style = "Light"
             self.language = "pt"
+            self.system_name = get_system_name()
 
     def apply_theme(self, style, persist=True):
         # Aplica o tema visual e atualiza os tokens usados nas telas.
@@ -212,9 +217,9 @@ class BaseApp(MDApp):
         self.theme_style = style
         self.theme_cls.theme_style = style
         self.theme_cls.primary_palette = "Blue"
-        self.theme_cls.primary_hue = "400" if style == "Dark" else "700"
+        self.theme_cls.primary_hue = "700" if style == "Dark" else "800"
         self.theme_cls.accent_palette = "BlueGray"
-        self.theme_cls.accent_hue = "400" if style == "Dark" else "500"
+        self.theme_cls.accent_hue = "500" if style == "Dark" else "600"
         self.theme_tokens = get_theme_tokens(style)
         if persist:
             self.save_app_settings()
@@ -228,6 +233,7 @@ class BaseApp(MDApp):
                     "smart_monitor_enabled": bool(self.smart_monitor_enabled),
                     "auto_banners_enabled": bool(self.auto_banners_enabled),
                     "language": normalize_language(getattr(self, "language", "pt")),
+                    "system_name": normalize_system_name(getattr(self, "system_name", DEFAULT_SYSTEM_NAME)),
                     theme_key: self.theme_style,
                 }
             )

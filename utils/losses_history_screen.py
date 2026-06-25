@@ -41,7 +41,6 @@ class LossesHistoryScreen(MDScreen):
     compact_mode = BooleanProperty(False)
 
     def __init__(self, db=None, **kwargs):
-        super().__init__(**kwargs)
         self.db = db or get_db()
         self.loss_report = None
         self.pdf_viewer = None
@@ -57,6 +56,7 @@ class LossesHistoryScreen(MDScreen):
         self._last_loaded_at = 0.0
         self._exporting_pdf = False
         self.back_target = "losses"
+        super().__init__(**kwargs)
 
     def _ensure_loss_report(self):
         if self.loss_report is None:

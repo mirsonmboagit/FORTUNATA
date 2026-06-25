@@ -1,8 +1,9 @@
 {
-  "ai_enabled": true,
+  "system_name": "MIRSON O PROBLEMA",
+  "ai_enabled": false,
   "auto_banners_enabled": false,
-  "smart_monitor_enabled": true,
-  "theme_style": "Dark",
+  "smart_monitor_enabled": false,
+  "theme_style": "Light",
   "manager_theme_style": "Dark",
   "language": "pt",
   "physical_scanner_enabled": true,

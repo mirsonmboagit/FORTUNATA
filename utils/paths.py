@@ -37,8 +37,8 @@ LEGACY_ENV_FILE = ROOT_DIR / ".env"
 LEGACY_REPORTS_DIR = ROOT_DIR / "Relatórios"
 LEGACY_RECEIPTS_DIR = ROOT_DIR / "Recibos"
 
-API_STDOUT_LOG = LOGS_DIR / "lojaapi-stdout.log"
-API_STDERR_LOG = LOGS_DIR / "lojaapi-stderr.log"
+API_STDOUT_LOG = LOGS_DIR / "sigempeapi-stdout.log"
+API_STDERR_LOG = LOGS_DIR / "sigempeapi-stderr.log"
 LOSSES_LOG_FILE = LOGS_DIR / "losses.log"
 
 RUNTIME_DIRS = (

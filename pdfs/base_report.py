@@ -134,6 +134,7 @@ class BasePDFReport:
             ],
             ['Produto:', filters.get('product', 'Todos os Produtos')],
             ['Categoria:', filters.get('category', 'Todas as Categorias')],
+            ['Vendedor/Gerente:', filters.get('seller', 'Todos os Vendedores')],
             ['Gerado em:', datetime.now().strftime('%d/%m/%Y %H:%M:%S')],
         ]
 

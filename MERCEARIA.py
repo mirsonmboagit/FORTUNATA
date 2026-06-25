@@ -27,6 +27,7 @@ from kivy.config import Config
 from utils.theme import get_theme_tokens
 from utils.i18n import language_label, language_options, language_short, normalize_language, translate
 from utils.i18n_runtime import install_i18n_hooks, localize_widget_tree
+from utils.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
 
 
 if sys.platform.startswith('win'):
@@ -34,7 +35,7 @@ if sys.platform.startswith('win'):
         import ctypes
         # Define o identificador da app no Windows.
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            'MerceariaApp.SistemaEstoque.1.0'
+            'SIGEMPE.SistemaGestaoComercial.1.0'
         )
     except Exception:
         pass
@@ -180,6 +181,7 @@ class MainApp(MDApp):
     # App principal com selecao de perfil, admin e gerente.
     theme_tokens = DictProperty({})
     language = StringProperty("pt")
+    system_name = StringProperty(DEFAULT_SYSTEM_NAME)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -200,6 +202,7 @@ class MainApp(MDApp):
         self.auto_banners_enabled = True
         self.theme_style = "Light"
         self.language = "pt"
+        self.system_name = DEFAULT_SYSTEM_NAME
         self._load_app_settings()
         self.apply_theme(self.theme_style, persist=False)
         install_i18n_hooks()
@@ -240,6 +243,7 @@ class MainApp(MDApp):
                 self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
                 self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
                 self.language = normalize_language(data.get("language", self.language))
+                self.system_name = normalize_system_name(data.get("system_name", self.system_name))
                 theme_style = data.get("theme_style", self.theme_style)
                 if theme_style in ("Light", "Dark"):
                     self.theme_style = theme_style
@@ -249,6 +253,7 @@ class MainApp(MDApp):
             self.auto_banners_enabled = True
             self.theme_style = "Light"
             self.language = "pt"
+            self.system_name = get_system_name()
 
     def apply_theme(self, style, persist=True):
         # Aplica o tema visual em todas as telas.
@@ -266,6 +271,7 @@ class MainApp(MDApp):
                 "smart_monitor_enabled": bool(self.smart_monitor_enabled),
                 "auto_banners_enabled": bool(self.auto_banners_enabled),
                 "language": normalize_language(getattr(self, "language", "pt")),
+                "system_name": normalize_system_name(getattr(self, "system_name", DEFAULT_SYSTEM_NAME)),
                 "theme_style": self.theme_style,
             }
             with open(self._app_settings_path, "w", encoding="utf-8") as f:
@@ -299,7 +305,7 @@ class MainApp(MDApp):
 
     def build(self):
         # Monta o ScreenManager com a selecao inicial de perfil.
-        self.title = 'MERCEARIA'
+        self.title = self.system_name
         self.icon = 'icon/admin.ico'
 
         sm = ScreenManager()
@@ -435,7 +441,7 @@ class MainApp(MDApp):
         return RestockHistoryScreen(db=self.db, name='restock_history')
 
     def on_start(self):
-        Window.set_title('MERCEARIA')
+        Window.set_title(self.system_name)
 
         if os.path.exists('icon/admin.ico'):
             Window.set_icon('icon/admin.ico')
@@ -504,13 +510,13 @@ Brown, Gray, BlueGray
 """
 As fontes foram registradas no início do arquivo:
 
-- LogoFont (fonts/h2.ttf): Use para o texto "MERCEARIA" e outros logos
+- LogoFont (fonts/h2.ttf): Use para o texto "SIGE MPE" e outros logos
 - MainFont (fonts/yahoo.ttf): Use para todo o resto do texto
 - JoeFont (fonts/joe.ttf): Fonte customizada Joe
 
 Para usar nos arquivos .kv:
     MDLabel:
-        text: "MERCEARIA"
+        text: "SIGE MPE"
         font_name: "LogoFont"
     
     MDLabel:
@@ -530,7 +536,7 @@ Roboto (fonte padrão) automaticamente como fallback.
 
 Estrutura esperada:
     seu_projeto/
-    ├── MERCEARIA.py
+    ├── SIGE MPE.py
     └── fonts/
         ├── h2.ttf
         ├── yahoo.ttf

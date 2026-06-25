@@ -1,64 +1,50 @@
 # Instalacao da App Admin
 
-Este pacote instala a app `MerceariaAdmin.exe` e deixa a ligacao a API pronta para computadores cliente.
+Este pacote instala a app `SIGEMPEAdmin.exe` e inclui um assistente visual para ligar Admin e Manager a mesma API e a mesma base de dados.
 
-## 1. Computador servidor
+## 1. Fluxo recomendado por cliques
 
 Use como servidor o computador que tem a base de dados principal.
 
-1. Descubra o IP do servidor na rede local:
+No servidor principal:
 
-   ```powershell
-   ipconfig
-   ```
+1. Abra a pasta `SIGEMPEAdmin`.
+2. Dê duplo clique em `Configurar Ligacao.cmd`.
+3. Clique em `Preparar servidor`.
+4. Aceite a permissao do Windows quando aparecer. O assistente configura a API, libera a porta no firewall e prepara o arranque automatico.
+5. Clique em `Guardar ficheiro para clientes`. O ficheiro `SIGEMPELigacao.json` sera criado no Ambiente de Trabalho.
 
-2. Configure a API para aceitar ligacoes da rede e gerar uma chave forte:
+Nos computadores cliente:
 
-   ```powershell
-   .\scripts\configure_api.ps1 -Role Server -ServerHost 0.0.0.0 -Port 8080 -GenerateApiKey
-   ```
+1. Copie a pasta `SIGEMPEAdmin` para o computador cliente.
+2. Copie tambem o ficheiro `SIGEMPELigacao.json` criado no servidor.
+3. Dê duplo clique em `Configurar Ligacao.cmd`.
+4. Clique em `Importar ficheiro` e escolha `SIGEMPELigacao.json`.
+5. Clique em `Testar e guardar`.
+6. Clique em `Abrir app` ou abra `SIGEMPEAdmin.exe`.
 
-   Guarde a `API_KEY` mostrada no terminal. Essa mesma chave deve ser usada em todos os computadores cliente.
+## 2. O que o assistente faz
 
-3. Inicie a API no servidor:
+No servidor principal, o assistente:
 
-   ```powershell
-   python server\run_api.py
-   ```
+- configura `config\api.json` com `host: 0.0.0.0` e porta `8080`;
+- gera ou reaproveita uma chave segura `API_KEY`;
+- configura a app local em modo `hybrid`;
+- libera a porta da API no firewall do Windows;
+- inicia `SIGEMPEAPI.exe`;
+- cria uma tarefa do Windows para iniciar a API quando o utilizador entrar no Windows;
+- cria o ficheiro `SIGEMPELigacao.json` para os clientes.
 
-   Para deixar a API como servico do Windows, use o `install_service.bat` do projeto no computador servidor depois de colocar o `nssm.exe` no caminho configurado em `config\service.json`.
+Nos computadores cliente, o assistente:
 
-4. Libere a porta no firewall do Windows, se necessario:
-
-   ```powershell
-   New-NetFirewallRule -DisplayName "Loja API 8080" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow
-   ```
-
-## 2. Computadores cliente
-
-Copie a pasta `dist\MerceariaAdmin` inteira para o outro computador.
-
-No computador cliente, configure a app para apontar para o IP do servidor:
-
-```powershell
-.\install\configure_api.ps1 -Role Client -ServerHost IP_DO_SERVIDOR -Port 8080 -ApiKey "A_MESMA_API_KEY_DO_SERVIDOR" -TestConnection
-```
-
-Exemplo:
-
-```powershell
-.\install\configure_api.ps1 -Role Client -ServerHost 192.168.1.20 -Port 8080 -ApiKey "cole-a-chave-aqui" -TestConnection
-```
-
-Depois abra:
-
-```powershell
-.\MerceariaAdmin.exe
-```
+- importa o IP, porta e chave do ficheiro de ligacao;
+- configura `config\app.json` com `db_mode: remote_strict`;
+- guarda a mesma `API_KEY`;
+- testa a API antes de finalizar.
 
 ## 3. Instalacao local do cliente
 
-Opcionalmente, no computador cliente, pode instalar para `%LOCALAPPDATA%\MerceariaAdmin` e criar atalho no ambiente de trabalho:
+Opcionalmente, um tecnico pode instalar para `%LOCALAPPDATA%\SIGEMPEAdmin` e criar atalho no ambiente de trabalho:
 
 ```powershell
 .\install\install_admin_client.ps1 -ServerHost IP_DO_SERVIDOR -Port 8080 -ApiKey "A_MESMA_API_KEY_DO_SERVIDOR"
@@ -66,11 +52,10 @@ Opcionalmente, no computador cliente, pode instalar para `%LOCALAPPDATA%\Mercear
 
 ## 4. Regras importantes da API
 
-- No servidor, `config\api.json` deve usar `host: 0.0.0.0` para aceitar outros computadores.
-- Nos clientes, `config\app.json` deve usar `db_mode: remote_strict` para evitar vendas/produtos gravados num SQLite local por engano.
-- A `API_KEY` no servidor e em todos os clientes deve ser exatamente igual.
-- O endereco `api_base_url` nos clientes deve usar o IP real do servidor, por exemplo `http://192.168.1.20:8080`.
-- Se o teste falhar, confirme rede, firewall, porta `8080`, IP do servidor e `API_KEY`.
+- O utilizador final deve usar `Configurar Ligacao.cmd`.
+- O servidor principal deve ficar ligado quando os clientes estiverem a usar o sistema.
+- A chave do ficheiro `SIGEMPELigacao.json` deve ser guardada com cuidado.
+- Se o teste falhar no cliente, confirme que o servidor esta ligado, que os dois computadores estao na mesma rede e que o ficheiro de ligacao e o mais recente.
 
 ## 5. Gerar o pacote novamente
 
@@ -83,5 +68,25 @@ No computador de desenvolvimento:
 O pacote final fica em:
 
 ```text
-dist\MerceariaAdmin
+dist\SIGEMPEAdmin
 ```
+
+## 6. Atualizar sem apagar dados
+
+Para atualizar um computador que ja tem o Admin instalado, copie a nova pasta `dist\SIGEMPEAdmin` para esse computador e execute o update a partir da pasta nova:
+
+```powershell
+.\install\update_admin_client.ps1 -InstallDir "$env:LOCALAPPDATA\SIGEMPEAdmin"
+```
+
+Se a app estiver instalada noutro local, informe essa pasta em `-InstallDir`.
+
+O update preserva:
+
+- `config\.env`, incluindo `API_KEY`
+- `config\app.json`, incluindo `api_base_url` e `db_mode`
+- `config\app_settings.json`, incluindo preferencias do utilizador
+- base de dados local, se existir
+- relatorios, recibos, logs e outros ficheiros gerados em runtime
+
+Nos computadores cliente, a base principal fica no servidor e e acedida pela API. O pacote do Admin nao leva `database\inventory.db`.

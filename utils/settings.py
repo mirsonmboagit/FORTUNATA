@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import json
+import secrets
 from collections import Counter
 from datetime import datetime
 from threading import Thread
@@ -31,7 +32,8 @@ from utils.device_config import get_device_settings, save_device_settings
 from utils.env_loader import load_dotenv
 from utils.focus_navigation import FormKeyboardController
 from utils.i18n import language_label, language_options, normalize_language, translate
-from utils.paths import APP_SETTINGS_FILE, ENV_FILE
+from utils.paths import APP_SETTINGS_FILE, ENV_FILE, data_path
+from utils.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name, save_system_name
 from utils.thermal_printer import (
     get_default_printer_name,
     list_system_printers,
@@ -478,7 +480,7 @@ class AddUserDialog:
                 on_release=lambda x: self.select_data_scope('own')
             )
             self.access_shared_btn = MDRectangleFlatButton(
-                text='Loja atual',
+                text='Empresa atual',
                 size_hint_x=0.35,
                 on_release=lambda x: self.select_data_scope('shared')
             )
@@ -572,7 +574,7 @@ class AddUserDialog:
         email_value = email if email else None
         data_owner = None if self.selected_data_scope == "own" else self._current_data_owner()
         if self.selected_data_scope == "shared" and not data_owner:
-            self.show_message('Erro', 'Nao foi possivel identificar a loja atual')
+            self.show_message('Erro', 'Nao foi possivel identificar a empresa atual')
             return
 
         try:
@@ -2420,6 +2422,7 @@ class AdminSettingsScreen(MDScreen):
     receipt_printer_name = StringProperty("Impressora padrao")
     receipt_paper_width_mm = NumericProperty(80)
     language_code = StringProperty("pt")
+    system_name = StringProperty(DEFAULT_SYSTEM_NAME)
     language_label = StringProperty("Português")
     vat_overview_text = StringProperty("Taxa geral ativa: --")
 
@@ -2456,10 +2459,17 @@ class AdminSettingsScreen(MDScreen):
         self._printer_name_field = None
         self._printer_width_field = None
         self._printer_status_label = None
+        self._system_name_dialog = None
+        self._system_name_field = None
         self._gemini_settings_dialog = None
         self._gemini_api_key_field = None
         self._gemini_model_field = None
         self._gemini_status_label = None
+        self._barcode_generator_dialog = None
+        self._barcode_list_count_field = None
+        self._barcode_product_count_field = None
+        self._barcode_copies_field = None
+        self.pdf_viewer = None
         self._loading_controller = getattr(self, "_loading_controller", None)
         self._background_task_title = ""
 
@@ -2482,6 +2492,7 @@ class AdminSettingsScreen(MDScreen):
         self.dark_theme_enabled = is_dark
         self._sync_device_settings_state()
         self._sync_language_state()
+        self._sync_system_name_state()
         if "smart_monitor_toggle" in self.ids:
             self.ids.smart_monitor_toggle.active = enabled
         if "auto_banners_toggle" in self.ids:
@@ -2506,6 +2517,7 @@ class AdminSettingsScreen(MDScreen):
         self._bind_app_language()
         self._sync_device_settings_state()
         self._sync_language_state()
+        self._sync_system_name_state()
         Clock.schedule_once(self._init_badge, 0.1)
         Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.15)
         Clock.schedule_once(lambda dt: self._refresh_vat_overview(), 0)
@@ -2628,6 +2640,71 @@ class AdminSettingsScreen(MDScreen):
         code = normalize_language(getattr(app, "language", "pt") if app else "pt")
         self.language_code = code
         self.language_label = language_label(code, include_short=True)
+
+    def _sync_system_name_state(self):
+        app = App.get_running_app()
+        name = normalize_system_name(
+            getattr(app, "system_name", None) if app else get_system_name(force_reload=True)
+        )
+        self.system_name = name
+        if app is not None:
+            try:
+                app.system_name = name
+                title = str(getattr(app, "title", "") or "")
+                suffix = " - ADMIN" if "ADMIN" in title.upper() else " - MANAGER" if "MANAGER" in title.upper() else ""
+                app.title = f"{name}{suffix}"
+                Window.set_title(app.title)
+            except Exception:
+                pass
+
+    def open_system_name_settings(self):
+        if self._system_name_dialog is not None:
+            try:
+                self._system_name_dialog.dismiss()
+            except Exception:
+                pass
+            self._system_name_dialog = None
+
+        self._system_name_field = MDTextField(
+            text=get_system_name(force_reload=True),
+            hint_text="Nome que aparece no sistema e nos recibos",
+            helper_text=f"Maximo de 48 caracteres. Padrao: {DEFAULT_SYSTEM_NAME}",
+            helper_text_mode="on_focus",
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(58),
+        )
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(16), dp(12), dp(16), dp(8)],
+            adaptive_height=True,
+        )
+        content.add_widget(self._system_name_field)
+        self._system_name_dialog = MDDialog(
+            title="Nome do sistema",
+            type="custom",
+            content_cls=content,
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda _x: self._system_name_dialog.dismiss()),
+                MDRaisedButton(text="Guardar", on_release=lambda _x: self.save_system_name_from_dialog()),
+            ],
+        )
+        self._system_name_dialog.open()
+
+    def save_system_name_from_dialog(self):
+        field = getattr(self, "_system_name_field", None)
+        name = save_system_name(field.text if field is not None else "")
+        self.system_name = name
+        app = App.get_running_app()
+        if app is not None:
+            try:
+                app.system_name = name
+            except Exception:
+                pass
+        if self._system_name_dialog is not None:
+            self._system_name_dialog.dismiss()
+        self.show_message("Sucesso", "Nome do sistema atualizado.")
 
     def open_language_menu(self, caller=None):
         if getattr(self, "_language_menu", None):
@@ -2810,7 +2887,7 @@ class AdminSettingsScreen(MDScreen):
 
     def _build_test_receipt_data(self):
         return {
-            "store_name": "MERCEARIA",
+            "store_name": get_system_name(force_reload=True),
             "receipt_code": "TESTE",
             "issued_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "operator": getattr(App.get_running_app(), "current_user", None) or "Administrador",
@@ -3674,6 +3751,356 @@ class AdminSettingsScreen(MDScreen):
         dialog.dismiss()
         self._start_bazara_backfill()
 
+    def open_barcode_generator(self):
+        if self._ranxo_prefill_running:
+            self.show_message("Aviso", "Tarefa em andamento.")
+            return
+        if self._barcode_generator_dialog is not None:
+            try:
+                self._barcode_generator_dialog.dismiss()
+            except Exception:
+                pass
+            self._barcode_generator_dialog = None
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(8), dp(4), dp(4)],
+            adaptive_height=True,
+        )
+        content.add_widget(MDLabel(
+            text=(
+                "Gera um unico codigo aleatorio e repete esse mesmo codigo no PDF. "
+                "Tambem pode atribuir codigos direto aos produtos sem codigo."
+            ),
+            theme_text_color="Secondary",
+            size_hint_y=None,
+            height=dp(64),
+        ))
+        self._barcode_list_count_field = MDTextField(
+            hint_text="Quantidade de etiquetas do codigo gerado",
+            text="24",
+            mode="rectangle",
+            input_filter="int",
+            size_hint_y=None,
+            height=dp(56),
+        )
+        self._barcode_product_count_field = MDTextField(
+            hint_text="Produtos a atualizar (0 = todos sem codigo)",
+            text="0",
+            mode="rectangle",
+            input_filter="int",
+            size_hint_y=None,
+            height=dp(56),
+        )
+        self._barcode_copies_field = MDTextField(
+            hint_text="Etiquetas por produto ao atribuir",
+            text="4",
+            mode="rectangle",
+            input_filter="int",
+            size_hint_y=None,
+            height=dp(56),
+        )
+        content.add_widget(self._barcode_list_count_field)
+        content.add_widget(self._barcode_product_count_field)
+        content.add_widget(self._barcode_copies_field)
+
+        dialog = MDDialog(
+            title="Gerador de codigos de barras",
+            type="custom",
+            content_cls=content,
+            buttons=[
+                MDFlatButton(text="Cancelar", on_release=lambda _x: dialog.dismiss()),
+                MDFlatButton(text="Gerar codigo", on_release=lambda _x: self._confirm_barcode_list_generation(dialog)),
+                MDRaisedButton(text="Atribuir", on_release=lambda _x: self._confirm_barcode_generation(dialog)),
+            ],
+        )
+        self._barcode_generator_dialog = dialog
+        dialog.open()
+
+    def _confirm_barcode_list_generation(self, dialog):
+        label_count = self._field_int(self._barcode_list_count_field, default=24, minimum=1)
+        if label_count > 1000:
+            self.show_message("Aviso", "Use no maximo 1000 etiquetas por PDF.")
+            return
+        dialog.dismiss()
+        self._barcode_generator_dialog = None
+        self._start_barcode_list_generation(label_count)
+
+    def _start_barcode_list_generation(self, label_count):
+        self._ranxo_prefill_running = True
+        self._set_background_task_loading(True, "A gerar codigo de barras...")
+        self._ranxo_prefill_dialog = MDDialog(
+            title="Codigo de barras",
+            text="A preparar etiquetas...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_barcode_list_generation, args=(int(label_count),), daemon=True).start()
+
+    def _run_barcode_list_generation(self, label_count):
+        result = {
+            "status": "ok",
+            "mode": "list",
+            "pdf_path": None,
+            "barcode": "",
+            "codes": 0,
+            "labels": 0,
+            "error": None,
+        }
+        try:
+            db = getattr(self.app, "db", None) or get_db()
+            known = self._known_barcode_values(db)
+            code = self._generate_unique_barcode(known)
+            labels = []
+            for copy_no in range(1, label_count + 1):
+                labels.append({
+                    "name": "Codigo gerado",
+                    "barcode": code,
+                    "copy_no": copy_no,
+                    "copies": label_count,
+                })
+                Clock.schedule_once(lambda dt, done=copy_no, total=label_count: self._update_barcode_list_progress(done, total), 0)
+            self._remember_generated_barcodes([code])
+            if labels:
+                from pdfs.barcode_labels_report import BarcodeLabelsReport
+                result["barcode"] = code
+                result["codes"] = 1
+                result["labels"] = len(labels)
+                result["pdf_path"] = BarcodeLabelsReport().generate(labels)
+            else:
+                result["status"] = "empty"
+        except Exception as exc:
+            result["status"] = "error"
+            result["error"] = str(exc)
+        Clock.schedule_once(lambda dt, payload=result: self._finish_barcode_generation(payload), 0)
+
+    def _confirm_barcode_generation(self, dialog):
+        product_limit = self._field_int(self._barcode_product_count_field, default=0, minimum=0)
+        copies = self._field_int(self._barcode_copies_field, default=4, minimum=1)
+        if copies > 200:
+            self.show_message("Aviso", "Use no maximo 200 etiquetas por produto.")
+            return
+        dialog.dismiss()
+        self._barcode_generator_dialog = None
+        self._start_barcode_generation(product_limit, copies)
+
+    def _start_barcode_generation(self, product_limit, copies):
+        self._ranxo_prefill_running = True
+        self._set_background_task_loading(True, "A gerar codigos de barras...")
+        self._ranxo_prefill_dialog = MDDialog(
+            title="Gerador de codigos de barras",
+            text="Preparando produtos sem codigo...",
+            buttons=[MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill)],
+        )
+        self._ranxo_prefill_dialog.open()
+        Thread(target=self._run_barcode_generation, args=(int(product_limit), int(copies)), daemon=True).start()
+
+    def _run_barcode_generation(self, product_limit, copies):
+        result = {"status": "ok", "pdf_path": None, "updated": 0, "labels": 0, "available": 0, "errors": 0, "error": None}
+        try:
+            db = getattr(self.app, "db", None) or get_db()
+            products = self._products_without_barcode(db)
+            result["available"] = len(products)
+            selected = products[:product_limit] if product_limit > 0 else products
+            if not selected:
+                result["status"] = "empty"
+            else:
+                known = self._known_barcode_values(db)
+                labels = []
+                new_codes = []
+                for idx, product in enumerate(selected, 1):
+                    code = self._generate_unique_barcode(known)
+                    ok = self._assign_barcode_to_product(db, product, code)
+                    if not ok:
+                        result["errors"] += 1
+                        continue
+                    new_codes.append(code)
+                    result["updated"] += 1
+                    product_name = self._product_value(product, 1, "Produto")
+                    for copy_no in range(1, copies + 1):
+                        labels.append({
+                            "name": product_name,
+                            "barcode": code,
+                            "copy_no": copy_no,
+                            "copies": copies,
+                        })
+                    Clock.schedule_once(lambda dt, done=idx, total=len(selected): self._update_barcode_generation_progress(done, total), 0)
+                self._remember_generated_barcodes(new_codes)
+                if labels:
+                    from pdfs.barcode_labels_report import BarcodeLabelsReport
+                    result["labels"] = len(labels)
+                    result["pdf_path"] = BarcodeLabelsReport().generate(labels)
+                else:
+                    result["status"] = "empty"
+        except Exception as exc:
+            result["status"] = "error"
+            result["error"] = str(exc)
+        Clock.schedule_once(lambda dt, payload=result: self._finish_barcode_generation(payload), 0)
+
+    def _update_barcode_generation_progress(self, done, total):
+        if self._ranxo_prefill_dialog:
+            self._ranxo_prefill_dialog.text = f"Atualizando produtos: {done}/{total}"
+
+    def _update_barcode_list_progress(self, done, total):
+        if self._ranxo_prefill_dialog:
+            self._ranxo_prefill_dialog.text = f"A montar etiquetas: {done}/{total}"
+
+    def _finish_barcode_generation(self, result):
+        self._ranxo_prefill_running = False
+        self._set_background_task_loading(False, "")
+        if not self._ranxo_prefill_dialog:
+            return
+        status = result.get("status")
+        if status == "ok":
+            pdf_path = result.get("pdf_path")
+            if result.get("mode") == "list":
+                lines = [
+                    "PDF gerado com sucesso.",
+                    f"Codigo: {result.get('barcode') or ''}",
+                    f"Etiquetas: {result.get('labels', 0)}",
+                    f"Arquivo: {pdf_path}",
+                ]
+            else:
+                lines = [
+                    "PDF gerado com sucesso.",
+                    f"Produtos atualizados: {result.get('updated', 0)}",
+                    f"Etiquetas: {result.get('labels', 0)}",
+                    f"Erros: {result.get('errors', 0)}",
+                    f"Arquivo: {pdf_path}",
+                ]
+            self._ranxo_prefill_dialog.text = "\n".join(lines)
+            self._ranxo_prefill_dialog.buttons = [
+                MDFlatButton(text="Fechar", on_release=self._dismiss_ranxo_prefill),
+                MDRaisedButton(text="Visualizar PDF", on_release=lambda _x, path=pdf_path: self._open_generated_barcode_pdf(path)),
+            ]
+            return
+        if status == "empty":
+            if result.get("mode") == "list":
+                self._ranxo_prefill_dialog.text = "Nao ha codigos para gerar."
+            else:
+                self._ranxo_prefill_dialog.text = "Nao ha produtos sem codigo de barras para gerar etiquetas."
+            return
+        self._ranxo_prefill_dialog.text = f"Falha ao gerar etiquetas: {result.get('error')}"
+
+    def _open_generated_barcode_pdf(self, pdf_path):
+        if not pdf_path:
+            return
+        try:
+            self._ensure_pdf_viewer().view_pdf(pdf_path)
+        except Exception as exc:
+            self.show_message("Erro", f"Nao foi possivel abrir o PDF: {exc}")
+
+    def _ensure_pdf_viewer(self):
+        if self.pdf_viewer is None:
+            from pdfs.pdf_viewer import PDFViewer
+            self.pdf_viewer = PDFViewer(error_callback=lambda message: self.show_message("Erro", message))
+        return self.pdf_viewer
+
+    @staticmethod
+    def _generated_barcodes_path():
+        return data_path("generated_barcodes.json")
+
+    def _known_barcode_values(self, db):
+        known = set(str(code).strip() for code in (db.get_known_barcodes() or []) if str(code or "").strip())
+        known.update(self._load_generated_barcodes())
+        return known
+
+    def _load_generated_barcodes(self):
+        path = self._generated_barcodes_path()
+        try:
+            if not path.exists():
+                return set()
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            values = payload.get("barcodes", []) if isinstance(payload, dict) else payload
+            return set(str(code).strip() for code in values if str(code or "").strip())
+        except Exception:
+            return set()
+
+    def _remember_generated_barcodes(self, codes):
+        new_codes = [str(code).strip() for code in (codes or []) if str(code or "").strip()]
+        if not new_codes:
+            return
+        path = self._generated_barcodes_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            remembered = self._load_generated_barcodes()
+            remembered.update(new_codes)
+            payload = {
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "barcodes": sorted(remembered),
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _field_int(field, default=0, minimum=0):
+        try:
+            value = int(str(getattr(field, "text", "") or "").strip() or default)
+        except (TypeError, ValueError):
+            value = default
+        return max(int(minimum), value)
+
+    def _products_without_barcode(self, db):
+        rows = db.get_all_products() or []
+        return [row for row in rows if not str(self._product_value(row, 12, "") or "").strip()]
+
+    @staticmethod
+    def _product_value(product, index, default=None):
+        try:
+            return product[index]
+        except Exception:
+            return default
+
+    def _assign_barcode_to_product(self, db, product, barcode):
+        args = (
+            self._product_value(product, 0),
+            self._product_value(product, 1, ""),
+            self._product_value(product, 11, ""),
+            self._product_value(product, 2, 0),
+            self._product_value(product, 3, 0),
+            self._product_value(product, 4, 0),
+            self._product_value(product, 5, 0),
+            self._product_value(product, 6, 0),
+            barcode,
+            self._product_value(product, 13, None),
+            bool(self._product_value(product, 15, False)),
+        )
+        kwargs = {
+            "package_quantity": self._product_value(product, 21, None),
+            "units_per_package": self._product_value(product, 23, None),
+            "allow_pack_sale": bool(self._product_value(product, 24, False)),
+            "vat_rule_code": self._product_value(product, 25, DEFAULT_VAT_RULE_CODE) or DEFAULT_VAT_RULE_CODE,
+        }
+        try:
+            updated = db.update_product(*args, **kwargs)
+            if updated is False:
+                return False
+            return True
+        except TypeError:
+            kwargs.pop("units_per_package", None)
+            kwargs.pop("allow_pack_sale", None)
+            updated = db.update_product(*args, **kwargs)
+            return updated is not False
+
+    def _generate_unique_barcode(self, known):
+        while True:
+            body = "29" + "".join(str(secrets.randbelow(10)) for _ in range(10))
+            code = body + self._ean13_check_digit(body)
+            if code not in known:
+                known.add(code)
+                return code
+
+    @staticmethod
+    def _ean13_check_digit(first_12_digits):
+        digits = [int(ch) for ch in str(first_12_digits)]
+        odd_sum = sum(digits[0::2])
+        even_sum = sum(digits[1::2])
+        return str((10 - ((odd_sum + even_sum * 3) % 10)) % 10)
+
     def reset_bazara_cache(self):
         if self._ranxo_prefill_running:
             self.show_message("Aviso", "Tarefa em andamento.")
@@ -4227,4 +4654,3 @@ class AdminSettingsScreen(MDScreen):
 
     def _stop_ai_polling(self):
         self._intelligence.stop()
-

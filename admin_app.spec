@@ -62,13 +62,25 @@ datas += collect_data_files("kivymd", includes=["*.kv", "fonts/*", "images/*"])
 
 hiddenimports = [
     "bcrypt",
+    "cv2",
     "fitz",
+    "flask",
     "kivy_deps.angle",
     "kivy_deps.glew",
     "kivy_deps.sdl2",
     "kivy_garden.matplotlib.backend_kivyagg",
     "matplotlib.backends.backend_agg",
+    "numpy",
+    "numpy._core",
+    "numpy._core._multiarray_umath",
+    "numpy._core.multiarray",
+    "numpy.core",
+    "numpy.core.multiarray",
+    "numpy.core.umath",
     "PIL.Image",
+    "pyzbar",
+    "pyzbar.pyzbar",
+    "pyzbar.wrapper",
     "reportlab.graphics.barcode.code128",
     "reportlab.graphics.barcode.qr",
     "requests",
@@ -90,9 +102,32 @@ hiddenimports += _local_modules(
     "api",
     "database",
     "pdfs",
+    "server",
+    "waitress",
 )
 
 hiddenimports = sorted(set(hiddenimports))
+
+api_hiddenimports = sorted(set([
+    "bcrypt",
+    "click",
+    "database.automation",
+    "database.database",
+    "flask",
+    "itsdangerous",
+    "jinja2",
+    "server.app",
+    "server.run_api",
+    "utils.app_config",
+    "utils.env_loader",
+    "utils.logging_setup",
+    "utils.paths",
+    "utils.perf_utils",
+    "utils.security_questions",
+    "utils.vat",
+    "waitress",
+    "werkzeug",
+]))
 
 
 a = Analysis(
@@ -103,19 +138,52 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
+    runtime_hooks=[str(ROOT / "scripts" / "pyinstaller_kivy_runtime_hook.py")],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+api_a = Analysis(
+    ["api_server_app.py"],
+    pathex=[str(ROOT)],
+    binaries=[],
+    datas=datas,
+    hiddenimports=api_hiddenimports,
+    hookspath=[],
+    hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
     optimize=0,
 )
 pyz = PYZ(a.pure)
+api_pyz = PYZ(api_a.pure)
 
-exe = EXE(
+app_exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name="MerceariaAdmin",
+    name="SIGEMPEAdmin",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=str(ROOT / "assets" / "icon" / "admin.ico"),
+)
+
+api_exe = EXE(
+    api_pyz,
+    api_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="SIGEMPEAPI",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -130,12 +198,15 @@ exe = EXE(
 )
 
 coll = COLLECT(
-    exe,
+    app_exe,
+    api_exe,
     a.binaries,
+    api_a.binaries,
     a.datas,
+    api_a.datas,
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="MerceariaAdmin",
+    name="SIGEMPEAdmin",
     contents_directory=".",
 )

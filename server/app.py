@@ -65,6 +65,7 @@ ALLOWLIST = {
     "get_sales_by_date",
     "get_sales_by_date_range",
     "get_all_sales",
+    "get_recent_sales",
     "get_sale_details",
     "refund_sale_item",
     "get_loss_records",
@@ -76,8 +77,10 @@ ALLOWLIST = {
     "get_products_for_stock_control",
     "get_products_for_filter",
     "get_categories",
+    "get_sales_users_for_filter",
     "get_report_data",
     "get_productivity_report_data",
+    "get_cash_user_report_data",
     "get_admin_home_snapshot",
     "add_product",
     "update_product",
@@ -90,6 +93,7 @@ ALLOWLIST = {
     "detect_fraud_patterns",
     "get_pending_approvals",
     "approve_stock_movement",
+    "delete_stock_movement",
     "log_action",
     "get_all_managers",
     "delete_manager",
@@ -167,7 +171,7 @@ class _AutomationScheduler:
         self._stop_event.clear()
         self._thread = Thread(
             target=self._loop,
-            name="loja-api-automation",
+            name="sige-mpe-api-automation",
             daemon=True,
         )
         self._thread.start()
@@ -246,7 +250,7 @@ def create_app():
             return _unauthorized()
         payload = {
             "ok": True,
-            "service": "loja-api",
+            "service": "sige-mpe-api",
             "runner": runtime["api"].get("runner") or "flask",
             "host": runtime["api"].get("host"),
             "port": runtime["api"].get("port"),
