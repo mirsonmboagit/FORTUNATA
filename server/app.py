@@ -93,6 +93,7 @@ ALLOWLIST = {
     "detect_fraud_patterns",
     "get_pending_approvals",
     "approve_stock_movement",
+    "reject_stock_movement",
     "delete_stock_movement",
     "log_action",
     "get_all_managers",

@@ -2020,6 +2020,61 @@ class Database(DatabaseAutomationMixin):
             self.conn.rollback()
             return False
 
+    def reject_stock_movement(self, movement_id, rejected_by=None):
+        """Rejeita movimento pendente sem alterar o stock."""
+        try:
+            movement_id = int(movement_id)
+        except (TypeError, ValueError):
+            return False
+
+        try:
+            self.cursor.execute(
+                """
+                SELECT approval_status, applied
+                FROM stock_movements
+                WHERE id = ?
+                """,
+                (movement_id,),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return False
+
+            approval_status, applied = row
+            if approval_status != "PENDING" or applied:
+                return False
+
+            now_str = self._now_str()
+            rejection_note = f"Movimento rejeitado por {rejected_by or 'admin'} em {now_str}"
+            self.cursor.execute(
+                """
+                UPDATE stock_movements
+                SET approval_status = 'REJECTED',
+                    approved_by = ?,
+                    approved_at = ?,
+                    applied = 0,
+                    note = CASE
+                        WHEN COALESCE(note, '') = '' THEN ?
+                        ELSE note || ' | ' || ?
+                    END
+                WHERE id = ?
+                """,
+                (
+                    rejected_by or "admin",
+                    now_str,
+                    rejection_note,
+                    rejection_note,
+                    movement_id,
+                ),
+            )
+            changed = self.cursor.rowcount > 0
+            self.conn.commit()
+            return changed
+        except sqlite3.Error as e:
+            print(f"Erro ao rejeitar movimento: {e}")
+            self.conn.rollback()
+            return False
+
     def delete_stock_movement(self, movement_id, deleted_by=None):
         """Remove um movimento do historico visivel sem recalcular o stock atual."""
         try:

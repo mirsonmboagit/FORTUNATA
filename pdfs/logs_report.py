@@ -35,6 +35,7 @@ class LogsReport(BasePDFReport):
         "SAVE_RECEIPT": "Recibo salvo",
         "REGISTER_LOSS": "Perda registrada",
         "APPROVE_LOSS": "Perda aprovada",
+        "REJECT_LOSS": "Perda rejeitada",
     }
 
     def _action_to_label(self, action):

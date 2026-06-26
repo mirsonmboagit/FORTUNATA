@@ -876,6 +876,7 @@ class SystemLogsDialog:
             "SAVE_RECEIPT": "Recibo salvo",
             "REGISTER_LOSS": "Perda registrada",
             "APPROVE_LOSS": "Perda aprovada",
+            "REJECT_LOSS": "Perda rejeitada",
         }
         
     def _theme_tokens(self):
@@ -946,6 +947,7 @@ class SystemLogsDialog:
             "SAVE_RECEIPT": ("content-save", "info"),
             "REGISTER_LOSS": ("alert-circle-outline", "warning"),
             "APPROVE_LOSS": ("check-decagram-outline", "success"),
+            "REJECT_LOSS": ("close-octagon-outline", "danger"),
         }
         return styles.get(action, ("information", "primary"))
         
@@ -1394,6 +1396,7 @@ class EnhancedSystemLogsDialog:
             "SAVE_RECEIPT": "Recibo salvo",
             "REGISTER_LOSS": "Perda registrada",
             "APPROVE_LOSS": "Perda aprovada",
+            "REJECT_LOSS": "Perda rejeitada",
         }
 
     def _theme_tokens(self):
@@ -1455,6 +1458,7 @@ class EnhancedSystemLogsDialog:
             "SAVE_RECEIPT": ("content-save", "info"),
             "REGISTER_LOSS": ("alert-circle-outline", "warning"),
             "APPROVE_LOSS": ("check-decagram-outline", "success"),
+            "REJECT_LOSS": ("close-octagon-outline", "danger"),
         }
         return styles.get(action, ("information", "primary"))
         self._action_styles = {
@@ -1474,6 +1478,7 @@ class EnhancedSystemLogsDialog:
             "SAVE_RECEIPT": {"icon": "content-save", "tone": "info"},
             "REGISTER_LOSS": {"icon": "alert-circle-outline", "tone": "warning"},
             "APPROVE_LOSS": {"icon": "check-decagram-outline", "tone": "success"},
+            "REJECT_LOSS": {"icon": "close-octagon-outline", "tone": "danger"},
         }
 
     def show(self):

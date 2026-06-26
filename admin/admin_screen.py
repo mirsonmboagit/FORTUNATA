@@ -17,7 +17,9 @@ import time
 from datetime import datetime, timedelta
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.label import MDLabel
+from kivymd.uix.card import MDCard
+from kivymd.uix.gridlayout import MDGridLayout
+from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import MDSnackbar
@@ -661,6 +663,208 @@ class AdminScreen(Screen):
     def _loss_type_label(self, code):
         return LOSS_LABELS.get(str(code or "").upper(), str(code or "Sem tipo"))
 
+    def _bind_wrapped_label_height(self, label, min_height=None):
+        min_height = dp(18) if min_height is None else min_height
+
+        def _sync(*_args):
+            label.text_size = (max(float(label.width or 0), 1.0), None)
+            try:
+                label.texture_update()
+            except Exception:
+                pass
+            label.height = max(float(min_height), float(label.texture_size[1] or 0))
+
+        label.bind(width=_sync, text=_sync)
+        Clock.schedule_once(lambda _dt: _sync(), 0)
+        return label
+
+    def _build_bounded_scroll(self, content, max_height_ratio=0.58, max_height_dp=560, min_height_dp=180):
+        from kivy.uix.scrollview import ScrollView
+
+        max_height = min(float(Window.height or dp(max_height_dp)) * float(max_height_ratio), dp(max_height_dp))
+        max_height = max(max_height, dp(min_height_dp))
+        scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width=dp(6),
+            size_hint=(1, None),
+            height=max_height,
+        )
+        content.size_hint_x = None
+
+        def _sync(*_args):
+            content.width = max(float(scroll.width or 0) - dp(4), dp(260))
+            content.height = max(float(content.minimum_height or 0), dp(1))
+            target_height = min(max(content.height + dp(4), dp(min_height_dp)), max_height)
+            scroll.height = target_height
+            scroll.do_scroll_y = content.height > target_height + dp(2)
+            scroll.bar_width = dp(6) if scroll.do_scroll_y else 0
+
+        content.bind(minimum_height=_sync)
+        scroll.bind(width=_sync)
+        scroll.add_widget(content)
+        Clock.schedule_once(lambda _dt: _sync(), 0)
+        return scroll
+
+    def _get_banner_target(self):
+        if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
+            return None
+        target = self.ids.ai_banner_container
+        ensure_center = getattr(self._intelligence, "_ensure_banner_center", None)
+        if callable(ensure_center):
+            try:
+                target = ensure_center()
+            except Exception:
+                target = self.ids.ai_banner_container
+        return target
+
+    def _render_status_banners(self, banners, auto_dismiss_seconds=None):
+        banners = [banner for banner in list(banners or []) if banner]
+        if not banners:
+            return False
+        target = self._get_banner_target()
+        if target is None:
+            return False
+        render_auto_banners(
+            target,
+            banners,
+            insights=None,
+            auto_dismiss_seconds=auto_dismiss_seconds,
+            show_timer=False,
+        )
+        return True
+
+    def _severity_label(self, severity):
+        try:
+            severity = int(severity or 0)
+        except Exception:
+            severity = 0
+        return {3: "ALTO", 2: "MEDIO", 1: "BAIXO"}.get(severity, "INFO")
+
+    def _build_fraud_alerts_banner(self, alerts, days_lookback=30):
+        alerts = list(alerts or [])
+        if not alerts:
+            return {
+                "kind": "fraud_ok",
+                "variant": "success",
+                "icon": "shield-check-outline",
+                "bg_color": (0.74, 0.92, 0.78, 1),
+                "title": "Sem alertas de fraude",
+                "messages": [
+                    f"Nenhum padrao suspeito encontrado nos ultimos {int(days_lookback)} dias.",
+                    "As perdas aprovadas continuam dentro dos limites de monitorizacao.",
+                ],
+                "all_messages": [],
+                "count": 0,
+                "urgency": 999,
+                "details_sections": [
+                    ("Estado atual", ["Nao ha alertas operacionais para rever neste periodo."]),
+                ],
+            }
+
+        sorted_alerts = sorted(
+            alerts,
+            key=lambda item: int(item.get("severity") or 0),
+            reverse=True,
+        )
+        high_count = sum(1 for item in sorted_alerts if int(item.get("severity") or 0) == 3)
+        medium_count = sum(1 for item in sorted_alerts if int(item.get("severity") or 0) == 2)
+        low_count = sum(1 for item in sorted_alerts if int(item.get("severity") or 0) == 1)
+        max_severity = int(sorted_alerts[0].get("severity") or 0)
+        variant = "danger" if max_severity >= 3 else "warning" if max_severity == 2 else "info"
+        icon = "shield-alert-outline" if max_severity >= 3 else "shield-search-outline"
+
+        messages = []
+        detail_lines = []
+        for alert in sorted_alerts[:10]:
+            label = self._severity_label(alert.get("severity"))
+            title = str(alert.get("title") or alert.get("alert_type") or "Alerta operacional")
+            description = str(alert.get("description") or "").strip()
+            user = str(alert.get("related_user") or "").strip()
+            messages.append(f"{label}: {title}")
+            detail = f"{label} - {title}"
+            if description:
+                detail += f": {description}"
+            if user:
+                detail += f" | Utilizador: {user}"
+            detail_lines.append(detail)
+        if len(sorted_alerts) > len(detail_lines):
+            detail_lines.append(f"Mais {len(sorted_alerts) - len(detail_lines)} alerta(s) no periodo.")
+
+        return {
+            "kind": "fraud",
+            "variant": variant,
+            "icon": icon,
+            "bg_color": (0.93, 0.34, 0.34, 1) if variant == "danger" else (0.98, 0.76, 0.34, 1),
+            "title": "Alertas de fraude",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(sorted_alerts),
+            "urgency": 0 if max_severity >= 3 else 10 if max_severity == 2 else 30,
+            "details_sections": [
+                (
+                    "Resumo",
+                    [
+                        f"Alta prioridade: {high_count}",
+                        f"Media prioridade: {medium_count}",
+                        f"Baixa prioridade: {low_count}",
+                    ],
+                ),
+                ("Alertas encontrados", detail_lines),
+            ],
+        }
+
+    def _build_pending_approvals_banner(self, pending):
+        pending = list(pending or [])
+        if not pending:
+            return {
+                "kind": "approval_ok",
+                "variant": "success",
+                "icon": "clipboard-check-outline",
+                "bg_color": (0.74, 0.92, 0.78, 1),
+                "title": "Aprovacoes em dia",
+                "messages": [
+                    "Nao existem perdas pendentes de aprovacao.",
+                    "Os movimentos registados nao exigem validacao administrativa neste momento.",
+                ],
+                "all_messages": [],
+                "count": 0,
+                "urgency": 999,
+                "details_sections": [
+                    ("Estado atual", ["Fila de aprovacoes pendentes vazia."]),
+                ],
+            }
+
+        messages = []
+        detail_lines = []
+        for row in pending[:10]:
+            values = list(row) + [""] * 14
+            mov_id, _prod_id, description, mov_type, qty, unit, cost, _price, reason, _note, evidence, created_at, user, role = values[:14]
+            product_name = str(description or "Produto")
+            cost_text = self._format_money(cost)
+            messages.append(f"#{mov_id} {product_name}: {qty} {unit or 'un'} | {cost_text}")
+            detail_lines.append(
+                f"#{mov_id} {mov_type}: {product_name}, {qty} {unit or 'un'}, {cost_text}, por {user or 'sistema'} ({role or 'sem perfil'}), {created_at or 'sem data'}, {'com evidencia' if evidence else 'sem evidencia'}, motivo: {str(reason or 'nao informado')}"
+            )
+        if len(pending) > len(detail_lines):
+            detail_lines.append(f"Mais {len(pending) - len(detail_lines)} aprovacao(oes) pendente(s).")
+
+        variant = "danger" if len(pending) >= 5 else "warning"
+        return {
+            "kind": "approvals",
+            "variant": variant,
+            "icon": "clipboard-alert-outline",
+            "bg_color": (0.93, 0.34, 0.34, 1) if variant == "danger" else (0.98, 0.76, 0.34, 1),
+            "title": "Aprovacoes pendentes",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(pending),
+            "urgency": 5 if variant == "danger" else 15,
+            "details_sections": [
+                ("Movimentos aguardando decisao", detail_lines),
+            ],
+        }
+
     def _ensure_loss_report(self):
         if self.loss_report is None:
             from pdfs.loss_report import LossReport
@@ -697,10 +901,10 @@ class AdminScreen(Screen):
         card = MDCard(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(120),
-            padding=dp(14),
-            spacing=dp(8),
-            radius=[dp(18)],
+            height=dp(98),
+            padding=dp(12),
+            spacing=dp(5),
+            radius=[dp(8)],
             elevation=0,
             md_bg_color=tokens.get("card_alt", [0.96, 0.97, 0.99, 1]),
         )
@@ -743,6 +947,8 @@ class AdminScreen(Screen):
                 text=subtitle,
                 font_size=dp(10.5),
                 theme_text_color="Secondary",
+                shorten=True,
+                shorten_from="right",
             )
         )
         return card
@@ -760,7 +966,7 @@ class AdminScreen(Screen):
             size_hint_y=None,
             padding=dp(14),
             spacing=dp(8),
-            radius=[dp(18)],
+            radius=[dp(8)],
             elevation=0,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
         )
@@ -797,21 +1003,15 @@ class AdminScreen(Screen):
                 size_hint_y=None,
                 font_size=dp(11.5),
                 theme_text_color="Secondary",
+                halign="left",
+                valign="top",
             )
-            item.bind(
-                texture_size=lambda inst, value: setattr(
-                    inst,
-                    "height",
-                    max(dp(18), value[1]),
-                )
-            )
+            self._bind_wrapped_label_height(item, min_height=dp(18))
             card.add_widget(item)
 
         return card
 
     def _build_loss_metrics_content(self, metrics, start_date, end_date, detailed=False):
-        from kivy.uix.scrollview import ScrollView
-
         content = MDBoxLayout(
             orientation="vertical",
             padding=dp(6),
@@ -828,17 +1028,33 @@ class AdminScreen(Screen):
             header_lines.append(
                 f"As perdas representam {float(metrics.get('loss_percentage') or 0):.2f}% das vendas do periodo."
             )
+        loss_count = int(metrics.get("loss_count") or 0)
         content.add_widget(
             self._build_loss_section_card(
                 "Resumo Executivo",
                 header_lines,
                 icon_name="chart-areaspline",
-                tone="info",
+                tone="info" if loss_count else "success",
             )
         )
 
+        if loss_count <= 0:
+            content.add_widget(
+                self._build_loss_section_card(
+                    "Sem perdas aprovadas no periodo",
+                    [
+                        "Nao foram encontradas perdas aprovadas e aplicadas para entrar nas metricas.",
+                        "Perdas pendentes, rejeitadas ou removidas nao entram neste painel de impacto financeiro.",
+                        "Use Aprovacoes Pendentes para validar perdas em aberto ou Historico de Perdas para rever registos.",
+                    ],
+                    icon_name="shield-check-outline",
+                    tone="success",
+                )
+            )
+            return self._build_bounded_scroll(content, max_height_ratio=0.44, max_height_dp=420, min_height_dp=220)
+
         metrics_grid = MDGridLayout(
-            cols=1 if Window.width < dp(1180) else 2,
+            cols=1 if Window.width < dp(740) else 2 if Window.width < dp(1280) else 3,
             spacing=dp(10),
             size_hint_y=None,
         )
@@ -966,13 +1182,12 @@ class AdminScreen(Screen):
                 )
             )
 
-        scroll = ScrollView(
-            do_scroll_x=False,
-            bar_width=dp(6),
-            size_hint=(1, 1),
+        return self._build_bounded_scroll(
+            content,
+            max_height_ratio=0.62 if detailed else 0.54,
+            max_height_dp=620 if detailed else 520,
+            min_height_dp=260,
         )
-        scroll.add_widget(content)
-        return scroll
 
     def _show_pdf_success(self, pdf_path):
         dialog = MDDialog(
@@ -3528,7 +3743,8 @@ class AdminScreen(Screen):
                 title="METRICAS DE PERDAS",
                 type="custom",
                 content_cls=content,
-                size_hint=(0.92, 0.9),
+                size_hint=(None, None),
+                size=(min(dp(820), Window.width * 0.9), min(dp(560), Window.height * 0.74)),
                 buttons=[
                     MDRaisedButton(
                         text="PDF",
@@ -3586,7 +3802,8 @@ class AdminScreen(Screen):
                 title="DETALHES DAS PERDAS",
                 type='custom',
                 content_cls=content,
-                size_hint=(0.93, 0.92),
+                size_hint=(None, None),
+                size=(min(dp(900), Window.width * 0.92), min(dp(660), Window.height * 0.84)),
                 buttons=[
                     MDRaisedButton(
                         text="PDF",
@@ -3610,17 +3827,24 @@ class AdminScreen(Screen):
             print(f"Erro ao mostrar relatorio: {e}")
 
     def show_fraud_alerts(self, *args):
+        days_lookback = 30
+
         def task():
-            return self.db.detect_fraud_patterns(days_lookback=30)
+            return self.db.detect_fraud_patterns(days_lookback=days_lookback)
 
         def on_success(alerts):
+            alerts = list(alerts or [])
+            banner = self._build_fraud_alerts_banner(alerts, days_lookback=days_lookback)
+            if self._render_status_banners([banner], auto_dismiss_seconds=None):
+                return
+
             if not alerts:
                 self.show_snackbar("Nenhum alerta de fraude detectado")
                 return
 
-            high_alerts = [a for a in alerts if a['severity'] == 3]
-            medium_alerts = [a for a in alerts if a['severity'] == 2]
-            low_alerts = [a for a in alerts if a['severity'] == 1]
+            high_alerts = [a for a in alerts if int(a.get('severity') or 0) == 3]
+            medium_alerts = [a for a in alerts if int(a.get('severity') or 0) == 2]
+            low_alerts = [a for a in alerts if int(a.get('severity') or 0) == 1]
 
             message = f"""ALERTAS DE SEGURANCA
 
@@ -3631,8 +3855,8 @@ class AdminScreen(Screen):
     PRINCIPAIS ALERTAS:"""
 
             for alert in (high_alerts + medium_alerts)[:5]:
-                severity_icon = {3: "[ALTO]", 2: "[MEDIO]", 1: "[BAIXO]"}[alert['severity']]
-                message += f"\n\n{severity_icon} {alert['title']}\n{alert['description']}"
+                severity_icon = {3: "[ALTO]", 2: "[MEDIO]", 1: "[BAIXO]"}.get(int(alert.get('severity') or 0), "[INFO]")
+                message += f"\n\n{severity_icon} {alert.get('title')}\n{alert.get('description')}"
 
             dialog = MDDialog(
                 title="ALERTAS DE FRAUDE",
@@ -3660,6 +3884,13 @@ class AdminScreen(Screen):
 
     def show_all_fraud_alerts(self, alerts):
         try:
+            alerts = list(alerts or [])
+            if self._render_status_banners(
+                [self._build_fraud_alerts_banner(alerts, days_lookback=30)],
+                auto_dismiss_seconds=None,
+            ):
+                return
+
             from kivy.uix.scrollview import ScrollView
 
             content = MDBoxLayout(
@@ -3671,16 +3902,16 @@ class AdminScreen(Screen):
             content.bind(minimum_height=content.setter('height'))
 
             for alert in alerts:
-                severity_label = {3: "ALTO", 2: "MEDIO", 1: "BAIXO"}[alert['severity']]
+                severity_label = self._severity_label(alert.get("severity"))
 
-                alert_text = f"""{severity_label} - {alert['alert_type']}
+                alert_text = f"""{severity_label} - {alert.get('alert_type')}
 
-    {alert['title']}
-    {alert['description']}
+    {alert.get('title')}
+    {alert.get('description')}
 
     """
-                if alert['related_user']:
-                    alert_text += f"Utilizador: {alert['related_user']}\n"
+                if alert.get('related_user'):
+                    alert_text += f"Utilizador: {alert.get('related_user')}\n"
 
                 alert_text += "-" * 50 + "\n"
 
@@ -3717,42 +3948,16 @@ class AdminScreen(Screen):
             return self.db.get_pending_approvals()
 
         def on_success(pending):
+            pending = list(pending or [])
+            banner = self._build_pending_approvals_banner(pending)
+            rendered = self._render_status_banners([banner], auto_dismiss_seconds=None)
             if not pending:
-                self.show_snackbar("Nenhuma aprovacao pendente")
+                if not rendered:
+                    self.show_snackbar("Nenhuma aprovacao pendente")
                 return
 
-            message = f"APROVACOES PENDENTES: {len(pending)}\n\n"
-
-            for row in pending[:5]:
-                mov_id, prod_id, description, mov_type, qty, unit, cost, price, reason, note, evidence, created_at, user, role = row
-
-                message += f"""ID #{mov_id} - {mov_type}
-    Produto: {description}
-    Quantidade: {qty} {unit} | Custo: {cost:.2f} MZN
-    Por: {user}
-    Motivo: {reason[:50]}...
-    {'Com evidencia' if evidence else 'Sem evidencia'}
-
-    """
-
-            if len(pending) > 5:
-                message += f"\n... e mais {len(pending) - 5} aprovacoes"
-
-            dialog = MDDialog(
-                title="APROVACOES PENDENTES",
-                text=message,
-                buttons=[
-                    MDFlatButton(
-                        text="VER DETALHES",
-                        on_release=lambda x: self.show_approval_details(pending)
-                    ),
-                    MDFlatButton(
-                        text="FECHAR",
-                        on_release=lambda x: dialog.dismiss()
-                    )
-                ]
-            )
-            dialog.open()
+            self.show_approval_details(pending)
+            return
 
         self._run_async_action(
             "pending-approvals",
@@ -3764,65 +3969,103 @@ class AdminScreen(Screen):
 
     def show_approval_details(self, pending_list):
         try:
-            from kivy.uix.scrollview import ScrollView
-
             app = App.get_running_app()
             current_user = getattr(app, "current_user", None)
+            tokens = getattr(app, "theme_tokens", {}) if app else {}
+            dialog_ref = {"dialog": None}
 
             content = MDBoxLayout(
-                orientation='vertical',
-                padding=dp(20),
-                spacing=dp(15),
-                size_hint_y=None
+                orientation="vertical",
+                padding=dp(8),
+                spacing=dp(10),
+                size_hint_y=None,
             )
-            content.bind(minimum_height=content.setter('height'))
+            content.bind(minimum_height=content.setter("height"))
 
             for row in pending_list:
-                mov_id, prod_id, description, mov_type, qty, unit, cost, price, reason, note, evidence, created_at, user, role = row
+                values = list(row) + [""] * 14
+                mov_id, _prod_id, description, mov_type, qty, unit, cost, _price, reason, note, evidence, created_at, user, role = values[:14]
 
-                card = MDBoxLayout(
-                    orientation='vertical',
-                    padding=dp(10),
-                    spacing=dp(5),
+                card = MDCard(
+                    orientation="vertical",
+                    padding=dp(12),
+                    spacing=dp(8),
                     size_hint_y=None,
-                    height=dp(200),
-                    md_bg_color=[0.95, 0.95, 0.95, 1]
+                    radius=[dp(8)],
+                    elevation=0,
+                    md_bg_color=tokens.get("card_alt", [0.96, 0.97, 0.99, 1]),
                 )
+                card.bind(minimum_height=card.setter("height"))
 
-                info_text = f"""ID: {mov_id} | Tipo: {mov_type}
-    Produto: {description}
-    Quantidade: {qty} {unit} | Custo: {cost:.2f} MZN
-    Registado por: {user} ({role})
-    Data: {created_at}
-    Motivo: {reason}
-    {f'Obs: {note}' if note else ''}
-    {'Com evidencia fotografica' if evidence else 'Sem evidencia'}"""
+                header = MDBoxLayout(
+                    size_hint_y=None,
+                    height=dp(26),
+                    spacing=dp(8),
+                )
+                header.add_widget(
+                    MDIcon(
+                        icon="clipboard-alert-outline",
+                        theme_text_color="Custom",
+                        text_color=tokens.get("warning", [0.84, 0.52, 0.12, 1]),
+                        size_hint=(None, None),
+                        size=(dp(18), dp(18)),
+                    )
+                )
+                header.add_widget(
+                    MDLabel(
+                        text=f"#{mov_id} | {mov_type or 'Movimento pendente'}",
+                        bold=True,
+                        theme_text_color="Primary",
+                        shorten=True,
+                        shorten_from="right",
+                    )
+                )
+                card.add_widget(header)
+
+                note_line = f"\nObs: {note}" if note else ""
+                info_text = (
+                    f"Produto: {description or 'Produto'}\n"
+                    f"Quantidade: {qty} {unit or 'un'} | Custo: {self._format_money(cost)}\n"
+                    f"Registado por: {user or 'sistema'} ({role or 'sem perfil'})\n"
+                    f"Data: {created_at or 'sem data'}\n"
+                    f"Motivo: {reason or 'nao informado'}"
+                    f"{note_line}\n"
+                    f"{'Com evidencia fotografica' if evidence else 'Sem evidencia'}"
+                )
 
                 info_label = MDLabel(
                     text=info_text,
                     size_hint_y=None,
-                    halign='left',
-                    font_size=dp(12)
+                    halign="left",
+                    valign="top",
+                    font_size=dp(12),
+                    theme_text_color="Secondary",
                 )
-                info_label.bind(texture_size=info_label.setter('size'))
+                self._bind_wrapped_label_height(info_label, min_height=dp(90))
                 card.add_widget(info_label)
 
                 buttons = MDBoxLayout(
                     size_hint_y=None,
                     height=dp(40),
-                    spacing=dp(10)
+                    spacing=dp(10),
                 )
 
                 approve_btn = MDRaisedButton(
                     text="APROVAR",
-                    md_bg_color=[0.2, 0.7, 0.3, 1],
-                    on_release=lambda x, mid=mov_id: self.approve_loss(mid, current_user)
+                    md_bg_color=tokens.get("success", [0.2, 0.7, 0.3, 1]),
+                    on_release=lambda _x, mid=mov_id: (
+                        dialog_ref["dialog"].dismiss() if dialog_ref.get("dialog") else None,
+                        self.approve_loss(mid, current_user),
+                    ),
                 )
 
                 reject_btn = MDRaisedButton(
                     text="REJEITAR",
-                    md_bg_color=[0.9, 0.3, 0.3, 1],
-                    on_release=lambda x, mid=mov_id: self.reject_loss(mid)
+                    md_bg_color=tokens.get("danger", [0.9, 0.3, 0.3, 1]),
+                    on_release=lambda _x, mid=mov_id: (
+                        dialog_ref["dialog"].dismiss() if dialog_ref.get("dialog") else None,
+                        self.reject_loss(mid),
+                    ),
                 )
 
                 buttons.add_widget(approve_btn)
@@ -3831,21 +4074,27 @@ class AdminScreen(Screen):
 
                 content.add_widget(card)
 
-            scroll = ScrollView(size_hint=(1, 1))
-            scroll.add_widget(content)
+            scroll = self._build_bounded_scroll(
+                content,
+                max_height_ratio=0.58,
+                max_height_dp=520,
+                min_height_dp=260,
+            )
 
             dialog = MDDialog(
                 title="DETALHES DAS APROVACOES",
-                type='custom',
+                type="custom",
                 content_cls=scroll,
-                size_hint=(0.95, 0.9),
+                size_hint=(None, None),
+                size=(min(dp(860), Window.width * 0.9), min(dp(620), Window.height * 0.78)),
                 buttons=[
                     MDFlatButton(
                         text="FECHAR",
-                        on_release=lambda x: dialog.dismiss()
+                        on_release=lambda _x: dialog.dismiss(),
                     )
-                ]
+                ],
             )
+            dialog_ref["dialog"] = dialog
             dialog.open()
 
         except Exception as e:
@@ -3853,11 +4102,12 @@ class AdminScreen(Screen):
 
     def approve_loss(self, movement_id, approved_by):
         try:
-            success = self.db.approve_stock_movement(movement_id, approved_by)
+            actor = approved_by or getattr(App.get_running_app(), "current_user", None) or "admin"
+            success = self.db.approve_stock_movement(movement_id, actor)
 
             if success:
                 self.show_snackbar(f"Perda #{movement_id} aprovada")
-                self.db.log_action(approved_by, "admin", "APPROVE_LOSS", f"Aprovada perda ID {movement_id}")
+                self.db.log_action(actor, "admin", "APPROVE_LOSS", f"Aprovada perda ID {movement_id}")
                 self.show_pending_approvals()
             else:
                 self.show_snackbar("Erro ao aprovar perda")
@@ -3867,9 +4117,19 @@ class AdminScreen(Screen):
 
     def reject_loss(self, movement_id):
         try:
-            self.show_snackbar(f"Perda #{movement_id} marcada para rejeição")
+            app = App.get_running_app()
+            actor = getattr(app, "current_user", None) or "admin"
+            rejecter = getattr(self.db, "reject_stock_movement", None)
+            success = rejecter(movement_id, rejected_by=actor) if callable(rejecter) else False
+            if success:
+                self.show_snackbar(f"Perda #{movement_id} rejeitada")
+                self.db.log_action(actor, "admin", "REJECT_LOSS", f"Rejeitada perda ID {movement_id}")
+                self.show_pending_approvals()
+                return
+            self.show_snackbar("Erro ao rejeitar perda")
         except Exception as e:
             print(f"Erro ao rejeitar: {e}")
+            self.show_snackbar("Erro ao rejeitar")
 
     # ------------------------------------------------------------------
     # Lifecycle events
@@ -3928,22 +4188,27 @@ class AdminScreen(Screen):
         def worker():
             try:
                 alerts = self.db.detect_fraud_patterns(days_lookback=7) or []
-                high_count = sum(1 for alert in alerts if alert.get("severity") == 3)
             except Exception as exc:
                 print(f"Erro ao verificar alertas: {exc}")
-                high_count = 0
+                alerts = []
             Clock.schedule_once(
-                lambda _dt, count=high_count, tok=token: self._apply_fraud_check_result(count, tok),
+                lambda _dt, items=alerts, tok=token: self._apply_fraud_check_result(items, tok),
                 0
             )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_fraud_check_result(self, high_count, token):
+    def _apply_fraud_check_result(self, alerts, token):
         if token != self._fraud_check_token:
             return
-        if high_count > 0:
-            if high_count != self._last_fraud_log_count:
+        alerts = list(alerts or [])
+        high_count = sum(1 for alert in alerts if int(alert.get("severity") or 0) == 3)
+        if alerts:
+            self._render_status_banners(
+                [self._build_fraud_alerts_banner(alerts, days_lookback=7)],
+                auto_dismiss_seconds=None,
+            )
+            if high_count > 0 and high_count != self._last_fraud_log_count:
                 app = App.get_running_app()
                 actor = getattr(app, "current_user", None) or "sistema"
                 role = getattr(app, "current_role", None) or "admin"
@@ -3957,11 +4222,39 @@ class AdminScreen(Screen):
                 except Exception:
                     pass
             self._last_fraud_log_count = high_count
-            print(f"Alertas criticos detectados: {high_count}")
+            print(f"Alertas de fraude detectados: {len(alerts)}")
             return
         self._last_fraud_log_count = 0
 
     def show_fraud_notification_popup(self, alert_count):
+        try:
+            count = int(alert_count or 0)
+        except Exception:
+            count = 0
+        if self._render_status_banners(
+            [
+                {
+                    "kind": "fraud",
+                    "variant": "danger",
+                    "icon": "shield-alert-outline",
+                    "bg_color": (0.93, 0.34, 0.34, 1),
+                    "title": "Alertas criticos de fraude",
+                    "messages": [
+                        f"Detectados {count} alerta(s) de alta prioridade.",
+                        "Revisao imediata recomendada.",
+                    ],
+                    "all_messages": [],
+                    "count": count,
+                    "urgency": 0,
+                    "details_sections": [
+                        ("Acao recomendada", ["Priorize a revisao dos movimentos suspeitos antes de novas validacoes."]),
+                    ],
+                }
+            ],
+            auto_dismiss_seconds=None,
+        ):
+            return
+
         dialog = MDDialog(
             title="ALERTAS CRITICOS",
             text=f"Detectados {alert_count} alertas de seguranca de alta prioridade!\n\nRecomenda-se revisao imediata.",

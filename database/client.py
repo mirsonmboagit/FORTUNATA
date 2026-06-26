@@ -40,6 +40,7 @@ class DatabaseClient:
         "reset_",
         "refund_",
         "approve_",
+        "reject_",
         "clear_",
     )
     _FALLBACK_SAFE_RPC_METHODS = {
@@ -287,8 +288,10 @@ class DatabaseClient:
         return method.startswith(self._MUTATING_RPC_PREFIXES)
 
     def _to_json_compatible(self, value):
-        if isinstance(value, (datetime, date)):
+        if isinstance(value, datetime):
             return value.isoformat(sep=" ")
+        if isinstance(value, date):
+            return value.isoformat()
         if isinstance(value, dict):
             return {k: self._to_json_compatible(v) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
@@ -862,6 +865,9 @@ class DatabaseClient:
 
     def approve_stock_movement(self, movement_id, approved_by):
         return self._rpc("approve_stock_movement", movement_id, approved_by)
+
+    def reject_stock_movement(self, movement_id, rejected_by=None):
+        return self._rpc("reject_stock_movement", movement_id, rejected_by=rejected_by)
 
     def delete_stock_movement(self, movement_id, deleted_by=None):
         return self._rpc("delete_stock_movement", movement_id, deleted_by=deleted_by)
