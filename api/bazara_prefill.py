@@ -14,7 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from api.api_bazara import BazaraAPI
-from utils.paths import CACHE_DIR
+from utils.config.paths import CACHE_DIR
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
 
 GRAPHQL_URL = "https://bazara.co.mz/graphql"
@@ -285,9 +285,21 @@ def _barcode_from_json_ld(data):
 
 
 def _extract_barcode_from_html(html_text: str) -> str | None:
-    if not has_beautifulsoup():
-        return None
     if not html_text:
+        return None
+
+    patterns = (
+        r'"gtin(?:13|14|12|8)?"\s*:\s*"(\d{8,14})"',
+        r'"(?:barcode|ean|upc|codigo[_-]?barras)"\s*:\s*"(\d{8,14})"',
+        r'c[oÃ³]digo de barras\s*</[^>]+>\s*<[^>]*>\s*(\d{8,14})',
+        r'(?:GTIN|EAN|UPC|Barcode|Codigo de barras|Código de barras)[^0-9]{0,80}(\d{8,14})',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, html_text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    if not has_beautifulsoup():
         return None
 
     soup = BeautifulSoup(html_text, "html.parser")
@@ -418,11 +430,12 @@ def prefill_bazara_cache(
             barcode = sku if _looks_like_barcode(sku) else _extract_barcode_from_item(item)
             if not barcode and fetch_pages:
                 barcode = _fetch_barcode_from_product_page(session, url_key, timeout)
-            if not barcode:
+            cache_key = barcode or sku
+            if not cache_key:
                 stats["no_sku"] += 1
                 continue
             data = {
-                "barcode": barcode,
+                "barcode": cache_key,
                 "sku": sku,
                 "url_key": url_key,
                 "name": item.get("name") or "",
@@ -430,7 +443,9 @@ def prefill_bazara_cache(
                 "image": api._extract_graphql_image(item),
                 "category": api._extract_graphql_category(item),
             }
-            created, updated = _merge_entry(cache, barcode, data)
+            if barcode and barcode != sku:
+                data["ean"] = barcode
+            created, updated = _merge_entry(cache, cache_key, data)
             if created:
                 stats["new"] += 1
                 stats["success"] += 1
@@ -482,9 +497,6 @@ def prefill_bazara_cache(
 
 
 def main():
-    if not has_beautifulsoup():
-        print("BeautifulSoup indisponivel. Instale beautifulsoup4 para executar o prefill Bazara.")
-        return
     parser = argparse.ArgumentParser(description="Prefill do cache offline do Bazara via GraphQL")
     parser.add_argument("--page-size", type=int, default=200, help="Tamanho da pagina")
     parser.add_argument("--delay", type=float, default=0.2, help="Delay entre paginas")
@@ -492,6 +504,8 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Ignora cache atual e recria do zero")
     parser.add_argument("--no-page-barcode", action="store_true", help="Nao abrir pagina do produto para buscar codigo de barras")
     args = parser.parse_args()
+    if not args.no_page_barcode and not has_beautifulsoup():
+        print("BeautifulSoup indisponivel. Vou abrir paginas e extrair codigos por regex.")
     prefill_bazara_cache(
         page_size=args.page_size,
         delay=args.delay,

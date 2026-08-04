@@ -12,9 +12,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from flask import Flask, current_app, jsonify, request
 
-from utils.app_config import get_api_config, get_app_config
-from utils.logging_setup import configure_runtime_logging
-from utils.paths import ROOT_DIR, ensure_runtime_dirs, set_project_cwd
+from utils.config.app_config import get_api_config, get_app_config
+from utils.config.logging_setup import configure_runtime_logging
+from utils.config.paths import ROOT_DIR, ensure_runtime_dirs, set_project_cwd
+from version import __version__
 
 set_project_cwd()
 ensure_runtime_dirs()
@@ -44,6 +45,15 @@ ALLOWLIST = {
     "has_admin",
     "is_admin_default",
     "create_user",
+    "update_user_email",
+    "get_user_email_status",
+    "is_user_email_verified",
+    "request_email_verification",
+    "confirm_email_verification",
+    "request_password_reset",
+    "confirm_password_reset",
+    "generate_recovery_codes",
+    "confirm_recovery_code",
     "set_security_questions",
     "verify_security_answers",
     "get_security_record",
@@ -52,6 +62,7 @@ ALLOWLIST = {
     "get_products_for_sale_page",
     "get_products_for_sale_catalog_page",
     "get_products_for_sale_ids",
+    "get_products_sale_revision",
     "get_product_by_barcode",
     "get_products_by_barcode",
     "get_all_products",
@@ -60,6 +71,18 @@ ALLOWLIST = {
     "get_vat_rules",
     "delete_product",
     "add_sale",
+    "get_open_cash_session",
+    "open_cash_session",
+    "get_cash_session_summary",
+    "close_cash_session",
+    "get_active_physical_inventory",
+    "list_physical_inventories",
+    "start_physical_inventory",
+    "get_physical_inventory_items",
+    "record_physical_inventory_count",
+    "get_physical_inventory_summary",
+    "complete_physical_inventory",
+    "cancel_physical_inventory",
     "record_stock_movement",
     "restock_product",
     "get_sales_by_date",
@@ -252,6 +275,7 @@ def create_app():
         payload = {
             "ok": True,
             "service": "sige-mpe-api",
+            "version": __version__,
             "runner": runtime["api"].get("runner") or "flask",
             "host": runtime["api"].get("host"),
             "port": runtime["api"].get("port"),

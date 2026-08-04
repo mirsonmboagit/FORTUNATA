@@ -8,6 +8,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from utils.core.formatters import format_money, safe_float
+
 from .base_report import BasePDFReport
 
 
@@ -39,16 +41,10 @@ class ShoppingListReport(BasePDFReport):
         return pdf_path
 
     def _money(self, value):
-        try:
-            return f"{float(value or 0):,.2f} MZN"
-        except Exception:
-            return "0.00 MZN"
+        return format_money(value, currency="MZN")
 
     def _qty(self, value, unit):
-        try:
-            number = float(value or 0)
-        except Exception:
-            number = 0.0
+        number = safe_float(value)
         if str(unit or "").upper() == "KG":
             return f"{number:.2f} KG"
         return f"{int(round(number))} UN"
@@ -123,7 +119,7 @@ class ShoppingListReport(BasePDFReport):
 
         if len(rows) == 1:
             rows.append([
-                self._cell("Nenhum produto precisa de reposicao.", cell_style),
+                self._cell("Nenhum produto precisa de reposição.", cell_style),
                 "-",
                 "-",
                 "-",

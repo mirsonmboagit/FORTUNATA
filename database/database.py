@@ -1,5 +1,6 @@
 import builtins
 import os
+import secrets
 import sqlite3
 import sys
 from datetime import datetime, timedelta, date
@@ -7,9 +8,17 @@ from time import perf_counter
 import bcrypt
 
 from database.automation import DatabaseAutomationMixin
-from utils.perf_utils import perf_log, should_log_debug
-from utils.paths import DB_BACKUP_DIR, resolve_path
-from utils.vat import (
+from utils.business.email_service import (
+    EmailServiceError,
+    is_valid_email,
+    normalize_email,
+    send_email_verification_code,
+    send_password_changed_notice,
+    send_password_reset_code,
+)
+from utils.core.perf_utils import perf_log, should_log_debug
+from utils.config.paths import DB_BACKUP_DIR, resolve_path
+from utils.business.vat import (
     DEFAULT_VAT_RULE_CODE,
     VAT_RULES,
     compute_vat_breakdown,
@@ -242,6 +251,10 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute("PRAGMA foreign_keys = ON")
             try:
                 self.cursor.execute("PRAGMA journal_mode = WAL")
+                self.cursor.execute("PRAGMA synchronous = NORMAL")
+                self.cursor.execute("PRAGMA temp_store = MEMORY")
+                self.cursor.execute("PRAGMA cache_size = -20000")
+                self.cursor.execute("PRAGMA mmap_size = 134217728")
             except sqlite3.Error:
                 pass
             print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Conectado com sucesso em: {self.db_path}")
@@ -486,8 +499,38 @@ class Database(DatabaseAutomationMixin):
                     self.cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
                 if "data_owner" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN data_owner TEXT")
+                if "email_verified" not in cols:
+                    self.cursor.execute(
+                        "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "email_verified_at" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
+                self.cursor.execute(
+                    "UPDATE users SET email = NULL "
+                    "WHERE email IS NOT NULL AND TRIM(email) = ''"
+                )
+                self.cursor.execute(
+                    "UPDATE users SET email = LOWER(TRIM(email)) WHERE email IS NOT NULL"
+                )
             except sqlite3.Error as e:
                 print(f"Erro ao adicionar colunas de contacto: {e}")
+
+            # Codigos de uso unico para confirmar o e-mail cadastrado.
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_verifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                code_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                attempts INTEGER DEFAULT 0,
+                last_sent_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (username) REFERENCES users(username)
+            )''')
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_email_verifications_username "
+                "ON email_verifications(username)"
+            )
 
             # Tabela de recuperacao de senha por SMS
             self.cursor.execute('''
@@ -503,6 +546,20 @@ class Database(DatabaseAutomationMixin):
             )''')
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_password_resets_username ON password_resets(username)"
+            )
+            # Codigos longos de recuperacao offline, gerados pelo administrador.
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS account_recovery_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                code_hash TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (username) REFERENCES users(username)
+            )''')
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_account_recovery_codes_username "
+                "ON account_recovery_codes(username)"
             )
             # Tabela de perguntas de seguranca
             self.cursor.execute('''
@@ -757,6 +814,39 @@ class Database(DatabaseAutomationMixin):
             ensure_column("sales", "vat_amount", "REAL DEFAULT 0")
             ensure_column("sales", "gross_total", "REAL DEFAULT 0")
             ensure_column("sales", "owner_username", "TEXT")
+            ensure_column("sales", "transaction_code", "TEXT")
+            ensure_column("sales", "payment_method", "TEXT DEFAULT 'cash'")
+            ensure_column("sales", "discount_amount", "REAL DEFAULT 0")
+            ensure_column("sales", "discount_reason", "TEXT")
+            ensure_column("sales", "discount_authorized_by", "TEXT")
+            ensure_column("sales", "cash_session_id", "INTEGER")
+
+            # Abertura e fecho de caixa por operador/terminal.
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS cash_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'manager',
+                    terminal_id TEXT NOT NULL,
+                    opened_at TEXT NOT NULL,
+                    opening_amount REAL NOT NULL DEFAULT 0,
+                    opening_note TEXT,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    closed_at TEXT,
+                    counted_amount REAL,
+                    expected_cash REAL,
+                    difference_amount REAL,
+                    closing_note TEXT,
+                    closed_by TEXT,
+                    owner_username TEXT
+                )
+                '''
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cash_sessions_open "
+                "ON cash_sessions(username, terminal_id, status)"
+            )
 
             # Tabela de devolucoes/estornos de venda
             self.cursor.execute(
@@ -927,6 +1017,54 @@ class Database(DatabaseAutomationMixin):
             ensure_column("stock_reconciliation_issues", "owner_username", "TEXT")
 
             self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS physical_inventories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'COUNTING',
+                    started_at TEXT NOT NULL,
+                    started_by TEXT NOT NULL,
+                    terminal_id TEXT,
+                    note TEXT,
+                    completed_at TEXT,
+                    completed_by TEXT,
+                    cancelled_at TEXT,
+                    cancelled_by TEXT,
+                    owner_username TEXT
+                )
+                '''
+            )
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS physical_inventory_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    inventory_id INTEGER NOT NULL,
+                    product_id INTEGER NOT NULL,
+                    product_name TEXT NOT NULL,
+                    unit TEXT NOT NULL DEFAULT 'UN',
+                    snapshot_qty REAL NOT NULL DEFAULT 0,
+                    counted_qty REAL,
+                    difference_qty REAL,
+                    counted_at TEXT,
+                    counted_by TEXT,
+                    count_note TEXT,
+                    applied_difference REAL,
+                    movement_id INTEGER,
+                    UNIQUE(inventory_id, product_id),
+                    FOREIGN KEY (inventory_id) REFERENCES physical_inventories(id),
+                    FOREIGN KEY (product_id) REFERENCES products(id),
+                    FOREIGN KEY (movement_id) REFERENCES stock_movements(id)
+                )
+                '''
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_inventory_status ON physical_inventories(status, started_at DESC)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_inventory_items_session ON physical_inventory_items(inventory_id, counted_at)"
+            )
+
+            self.cursor.execute(
                 "SELECT username FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1"
             )
             legacy_owner_row = self.cursor.fetchone()
@@ -1018,6 +1156,22 @@ class Database(DatabaseAutomationMixin):
                 "CREATE INDEX IF NOT EXISTS idx_user_logs_timestamp "
                 "ON user_logs (timestamp)"
             )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_logs_scope_timestamp "
+                "ON user_logs (COALESCE(owner_username, ''), timestamp DESC)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_logs_scope_role_timestamp "
+                "ON user_logs (COALESCE(owner_username, ''), role, timestamp DESC)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_logs_scope_action_timestamp "
+                "ON user_logs (COALESCE(owner_username, ''), action, timestamp DESC)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_logs_scope_user_timestamp "
+                "ON user_logs (COALESCE(owner_username, ''), username, timestamp DESC)"
+            )
             
             self.conn.commit()
             print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Banco de dados configurado com suporte completo a vendas por KG e sistema de perdas!")
@@ -1055,15 +1209,71 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao verificar admin: {e}")
             return False
 
-    def create_admin(self, username, password):
+    def _email_in_use(self, email, exclude_username=None):
+        normalized = normalize_email(email)
+        if not normalized:
+            return False
+        if exclude_username:
+            self.cursor.execute(
+                "SELECT 1 FROM users "
+                "WHERE LOWER(TRIM(COALESCE(email, ''))) = ? AND username != ? LIMIT 1",
+                (normalized, exclude_username),
+            )
+        else:
+            self.cursor.execute(
+                "SELECT 1 FROM users "
+                "WHERE LOWER(TRIM(COALESCE(email, ''))) = ? LIMIT 1",
+                (normalized,),
+            )
+        return self.cursor.fetchone() is not None
+
+    @staticmethod
+    def _mask_email(email):
+        normalized = normalize_email(email)
+        if not is_valid_email(normalized):
+            return None
+        local, domain = normalized.rsplit("@", 1)
+        if len(local) <= 2:
+            masked_local = local[:1] + "*" * max(1, len(local) - 1)
+        else:
+            masked_local = local[:2] + "*" * max(2, len(local) - 2)
+        return f"{masked_local}@{domain}"
+
+    @staticmethod
+    def _new_six_digit_code():
+        return f"{secrets.randbelow(1_000_000):06d}"
+
+    @staticmethod
+    def _code_matches(code, stored_hash):
+        candidate = str(code or "").strip()
+        if not candidate or not stored_hash:
+            return False
+        hashed = stored_hash.encode("utf-8") if isinstance(stored_hash, str) else stored_hash
+        try:
+            return bcrypt.checkpw(candidate.encode("utf-8"), hashed)
+        except (TypeError, ValueError):
+            return False
+
+    def create_admin(self, username, password, email=None):
         """Criar admin inicial"""
         try:
+            username = str(username or "").strip()
+            if not username or not password:
+                return False
+            normalized_email = normalize_email(email) if email is not None else None
+            if normalized_email == "":
+                normalized_email = None
+            if normalized_email is not None:
+                if not is_valid_email(normalized_email) or self._email_in_use(normalized_email):
+                    return False
             self.cursor.execute("SELECT COUNT(*) FROM users")
             had_users = int(self.cursor.fetchone()[0] or 0) > 0
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
             self.cursor.execute(
-                "INSERT INTO users (username, password, role, data_owner) VALUES (?, ?, ?, ?)",
-                (username, hashed_password, 'admin', username),
+                "INSERT INTO users "
+                "(username, password, role, email, email_verified, email_verified_at, data_owner) "
+                "VALUES (?, ?, ?, ?, 0, NULL, ?)",
+                (username, hashed_password, 'admin', normalized_email, username),
             )
             if not had_users:
                 for table in (
@@ -1235,12 +1445,19 @@ class Database(DatabaseAutomationMixin):
             role = str(role or "").strip().lower()
             if not username or not password or role not in ("admin", "manager"):
                 return False
-            email = str(email).strip() if email else None
+            email = normalize_email(email) if email is not None else None
+            if email == "":
+                email = None
+            if email is not None:
+                if not is_valid_email(email) or self._email_in_use(email):
+                    return False
             phone = str(phone).strip() if phone else None
             owner = str(data_owner or username or "").strip() or username
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
             self.cursor.execute(
-                "INSERT INTO users (username, password, role, email, phone, data_owner) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users "
+                "(username, password, role, email, phone, data_owner, email_verified, email_verified_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL)",
                 (username, hashed_password, role, email, phone, owner),
             )
             self.conn.commit()
@@ -1252,6 +1469,485 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao criar usuario: {e}")
             self.conn.rollback()
             return False
+
+    def update_user_email(self, username, email):
+        """Atualiza o endereco cadastrado e exige uma nova verificacao."""
+        username = str(username or "").strip()
+        normalized = normalize_email(email)
+        if not username or not is_valid_email(normalized):
+            return False
+        try:
+            self.cursor.execute(
+                "SELECT email FROM users WHERE username = ?",
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            if not row or self._email_in_use(normalized, exclude_username=username):
+                return False
+
+            current = normalize_email(row[0])
+            if current == normalized:
+                if row[0] != normalized:
+                    self.cursor.execute(
+                        "UPDATE users SET email = ? WHERE username = ?",
+                        (normalized, username),
+                    )
+                    self.conn.commit()
+                return True
+
+            self.cursor.execute(
+                "UPDATE users SET email = ?, email_verified = 0, email_verified_at = NULL "
+                "WHERE username = ?",
+                (normalized, username),
+            )
+            self.cursor.execute(
+                "DELETE FROM email_verifications WHERE username = ?",
+                (username,),
+            )
+            self.cursor.execute(
+                "DELETE FROM password_resets WHERE username = ?",
+                (username,),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao atualizar e-mail: {e}")
+            self.conn.rollback()
+            return False
+
+    def get_user_email_status(self, username):
+        """Retorna apenas o estado e uma versao mascarada do e-mail."""
+        try:
+            self.cursor.execute(
+                "SELECT email, COALESCE(email_verified, 0) FROM users WHERE username = ?",
+                (str(username or "").strip(),),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return {"has_email": False, "verified": False, "masked_email": None}
+            has_email = is_valid_email(row[0])
+            return {
+                "has_email": has_email,
+                "verified": bool(has_email and row[1]),
+                "masked_email": self._mask_email(row[0]) if has_email else None,
+            }
+        except sqlite3.Error as e:
+            print(f"Erro ao obter estado do e-mail: {e}")
+            return {"has_email": False, "verified": False, "masked_email": None}
+
+    def is_user_email_verified(self, username):
+        return bool(self.get_user_email_status(username).get("verified"))
+
+    @staticmethod
+    def _code_retry_after(last_sent_at, resend_seconds, now):
+        if not last_sent_at:
+            return 0
+        try:
+            sent_at = datetime.fromisoformat(str(last_sent_at))
+        except (TypeError, ValueError):
+            return 0
+        remaining = float(resend_seconds) - (now - sent_at).total_seconds()
+        return max(0, int(remaining) + (1 if remaining > int(remaining) else 0))
+
+    def request_email_verification(self, username, resend_seconds=60, expiry_minutes=10):
+        """Envia um codigo ao endereco ja armazenado no cadastro."""
+        username = str(username or "").strip()
+        resend_seconds = max(60, min(3600, int(resend_seconds or 60)))
+        expiry_minutes = max(1, min(10, int(expiry_minutes or 10)))
+        try:
+            self.cursor.execute(
+                "SELECT email, COALESCE(email_verified, 0) FROM users WHERE username = ?",
+                (username,),
+            )
+            user = self.cursor.fetchone()
+            if not user:
+                return {"ok": False, "reason": "user_not_found"}
+            email, verified = user
+            if verified:
+                return {"ok": True, "reason": "already_verified", "retry_after": 0}
+            if not email:
+                return {"ok": False, "reason": "no_email"}
+            email = normalize_email(email)
+            if not is_valid_email(email):
+                return {"ok": False, "reason": "invalid_email"}
+
+            now = datetime.now().replace(microsecond=0)
+            self.cursor.execute(
+                "SELECT last_sent_at FROM email_verifications WHERE username = ?",
+                (username,),
+            )
+            record = self.cursor.fetchone()
+            retry_after = self._code_retry_after(
+                record[0] if record else None, resend_seconds, now
+            )
+            if retry_after:
+                return {
+                    "ok": False,
+                    "reason": "rate_limited",
+                    "retry_after": retry_after,
+                }
+
+            code = self._new_six_digit_code()
+            code_hash = bcrypt.hashpw(code.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            expires_at = now + timedelta(minutes=expiry_minutes)
+            try:
+                send_email_verification_code(email, username, code)
+            except EmailServiceError as exc:
+                print(f"Erro ao enviar verificacao de e-mail: {exc}")
+                return {"ok": False, "reason": "email_unavailable"}
+
+            self.cursor.execute(
+                """
+                INSERT INTO email_verifications
+                    (username, code_hash, expires_at, attempts, last_sent_at, created_at)
+                VALUES (?, ?, ?, 0, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    code_hash = excluded.code_hash,
+                    expires_at = excluded.expires_at,
+                    attempts = 0,
+                    last_sent_at = excluded.last_sent_at,
+                    created_at = excluded.created_at
+                """,
+                (
+                    username,
+                    code_hash,
+                    expires_at.isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            self.conn.commit()
+            return {
+                "ok": True,
+                "reason": "sent",
+                "retry_after": resend_seconds,
+                "expires_in": expiry_minutes * 60,
+            }
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            print(f"Erro ao solicitar verificacao de e-mail: {e}")
+            self.conn.rollback()
+            return {"ok": False, "reason": "error"}
+
+    def confirm_email_verification(self, username, code, max_attempts=5):
+        """Confirma um codigo valido, dentro do prazo e ainda nao utilizado."""
+        username = str(username or "").strip()
+        max_attempts = max(1, min(5, int(max_attempts or 5)))
+        try:
+            self.cursor.execute(
+                "SELECT code_hash, expires_at, COALESCE(attempts, 0) "
+                "FROM email_verifications WHERE username = ?",
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return {"ok": False, "reason": "not_found"}
+
+            code_hash, expires_raw, attempts = row
+            now = datetime.now().replace(microsecond=0)
+            try:
+                expires_at = datetime.fromisoformat(str(expires_raw))
+            except (TypeError, ValueError):
+                expires_at = now - timedelta(seconds=1)
+            if now >= expires_at:
+                self.cursor.execute(
+                    "DELETE FROM email_verifications WHERE username = ?", (username,)
+                )
+                self.conn.commit()
+                return {"ok": False, "reason": "expired"}
+
+            if not self._code_matches(code, code_hash):
+                attempts = int(attempts or 0) + 1
+                if attempts >= max_attempts:
+                    self.cursor.execute(
+                        "DELETE FROM email_verifications WHERE username = ?", (username,)
+                    )
+                    self.conn.commit()
+                    return {"ok": False, "reason": "too_many_attempts", "remaining": 0}
+                self.cursor.execute(
+                    "UPDATE email_verifications SET attempts = ? WHERE username = ?",
+                    (attempts, username),
+                )
+                self.conn.commit()
+                return {
+                    "ok": False,
+                    "reason": "invalid",
+                    "remaining": max_attempts - attempts,
+                }
+
+            verified_at = now.isoformat()
+            self.cursor.execute(
+                "UPDATE users SET email_verified = 1, email_verified_at = ? "
+                "WHERE username = ?",
+                (verified_at, username),
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return {"ok": False, "reason": "not_found"}
+            self.cursor.execute(
+                "DELETE FROM email_verifications WHERE username = ? AND code_hash = ?",
+                (username, code_hash),
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return {"ok": False, "reason": "not_found"}
+            self.conn.commit()
+            return {"ok": True, "reason": "verified"}
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            print(f"Erro ao confirmar e-mail: {e}")
+            self.conn.rollback()
+            return {"ok": False, "reason": "error"}
+
+    def generate_recovery_codes(self, username, count=8):
+        """Gera codigos offline; o texto claro e devolvido apenas nesta operacao."""
+        username = str(username or "").strip()
+        try:
+            count = max(4, min(12, int(count or 8)))
+            self.cursor.execute("SELECT role FROM users WHERE username = ?", (username,))
+            user = self.cursor.fetchone()
+            if not user:
+                return {"ok": False, "reason": "not_found"}
+            now = datetime.now().replace(microsecond=0).isoformat()
+            codes = []
+            self.cursor.execute("DELETE FROM account_recovery_codes WHERE username = ?", (username,))
+            for _ in range(count):
+                raw = secrets.token_hex(8).upper()
+                code = f"{raw[:4]}-{raw[4:8]}-{raw[8:12]}-{raw[12:]}"
+                code_hash = bcrypt.hashpw(code.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+                self.cursor.execute(
+                    "INSERT INTO account_recovery_codes "
+                    "(username, code_hash, created_at) VALUES (?, ?, ?)",
+                    (username, code_hash, now),
+                )
+                codes.append(code)
+            self.conn.commit()
+            return {"ok": True, "username": username, "codes": codes, "created_at": now}
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            print(f"Erro ao gerar codigos de recuperacao: {exc}")
+            self.conn.rollback()
+            return {"ok": False, "reason": "error"}
+
+    def confirm_recovery_code(self, username, code, new_password, min_password_length=8):
+        """Usa um codigo offline uma unica vez para trocar a senha."""
+        username = str(username or "").strip()
+        code = str(code or "").strip().upper()
+        min_password_length = max(8, int(min_password_length or 8))
+        if len(str(new_password or "")) < min_password_length:
+            return {"ok": False, "reason": "weak_password", "min_length": min_password_length}
+        try:
+            self.cursor.execute(
+                "SELECT id, code_hash FROM account_recovery_codes "
+                "WHERE username = ? AND used_at IS NULL",
+                (username,),
+            )
+            rows = self.cursor.fetchall()
+            matched_id = None
+            for row_id, code_hash in rows:
+                if self._code_matches(code, code_hash):
+                    matched_id = row_id
+                    break
+            if matched_id is None:
+                return {"ok": False, "reason": "invalid"}
+            hashed_password = bcrypt.hashpw(str(new_password).encode("utf-8"), bcrypt.gensalt())
+            now = datetime.now().replace(microsecond=0).isoformat()
+            self.cursor.execute(
+                "UPDATE account_recovery_codes SET used_at = ? "
+                "WHERE id = ? AND used_at IS NULL", (now, matched_id)
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return {"ok": False, "reason": "invalid"}
+            self.cursor.execute(
+                "UPDATE users SET password = ? WHERE username = ?",
+                (hashed_password, username),
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return {"ok": False, "reason": "not_found"}
+            self.conn.commit()
+            return {"ok": True, "reason": "password_reset"}
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            print(f"Erro ao confirmar codigo de recuperacao: {exc}")
+            self.conn.rollback()
+            return {"ok": False, "reason": "error"}
+
+    def request_password_reset(self, username, resend_seconds=60, expiry_minutes=10):
+        """Solicita recuperacao sem aceitar ou revelar o endereco de destino."""
+        username = str(username or "").strip()
+        resend_seconds = max(60, min(3600, int(resend_seconds or 60)))
+        expiry_minutes = max(1, min(10, int(expiry_minutes or 10)))
+        generic = {
+            "ok": True,
+            "reason": "accepted",
+            "retry_after": resend_seconds,
+        }
+        try:
+            self.cursor.execute("SELECT email FROM users WHERE username = ?", (username,))
+            user = self.cursor.fetchone()
+            if not user or not user[0] or not is_valid_email(user[0]):
+                return generic
+            email = normalize_email(user[0])
+
+            now = datetime.now().replace(microsecond=0)
+            self.cursor.execute(
+                "SELECT last_sent_at FROM password_resets WHERE username = ?",
+                (username,),
+            )
+            record = self.cursor.fetchone()
+            retry_after = self._code_retry_after(
+                record[0] if record else None, resend_seconds, now
+            )
+            if retry_after:
+                return {"ok": True, "reason": "accepted", "retry_after": retry_after}
+
+            code = self._new_six_digit_code()
+            code_hash = bcrypt.hashpw(code.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            expires_at = now + timedelta(minutes=expiry_minutes)
+            try:
+                send_password_reset_code(email, username, code)
+            except EmailServiceError as exc:
+                print(f"Erro ao enviar recuperacao de senha: {exc}")
+                return {"ok": False, "reason": "email_unavailable"}
+
+            self.cursor.execute(
+                """
+                INSERT INTO password_resets
+                    (username, code_hash, expires_at, attempts, last_sent_at, created_at)
+                VALUES (?, ?, ?, 0, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    code_hash = excluded.code_hash,
+                    expires_at = excluded.expires_at,
+                    attempts = 0,
+                    last_sent_at = excluded.last_sent_at,
+                    created_at = excluded.created_at
+                """,
+                (
+                    username,
+                    code_hash,
+                    expires_at.isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            self.conn.commit()
+            return generic
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            print(f"Erro ao solicitar recuperacao de senha: {e}")
+            self.conn.rollback()
+            return {"ok": False, "reason": "error"}
+
+    def confirm_password_reset(
+        self,
+        username,
+        code,
+        new_password,
+        max_attempts=5,
+        min_password_length=8,
+    ):
+        """Consome o codigo e troca a senha na mesma transacao."""
+        username = str(username or "").strip()
+        max_attempts = max(1, min(5, int(max_attempts or 5)))
+        min_password_length = max(8, int(min_password_length or 8))
+        if len(str(new_password or "")) < min_password_length:
+            return {
+                "ok": False,
+                "reason": "weak_password",
+                "min_length": min_password_length,
+            }
+        try:
+            self.cursor.execute(
+                """
+                SELECT pr.code_hash, pr.expires_at, COALESCE(pr.attempts, 0),
+                       u.email, u.role,
+                       COALESCE(NULLIF(TRIM(u.data_owner), ''), u.username)
+                FROM password_resets pr
+                JOIN users u ON u.username = pr.username
+                WHERE pr.username = ?
+                """,
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return {"ok": False, "reason": "not_found"}
+
+            code_hash, expires_raw, attempts, email, role, owner = row
+            now = datetime.now().replace(microsecond=0)
+            try:
+                expires_at = datetime.fromisoformat(str(expires_raw))
+            except (TypeError, ValueError):
+                expires_at = now - timedelta(seconds=1)
+            if now >= expires_at:
+                self.cursor.execute("DELETE FROM password_resets WHERE username = ?", (username,))
+                self.conn.commit()
+                return {"ok": False, "reason": "expired"}
+
+            if not self._code_matches(code, code_hash):
+                attempts = int(attempts or 0) + 1
+                if attempts >= max_attempts:
+                    self.cursor.execute(
+                        "DELETE FROM password_resets WHERE username = ?", (username,)
+                    )
+                    self.conn.commit()
+                    return {"ok": False, "reason": "too_many_attempts", "remaining": 0}
+                self.cursor.execute(
+                    "UPDATE password_resets SET attempts = ? WHERE username = ?",
+                    (attempts, username),
+                )
+                self.conn.commit()
+                return {
+                    "ok": False,
+                    "reason": "invalid",
+                    "remaining": max_attempts - attempts,
+                }
+
+            hashed_password = bcrypt.hashpw(
+                str(new_password).encode("utf-8"), bcrypt.gensalt()
+            )
+            self.cursor.execute(
+                "DELETE FROM password_resets WHERE username = ? AND code_hash = ?",
+                (username, code_hash),
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return {"ok": False, "reason": "not_found"}
+            self.cursor.execute(
+                "UPDATE users SET password = ?, email_verified = 1, email_verified_at = ? "
+                "WHERE username = ?",
+                (hashed_password, now.isoformat(), username),
+            )
+            if self.cursor.rowcount == 0:
+                self.conn.rollback()
+                return {"ok": False, "reason": "not_found"}
+            self.cursor.execute(
+                """
+                INSERT INTO user_logs
+                    (username, role, action, details, timestamp, owner_username)
+                VALUES (?, ?, 'RESET_PASSWORD_EMAIL', ?, ?, ?)
+                """,
+                (
+                    username,
+                    role,
+                    "Senha redefinida por codigo enviado ao e-mail cadastrado",
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
+                    owner or username,
+                ),
+            )
+            self.conn.commit()
+
+            notice_sent = True
+            try:
+                send_password_changed_notice(email, username)
+            except EmailServiceError as exc:
+                notice_sent = False
+                print(f"Senha alterada, mas o aviso por e-mail falhou: {exc}")
+            return {
+                "ok": True,
+                "reason": "password_reset",
+                "notice_sent": notice_sent,
+            }
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            print(f"Erro ao confirmar recuperacao de senha: {e}")
+            self.conn.rollback()
+            return {"ok": False, "reason": "error"}
 
     def update_admin_profile(self, current_username, new_username=None, new_password=None):
         """Atualizar username e/ou senha do admin"""
@@ -1287,7 +1983,7 @@ class Database(DatabaseAutomationMixin):
     def set_security_questions(self, username, answers):
         """Configurar perguntas de seguranca para um usuario"""
         try:
-            from utils.security_questions import REQUIRED_QUESTION_COUNT, hash_answer
+            from utils.business.security_questions import REQUIRED_QUESTION_COUNT, hash_answer
             normalized_answers = [str(answer or "").strip() for answer in list(answers or [])]
             if len(normalized_answers) < REQUIRED_QUESTION_COUNT or len(normalized_answers) > 4:
                 return False
@@ -1360,7 +2056,7 @@ class Database(DatabaseAutomationMixin):
     def verify_security_answers(self, username, answers, max_attempts=5, lock_minutes=15):
         """Verifica respostas de seguranca e gerencia tentativas/lock"""
         try:
-            from utils.security_questions import REQUIRED_QUESTION_COUNT, check_answer
+            from utils.business.security_questions import REQUIRED_QUESTION_COUNT, check_answer
             normalized_answers = [str(answer or "").strip() for answer in list(answers or [])]
             if len(normalized_answers) < REQUIRED_QUESTION_COUNT or len(normalized_answers) > 4:
                 return {"ok": False, "reason": "not_configured"}
@@ -2699,7 +3395,7 @@ class Database(DatabaseAutomationMixin):
         except Exception as e:
             print(f"Erro ao detectar perdas fora do horÃƒÆ’Ã‚Â¡rio: {e}")
         
-        # 4. Perdas sem evidÃƒÆ’Ã‚Âªncia (acima de 50% do limite)
+        # 4. Perdas sem evidencia (acima de 50% do limite)
         try:
             high_value_threshold = LOSS_VALUE_LIMIT_MZN * 0.5
             
@@ -2730,7 +3426,7 @@ class Database(DatabaseAutomationMixin):
                 alerts.append({
                     'alert_type': 'NO_EVIDENCE',
                     'severity': 2,
-                    'title': f'Perda sem evidÃƒÆ’Ã‚Âªncia: {cost:.2f} MZN',
+                    'title': f'Perda sem evidencia: {cost:.2f} MZN',
                     'description': f'{user} registou {movement_type} de {cost:.2f} MZN sem foto/comprovativo',
                     'related_user': user,
                     'related_product_id': product_id,
@@ -2742,7 +3438,7 @@ class Database(DatabaseAutomationMixin):
                     }
                 })
         except Exception as e:
-            print(f"Erro ao detectar perdas sem evidÃƒÆ’Ã‚Âªncia: {e}")
+            print(f"Erro ao detectar perdas sem evidencia: {e}")
         
         return sorted(alerts, key=lambda x: x['severity'], reverse=True)
 
@@ -3630,6 +4326,12 @@ class Database(DatabaseAutomationMixin):
         terminal_id=None,
         is_promotional=False,
         vat_rule_code=None,
+        transaction_code=None,
+        payment_method="cash",
+        discount_amount=0.0,
+        cash_session_id=None,
+        discount_reason=None,
+        discount_authorized_by=None,
     ):
         """Adicionar nova venda - SUPORTA QUANTIDADES DECIMAIS (KG) - ATUALIZA ESTOQUE"""
         try:
@@ -3638,6 +4340,10 @@ class Database(DatabaseAutomationMixin):
             sale_date = self._now_str()
             created_by = username or "SYSTEM"
             created_role = role or "manager"
+            payment_method = str(payment_method or "cash").strip().lower()
+            if payment_method not in {"cash", "card", "mobile", "emola"}:
+                payment_method = "cash"
+            discount_amount = max(0.0, float(discount_amount or 0.0))
 
             scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(f"""
@@ -3715,8 +4421,14 @@ class Database(DatabaseAutomationMixin):
                     vat_amount,
                     gross_total,
                     owner_username
+                    , transaction_code
+                    , payment_method
+                    , discount_amount
+                    , cash_session_id
+                    , discount_reason
+                    , discount_authorized_by
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 product_id,
                 quantity,
@@ -3735,6 +4447,12 @@ class Database(DatabaseAutomationMixin):
                 vat_data["vat_amount"],
                 vat_data["gross_total"],
                 self._owner_value(created_by),
+                str(transaction_code or "").strip() or None,
+                payment_method,
+                discount_amount,
+                int(cash_session_id) if cash_session_id else None,
+                str(discount_reason or "").strip() or None,
+                str(discount_authorized_by or "").strip() or None,
             ))
             sale_id = self.cursor.lastrowid
 
@@ -3781,6 +4499,362 @@ class Database(DatabaseAutomationMixin):
             self.conn.rollback()
             return None
 
+    def get_open_cash_session(self, username=None, terminal_id=None):
+        """Retorna o caixa aberto do operador neste terminal."""
+        username = str(username or self.current_user or "").strip()
+        terminal_id = str(terminal_id or "POS").strip() or "POS"
+        if not username:
+            return None
+        self.cursor.execute(
+            """
+            SELECT id, username, role, terminal_id, opened_at, opening_amount,
+                   opening_note, status
+            FROM cash_sessions
+            WHERE username = ? AND terminal_id = ? AND status = 'OPEN'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (username, terminal_id),
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        keys = ("id", "username", "role", "terminal_id", "opened_at", "opening_amount", "opening_note", "status")
+        return dict(zip(keys, row))
+
+    def open_cash_session(self, username, terminal_id, opening_amount=0.0, note="", role=None):
+        username = str(username or "").strip()
+        terminal_id = str(terminal_id or "POS").strip() or "POS"
+        if not username:
+            return {"ok": False, "message": "Utilizador invalido"}
+        try:
+            opening_amount = float(opening_amount or 0.0)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Fundo inicial invalido"}
+        if opening_amount < 0:
+            return {"ok": False, "message": "O fundo inicial nao pode ser negativo"}
+        existing = self.get_open_cash_session(username, terminal_id)
+        if existing:
+            return {"ok": True, "message": "Caixa ja estava aberto", "session": existing, "created": False}
+        now = self._now_str()
+        self.cursor.execute(
+            """
+            INSERT INTO cash_sessions (
+                username, role, terminal_id, opened_at, opening_amount,
+                opening_note, status, owner_username
+            ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?)
+            """,
+            (username, role or self.current_role or "manager", terminal_id, now,
+             opening_amount, str(note or "").strip(), self._owner_value(username)),
+        )
+        session_id = self.cursor.lastrowid
+        self.conn.commit()
+        self.log_action(username, role or "manager", "OPEN_CASH", f"Caixa #{session_id} | Fundo: {opening_amount:.2f} MT | Terminal: {terminal_id}")
+        return {"ok": True, "message": "Caixa aberto com sucesso", "session": self.get_open_cash_session(username, terminal_id), "created": True}
+
+    def get_cash_session_summary(self, session_id):
+        self.cursor.execute(
+            "SELECT id, username, terminal_id, opened_at, opening_amount, status, closed_at, counted_amount, expected_cash, difference_amount FROM cash_sessions WHERE id = ?",
+            (int(session_id),),
+        )
+        session = self.cursor.fetchone()
+        if not session:
+            return None
+        self.cursor.execute(
+            """
+            SELECT COALESCE(payment_method, 'cash'),
+                   COALESCE(SUM(gross_total), 0),
+                   COUNT(DISTINCT COALESCE(transaction_code, 'sale:' || id)),
+                   COALESCE(SUM(discount_amount), 0)
+            FROM sales WHERE cash_session_id = ?
+            GROUP BY COALESCE(payment_method, 'cash')
+            """,
+            (int(session_id),),
+        )
+        methods = {row[0]: {"total": float(row[1] or 0), "transactions": int(row[2] or 0), "discounts": float(row[3] or 0)} for row in self.cursor.fetchall()}
+        self.cursor.execute(
+            """
+            SELECT COALESCE(SUM(sr.total_refund), 0)
+            FROM sales_returns sr JOIN sales s ON s.id = sr.sale_id
+            WHERE s.cash_session_id = ? AND COALESCE(s.payment_method, 'cash') = 'cash'
+            """,
+            (int(session_id),),
+        )
+        cash_refunds = float((self.cursor.fetchone() or [0])[0] or 0)
+        opening = float(session[4] or 0)
+        expected = opening + float(methods.get("cash", {}).get("total", 0)) - cash_refunds
+        return {
+            "id": session[0], "username": session[1], "terminal_id": session[2],
+            "opened_at": session[3], "opening_amount": opening, "status": session[5],
+            "closed_at": session[6], "counted_amount": session[7],
+            "expected_cash": round(expected, 2), "difference_amount": session[9],
+            "payment_methods": methods, "cash_refunds": round(cash_refunds, 2),
+            "sales_total": round(sum(item["total"] for item in methods.values()), 2),
+            "transaction_count": sum(item["transactions"] for item in methods.values()),
+            "discount_total": round(sum(item["discounts"] for item in methods.values()), 2),
+        }
+
+    def close_cash_session(self, session_id, counted_amount, note="", closed_by=None, role=None):
+        summary = self.get_cash_session_summary(session_id)
+        if not summary:
+            return {"ok": False, "message": "Sessao de caixa nao encontrada"}
+        if summary["status"] != "OPEN":
+            return {"ok": False, "message": "Este caixa ja esta fechado"}
+        try:
+            counted_amount = float(counted_amount)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Valor contado invalido"}
+        if counted_amount < 0:
+            return {"ok": False, "message": "O valor contado nao pode ser negativo"}
+        expected = float(summary["expected_cash"])
+        difference = round(counted_amount - expected, 2)
+        closed_by = str(closed_by or self.current_user or summary["username"]).strip()
+        self.cursor.execute(
+            """
+            UPDATE cash_sessions SET status='CLOSED', closed_at=?, counted_amount=?,
+                expected_cash=?, difference_amount=?, closing_note=?, closed_by=?
+            WHERE id=? AND status='OPEN'
+            """,
+            (self._now_str(), counted_amount, expected, difference, str(note or "").strip(), closed_by, int(session_id)),
+        )
+        self.conn.commit()
+        self.log_action(closed_by, role or self.current_role or "manager", "CLOSE_CASH", f"Caixa #{session_id} | Esperado: {expected:.2f} MT | Contado: {counted_amount:.2f} MT | Diferenca: {difference:.2f} MT")
+        closed = self.get_cash_session_summary(session_id)
+        return {"ok": True, "message": "Caixa fechado com sucesso", "summary": closed}
+
+    def get_active_physical_inventory(self):
+        scope_sql, scope_params = self._owner_filter()
+        self.cursor.execute(
+            f"""
+            SELECT id, name, status, started_at, started_by, terminal_id, note
+            FROM physical_inventories
+            WHERE status = 'COUNTING'{scope_sql}
+            ORDER BY id DESC LIMIT 1
+            """,
+            tuple(scope_params),
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        keys = ("id", "name", "status", "started_at", "started_by", "terminal_id", "note")
+        return dict(zip(keys, row))
+
+    def list_physical_inventories(self, limit=50, status=None):
+        clauses = ["1=1"]
+        params = []
+        scope_sql, scope_params = self._owner_filter()
+        normalized_status = str(status or "").strip().upper()
+        if normalized_status in {"COUNTING", "COMPLETED", "CANCELLED"}:
+            clauses.append("status = ?")
+            params.append(normalized_status)
+        params.extend(scope_params)
+        params.append(max(1, min(int(limit or 50), 500)))
+        self.cursor.execute(
+            f"""
+            SELECT id, name, status, started_at, started_by, completed_at,
+                   completed_by, cancelled_at, cancelled_by, note
+            FROM physical_inventories
+            WHERE {' AND '.join(clauses)}{scope_sql}
+            ORDER BY id DESC LIMIT ?
+            """,
+            tuple(params),
+        )
+        keys = ("id", "name", "status", "started_at", "started_by", "completed_at", "completed_by", "cancelled_at", "cancelled_by", "note")
+        rows = []
+        for row in self.cursor.fetchall():
+            payload = dict(zip(keys, row))
+            summary = self.get_physical_inventory_summary(payload["id"])
+            if summary:
+                payload.update({
+                    "total_items": summary["total_items"],
+                    "counted_items": summary["counted_items"],
+                    "divergent_items": summary["divergent_items"],
+                })
+            rows.append(payload)
+        return rows
+
+    def start_physical_inventory(self, name, started_by, terminal_id=None, note=""):
+        name = str(name or "").strip() or f"Inventario {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        started_by = str(started_by or self.current_user or "").strip()
+        if not started_by:
+            return {"ok": False, "message": "Utilizador invalido"}
+        active = self.get_active_physical_inventory()
+        if active:
+            return {"ok": False, "message": "Ja existe um inventario em contagem", "inventory": active}
+        try:
+            now = self._now_str()
+            owner = self._owner_value(started_by)
+            self.cursor.execute(
+                """
+                INSERT INTO physical_inventories (
+                    name, status, started_at, started_by, terminal_id, note, owner_username
+                ) VALUES (?, 'COUNTING', ?, ?, ?, ?, ?)
+                """,
+                (name, now, started_by, terminal_id, str(note or "").strip(), owner),
+            )
+            inventory_id = self.cursor.lastrowid
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                f"""
+                INSERT INTO physical_inventory_items (
+                    inventory_id, product_id, product_name, unit, snapshot_qty
+                )
+                SELECT ?, id, description,
+                       CASE WHEN COALESCE(is_sold_by_weight, 0) = 1 THEN 'KG' ELSE 'UN' END,
+                       COALESCE(existing_stock, 0)
+                FROM products
+                WHERE 1=1{scope_sql}
+                """,
+                (inventory_id, *scope_params),
+            )
+            item_count = self.cursor.rowcount
+            self.conn.commit()
+            self.log_action(started_by, self.current_role or "admin", "START_INVENTORY", f"Inventario #{inventory_id}: {name} | {item_count} produtos")
+            return {"ok": True, "message": "Inventario iniciado", "inventory": self.get_active_physical_inventory(), "item_count": item_count}
+        except sqlite3.Error as exc:
+            self.conn.rollback()
+            return {"ok": False, "message": f"Erro ao iniciar inventario: {exc}"}
+
+    def get_physical_inventory_items(self, inventory_id, query=None, only_uncounted=False, limit=100, offset=0):
+        clauses = ["i.inventory_id = ?"]
+        params = [int(inventory_id)]
+        if only_uncounted:
+            clauses.append("i.counted_qty IS NULL")
+        query = str(query or "").strip()
+        if query:
+            clauses.append("(LOWER(i.product_name) LIKE LOWER(?) OR CAST(i.product_id AS TEXT) = ?)")
+            params.extend([f"%{query}%", query])
+        params.extend([max(1, min(int(limit or 100), 100000)), max(0, int(offset or 0))])
+        self.cursor.execute(
+            f"""
+            SELECT i.id, i.product_id, i.product_name, i.unit, i.snapshot_qty,
+                   i.counted_qty, i.difference_qty, i.counted_at, i.counted_by,
+                   i.count_note, i.applied_difference, i.movement_id,
+                   COALESCE(p.existing_stock, i.snapshot_qty) AS current_qty
+            FROM physical_inventory_items i
+            LEFT JOIN products p ON p.id = i.product_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY CASE WHEN i.counted_qty IS NULL THEN 0 ELSE 1 END, i.product_name
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params),
+        )
+        keys = ("item_id", "product_id", "product_name", "unit", "snapshot_qty", "counted_qty", "difference_qty", "counted_at", "counted_by", "count_note", "applied_difference", "movement_id", "current_qty")
+        return [dict(zip(keys, row)) for row in self.cursor.fetchall()]
+
+    def record_physical_inventory_count(self, inventory_id, product_id, counted_qty, counted_by, note=""):
+        try:
+            counted_qty = float(counted_qty)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Quantidade contada invalida"}
+        if counted_qty < 0:
+            return {"ok": False, "message": "A quantidade nao pode ser negativa"}
+        self.cursor.execute("SELECT status FROM physical_inventories WHERE id = ?", (int(inventory_id),))
+        status = self.cursor.fetchone()
+        if not status or status[0] != "COUNTING":
+            return {"ok": False, "message": "Inventario nao esta em contagem"}
+        self.cursor.execute(
+            "SELECT snapshot_qty FROM physical_inventory_items WHERE inventory_id = ? AND product_id = ?",
+            (int(inventory_id), int(product_id)),
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return {"ok": False, "message": "Produto nao pertence a este inventario"}
+        difference = round(counted_qty - float(row[0] or 0), 6)
+        self.cursor.execute(
+            """
+            UPDATE physical_inventory_items
+            SET counted_qty=?, difference_qty=?, counted_at=?, counted_by=?, count_note=?
+            WHERE inventory_id=? AND product_id=?
+            """,
+            (counted_qty, difference, self._now_str(), str(counted_by or self.current_user or "SYSTEM"), str(note or "").strip(), int(inventory_id), int(product_id)),
+        )
+        self.conn.commit()
+        return {"ok": True, "message": "Contagem guardada", "difference_qty": difference}
+
+    def get_physical_inventory_summary(self, inventory_id):
+        self.cursor.execute(
+            "SELECT id, name, status, started_at, started_by, completed_at, completed_by, cancelled_at, cancelled_by FROM physical_inventories WHERE id=?",
+            (int(inventory_id),),
+        )
+        inv = self.cursor.fetchone()
+        if not inv:
+            return None
+        self.cursor.execute(
+            """
+            SELECT COUNT(*), COUNT(counted_qty),
+                   SUM(CASE WHEN ABS(COALESCE(difference_qty, 0)) > 0.000001 THEN 1 ELSE 0 END),
+                   COALESCE(SUM(ABS(COALESCE(difference_qty, 0))), 0)
+            FROM physical_inventory_items WHERE inventory_id=?
+            """,
+            (int(inventory_id),),
+        )
+        total, counted, divergent, absolute_difference = self.cursor.fetchone()
+        return {
+            "id": inv[0], "name": inv[1], "status": inv[2], "started_at": inv[3], "started_by": inv[4],
+            "completed_at": inv[5], "completed_by": inv[6], "cancelled_at": inv[7], "cancelled_by": inv[8],
+            "total_items": int(total or 0), "counted_items": int(counted or 0),
+            "pending_items": int(total or 0) - int(counted or 0), "divergent_items": int(divergent or 0),
+            "absolute_difference": float(absolute_difference or 0),
+        }
+
+    def complete_physical_inventory(self, inventory_id, completed_by, allow_partial=False, note=""):
+        summary = self.get_physical_inventory_summary(inventory_id)
+        if not summary or summary["status"] != "COUNTING":
+            return {"ok": False, "message": "Inventario nao esta em contagem"}
+        if summary["counted_items"] == 0:
+            return {"ok": False, "message": "Nenhum produto foi contado"}
+        if summary["pending_items"] and not allow_partial:
+            return {"ok": False, "message": f"Ainda faltam {summary['pending_items']} produtos"}
+        try:
+            items = self.get_physical_inventory_items(inventory_id, limit=100000)
+            adjustment_count = 0
+            for item in items:
+                if item["counted_qty"] is None:
+                    continue
+                current_qty = float(item["current_qty"] or 0)
+                target_qty = float(item["counted_qty"] or 0)
+                difference = round(target_qty - current_qty, 6)
+                movement_id = None
+                if abs(difference) > 0.000001:
+                    movement_id = self._record_stock_movement_tx(
+                        self.cursor, item["product_id"], "ADJUSTMENT", abs(difference),
+                        "IN" if difference > 0 else "OUT",
+                        reason="Inventario fisico",
+                        note=f"Inventario #{inventory_id}: {summary['name']} | {str(note or '').strip()}",
+                        reference_table="physical_inventories", reference_id=int(inventory_id),
+                        created_by=completed_by, created_role="admin",
+                        approval_status="APPROVED", approved_by=completed_by,
+                        approved_at=self._now_str(), apply_stock=True,
+                    )
+                    if not movement_id:
+                        raise sqlite3.Error(f"Falha ao ajustar produto #{item['product_id']}")
+                    adjustment_count += 1
+                self.cursor.execute(
+                    "UPDATE physical_inventory_items SET applied_difference=?, movement_id=? WHERE id=?",
+                    (difference, movement_id, item["item_id"]),
+                )
+            now = self._now_str()
+            self.cursor.execute(
+                "UPDATE physical_inventories SET status='COMPLETED', completed_at=?, completed_by=?, note=CASE WHEN ?='' THEN note ELSE ? END WHERE id=? AND status='COUNTING'",
+                (now, str(completed_by or self.current_user or "admin"), str(note or "").strip(), str(note or "").strip(), int(inventory_id)),
+            )
+            self.conn.commit()
+            self.log_action(completed_by, "admin", "COMPLETE_INVENTORY", f"Inventario #{inventory_id} | Contados: {summary['counted_items']} | Ajustes: {adjustment_count}")
+            return {"ok": True, "message": "Inventario concluido", "adjustment_count": adjustment_count, "summary": self.get_physical_inventory_summary(inventory_id)}
+        except sqlite3.Error as exc:
+            self.conn.rollback()
+            return {"ok": False, "message": f"Erro ao concluir inventario: {exc}"}
+
+    def cancel_physical_inventory(self, inventory_id, cancelled_by, reason=""):
+        self.cursor.execute(
+            "UPDATE physical_inventories SET status='CANCELLED', cancelled_at=?, cancelled_by=?, note=CASE WHEN ?='' THEN note ELSE ? END WHERE id=? AND status='COUNTING'",
+            (self._now_str(), str(cancelled_by or self.current_user or "admin"), str(reason or "").strip(), str(reason or "").strip(), int(inventory_id)),
+        )
+        changed = self.cursor.rowcount > 0
+        self.conn.commit()
+        if changed:
+            self.log_action(cancelled_by, "admin", "CANCEL_INVENTORY", f"Inventario #{inventory_id} | Motivo: {reason or 'nao informado'}")
+        return {"ok": changed, "message": "Inventario cancelado" if changed else "Inventario nao pode ser cancelado"}
     def _get_sale_returned_qty_tx(self, cursor, sale_id):
         cursor.execute(
             "SELECT COALESCE(SUM(returned_qty), 0) FROM sales_returns WHERE sale_id = ?",
@@ -3936,6 +5010,12 @@ class Database(DatabaseAutomationMixin):
             )
             return_id = self.cursor.lastrowid
             self.conn.commit()
+            self.log_action(
+                created_by,
+                created_role,
+                "REFUND_SALE",
+                f"Venda #{sale_id} | Quantidade: {quantity:.2f} | Reembolso: {total_refund:.2f} MT | Motivo: {reason}",
+            )
             return {
                 "ok": True,
                 "message": "Estorno registado com sucesso",
@@ -4484,6 +5564,26 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao obter vendedores para filtro: {e}")
             return []
 
+    def get_products_sale_revision(self):
+        """Assinatura barata para saber se stock/catalogo mudou sem recarregar linhas."""
+        try:
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                """
+                SELECT COUNT(*),
+                       ROUND(COALESCE(SUM(existing_stock), 0), 6),
+                       ROUND(COALESCE(SUM(sold_stock), 0), 6),
+                       COALESCE(MAX(id), 0),
+                       COALESCE(MAX(status_updated_at), '')
+                FROM products WHERE 1=1
+                """ + scope_sql,
+                tuple(scope_params),
+            )
+            row = self.cursor.fetchone() or (0, 0, 0, 0, "")
+            return "|".join(str(value) for value in row)
+        except sqlite3.Error:
+            return ""
+
     def get_report_data(self, start_date, end_date, product_id=None, category=None, seller=None):
         """Obter dados agregados para relatorios"""
         query = """
@@ -5014,13 +6114,16 @@ class Database(DatabaseAutomationMixin):
     def get_admin_home_snapshot(self, lookback_days=7):
         """Retorna um snapshot agregado para a HOME do administrador."""
         try:
-            lookback_days = max(3, min(int(lookback_days or 7), 30))
+            lookback_days = max(7, min(int(lookback_days or 30), 3650))
         except Exception:
-            lookback_days = 7
+            lookback_days = 30
 
         now = datetime.now()
         today_date = now.date()
         start_date = today_date - timedelta(days=lookback_days - 1)
+        group_by_month = lookback_days >= 365
+        if group_by_month:
+            start_date = date(start_date.year, start_date.month, 1)
         today_iso = today_date.isoformat()
         start_iso = start_date.isoformat()
         month_key = now.strftime("%m")
@@ -5097,9 +6200,11 @@ class Database(DatabaseAutomationMixin):
             total_products = int(self.cursor.fetchone()[0] or 0)
 
             self.cursor.execute(
-                "SELECT COUNT(*) FROM products WHERE existing_stock > 0 AND existing_stock <= ?"
+                "SELECT COUNT(*) FROM products WHERE existing_stock > 0 "
+                "AND (existing_stock + COALESCE(sold_stock, 0)) > 0 "
+                "AND existing_stock < (existing_stock + COALESCE(sold_stock, 0)) * 0.30"
                 + product_scope_sql,
-                (low_threshold, *product_scope_params),
+                tuple(product_scope_params),
             )
             critical_stock_count = int(self.cursor.fetchone()[0] or 0)
 
@@ -5155,12 +6260,15 @@ class Database(DatabaseAutomationMixin):
                 for row in self.cursor.fetchall()
             ]
 
+            sales_period_expr = "strftime('%Y-%m', sale_date)" if group_by_month else "DATE(sale_date)"
+            movement_period_expr = "strftime('%Y-%m', created_at)" if group_by_month else "DATE(created_at)"
+
             self.cursor.execute(
-                "SELECT DATE(sale_date) AS sale_day, COUNT(*) AS sales_count, "
+                f"SELECT {sales_period_expr} AS sale_period, COUNT(*) AS sales_count, "
                 "COALESCE(SUM(total_price), 0) AS revenue "
                 "FROM sales WHERE DATE(sale_date) BETWEEN ? AND ? "
                 + ("AND COALESCE(owner_username, '') = ? " if owner else "")
-                + "GROUP BY DATE(sale_date) ORDER BY DATE(sale_date) ASC",
+                + f"GROUP BY {sales_period_expr} ORDER BY {sales_period_expr} ASC",
                 (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
             )
             sales_map = {
@@ -5172,13 +6280,13 @@ class Database(DatabaseAutomationMixin):
             }
 
             self.cursor.execute(
-                "SELECT DATE(created_at) AS movement_day, "
+                f"SELECT {movement_period_expr} AS movement_period, "
                 "COALESCE(SUM(CASE WHEN direction = 'IN' THEN qty ELSE 0 END), 0) AS qty_in, "
                 "COALESCE(SUM(CASE WHEN direction = 'OUT' THEN qty ELSE 0 END), 0) AS qty_out "
                 "FROM stock_movements "
                 "WHERE applied = 1 AND DATE(created_at) BETWEEN ? AND ? "
                 + ("AND COALESCE(owner_username, '') = ? " if owner else "")
-                + "GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC",
+                + f"GROUP BY {movement_period_expr} ORDER BY {movement_period_expr} ASC",
                 (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
             )
             stock_map = {
@@ -5199,7 +6307,7 @@ class Database(DatabaseAutomationMixin):
                 "WHERE DATE(s.sale_date) BETWEEN ? AND ? "
                 + ("AND COALESCE(s.owner_username, '') = ? " if owner else "")
                 + "GROUP BY s.product_id "
-                "ORDER BY total_revenue DESC, total_qty DESC LIMIT 5",
+                "ORDER BY total_revenue DESC, total_qty DESC LIMIT 8",
                 (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
             )
             top_products = [
@@ -5247,26 +6355,51 @@ class Database(DatabaseAutomationMixin):
 
             sales_series = []
             stock_flow_series = []
-            current_day = start_date
-            while current_day <= today_date:
-                day_key = current_day.isoformat()
-                sales_entry = sales_map.get(day_key, {})
-                stock_entry = stock_map.get(day_key, {})
+            if group_by_month:
+                periods = []
+                current_month = date(start_date.year, start_date.month, 1)
+                final_month = date(today_date.year, today_date.month, 1)
+                while current_month <= final_month:
+                    month_key_full = current_month.isoformat()
+                    month_key_short = current_month.strftime("%Y-%m")
+                    periods.append(
+                        (
+                            month_key_short,
+                            month_key_full,
+                            current_month.strftime("%m/%Y"),
+                        )
+                    )
+                    if current_month.month == 12:
+                        current_month = date(current_month.year + 1, 1, 1)
+                    else:
+                        current_month = date(current_month.year, current_month.month + 1, 1)
+            else:
+                periods = []
+                current_day = start_date
+                while current_day <= today_date:
+                    day_key = current_day.isoformat()
+                    periods.append((day_key, day_key, current_day.strftime("%d/%m")))
+                    current_day += timedelta(days=1)
+
+            for period_key, date_key, label in periods:
+                sales_entry = sales_map.get(period_key, {})
+                stock_entry = stock_map.get(period_key, {})
                 sales_series.append(
                     {
-                        "date": day_key,
+                        "date": date_key,
+                        "label": label,
                         "sales_count": int(sales_entry.get("sales_count") or 0),
                         "revenue": round(_safe_float(sales_entry.get("revenue")), 2),
                     }
                 )
                 stock_flow_series.append(
                     {
-                        "date": day_key,
+                        "date": date_key,
+                        "label": label,
                         "in_qty": round(_safe_float(stock_entry.get("in_qty")), 2),
                         "out_qty": round(_safe_float(stock_entry.get("out_qty")), 2),
                     }
                 )
-                current_day += timedelta(days=1)
 
             recent_values = [item["revenue"] for item in sales_series[:-1] if _safe_float(item["revenue"]) >= 0]
             recent_average = round(sum(recent_values) / len(recent_values), 2) if recent_values else 0.0
@@ -5284,7 +6417,9 @@ class Database(DatabaseAutomationMixin):
                 direction = "above"
 
             low_stock_items = []
-            for name, stock, is_weight, days_left, product_id in (insights.get("low_stock") or [])[:6]:
+            for name, stock, is_weight, days_left, product_id in (insights.get("low_stock") or []):
+                if _safe_float(stock) <= 0:
+                    continue
                 low_stock_items.append(
                     {
                         "product_id": product_id,
@@ -5294,12 +6429,32 @@ class Database(DatabaseAutomationMixin):
                         "days_left": round(_safe_float(days_left), 1) if days_left is not None and _safe_float(days_left) < 999 else None,
                     }
                 )
+                if len(low_stock_items) >= 6:
+                    break
+
+            def _expiry_product_id(name, date_str):
+                try:
+                    parsed = datetime.strptime(str(date_str or ""), "%d/%m/%Y").strftime("%Y-%m-%d")
+                except Exception:
+                    parsed = str(date_str or "").strip()
+                try:
+                    self.cursor.execute(
+                        "SELECT id FROM products "
+                        "WHERE description = ? AND (expiry_date = ? OR DATE(expiry_date) = ?) "
+                        "ORDER BY id ASC LIMIT 1",
+                        (name, parsed, parsed),
+                    )
+                    row = self.cursor.fetchone()
+                    return row[0] if row else None
+                except Exception:
+                    return None
 
             def _expiry_items(rows):
                 items = []
                 for name, days_left, date_str, stock, unit in list(rows or [])[:6]:
                     items.append(
                         {
+                            "product_id": _expiry_product_id(name, date_str),
                             "name": name,
                             "days_left": int(days_left or 0),
                             "date": date_str,
@@ -5369,7 +6524,7 @@ class Database(DatabaseAutomationMixin):
             snapshot["top_products"] = top_products
             snapshot["alerts"] = {
                 "counts": {
-                    "critical_stock": len(low_stock_items),
+                    "critical_stock": critical_stock_count,
                     "out_of_stock": out_of_stock_count,
                     "expired": len(expired_items),
                     "expiring_soon": len(expiring_items),
@@ -5394,10 +6549,29 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao obter snapshot da HOME admin: {e}")
             return snapshot
 
-    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100, offset=0):
+    def get_user_logs(
+        self,
+        user_filter="",
+        action_filter="",
+        role_filter="",
+        limit=100,
+        offset=0,
+        exclude_actions=None,
+        details_limit=None,
+    ):
         """Obter logs do sistema com filtros"""
+        details_expr = "details"
+        if details_limit:
+            safe_details_limit = max(40, min(int(details_limit), 1000))
+            details_expr = (
+                "CASE "
+                "WHEN details IS NULL THEN NULL "
+                f"WHEN LENGTH(details) > {safe_details_limit} "
+                f"THEN SUBSTR(details, 1, {safe_details_limit}) || '...' "
+                "ELSE details END"
+            )
         query = (
-            "SELECT id, username, role, action, details, timestamp "
+            f"SELECT id, username, role, action, {details_expr}, timestamp "
             "FROM user_logs WHERE 1=1"
         )
         params = []
@@ -5417,7 +6591,18 @@ class Database(DatabaseAutomationMixin):
             query += " AND role = ?"
             params.append(role_filter)
 
-        query += " ORDER BY timestamp DESC"
+        if exclude_actions:
+            ignored = [
+                str(action or "").strip().upper()
+                for action in exclude_actions
+                if str(action or "").strip()
+            ]
+            if ignored:
+                placeholders = ",".join("?" for _ in ignored)
+                query += f" AND UPPER(action) NOT IN ({placeholders})"
+                params.extend(ignored)
+
+        query += " ORDER BY timestamp DESC, id DESC"
         if limit:
             query += " LIMIT ? OFFSET ?"
             params.append(int(limit))
@@ -5480,11 +6665,12 @@ class Database(DatabaseAutomationMixin):
         row = self.cursor.fetchone()
         peak_hour = f"{row[0]}:00-{row[0]}:59" if row else "n/d"
 
-        low_threshold = 5
         self.cursor.execute(
             "SELECT id, description, existing_stock, is_sold_by_weight FROM products "
-            "WHERE existing_stock <= ? ORDER BY existing_stock ASC",
-            (low_threshold,),
+            "WHERE existing_stock > 0 "
+            "AND (existing_stock + COALESCE(sold_stock, 0)) > 0 "
+            "AND existing_stock < (existing_stock + COALESCE(sold_stock, 0)) * 0.30 "
+            "ORDER BY existing_stock ASC",
         )
         low_stock_raw = self.cursor.fetchall()
 
@@ -5566,7 +6752,7 @@ class Database(DatabaseAutomationMixin):
         if total_count == 0:
             alerts.append("Sem vendas registadas hoje.")
         if low_stock:
-            alerts.append(f"{len(low_stock)} produtos com stock baixo (<= {low_threshold}).")
+            alerts.append(f"{len(low_stock)} produtos com stock critico (abaixo de 30%).")
         if expiry_levels["vencido"]:
             alerts.append(f"{len(expiry_levels['vencido'])} produtos vencidos.")
         if expiry_levels["critico"]:

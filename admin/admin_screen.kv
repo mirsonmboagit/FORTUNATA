@@ -36,7 +36,7 @@
                 size_hint_y: None
                 height: max(dp(56), root.height * 0.07)
                 left_action_items: [["view-dashboard-outline", lambda x: root.go_home(), "Pagina inicial (Alt+1)"]]
-                right_action_items: [["package-variant-plus", lambda x: root.open_restock_screen(), "Reposicao (Alt+2)"], ["alert-circle", lambda x: root.open_losses_screen(), "Perdas (Alt+3)"], ["chart-bar", lambda x: root.generate_report(), "Relatorios (Alt+4)"], ["cog", lambda x: root.go_to_definitions(), "Definicoes (Alt+S)"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
+                right_action_items: []
 
             # BARRA DE FERRAMENTAS COMPACTA
             AdminHoverCard:
@@ -92,6 +92,19 @@
                         font_size: sp(13)
 
                     AdminActionButton:
+                        id: refresh_btn
+                        text: "Atualizar"
+                        icon: "refresh"
+                        tooltip_text: "Atualizar lista de produtos (Ctrl+R)"
+                        md_bg_color: app.theme_tokens['primary']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        hover_accent_color: [1, 1, 1, 1]
+                        size_hint_x: 0.12
+                        on_release: root.refresh_products_panel()
+                        font_size: sp(13)
+
+                    AdminActionButton:
                         id: add_btn
                         text: "Adicionar"
                         icon: "plus-circle"
@@ -116,6 +129,19 @@
                         size_hint_x: 0.18
                         disabled: root.shopping_list_busy
                         on_release: root.open_shopping_list_preview()
+                        font_size: sp(13)
+
+                    AdminActionButton:
+                        id: inventory_btn
+                        text: "Inventario"
+                        icon: "clipboard-list-outline"
+                        tooltip_text: "Iniciar ou continuar inventario fisico"
+                        md_bg_color: app.theme_tokens['warning']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        hover_accent_color: [1, 1, 1, 1]
+                        size_hint_x: 0.14
+                        on_release: root.open_physical_inventory()
                         font_size: sp(13)
 
                     
@@ -280,7 +306,7 @@
             icon: "assets/icon/idea.ico"
             elevation: 2
             pos_hint: {"right": 0.965, "y": 0.04}
-            hint_text: "Assistente IA"
+            hint_text: "Selecionar banner"
             on_release: root.open_ai_menu(self)
 
         # Badge com número de notificações (só aparece quando > 0)

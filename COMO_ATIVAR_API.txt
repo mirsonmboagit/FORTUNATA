@@ -1,0 +1,33 @@
+COMO ATIVAR A API DA LOJA
+
+1. Abra a pasta da loja.
+2. Clique duas vezes em ATIVAR_API.bat.
+3. Se quiser que a API inicie sozinha com o Windows:
+   - clique com o botao direito em ATIVAR_API.bat;
+   - escolha "Executar como administrador".
+4. Se aparecer aviso do Windows, escolha "Mais informacoes" e depois "Executar assim mesmo".
+
+Depois da ativacao, fica criado no Ambiente de Trabalho o atalho:
+
+    Iniciar API da Loja
+
+Esse atalho serve para iniciar a API manualmente caso o servico do Windows nao esteja ativo.
+
+Endereco da API neste computador:
+
+    http://127.0.0.1:8080
+
+Para outro computador, versao profissional:
+
+1. Use a pasta pronta dist\LojaAPI_Instalador.
+2. Copie essa pasta inteira para o outro computador.
+3. Clique com o botao direito em ATIVAR_API.bat.
+4. Escolha "Executar como administrador".
+
+Esta versao nao precisa de Python instalado. Ela usa LojaAPI.exe.
+
+Problema corrigido:
+
+O servico antigo estava configurado para entrar com a conta do utilizador do Windows.
+Quando a senha muda ou a conta nao entra como servico, o Windows mostra o erro 1069.
+A nova ativacao configura o servico LojaAPI para usar LocalSystem, sem precisar da senha do utilizador.

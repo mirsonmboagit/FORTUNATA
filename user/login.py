@@ -1,4 +1,5 @@
 import os
+import re
 from threading import Thread
 
 from kivy.properties import (
@@ -27,8 +28,7 @@ from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.menu import MDDropdownMenu
 
 from database.provider import get_db, uses_remote_backend
-from utils.i18n import language_options, language_short, translate
-from utils.security_questions import QUESTIONS
+from utils.core.i18n import language_options, language_short, translate
 
 LOGIN_KV_PATH = os.path.join(os.path.dirname(__file__), 'login_screen.kv')
 try:
@@ -73,7 +73,7 @@ class LoginScreen(MDScreen):
     allow_admin_setup = BooleanProperty(True)
     success_screen = StringProperty("")
     registration_mode = StringProperty("disabled")
-    registration_password_min_len = NumericProperty(4)
+    registration_password_min_len = NumericProperty(8)
     login_blocked = BooleanProperty(False)
     operation_in_progress = BooleanProperty(False)
     operation_status = StringProperty("")
@@ -92,22 +92,38 @@ class LoginScreen(MDScreen):
         self._pending_login = None
         self._setup_mode = None
         self._setup_original_username = None
+        self._setup_email = None
         self._forgot_dialog = None
         self._forgot_user_field = None
-        self._forgot_answer_fields = []
+        self._forgot_code_field = None
         self._forgot_new_password = None
         self._forgot_confirm_password = None
+        self._forgot_feedback = None
+        self._forgot_send_button = None
+        self._forgot_resend_button = None
+        self._forgot_cancel_button = None
+        self._forgot_recovery_button = None
+        self._recovery_code_dialog = None
+        self._forgot_stage = "request"
         self._forgot_content_container = None
         self._register_dialog = None
         self._register_username = None
+        self._register_email = None
         self._register_password = None
         self._register_confirm = None
-        self._register_answer_fields = []
         self._register_feedback = None
         self._register_content_container = None
         self._register_submit_button = None
         self._register_cancel_button = None
         self._register_submit_default_text = "CRIAR CONTA"
+        self._verification_dialog = None
+        self._verification_username = None
+        self._verification_role = None
+        self._verification_code = None
+        self._verification_feedback = None
+        self._verification_confirm_button = None
+        self._verification_resend_button = None
+        self._verification_close_button = None
         self._operation_token = 0
         self._language_menu = None
         self._language_bound_app = None
@@ -439,6 +455,12 @@ class LoginScreen(MDScreen):
         self.operation_status = status if busy else ""
         self._refresh_input_state()
         self._set_register_busy(bool(busy))
+        self._set_forgot_busy(bool(busy))
+
+    @staticmethod
+    def _is_valid_email(email):
+        value = str(email or "").strip()
+        return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
 
     def _uses_remote_db(self):
         return uses_remote_backend(self.db)
@@ -536,7 +558,7 @@ class LoginScreen(MDScreen):
         self._run_background_task(
             task,
             apply_setup,
-            busy_text="A validar configuracao administrativa...",
+            busy_text="A validar configuração administrativa...",
         )
 
     def _open_setup_admin_dialog(self, mode='create', original_username=None):
@@ -547,8 +569,8 @@ class LoginScreen(MDScreen):
             self._setup_dialog.dismiss()
             self._setup_dialog = None
 
-        title = 'Criar Administrador' if mode == 'create' else 'Atualizar Administrador Padrao'
-        label_text = 'Configure o administrador inicial' if mode == 'create' else 'Atualize o administrador padrao'
+        title = 'Criar Administrador' if mode == 'create' else 'Atualizar Administrador Padrão'
+        label_text = 'Configure o administrador inicial' if mode == 'create' else 'Atualize o administrador padrão'
         button_text = 'CRIAR' if mode == 'create' else 'ATUALIZAR'
 
         content = MDBoxLayout(
@@ -566,7 +588,7 @@ class LoginScreen(MDScreen):
         content.add_widget(self._setup_label)
 
         self._setup_username = MDTextField(
-            hint_text='Nome de usuario',
+            hint_text='Nome de utilizador',
             mode='rectangle',
             size_hint_y=None,
             height=dp(56),
@@ -574,6 +596,18 @@ class LoginScreen(MDScreen):
         if original_username:
             self._setup_username.text = original_username
         content.add_widget(self._setup_username)
+
+        self._setup_email = None
+        if mode == 'create':
+            self._setup_email = MDTextField(
+                hint_text='E-mail',
+                helper_text='Usado para confirmar a conta e recuperar a senha',
+                helper_text_mode='on_focus',
+                mode='rectangle',
+                size_hint_y=None,
+                height=dp(56),
+            )
+            content.add_widget(self._setup_email)
 
         self._setup_password = MDTextField(
             hint_text='Senha',
@@ -606,17 +640,21 @@ class LoginScreen(MDScreen):
 
     def _create_admin_from_dialog(self, *args):
         username = self._setup_username.text.strip()
+        email = self._setup_email.text.strip() if self._setup_email is not None else ''
         password = self._setup_password.text.strip()
         confirm = self._setup_confirm.text.strip()
 
-        if not username or not password or not confirm:
-            self._show_message('Erro', 'Todos os campos sao obrigatorios')
+        if not username or not password or not confirm or (self._setup_mode == 'create' and not email):
+            self._show_message('Erro', 'Todos os campos são obrigatórios')
             return
-        if len(password) < 6:
-            self._show_message('Erro', 'A senha deve ter no minimo 6 caracteres')
+        if self._setup_mode == 'create' and not self._is_valid_email(email):
+            self._show_message('Erro', 'Informe um e-mail válido')
+            return
+        if len(password) < 8:
+            self._show_message('Erro', 'A senha deve ter no mínimo 8 caracteres')
             return
         if password != confirm:
-            self._show_message('Erro', 'As senhas nao coincidem')
+            self._show_message('Erro', 'As senhas não coincidem')
             return
 
         def task():
@@ -642,7 +680,7 @@ class LoginScreen(MDScreen):
                     return None
                 if user_exists:
                     return {"status": "user_exists"}
-                created = self.db.create_admin(username, password)
+                created = self.db.create_admin(username, password, email=email)
                 if not created and self._db_last_error():
                     return None
                 if not created:
@@ -654,17 +692,17 @@ class LoginScreen(MDScreen):
 
         def handle_result(result, error):
             if error:
-                self._show_operation_error('Nao foi possivel concluir a configuracao do admin')
+                self._show_operation_error('Não foi possível concluir a configuração do admin')
                 return
             status = (result or {}).get("status")
             if status == "user_exists":
-                self._show_message('Erro', 'Nome de usuario ja existe')
+                self._show_message('Erro', 'Nome de utilizador já existe')
                 return
             if status == "update_failed":
-                self._show_message('Erro', 'Nao foi possivel atualizar o admin')
+                self._show_message('Erro', 'Não foi possível atualizar o admin')
                 return
             if status == "create_failed":
-                self._show_message('Erro', 'Nao foi possivel criar o admin')
+                self._show_message('Erro', 'Não foi possível criar o admin')
                 return
 
             self._close_setup_dialog()
@@ -679,13 +717,14 @@ class LoginScreen(MDScreen):
         self._run_background_task(
             task,
             handle_result,
-            busy_text="A guardar configuracao do admin...",
+            busy_text="A guardar configuração do admin...",
         )
 
     def _close_setup_dialog(self):
         if self._setup_dialog:
             self._setup_dialog.dismiss()
             self._setup_dialog = None
+        self._setup_email = None
 
     def _open_force_password_dialog(self, username, role):
         self._pending_login = (username, role)
@@ -725,7 +764,7 @@ class LoginScreen(MDScreen):
         content.add_widget(self._force_confirm)
 
         self._force_dialog = MDDialog(
-            title='Alteracao obrigatoria',
+            title='Alteração obrigatória',
             type='custom',
             content_cls=content,
             auto_dismiss=False,
@@ -740,18 +779,18 @@ class LoginScreen(MDScreen):
         confirm = self._force_confirm.text.strip()
 
         if not password or not confirm:
-            self._show_message('Erro', 'Todos os campos sao obrigatorios')
+            self._show_message('Erro', 'Todos os campos são obrigatórios')
             return
         if len(password) < 6:
-            self._show_message('Erro', 'A senha deve ter no minimo 6 caracteres')
+            self._show_message('Erro', 'A senha deve ter no mínimo 6 caracteres')
             return
         if password != confirm:
-            self._show_message('Erro', 'As senhas nao coincidem')
+            self._show_message('Erro', 'As senhas não coincidem')
             return
 
         username, role = self._pending_login or (None, None)
         if not username:
-            self._show_message('Erro', 'Utilizador invalido')
+            self._show_message('Erro', 'Utilizador inválido')
             return
 
         def task():
@@ -768,10 +807,10 @@ class LoginScreen(MDScreen):
 
         def handle_result(updated, error):
             if error:
-                self._show_operation_error('Nao foi possivel atualizar a senha')
+                self._show_operation_error('Não foi possível atualizar a senha')
                 return
             if (updated or {}).get("status") != "ok":
-                self._show_message('Erro', 'Nao foi possivel atualizar a senha')
+                self._show_message('Erro', 'Não foi possível atualizar a senha')
                 return
 
             if self._force_dialog:
@@ -799,9 +838,9 @@ class LoginScreen(MDScreen):
 
         if not user or not pwd:
             if not user:
-                self.username_error = "Usuario e obrigatorio!"
+                self.username_error = "Utilizador é obrigatório!"
             if not pwd:
-                self.password_error = "Senha e obrigatoria!"
+                self.password_error = "Senha é obrigatória!"
             return
 
         def task():
@@ -817,7 +856,7 @@ class LoginScreen(MDScreen):
 
         def handle_login(result, error):
             if error:
-                self._show_operation_error('Nao foi possivel validar o login no momento')
+                self._show_operation_error('Não foi possível validar o login no momento')
                 return
 
             role = (result or {}).get("role")
@@ -882,7 +921,7 @@ class LoginScreen(MDScreen):
             app._ai_banners_last_key = None
 
     def forgot_password(self):
-        # Fluxo de recuperacao por perguntas de seguranca.
+        # O e-mail vem sempre do cadastro; nunca e pedido durante a recuperacao.
         if self._forgot_dialog:
             if self.username and self.username.text.strip() and self._forgot_user_field:
                 self._forgot_user_field.text = self.username.text.strip()
@@ -899,10 +938,10 @@ class LoginScreen(MDScreen):
         )
         content_box.bind(minimum_height=content_box.setter('height'))
         content_box.add_widget(MDLabel(
-            text='Responda as perguntas para recuperar a senha',
+            text='Informe o utilizador para receber um código no e-mail cadastrado.',
             theme_text_color='Secondary',
             size_hint_y=None,
-            height=dp(24),
+            height=dp(42),
         ))
 
         self._forgot_user_field = MDTextField(
@@ -915,26 +954,20 @@ class LoginScreen(MDScreen):
             self._forgot_user_field.text = self.username.text.strip()
         content_box.add_widget(self._forgot_user_field)
 
-        self._forgot_answer_fields = []
-        for question in QUESTIONS:
-            content_box.add_widget(MDLabel(
-                text=question,
-                theme_text_color='Secondary',
-                size_hint_y=None,
-                height=dp(24),
-            ))
-            field = MDTextField(
-                hint_text='Resposta',
-                password=True,
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56),
-            )
-            self._forgot_answer_fields.append(field)
-            content_box.add_widget(field)
+        self._forgot_code_field = MDTextField(
+            hint_text='Código de 6 dígitos',
+            helper_text='O código expira em 10 minutos',
+            helper_text_mode='on_focus',
+            input_filter='int',
+            max_text_length=6,
+            mode='rectangle',
+            size_hint_y=None,
+            height=dp(56),
+        )
+        content_box.add_widget(self._forgot_code_field)
 
         self._forgot_new_password = MDTextField(
-            hint_text='Nova senha',
+            hint_text='Nova senha (mínimo 8 caracteres)',
             password=True,
             mode='rectangle',
             size_hint_y=None,
@@ -951,6 +984,19 @@ class LoginScreen(MDScreen):
         )
         content_box.add_widget(self._forgot_confirm_password)
 
+        self._forgot_feedback = MDLabel(
+            text='',
+            theme_text_color='Secondary',
+            size_hint_y=None,
+            height=0,
+            opacity=0,
+        )
+        self._forgot_feedback.bind(
+            width=lambda inst, width: setattr(inst, 'text_size', (width, None)),
+            texture_size=lambda inst, size: setattr(inst, 'height', max(dp(24), size[1]) if inst.text else 0),
+        )
+        content_box.add_widget(self._forgot_feedback)
+
         scroll = MDScrollView(do_scroll_x=False, size_hint=(1, 1))
         scroll.add_widget(content_box)
         dialog_height, content_height = self._calc_forgot_sizes()
@@ -961,17 +1007,47 @@ class LoginScreen(MDScreen):
         )
         self._forgot_content_container.add_widget(scroll)
 
+        self._forgot_cancel_button = MDFlatButton(
+            text='CANCELAR',
+            on_release=self._dismiss_forgot_dialog,
+        )
+        self._forgot_recovery_button = MDFlatButton(
+            text='USAR CÓDIGO DE EMERGÊNCIA',
+            on_release=self._open_recovery_code_dialog,
+        )
+        self._forgot_resend_button = MDFlatButton(
+            text='REENVIAR',
+            on_release=self._resend_password_reset,
+        )
+        self._forgot_send_button = MDFlatButton(
+            text='ENVIAR CÓDIGO',
+            on_release=self._submit_forgot,
+        )
+
         self._forgot_dialog = MDDialog(
-            title='Recuperacao de senha',
+            title='Recuperação de senha',
             type='custom',
             content_cls=self._forgot_content_container,
             size_hint=(0.7, None),
             height=dialog_height,
+            auto_dismiss=False,
             buttons=[
-                MDFlatButton(text='CANCELAR', on_release=self._dismiss_forgot_dialog),
-                MDFlatButton(text='SALVAR', on_release=self._submit_forgot_questions),
+                self._forgot_cancel_button,
+                self._forgot_recovery_button,
+                self._forgot_resend_button,
+                self._forgot_send_button,
             ],
         )
+        self._forgot_user_field.bind(on_text_validate=self._submit_forgot)
+        self._forgot_code_field.bind(
+            on_text_validate=lambda *args: self._focus_register_field(self._forgot_new_password)
+        )
+        self._forgot_new_password.bind(
+            on_text_validate=lambda *args: self._focus_register_field(self._forgot_confirm_password)
+        )
+        self._forgot_confirm_password.bind(on_text_validate=self._submit_forgot)
+        self._forgot_stage = 'request'
+        self._set_forgot_stage('request')
         self._forgot_dialog.open()
 
     def _calc_forgot_sizes(self):
@@ -982,145 +1058,241 @@ class LoginScreen(MDScreen):
     def _update_forgot_dialog_size(self):
         dialog_height, content_height = self._calc_forgot_sizes()
         if self._forgot_dialog:
-            self._forgot_dialog.size_hint = (0.7, None)
+            width = Window.width or dp(900)
+            self._forgot_dialog.size_hint = (0.92 if width < dp(620) else 0.7, None)
             self._forgot_dialog.height = dialog_height
         if self._forgot_content_container:
             self._forgot_content_container.height = content_height
 
     def _dismiss_forgot_dialog(self, *args):
-        self._clear_forgot_fields()
         if self._forgot_dialog:
             self._forgot_dialog.dismiss()
+        self._clear_forgot_fields()
+        self._forgot_dialog = None
+        self._forgot_user_field = None
+        self._forgot_code_field = None
+        self._forgot_new_password = None
+        self._forgot_confirm_password = None
+        self._forgot_feedback = None
+        self._forgot_send_button = None
+        self._forgot_resend_button = None
+        self._forgot_cancel_button = None
+        self._forgot_recovery_button = None
+        self._forgot_content_container = None
+        self._forgot_stage = 'request'
 
     def _clear_forgot_fields(self):
         if self._forgot_user_field:
             self._forgot_user_field.text = ''
-        for field in self._forgot_answer_fields:
-            field.text = ''
+        if self._forgot_code_field:
+            self._forgot_code_field.text = ''
         if self._forgot_new_password:
             self._forgot_new_password.text = ''
         if self._forgot_confirm_password:
             self._forgot_confirm_password.text = ''
 
-    def _submit_forgot_questions(self, *args):
-        username = self._forgot_user_field.text.strip() if self._forgot_user_field else ''
-        answers = [field.text.strip() for field in self._forgot_answer_fields]
-        new_password = self._forgot_new_password.text.strip() if self._forgot_new_password else ''
-        confirm = self._forgot_confirm_password.text.strip() if self._forgot_confirm_password else ''
+    def _set_forgot_feedback(self, message='', error=False):
+        if self._forgot_feedback is None:
+            return
+        self._forgot_feedback.text = message
+        self._forgot_feedback.opacity = 1 if message else 0
+        self._forgot_feedback.theme_text_color = 'Error' if error else 'Secondary'
 
-        if not username or any(not ans for ans in answers):
-            self._show_message('Erro', 'Preencha usuario e todas as respostas')
+    def _set_forgot_stage(self, stage):
+        self._forgot_stage = stage
+        show_reset = stage == 'confirm'
+        for field in (
+            self._forgot_code_field,
+            self._forgot_new_password,
+            self._forgot_confirm_password,
+        ):
+            if field is not None:
+                field.height = dp(56) if show_reset else 0
+                field.opacity = 1 if show_reset else 0
+                field.disabled = (not show_reset) or self.operation_in_progress
+        if self._forgot_user_field is not None:
+            self._forgot_user_field.disabled = show_reset or self.operation_in_progress
+        if self._forgot_send_button is not None:
+            self._forgot_send_button.text = 'REDEFINIR' if show_reset else 'ENVIAR CÓDIGO'
+        if self._forgot_resend_button is not None:
+            self._forgot_resend_button.opacity = 1 if show_reset else 0
+            self._forgot_resend_button.disabled = (not show_reset) or self.operation_in_progress
+
+    def _set_forgot_busy(self, busy):
+        if self._forgot_dialog is None:
             return
-        if not new_password or not confirm:
-            self._show_message('Erro', 'Preencha a nova senha')
-            return
-        if len(new_password) < 6:
-            self._show_message('Erro', 'A senha deve ter no minimo 6 caracteres')
-            return
-        if new_password != confirm:
-            self._show_message('Erro', 'As senhas nao coincidem')
+        self._set_forgot_stage(self._forgot_stage)
+        if self._forgot_user_field is not None:
+            self._forgot_user_field.disabled = bool(busy) or self._forgot_stage == 'confirm'
+        for field in (
+            self._forgot_code_field,
+            self._forgot_new_password,
+            self._forgot_confirm_password,
+        ):
+            if field is not None:
+                field.disabled = bool(busy) or self._forgot_stage != 'confirm'
+        if self._forgot_send_button is not None:
+            self._forgot_send_button.disabled = bool(busy)
+            if busy:
+                self._forgot_send_button.text = 'A PROCESSAR...'
+            else:
+                self._forgot_send_button.text = (
+                    'REDEFINIR' if self._forgot_stage == 'confirm' else 'ENVIAR CÓDIGO'
+                )
+        if self._forgot_resend_button is not None:
+            self._forgot_resend_button.disabled = bool(busy) or self._forgot_stage != 'confirm'
+        if self._forgot_cancel_button is not None:
+            self._forgot_cancel_button.disabled = bool(busy)
+
+    def _submit_forgot(self, *args):
+        if self._forgot_stage == 'confirm':
+            self._confirm_password_reset()
+        else:
+            self._request_password_reset()
+
+    def _request_password_reset(self, resend=False):
+        username = self._forgot_user_field.text.strip() if self._forgot_user_field else ''
+        if not username:
+            self._set_forgot_feedback('Informe o nome de utilizador.', True)
             return
 
         def task():
-            role = self.db.get_user_role(username)
-            if not role and self._db_last_error():
-                return None
-            if not role:
-                return {"status": "user_not_found", "username": username}
-
-            result = self.db.verify_security_answers(username, answers)
-            if not result and self._db_last_error():
-                return None
-            if not result or not result.get("ok"):
-                return {"status": "answers_failed", "result": result or {}, "role": role}
-
-            updated = self.db.update_user_password(username, new_password, role=role)
-            if not updated and self._db_last_error():
-                return None
-            if not updated:
-                return {"status": "password_update_failed"}
-
-            self.db.update_security_state(username, 0, None)
-            try:
-                self.db.log_action(username, role or 'manager', 'RESET_PASSWORD_QA', 'Senha redefinida via perguntas')
-            except Exception:
-                pass
-            return {"status": "ok"}
+            return self.db.request_password_reset(username)
 
         def handle_result(result, error):
             if error:
-                self._show_operation_error('Nao foi possivel processar a recuperacao')
-                return
-
-            status = (result or {}).get("status")
-            if status == "user_not_found":
-                self._audit_event(
-                    (result or {}).get("username") or username,
-                    "guest",
-                    "ACCESS_ATTEMPT",
-                    "Tentativa de recuperacao de senha para utilizador inexistente",
+                self._set_forgot_feedback(
+                    'Não foi possível contactar o serviço de recuperação. Tente novamente.',
+                    True,
                 )
-                self._show_message('Erro', 'Usuario nao encontrado')
                 return
-            if status == "answers_failed":
-                payload = (result or {}).get("result") or {}
-                reason = payload.get("reason")
-                audit_role = (result or {}).get("role") or "guest"
-                if reason == "not_configured":
-                    self._audit_event(
-                        username,
-                        audit_role,
-                        "ACCESS_DENIED",
-                        "Tentativa de recuperacao sem perguntas configuradas",
+            payload = result or {}
+            if not payload.get('ok'):
+                reason = payload.get('reason')
+                if reason == 'email_unavailable':
+                    self._set_forgot_feedback(
+                        'Configure SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD e SMTP_FROM_EMAIL em config/.env.',
+                        True,
                     )
-                    self._show_message('Erro', 'Perguntas nao configuradas. Fale com o admin')
-                elif reason == "locked":
-                    remaining = payload.get("remaining_minutes") or 15
-                    self._audit_event(
-                        username,
-                        audit_role,
-                        "SECURITY_ALERT",
-                        f"Tentativa de recuperacao bloqueada | aguarde {remaining} min",
-                    )
-                    self._show_message('Erro', f'Tentativas excedidas. Aguarde {remaining} min')
-                elif reason == "invalid":
-                    remaining = payload.get("remaining")
-                    attempts = payload.get("attempts")
-                    details = "Respostas de recuperacao incorretas"
-                    if remaining is not None:
-                        details += f" | restantes: {remaining}"
-                    if attempts is not None:
-                        details += f" | falhas: {attempts}"
-                    self._audit_event(
-                        username,
-                        audit_role,
-                        "ACCESS_ATTEMPT",
-                        details,
-                    )
-                    if remaining is not None:
-                        self._show_message('Erro', f'Respostas incorretas. Tentativas restantes: {remaining}')
-                    else:
-                        self._show_message('Erro', 'Respostas incorretas')
+                elif reason == 'rate_limited':
+                    wait = payload.get('retry_after') or 60
+                    self._set_forgot_feedback(f'Aguarde {wait} segundos antes de reenviar.', True)
                 else:
-                    self._show_message('Erro', 'Nao foi possivel validar as respostas')
-                return
-            if status == "password_update_failed":
-                self._show_message('Erro', 'Nao foi possivel atualizar a senha')
+                    self._set_forgot_feedback('Não foi possível enviar o código. Tente novamente.', True)
                 return
 
-            self._show_message('Sucesso', 'Senha atualizada com sucesso!')
-            self._dismiss_forgot_dialog()
+            self._set_forgot_stage('confirm')
+            wait = payload.get('retry_after')
+            suffix = f' Poderá reenviar após {wait} segundos.' if wait else ''
+            self._set_forgot_feedback(
+                'Se existir uma conta com esse utilizador, enviámos um código ao e-mail cadastrado.' + suffix
+            )
+            if not resend:
+                self._focus_register_field(self._forgot_code_field)
 
         self._run_background_task(
             task,
             handle_result,
-            busy_text="A validar recuperacao...",
+            busy_text="A enviar código...",
+        )
+
+    def _resend_password_reset(self, *args):
+        self._request_password_reset(resend=True)
+
+    def _open_recovery_code_dialog(self, *args):
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), padding=dp(16), adaptive_height=True)
+        username = MDTextField(hint_text='Utilizador', mode='rectangle', size_hint_y=None, height=dp(56))
+        if self._forgot_user_field and self._forgot_user_field.text.strip():
+            username.text = self._forgot_user_field.text.strip()
+        code = MDTextField(hint_text='Código de emergência', mode='rectangle', size_hint_y=None, height=dp(56))
+        new_password = MDTextField(hint_text='Nova senha (mínimo 8 caracteres)', password=True, mode='rectangle', size_hint_y=None, height=dp(56))
+        confirm = MDTextField(hint_text='Confirmar nova senha', password=True, mode='rectangle', size_hint_y=None, height=dp(56))
+        feedback = MDLabel(text='', theme_text_color='Error', size_hint_y=None, height=dp(30))
+        for field in (username, code, new_password, confirm):
+            content.add_widget(field)
+        content.add_widget(feedback)
+
+        def submit(*_args):
+            user, raw_code = username.text.strip(), code.text.strip()
+            password, repeated = new_password.text, confirm.text
+            if not user or not raw_code:
+                feedback.text = 'Informe o utilizador e o código.'; return
+            if len(password) < 8:
+                feedback.text = 'A nova senha deve ter no mínimo 8 caracteres.'; return
+            if password != repeated:
+                feedback.text = 'As senhas não coincidem.'; return
+            result = self.db.confirm_recovery_code(user, raw_code, password)
+            if result.get('ok'):
+                dialog.dismiss()
+                self._show_message('Sucesso', 'Senha atualizada. Já pode iniciar sessão.')
+            else:
+                feedback.text = 'Código inválido ou já utilizado.'
+
+        dialog = MDDialog(
+            title='Recuperação offline', type='custom', content_cls=content, auto_dismiss=False,
+            buttons=[MDFlatButton(text='CANCELAR', on_release=lambda *_: dialog.dismiss()), MDRaisedButton(text='REDEFINIR', on_release=submit)],
+        )
+        self._recovery_code_dialog = dialog
+        dialog.open()
+
+    def _confirm_password_reset(self):
+        username = self._forgot_user_field.text.strip() if self._forgot_user_field else ''
+        code = self._forgot_code_field.text.strip() if self._forgot_code_field else ''
+        new_password = self._forgot_new_password.text.strip() if self._forgot_new_password else ''
+        confirm = self._forgot_confirm_password.text.strip() if self._forgot_confirm_password else ''
+
+        if len(code) != 6 or not code.isdigit():
+            self._set_forgot_feedback('Informe o código de 6 dígitos enviado por e-mail.', True)
+            self._focus_register_field(self._forgot_code_field)
+            return
+        if len(new_password) < 8:
+            self._set_forgot_feedback('A nova senha deve ter no mínimo 8 caracteres.', True)
+            self._focus_register_field(self._forgot_new_password)
+            return
+        if new_password != confirm:
+            self._set_forgot_feedback('As senhas não coincidem.', True)
+            self._focus_register_field(self._forgot_confirm_password)
+            return
+
+        def task():
+            return self.db.confirm_password_reset(username, code, new_password)
+
+        def handle_result(result, error):
+            if error:
+                self._set_forgot_feedback('Não foi possível redefinir a senha. Tente novamente.', True)
+                return
+            payload = result or {}
+            if payload.get('ok'):
+                self._dismiss_forgot_dialog()
+                self._show_message('Sucesso', 'Senha atualizada com sucesso! Já pode iniciar sessão.')
+                return
+
+            reason = payload.get('reason')
+            if reason == 'weak_password':
+                message = 'A nova senha deve ter no mínimo 8 caracteres.'
+            elif reason == 'expired':
+                message = 'O código expirou. Clique em REENVIAR para receber outro.'
+            elif reason == 'too_many_attempts':
+                message = 'Código bloqueado após muitas tentativas. Solicite um novo código.'
+            elif reason in ('invalid', 'not_found'):
+                remaining = payload.get('remaining')
+                message = 'Código inválido.'
+                if remaining is not None:
+                    message += f' Tentativas restantes: {remaining}.'
+            else:
+                message = 'Não foi possível validar o código. Tente novamente.'
+            self._set_forgot_feedback(message, True)
+
+        self._run_background_task(
+            task,
+            handle_result,
+            busy_text='A redefinir senha...',
         )
 
     def register(self):
         mode = self._normalized_registration_mode()
         if mode == 'disabled':
-            self._show_message('Info', 'Cadastro indisponivel neste app')
+            self._show_message('Info', 'Registo indisponível neste app')
             return
 
         self._open_register_dialog()
@@ -1204,10 +1376,9 @@ class LoginScreen(MDScreen):
             self._register_content_container.height = content_height
 
     def _set_register_busy(self, busy):
-        if not any((self._register_username, self._register_password, self._register_confirm, self._register_answer_fields)):
+        if not any((self._register_username, self._register_email, self._register_password, self._register_confirm)):
             return
-        fields = [self._register_username, self._register_password, self._register_confirm]
-        fields.extend(self._register_answer_fields or [])
+        fields = [self._register_username, self._register_email, self._register_password, self._register_confirm]
         for field in fields:
             if field is not None:
                 field.disabled = bool(busy)
@@ -1235,25 +1406,25 @@ class LoginScreen(MDScreen):
         Clock.schedule_once(lambda dt: setattr(field, "focus", True), 0)
 
     def _open_register_dialog(self):
-        # Abre cadastro de novo usuario conforme o modo permitido.
+        # Abre o registo de novo utilizador conforme o modo permitido.
         if self._register_dialog:
             self._register_dialog.dismiss()
             self._register_dialog = None
 
         mode = self._normalized_registration_mode()
         is_admin_setup = mode == 'admin_bootstrap'
-        title = 'Criar administrador inicial' if is_admin_setup else 'Criar conta gerente'
-        role_text = 'Administrador' if is_admin_setup else 'Manager'
+        title = 'Criar administrador inicial' if is_admin_setup else 'Criar conta de gerente'
+        role_text = 'Administrador' if is_admin_setup else 'Gerente'
         subtitle = (
-            'Primeiro acesso para configuracao e gestao do sistema.'
+            'Primeiro acesso para configuração e gestão do sistema.'
             if is_admin_setup else
-            'Acesso para vendas, consulta rapida e operacao diaria.'
+            'Acesso para vendas, consulta rápida e operação diária.'
         )
         accent = self._register_accent_color(mode)
         text_secondary = self._theme_color("text_secondary", [0.36, 0.40, 0.48, 1])
         card_alt = self._theme_color("card_alt", [0.94, 0.95, 0.97, 1])
         on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
-        min_len = int(self.registration_password_min_len or 4)
+        min_len = max(8, int(self.registration_password_min_len or 8))
 
         content = MDBoxLayout(
             orientation='vertical',
@@ -1320,14 +1491,14 @@ class LoginScreen(MDScreen):
         tip_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         tip_row.add_widget(tip_icon)
         tip_row.add_widget(self._register_text_label(
-            f'A senha precisa ter no minimo {min_len} caracteres.',
+            f'A senha precisa ter no mínimo {min_len} caracteres.',
             "text_secondary",
             "Caption",
         ))
         content.add_widget(tip_row)
 
         self._register_username = MDTextField(
-            hint_text='Nome de usuario',
+            hint_text='Nome de utilizador',
             icon_right='account-outline',
             mode='rectangle',
             size_hint_y=None,
@@ -1338,9 +1509,21 @@ class LoginScreen(MDScreen):
             self._register_username.text = self.username.text.strip()
         content.add_widget(self._register_username)
 
+        self._register_email = MDTextField(
+            hint_text='E-mail',
+            helper_text='Receberá aqui os códigos de confirmação e recuperação',
+            helper_text_mode='on_focus',
+            icon_right='email-outline',
+            mode='rectangle',
+            size_hint_y=None,
+            height=dp(64),
+        )
+        self._register_email.line_color_focus = accent
+        content.add_widget(self._register_email)
+
         self._register_password = MDTextField(
             hint_text='Senha',
-            helper_text=f'Minimo {min_len} caracteres',
+            helper_text=f'Mínimo {min_len} caracteres',
             helper_text_mode='on_focus',
             icon_right='lock-outline',
             password=True,
@@ -1353,7 +1536,7 @@ class LoginScreen(MDScreen):
 
         self._register_confirm = MDTextField(
             hint_text='Confirmar senha',
-            helper_text='Repita a senha para evitar erro de digitacao',
+            helper_text='Repita a senha para evitar erro de digitação',
             helper_text_mode='on_focus',
             icon_right='lock-check-outline',
             password=True,
@@ -1364,60 +1547,13 @@ class LoginScreen(MDScreen):
         self._register_confirm.line_color_focus = accent
         content.add_widget(self._register_confirm)
 
-        questions_title = MDBoxLayout(
-            orientation='horizontal',
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(32),
-        )
-        questions_icon = MDIcon(
-            icon='shield-question-outline',
-            halign='center',
-            valign='middle',
-            theme_text_color='Custom',
-            text_color=accent,
-            size_hint_x=None,
-            width=dp(22),
-        )
-        questions_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
-        questions_title.add_widget(questions_icon)
-        questions_title.add_widget(self._register_text_label(
-            'Perguntas de recuperacao',
-            "text_primary",
-            "Subtitle2",
-            True,
-        ))
-        content.add_widget(questions_title)
-
-        self._register_answer_fields = []
-        for index, question in enumerate(QUESTIONS, start=1):
-            content.add_widget(self._register_text_label(question, "text_secondary", "Caption"))
-            field = MDTextField(
-                hint_text=f'Resposta {index}',
-                helper_text='Usada para recuperar a senha',
-                helper_text_mode='on_focus',
-                icon_right='key-variant',
-                password=True,
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(64),
-            )
-            field.line_color_focus = accent
-            self._register_answer_fields.append(field)
-            content.add_widget(field)
-
-        self._register_confirm.bind(on_text_validate=lambda *args: self._focus_register_field(
-            self._register_answer_fields[0] if self._register_answer_fields else None
-        ))
-        for index, field in enumerate(self._register_answer_fields):
-            if index + 1 < len(self._register_answer_fields):
-                next_field = self._register_answer_fields[index + 1]
-                field.bind(on_text_validate=lambda *args, target=next_field: self._focus_register_field(target))
-            else:
-                field.bind(on_text_validate=self._submit_register)
-
-        register_fields = [self._register_username, self._register_password, self._register_confirm]
-        register_fields.extend(self._register_answer_fields)
+        register_fields = [
+            self._register_username,
+            self._register_email,
+            self._register_password,
+            self._register_confirm,
+        ]
+        self._register_confirm.bind(on_text_validate=self._submit_register)
         for field in register_fields:
             field.bind(text=self._clear_register_feedback)
 
@@ -1445,7 +1581,7 @@ class LoginScreen(MDScreen):
             md_bg_color=card_alt,
         )
         shield_icon = MDIcon(
-            icon='shield-check-outline',
+            icon='email-check-outline',
             halign='center',
             valign='middle',
             theme_text_color='Custom',
@@ -1456,7 +1592,7 @@ class LoginScreen(MDScreen):
         shield_icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         security_note.add_widget(shield_icon)
         security_note.add_widget(self._register_text_label(
-            'As respostas ficam protegidas e serao pedidas se esquecer a senha.',
+            'O codigo de recuperacao sera enviado apenas para este e-mail cadastrado.',
             "text_secondary",
             "Caption",
         ))
@@ -1507,6 +1643,7 @@ class LoginScreen(MDScreen):
             self._register_dialog.dismiss()
             self._register_dialog = None
         self._register_username = None
+        self._register_email = None
         self._register_password = None
         self._register_confirm = None
         self._register_answer_fields = []
@@ -1516,20 +1653,24 @@ class LoginScreen(MDScreen):
         self._register_cancel_button = None
 
     def _submit_register(self, *args):
-        # Valida e grava a conta criada no dialogo.
+        # Valida e grava a conta criada no diálogo.
         mode = self._normalized_registration_mode()
         username = self._register_username.text.strip() if self._register_username else ''
+        email = self._register_email.text.strip() if self._register_email else ''
         password = self._register_password.text.strip() if self._register_password else ''
         confirm = self._register_confirm.text.strip() if self._register_confirm else ''
-        answers = [field.text.strip() for field in (self._register_answer_fields or [])]
 
         if not username:
-            self._set_register_feedback('Informe o nome de usuario.')
+            self._set_register_feedback('Informe o nome de utilizador.')
             self._focus_register_field(self._register_username)
             return
         if ' ' in username:
-            self._set_register_feedback('O nome de usuario nao deve ter espacos.')
+            self._set_register_feedback('O nome de utilizador não deve ter espaços.')
             self._focus_register_field(self._register_username)
+            return
+        if not email or not self._is_valid_email(email):
+            self._set_register_feedback('Informe um e-mail valido para recuperar a conta.')
+            self._focus_register_field(self._register_email)
             return
         if not password:
             self._set_register_feedback('Informe a senha da conta.')
@@ -1540,30 +1681,22 @@ class LoginScreen(MDScreen):
             self._focus_register_field(self._register_confirm)
             return
 
-        min_len = int(self.registration_password_min_len or 4)
+        min_len = max(8, int(self.registration_password_min_len or 8))
         if len(password) < min_len:
-            self._set_register_feedback(f'A senha deve ter no minimo {min_len} caracteres.')
+            self._set_register_feedback(f'A senha deve ter no mínimo {min_len} caracteres.')
             self._focus_register_field(self._register_password)
             return
         if password != confirm:
-            self._set_register_feedback('As senhas nao coincidem.')
+            self._set_register_feedback('As senhas não coincidem.')
             self._focus_register_field(self._register_confirm)
             return
-        if not answers or any(not answer for answer in answers):
-            self._set_register_feedback('Responda as perguntas de recuperacao.')
-            for field in self._register_answer_fields or []:
-                if not field.text.strip():
-                    self._focus_register_field(field)
-                    break
-            return
-
         role = ''
         if mode == 'manager_self_service':
             role = 'manager'
         elif mode == 'admin_bootstrap':
             role = 'admin'
         else:
-            self._show_message('Info', 'Cadastro indisponivel neste app')
+            self._show_message('Info', 'Registo indisponível neste app')
             self._close_register_dialog()
             return
 
@@ -1585,7 +1718,7 @@ class LoginScreen(MDScreen):
                     return None
                 if has_admin:
                     return {"status": "admin_exists"}
-                created = self.db.create_admin(username, password)
+                created = self.db.create_admin(username, password, email=email)
                 if not created and self._db_last_error():
                     return None
                 if not created:
@@ -1595,16 +1728,12 @@ class LoginScreen(MDScreen):
                     if has_admin:
                         return {"status": "admin_exists"}
                     return {"status": "create_failed"}
-                if not self.db.set_security_questions(username, answers):
-                    return {"status": "questions_failed"}
             else:
-                created = self.db.create_user(username, password, 'manager')
+                created = self.db.create_user(username, password, 'manager', email=email)
                 if not created and self._db_last_error():
                     return None
                 if not created:
                     return {"status": "create_failed"}
-                if not self.db.set_security_questions(username, answers):
-                    return {"status": "questions_failed"}
                 try:
                     self.db.log_action(
                         username,
@@ -1619,30 +1748,26 @@ class LoginScreen(MDScreen):
         def handle_result(result, error):
             if error:
                 if role == 'admin':
-                    self._set_register_feedback('Nao foi possivel criar o administrador.')
+                    self._set_register_feedback('Não foi possível criar o administrador.')
                 else:
-                    self._set_register_feedback('Nao foi possivel criar a conta.')
+                    self._set_register_feedback('Não foi possível criar a conta.')
                 return
 
             status = (result or {}).get("status")
             if status == "user_exists":
-                self._set_register_feedback('Nome de usuario ja existe.')
+                self._set_register_feedback('Nome de utilizador já existe.')
                 self._focus_register_field(self._register_username)
                 return
             if status == "admin_exists":
-                self._show_message('Info', 'Ja existe um administrador. Novos administradores devem ser criados em Configuracoes.')
+                self._show_message('Info', 'Já existe um administrador. Novos administradores devem ser criados em Configurações.')
                 self._close_register_dialog()
                 return
             if status == "create_failed":
                 if role == 'admin':
-                    self._set_register_feedback('Nao foi possivel criar o admin.')
+                    self._set_register_feedback('Não foi possível criar o admin.')
                 else:
-                    self._set_register_feedback('Nao foi possivel criar a conta.')
+                    self._set_register_feedback('Não foi possível criar a conta.')
                 return
-            if status == "questions_failed":
-                self._set_register_feedback('Conta criada, mas nao foi possivel salvar as perguntas de recuperacao.')
-                return
-
             self._close_register_dialog()
             if self.username:
                 self.username.text = username
@@ -1650,7 +1775,7 @@ class LoginScreen(MDScreen):
                 self.password.text = ''
             self.username_error = ''
             self.password_error = ''
-            self._show_message('Sucesso', 'Conta criada com sucesso! Faca login.')
+            self._show_message('Sucesso', 'Conta criada com sucesso! Faça login.')
 
         self._run_background_task(
             task,
@@ -1674,7 +1799,7 @@ class AdminLoginScreen(LoginScreen):
         kwargs.setdefault("allowed_roles", ["admin"])
         kwargs.setdefault("allow_admin_setup", True)
         kwargs.setdefault("registration_mode", "admin_bootstrap")
-        kwargs.setdefault("registration_password_min_len", 4)
+        kwargs.setdefault("registration_password_min_len", 8)
         kwargs.setdefault("success_screen", "admin_home")
         super().__init__(**kwargs)
 
@@ -1685,7 +1810,7 @@ class ManagerLoginScreen(LoginScreen):
         kwargs.setdefault("allowed_roles", ["manager"])
         kwargs.setdefault("allow_admin_setup", False)
         kwargs.setdefault("registration_mode", "manager_self_service")
-        kwargs.setdefault("registration_password_min_len", 4)
+        kwargs.setdefault("registration_password_min_len", 8)
         kwargs.setdefault("success_screen", "manager")
         kwargs.setdefault("show_theme_toggle", True)
         super().__init__(**kwargs)

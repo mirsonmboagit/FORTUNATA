@@ -144,24 +144,69 @@ class _BaseChartCard(HoverCard):
 class SalesTrendChart(_BaseChartCard):
     def __init__(self, **kwargs):
         super().__init__(
-            title="Vendas Recentes",
-            subtitle="Receita diaria dos ultimos dias",
+            title="Grafico Operacional",
+            subtitle="Escolha a metrica e o periodo na HOME",
             height=dp(322),
             **kwargs,
         )
 
     def set_series(self, series):
+        self.set_dashboard(
+            metric="revenue",
+            period_label="periodo atual",
+            sales_series=series,
+            stock_series=[],
+            top_products=[],
+        )
+
+    def set_dashboard(self, metric, period_label, sales_series=None, stock_series=None, top_products=None):
+        metric = str(metric or "revenue")
+        if metric == "sales_count":
+            self._set_single_series(
+                title="Quantidade de Vendas",
+                period_label=period_label,
+                series=sales_series,
+                value_key="sales_count",
+                value_label="Vendas",
+                formatter=lambda value: str(int(round(float(value or 0)))),
+                color_key="success",
+            )
+            return
+        if metric == "stock_flow":
+            self._set_stock_flow(stock_series, period_label)
+            return
+        if metric == "top_products":
+            self._set_top_products(top_products, period_label)
+            return
+        self._set_single_series(
+            title="Faturacao Geral",
+            period_label=period_label,
+            series=sales_series,
+            value_key="revenue",
+            value_label="Faturacao",
+            formatter=_format_mzn,
+            color_key="primary",
+        )
+
+    def _chart_labels(self, series):
+        return [
+            str(item.get("label") or _format_short_date(item.get("date")))
+            for item in (series or [])
+        ]
+
+    def _set_single_series(self, title, period_label, series, value_key, value_label, formatter, color_key):
         series = list(series or [])
         if not _ensure_matplotlib():
             self.set_state_text("Graficos indisponiveis no momento.")
             return
-        if not series or not any(float(item.get("revenue") or 0.0) > 0 for item in series):
-            self.set_state_text("Sem vendas suficientes para gerar o grafico.")
+        if not series or not any(float(item.get(value_key) or 0.0) > 0 for item in series):
+            self.title_label.text = title
+            self.subtitle_label.text = str(period_label or "")
+            self.set_state_text("Sem dados suficientes para este periodo.")
             return
 
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
-        primary = tokens.get("primary", (0.10, 0.35, 0.65, 1))
-        success = tokens.get("success", (0.2, 0.65, 0.3, 1))
+        accent = tokens.get(color_key, tokens.get("primary", (0.10, 0.35, 0.65, 1)))
         info = tokens.get("info", (0.18, 0.58, 0.86, 1))
         warning = tokens.get("warning", (0.92, 0.68, 0.18, 1))
         danger = tokens.get("danger", (0.88, 0.34, 0.30, 1))
@@ -169,8 +214,8 @@ class SalesTrendChart(_BaseChartCard):
         label_color = tokens.get("text_secondary", (0.42, 0.46, 0.5, 1))
         bg_color = tokens.get("card", (1, 1, 1, 1))
 
-        labels = [_format_short_date(item.get("date")) for item in series]
-        values = [float(item.get("revenue") or 0.0) for item in series]
+        labels = self._chart_labels(series)
+        values = [float(item.get(value_key) or 0.0) for item in series]
         counts = [int(item.get("sales_count") or 0) for item in series]
         x_values = list(range(len(series)))
 
@@ -179,12 +224,11 @@ class SalesTrendChart(_BaseChartCard):
         ax = figure.add_subplot(111)
         ax.set_facecolor(bg_color)
         palette = [
-            primary,
+            accent,
             info,
             warning,
             danger,
-            (*primary[:3], 0.78),
-            (*success[:3], 0.78),
+            (*accent[:3], 0.78),
         ]
         bar_colors = [palette[index % len(palette)] for index in range(len(values))]
         bars = ax.bar(x_values, values, color=bar_colors, width=0.62)
@@ -210,33 +254,27 @@ class SalesTrendChart(_BaseChartCard):
         ax.spines["left"].set_color((*divider[:3], 0.8))
         ax.spines["bottom"].set_color((*divider[:3], 0.8))
 
-        last_index = len(values) - 1
-        bars[last_index].set_color(success)
-        ax.annotate(
-            "Hoje",
-            xy=(last_index, values[last_index]),
-            xytext=(0, 12),
-            textcoords="offset points",
-            ha="center",
-            color=success,
-            fontsize=9,
-            fontweight="bold",
-        )
+        if len(values) <= 62:
+            last_index = len(values) - 1
+            bars[last_index].set_color(tokens.get("success", (0.2, 0.65, 0.3, 1)))
 
         max_value = max(values) if values else 0
         ax.set_ylim(0, max(max_value * 1.2, 4))
         hover_items = []
+        show_value_labels = len(values) <= 45
         for index, bar in enumerate(bars):
-            ax.text(
-                bar.get_x() + (bar.get_width() / 2.0),
-                bar.get_height() + max(max_value * 0.02, 0.15),
-                f"{values[index]:.0f}",
-                ha="center",
-                va="bottom",
-                color=label_color,
-                fontsize=8,
-                fontweight="bold",
-            )
+            if show_value_labels:
+                ax.text(
+                    bar.get_x() + (bar.get_width() / 2.0),
+                    bar.get_height() + max(max_value * 0.02, 0.15),
+                    f"{values[index]:.0f}",
+                    ha="center",
+                    va="bottom",
+                    color=label_color,
+                    fontsize=8,
+                    fontweight="bold",
+                )
+            raw_value = values[index]
             hover_items.append(
                 {
                     "artist": bar,
@@ -245,16 +283,161 @@ class SalesTrendChart(_BaseChartCard):
                         bar.get_height(),
                     ),
                     "text": (
-                        f"Dia: {labels[index]}\n"
-                        f"Receita: {_format_mzn(values[index])}\n"
+                        f"Periodo: {labels[index]}\n"
+                        f"{value_label}: {formatter(raw_value)}\n"
                         f"Vendas: {counts[index]}"
                     ),
                 }
             )
-        self.subtitle_label.text = (
-            f"{sum(counts)} vendas | Receita acumulada {_format_mzn(sum(values))}"
-        )
+        self.title_label.text = title
+        total_text = formatter(sum(values))
+        self.subtitle_label.text = f"{period_label} | {value_label}: {total_text}"
         figure.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.2)
+        self.set_figure(figure, hover_items=hover_items)
+
+    def _set_stock_flow(self, series, period_label):
+        series = list(series or [])
+        if not _ensure_matplotlib():
+            self.set_state_text("Graficos indisponiveis no momento.")
+            return
+        if not series or not any(
+            (float(item.get("in_qty") or 0.0) > 0 or float(item.get("out_qty") or 0.0) > 0)
+            for item in series
+        ):
+            self.title_label.text = "Fluxo de Stock"
+            self.subtitle_label.text = str(period_label or "")
+            self.set_state_text("Sem movimentacoes de stock para este periodo.")
+            return
+
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        success = tokens.get("success", (0.2, 0.65, 0.3, 1))
+        danger = tokens.get("danger", (0.88, 0.34, 0.30, 1))
+        divider = tokens.get("divider", (0.82, 0.85, 0.9, 1))
+        label_color = tokens.get("text_secondary", (0.42, 0.46, 0.5, 1))
+        bg_color = tokens.get("card", (1, 1, 1, 1))
+
+        labels = self._chart_labels(series)
+        in_values = [float(item.get("in_qty") or 0.0) for item in series]
+        out_values = [float(item.get("out_qty") or 0.0) for item in series]
+        positions = list(range(len(series)))
+
+        figure = Figure(figsize=(6.3, 3.15), dpi=100)
+        figure.patch.set_facecolor(bg_color)
+        ax = figure.add_subplot(111)
+        ax.set_facecolor(bg_color)
+
+        width = 0.36
+        in_bars = ax.bar([pos - (width / 2.0) for pos in positions], in_values, width=width, color=success, label="Entradas")
+        out_bars = ax.bar([pos + (width / 2.0) for pos in positions], out_values, width=width, color=danger, label="Saidas")
+
+        tick_step = max(1, len(labels) // 7)
+        tick_positions = list(range(0, len(labels), tick_step))
+        if tick_positions[-1] != len(labels) - 1:
+            tick_positions.append(len(labels) - 1)
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels([labels[index] for index in tick_positions], rotation=0)
+        ax.grid(axis="y", color=(*divider[:3], 0.55), linewidth=0.9)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis="x", colors=label_color, labelsize=9)
+        ax.tick_params(axis="y", colors=label_color, labelsize=9)
+
+        for spine_name in ("top", "right"):
+            ax.spines[spine_name].set_visible(False)
+        ax.spines["left"].set_color((*divider[:3], 0.8))
+        ax.spines["bottom"].set_color((*divider[:3], 0.8))
+        ax.legend(frameon=False, fontsize=8.5, labelcolor=label_color, loc="upper right")
+
+        max_value = max(in_values + out_values) if (in_values or out_values) else 0
+        ax.set_ylim(0, max(max_value * 1.22, 4))
+        self.title_label.text = "Fluxo de Stock"
+        self.subtitle_label.text = f"{period_label} | Entradas {sum(in_values):.1f} | Saidas {sum(out_values):.1f}"
+        figure.subplots_adjust(left=0.09, right=0.98, top=0.88, bottom=0.2)
+        hover_items = []
+        for index, bar in enumerate(in_bars):
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (bar.get_x() + (bar.get_width() / 2.0), bar.get_height()),
+                    "text": f"Periodo: {labels[index]}\nEntradas: {in_values[index]:.1f}",
+                }
+            )
+        for index, bar in enumerate(out_bars):
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (bar.get_x() + (bar.get_width() / 2.0), bar.get_height()),
+                    "text": f"Periodo: {labels[index]}\nSaidas: {out_values[index]:.1f}",
+                }
+            )
+        self.set_figure(figure, hover_items=hover_items)
+
+    def _set_top_products(self, rows, period_label):
+        rows = list(rows or [])
+        if not _ensure_matplotlib():
+            self.set_state_text("Graficos indisponiveis no momento.")
+            return
+        if not rows:
+            self.title_label.text = "Top Produtos"
+            self.subtitle_label.text = str(period_label or "")
+            self.set_state_text("Sem produtos vendidos neste periodo.")
+            return
+
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        primary = tokens.get("primary", (0.10, 0.35, 0.65, 1))
+        info = tokens.get("info", (0.18, 0.58, 0.86, 1))
+        divider = tokens.get("divider", (0.82, 0.85, 0.9, 1))
+        label_color = tokens.get("text_secondary", (0.42, 0.46, 0.5, 1))
+        bg_color = tokens.get("card", (1, 1, 1, 1))
+
+        items = list(reversed(rows[:8]))
+        names = [str(item.get("name") or "Produto") for item in items]
+        labels = [name if len(name) <= 24 else f"{name[:21]}..." for name in names]
+        values = [float(item.get("revenue") or 0.0) for item in items]
+
+        figure = Figure(figsize=(6.3, 3.15), dpi=100)
+        figure.patch.set_facecolor(bg_color)
+        ax = figure.add_subplot(111)
+        ax.set_facecolor(bg_color)
+        bars = ax.barh(range(len(items)), values, color=[primary if i % 2 == 0 else info for i in range(len(items))])
+        ax.set_yticks(range(len(items)))
+        ax.set_yticklabels(labels)
+        ax.grid(axis="x", color=(*divider[:3], 0.55), linewidth=0.9)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis="x", colors=label_color, labelsize=9)
+        ax.tick_params(axis="y", colors=label_color, labelsize=8.5)
+        for spine_name in ("top", "right"):
+            ax.spines[spine_name].set_visible(False)
+        ax.spines["left"].set_color((*divider[:3], 0.8))
+        ax.spines["bottom"].set_color((*divider[:3], 0.8))
+
+        max_value = max(values) if values else 0
+        ax.set_xlim(0, max(max_value * 1.18, 4))
+        hover_items = []
+        for index, bar in enumerate(bars):
+            value = values[index]
+            ax.text(
+                value + max(max_value * 0.015, 0.15),
+                bar.get_y() + (bar.get_height() / 2.0),
+                f"{value:.0f}",
+                va="center",
+                color=label_color,
+                fontsize=8,
+                fontweight="bold",
+            )
+            hover_items.append(
+                {
+                    "artist": bar,
+                    "position": (bar.get_width(), bar.get_y() + (bar.get_height() / 2.0)),
+                    "text": (
+                        f"Produto: {names[index]}\n"
+                        f"Faturacao: {_format_mzn(value)}\n"
+                        f"Qtd: {float(items[index].get('quantity') or 0.0):.2f}"
+                    ),
+                }
+            )
+        self.title_label.text = "Top Produtos"
+        self.subtitle_label.text = f"{period_label} | Top {len(items)} por faturacao"
+        figure.subplots_adjust(left=0.28, right=0.96, top=0.9, bottom=0.18)
         self.set_figure(figure, hover_items=hover_items)
 
 

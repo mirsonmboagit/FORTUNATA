@@ -7,8 +7,8 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Preformatted
 
 from .base_report import BasePDFReport
-from utils.paths import RECEIPTS_DIR
-from utils.thermal_printer import format_receipt_text
+from utils.config.paths import RECEIPTS_DIR
+from utils.hardware.thermal_printer import format_receipt_text
 
 
 class ReceiptReport(BasePDFReport):

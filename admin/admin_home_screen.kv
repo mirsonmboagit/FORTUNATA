@@ -35,7 +35,7 @@
                 md_bg_color: app.theme_tokens["primary"]
                 specific_text_color: app.theme_tokens["on_primary"]
                 elevation: 4
-                right_action_items: [["refresh", lambda x: root.refresh_home(), "Atualizar (Ctrl+R)"], ["chart-bar", lambda x: root.open_reports(), "Relatorios (Alt+3)"], ["cog", lambda x: root.go_to_settings(), "Definicoes (Alt+S)"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
+                right_action_items: [["refresh", lambda x: root.refresh_home(), "Atualizar (Ctrl+R)"], ["logout", lambda x: root.logout(), "Terminar sessao"]]
 
             MDBoxLayout:
                 orientation: "vertical"
@@ -123,32 +123,6 @@
                                     width: dp(96)
                                     on_release: root.add_product()
 
-                                HeroActionButton:
-                                    id: hero_reports_button
-                                    text: "Relatorios"
-                                    md_bg_color: 1, 1, 1, 0.12
-                                    text_color: app.theme_tokens["on_primary"]
-                                    elevation: 0
-                                    line_color: 1, 1, 1, 0.35
-                                    line_width: 1
-                                    hover_accent_color: [1, 1, 1, 1]
-                                    size_hint_x: None
-                                    width: dp(96)
-                                    on_release: root.open_reports()
-
-                                HeroActionButton:
-                                    id: hero_pdfs_button
-                                    text: "PDFs"
-                                    md_bg_color: 1, 1, 1, 0.12
-                                    text_color: app.theme_tokens["on_primary"]
-                                    elevation: 0
-                                    line_color: 1, 1, 1, 0.35
-                                    line_width: 1
-                                    hover_accent_color: [1, 1, 1, 1]
-                                    size_hint_x: None
-                                    width: dp(84)
-                                    on_release: root.show_all_pdfs()
-
                 MDBoxLayout:
                     id: main_shell
                     orientation: "horizontal"
@@ -190,7 +164,46 @@
                         MDBoxLayout:
                             id: sales_chart_host
                             orientation: "vertical"
+                            spacing: dp(8)
                             size_hint_y: 1
+
+                            MDBoxLayout:
+                                id: chart_controls
+                                size_hint_y: None
+                                height: dp(38)
+                                spacing: dp(8)
+
+                                MDLabel:
+                                    text: "Grafico"
+                                    font_style: "Subtitle1"
+                                    bold: True
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens["text_primary"]
+
+                                HeroActionButton:
+                                    id: chart_metric_btn
+                                    text: root.chart_metric_text
+                                    md_bg_color: app.theme_tokens["card_alt"]
+                                    text_color: app.theme_tokens["text_primary"]
+                                    hover_accent_color: app.theme_tokens["primary"]
+                                    size_hint_x: None
+                                    width: dp(150)
+                                    on_release: root.show_chart_metric_menu(self)
+
+                                HeroActionButton:
+                                    id: chart_period_btn
+                                    text: root.chart_period_text
+                                    md_bg_color: app.theme_tokens["card_alt"]
+                                    text_color: app.theme_tokens["text_primary"]
+                                    hover_accent_color: app.theme_tokens["primary"]
+                                    size_hint_x: None
+                                    width: dp(118)
+                                    on_release: root.show_chart_period_menu(self)
+
+                            MDBoxLayout:
+                                id: chart_canvas_host
+                                orientation: "vertical"
+                                size_hint_y: 1
 
                     MDBoxLayout:
                         id: right_col
@@ -244,7 +257,7 @@
                             md_bg_color: app.theme_tokens["card"]
 
                             MDLabel:
-                                text: "Atalhos"
+                                text: "Acessos"
                                 font_style: "Subtitle1"
                                 bold: True
                                 theme_text_color: "Custom"

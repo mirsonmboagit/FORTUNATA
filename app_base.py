@@ -3,9 +3,9 @@ import os
 import sys
 from threading import Thread
 from time import perf_counter
-from utils.app_config import get_app_settings, save_app_settings as persist_app_settings
-from utils.paths import APP_SETTINGS_FILE, ROOT_DIR, asset_path, ensure_runtime_dirs, set_project_cwd
-from utils.logging_setup import configure_runtime_logging
+from utils.config.app_config import get_app_settings, save_app_settings as persist_app_settings
+from utils.config.paths import APP_SETTINGS_FILE, ROOT_DIR, asset_path, ensure_runtime_dirs, set_project_cwd
+from utils.config.logging_setup import configure_runtime_logging
 
 # Prepara caminhos, pastas e logs antes de carregar o Kivy.
 set_project_cwd()
@@ -30,10 +30,10 @@ from kivy.properties import DictProperty, StringProperty
 from kivy.core.text import LabelBase
 from kivy.clock import Clock
 
-from utils.theme import get_theme_tokens
-from utils.i18n import language_label, language_options, language_short, normalize_language, translate
-from utils.i18n_runtime import install_i18n_hooks, localize_widget_tree
-from utils.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
+from utils.config.theme import get_theme_tokens
+from utils.core.i18n import language_label, language_options, language_short, normalize_language, translate
+from utils.core.i18n_runtime import install_i18n_hooks, localize_widget_tree
+from utils.config.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
 
 
 if sys.platform.startswith('win'):
@@ -176,6 +176,9 @@ class BaseApp(MDApp):
         self._optional_warmup_started = False
         self._screen_warmup_ev = None
         self._screen_warmup_queue = []
+        # Evita disputar CPU/IO com login e primeiros cliques. Tarefas pesadas
+        # so aquecem depois de a interface estar estabilizada.
+        self.background_warmup_delay = 8.0
         self._startup_started_at = perf_counter()
         self._ignored_early_close = False
         self._load_app_settings()
@@ -271,6 +274,8 @@ class BaseApp(MDApp):
         if icon_path.exists():
             Window.set_icon(str(icon_path))
         Window.bind(on_request_close=self._handle_window_request_close)
+        # A mesma passagem localiza os textos e aplica a escala minima de
+        # leitura a toda a arvore, inclusive componentes adicionados depois.
         Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
         self._start_automation_tasks()
         self._queue_optional_dependency_warmup()
@@ -322,7 +327,7 @@ class BaseApp(MDApp):
     def _start_automation_tasks(self):
         if not self.db or not hasattr(self.db, "run_automation_tasks"):
             return
-        Clock.schedule_once(self._run_automation_tasks, 0.35)
+        Clock.schedule_once(self._run_automation_tasks, self.background_warmup_delay)
         if self._automation_ev:
             self._automation_ev.cancel()
         # Checagem leve a cada minuto; execução real respeita intervalos internos do DB.
@@ -333,7 +338,7 @@ class BaseApp(MDApp):
             return
         self._optional_warmup_ev = Clock.schedule_once(
             lambda _dt: self._warmup_optional_dependencies(),
-            0.9,
+            self.background_warmup_delay + 2.0,
         )
 
     def _warmup_optional_dependencies(self):
@@ -353,7 +358,7 @@ class BaseApp(MDApp):
                         pass
 
                 try:
-                    from utils.vision import get_vision_dependencies
+                    from utils.hardware.vision import get_vision_dependencies
 
                     get_vision_dependencies()
                 except Exception:
@@ -380,7 +385,7 @@ class BaseApp(MDApp):
             added = True
 
         if added and self._screen_warmup_ev is None:
-            self._schedule_screen_warmup(delay)
+            self._schedule_screen_warmup(max(self.background_warmup_delay, delay))
         return added
 
     def _schedule_screen_warmup(self, delay):

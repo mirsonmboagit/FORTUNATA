@@ -2,14 +2,16 @@
 import os
 import sys
 import math
-from kivy.properties import ObjectProperty, ListProperty, BooleanProperty
+import unicodedata
+from kivy.properties import ObjectProperty, ListProperty, BooleanProperty, NumericProperty
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.core.window import Window
 from kivy.metrics import dp, sp
 from kivy.uix.modalview import ModalView
+from kivy.uix.scrollview import ScrollView
 from kivy.app import App
-from kivy.graphics import Color, Line
+from kivy.graphics import Color, Line, RoundedRectangle
 from kivy.animation import Animation
 from collections import deque
 from threading import Thread
@@ -23,26 +25,38 @@ from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.snackbar import MDSnackbar
+from kivymd.uix.textfield import MDTextField
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from AI.controller import ProactiveIntelligenceController
-
 from database.provider import get_db
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton, HoverTooltipIconButton
 from ui.components.loading_overlay import ScreenLoadingController
-from utils.ai_insights import build_admin_insights, build_admin_insights_ai
-from utils.ai_popups import (
-    build_auto_banner_data,
-    build_banner_details_sections,
-    build_positive_banner,
-    render_auto_banners,
-)
+from utils.core.i18n import correct_portuguese_text
+from utils.core.formatters import format_money
 from ui.components.tooltip_widgets import TooltipFloatingActionButton, TooltipIconButton
-from utils.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
+from utils.business.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
+
+
+_PRODUCT_FORM_CLASS = None
+
+
+def _get_ai_popup_helpers():
+    from utils.ai.ai_popups import (
+        build_auto_banner_data,
+        build_banner_details_sections,
+        build_positive_banner,
+        render_auto_banners,
+    )
+    return (
+        build_auto_banner_data,
+        build_banner_details_sections,
+        build_positive_banner,
+        render_auto_banners,
+    )
 
 
 def _get_detail_popup_class():
@@ -83,13 +97,18 @@ def _build_unavailable_product_form_class(error):
 
 
 def _get_product_form_class():
+    global _PRODUCT_FORM_CLASS
+    if _PRODUCT_FORM_CLASS is not None:
+        return _PRODUCT_FORM_CLASS
     try:
         from .product_form import ProductForm
-        return ProductForm
+        _PRODUCT_FORM_CLASS = ProductForm
+        return _PRODUCT_FORM_CLASS
     except ImportError:
         try:
             from admin.product_form import ProductForm
-            return ProductForm
+            _PRODUCT_FORM_CLASS = ProductForm
+            return _PRODUCT_FORM_CLASS
         except Exception as exc:
             return _build_unavailable_product_form_class(exc)
     except Exception as exc:
@@ -107,9 +126,9 @@ LOSS_LABELS = {
     "ADJUSTMENT": "Ajuste",
 }
 
-# ── Tamanho do lote de widgets criados por frame durante render paginado ──
-_TABLE_BATCH_SIZE = 3
-# ── Intervalo entre lotes (segundos) — mantém o UI responsivo ──
+# -- Tamanho do lote de widgets criados por frame durante render paginado --
+_TABLE_BATCH_SIZE = 6
+# -- Intervalo entre lotes (segundos) — mantem o UI responsivo --
 _TABLE_BATCH_INTERVAL = 0.016   # ~1 frame a 60 fps
 
 
@@ -120,8 +139,111 @@ def _safe_float(value, default=0.0):
         return default
 
 
+class ProductTableCell(MDBoxLayout):
+    hover_growth = NumericProperty(0)
+    hover_glow_alpha = NumericProperty(0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._hover_glow_rgba = [0.15, 0.52, 0.76, 1]
+        with self.canvas.after:
+            self._hover_glow_color = Color(0.15, 0.52, 0.76, 0)
+            self._hover_glow_rect = RoundedRectangle(
+                pos=self.pos,
+                size=self.size,
+                radius=[dp(4)],
+            )
+            self._hover_outline_color = Color(0.15, 0.52, 0.76, 0)
+            self._hover_outline = Line(
+                rounded_rectangle=(self.x, self.y, self.width, self.height, dp(4)),
+                width=dp(1.1),
+            )
+        self.bind(
+            pos=self._sync_hover_glow,
+            size=self._sync_hover_glow,
+            hover_growth=self._sync_hover_glow,
+            hover_glow_alpha=self._sync_hover_glow,
+        )
+
+    def set_hover_glow_color(self, rgba):
+        color = list(rgba or self._hover_glow_rgba)
+        while len(color) < 4:
+            color.append(1)
+        self._hover_glow_rgba = color[:4]
+        self._sync_hover_glow()
+
+    def _sync_hover_glow(self, *_args):
+        color = list(self._hover_glow_rgba or [0.15, 0.52, 0.76, 1])
+        alpha = float(self.hover_glow_alpha or 0)
+        color[3] = alpha
+        self._hover_glow_color.rgba = color
+        inset = dp(1)
+        self._hover_glow_rect.pos = (self.x + inset, self.y + inset)
+        self._hover_glow_rect.size = (
+            max(0, self.width - (inset * 2)),
+            max(0, self.height - (inset * 2)),
+        )
+        self._hover_glow_rect.radius = [dp(5)]
+        outline = list(color)
+        outline[3] = min(alpha * 2.2, 0.78)
+        self._hover_outline_color.rgba = outline
+        self._hover_outline.rounded_rectangle = (
+            self.x + inset,
+            self.y + inset,
+            max(0, self.width - (inset * 2)),
+            max(0, self.height - (inset * 2)),
+            dp(5),
+        )
+
+    def animate_inner_growth(self, active):
+        scale = 1.18 if active else 1.0
+        for widget in self._iter_content_widgets():
+            for attr in ("font_size", "icon_size"):
+                if not hasattr(widget, attr):
+                    continue
+                base_attr = f"_product_cell_base_{attr}"
+                base = getattr(widget, base_attr, None)
+                if base is None:
+                    try:
+                        base = float(getattr(widget, attr))
+                    except Exception:
+                        continue
+                    setattr(widget, base_attr, base)
+                Animation.cancel_all(widget, attr)
+                Animation(**{attr: base * scale, "d": 0.12, "t": "out_quad"}).start(widget)
+            self._animate_inner_shake(widget, active)
+
+    def _animate_inner_shake(self, widget, active):
+        if not hasattr(widget, "x"):
+            return
+        base_x = getattr(widget, "_product_cell_base_x", None)
+        if base_x is None or active:
+            try:
+                base_x = float(widget.x)
+            except Exception:
+                return
+            widget._product_cell_base_x = base_x
+        Animation.cancel_all(widget, "x")
+        if not active:
+            Animation(x=base_x, d=0.08, t="out_quad").start(widget)
+            return
+        wobble = dp(2)
+        (
+            Animation(x=base_x + wobble, d=0.035, t="out_quad")
+            + Animation(x=base_x - wobble, d=0.045, t="out_quad")
+            + Animation(x=base_x + (wobble * 0.45), d=0.035, t="out_quad")
+            + Animation(x=base_x, d=0.045, t="out_quad")
+        ).start(widget)
+
+    def _iter_content_widgets(self):
+        stack = list(getattr(self, "children", []) or [])
+        while stack:
+            widget = stack.pop()
+            yield widget
+            stack.extend(list(getattr(widget, "children", []) or []))
+
+
 class AdminScreen(Screen):
-    PRODUCTS_CACHE_SECONDS = 45
     LOSS_METRICS_LOOKBACK_DAYS = 365
     PRODUCTS_PAGE_SIZE = 18
     product_table = ObjectProperty(None)
@@ -131,7 +253,7 @@ class AdminScreen(Screen):
     quick_actions_open = BooleanProperty(False)
     shopping_list_busy = BooleanProperty(False)
 
-    # ── Token para descartar resultados de filtros obsoletos ──────────────────
+    # -- Token para descartar resultados de filtros obsoletos ------------------
     _filter_token = 0
 
     def __init__(self, **kwargs):
@@ -146,30 +268,32 @@ class AdminScreen(Screen):
 
         self.swing_event = None
         self.notification_count = 0
-        self._ai_poll_ev = None
         self._products_load_token = 0
         self._products_loading = False
         self._pending_products_load = False
+        self._products_loaded_once = False
         self._last_products_load_at = 0.0
+        self._products_table_dirty = True
+        self._resize_rebuild_ev = None
+        self._product_form_preload_ev = None
 
-        # ── Render de tabela em lotes ────────────────────────────────────────
+        # -- Render de tabela em lotes ----------------------------------------
         self._table_render_ev = None
         self._table_render_token = 0
         self._pending_table_rows = deque()   # deque de (idx, product) aguardando render
+        self._product_row_hover_handlers = []
         self._table_row_height = dp(48)
         self._table_palette = {}
 
         self._current_display = []
         self._current_filtered_products = []
         self._aggregated_products_cache = []
+        self._product_search_index = {}
         self._product_page_index = 0
         self._display_ids_by_product_id = {}
         self._selected_lot_ids_by_catalog_key = {}
         self._alerts_refresh_token = 0
         self._ai_popup_token = 0
-        self._fraud_check_token = 0
-        self._fraud_check_until = 0.0
-        self._last_fraud_log_count = 0
         self._async_actions = set()
         self._cached_admin_insights = {}
         self._expiry_alerts_by_id = {}
@@ -191,25 +315,30 @@ class AdminScreen(Screen):
         self._shortcut_help_dialog = None
         self._loading_controller = getattr(self, "_loading_controller", None)
 
-        # ── Snackbar reutilizável ─────────────────────────────────────────────
+        # -- Snackbar reutilizável ---------------------------------------------
         self._snackbar = None
 
-        self._intelligence = ProactiveIntelligenceController(
-            screen=self,
-            db=self.db,
-            history_title="Historico de monitorizacao",
-            banner_columns=1,
-            auto_batch_size=2,
-            auto_stagger_seconds=2.0,
-            auto_present_enabled=True,
-            auto_present_as_history=True,
-        )
+        self._intelligence = None
 
         Window.bind(on_resize=self._on_window_resize)
 
+    def _get_intelligence(self):
+        if self._intelligence is None:
+            from AI.controller import ProactiveIntelligenceController
+            self._intelligence = ProactiveIntelligenceController(
+                screen=self,
+                db=self.db,
+                history_title="Historico de monitorizacao",
+                banner_columns=1,
+                auto_batch_size=2,
+                auto_stagger_seconds=2.0,
+                auto_present_enabled=True,
+                auto_present_as_history=False,
+            )
+        return self._intelligence
+
     def on_kv_post(self, base_widget):
-        self._ensure_loading_overlay()
-        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+        self._update_responsive_layout()
 
     def _ensure_loading_overlay(self):
         if getattr(self, "_loading_controller", None) is None:
@@ -227,6 +356,41 @@ class AdminScreen(Screen):
     def _clear_loading_overlay(self):
         if getattr(self, "_loading_controller", None) is not None:
             self._loading_controller.clear()
+
+    def _is_current_screen(self):
+        return bool(self.manager and self.manager.current == self.name)
+
+    def _cancel_clock_event_attr(self, attr_name):
+        event = getattr(self, attr_name, None)
+        if event is None:
+            return False
+        try:
+            event.cancel()
+        except Exception:
+            try:
+                Clock.unschedule(event)
+            except Exception:
+                pass
+        setattr(self, attr_name, None)
+        return True
+
+    def _cancel_enter_events(self):
+        for attr_name in (
+            "_resize_rebuild_ev",
+            "_product_form_preload_ev",
+        ):
+            self._cancel_clock_event_attr(attr_name)
+
+    def _schedule_product_form_preload(self, delay=0.05):
+        if _PRODUCT_FORM_CLASS is not None:
+            return
+        if self._product_form_preload_ev is not None:
+            return
+        self._product_form_preload_ev = Clock.schedule_once(self._preload_product_form_class, delay)
+
+    def _preload_product_form_class(self, *_args):
+        self._product_form_preload_ev = None
+        _get_product_form_class()
 
     def toggle_quick_actions(self, *args):
         self.quick_actions_open = not self.quick_actions_open
@@ -348,10 +512,6 @@ class AdminScreen(Screen):
                 "Alt+C: abrir categorias\n"
                 "Alt+F: alternar filtro KG/unidade/todos\n"
                 "Alt+1: pagina inicial\n"
-                "Alt+2: reposicao\n"
-                "Alt+3: perdas\n"
-                "Alt+4: relatorios\n"
-                "Alt+S: definicoes\n"
                 "Esc: fechar menus, dialogs e paineis"
             )
             dialog = MDDialog(
@@ -410,18 +570,6 @@ class AdminScreen(Screen):
             return True
         if "alt" in modifiers and key_name == "1":
             self.go_home()
-            return True
-        if "alt" in modifiers and key_name == "2":
-            self.open_restock_screen()
-            return True
-        if "alt" in modifiers and key_name == "3":
-            self.open_losses_screen()
-            return True
-        if "alt" in modifiers and key_name == "4":
-            self.generate_report()
-            return True
-        if "alt" in modifiers and key_name == "s":
-            self.go_to_definitions()
             return True
         return False
 
@@ -491,11 +639,18 @@ class AdminScreen(Screen):
     # Lifecycle
     # ------------------------------------------------------------------
     def _on_window_resize(self, instance, width, height):
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
         self._update_responsive_layout(width)
-        Clock.unschedule(self._deferred_rebuild)
-        Clock.schedule_once(self._deferred_rebuild, 0.15)
+        self._cancel_clock_event_attr("_resize_rebuild_ev")
+        self._resize_rebuild_ev = Clock.schedule_once(self._deferred_rebuild, 0.15)
 
     def _deferred_rebuild(self, dt):
+        self._resize_rebuild_ev = None
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
         self._render_current_product_page()
 
     def _update_responsive_layout(self, width=None):
@@ -503,7 +658,7 @@ class AdminScreen(Screen):
             return
         width = width or Window.width
         compact = width < dp(900)
-        if compact == self._compact_layout:
+        if compact == getattr(self, "_compact_layout", None):
             return
         self._compact_layout = compact
 
@@ -512,6 +667,7 @@ class AdminScreen(Screen):
         search_input = self.ids.get("search_input")
         category_spinner = self.ids.get("category_spinner")
         filter_btn = self.ids.get("filter_btn")
+        refresh_btn = self.ids.get("refresh_btn")
         add_btn = self.ids.get("add_btn")
         shopping_list_btn = self.ids.get("shopping_list_btn")
 
@@ -529,6 +685,8 @@ class AdminScreen(Screen):
                 category_spinner.size_hint_x = 1
             if filter_btn:
                 filter_btn.size_hint_x = 1
+            if refresh_btn:
+                refresh_btn.size_hint_x = 1
             if add_btn:
                 add_btn.size_hint_x = 1
             if shopping_list_btn:
@@ -547,6 +705,8 @@ class AdminScreen(Screen):
             if filter_btn:
                 filter_btn.size_hint_x = None
                 filter_btn.width = dp(48)
+            if refresh_btn:
+                refresh_btn.size_hint_x = 0.12
             if add_btn:
                 add_btn.size_hint_x = 0.13
             if shopping_list_btn:
@@ -558,6 +718,8 @@ class AdminScreen(Screen):
     # Sistema de Notificações e Animação de Abanar
     # ------------------------------------------------------------------
     def _init_badge(self, dt):
+        if not self._is_current_screen():
+            return
         if hasattr(self.ids, 'ai_badge'):
             self.ids.ai_badge.opacity = 0
 
@@ -615,7 +777,7 @@ class AdminScreen(Screen):
 
         self._stop_swing_animation()
 
-        # ── CORRECAO: Animation reutilizada — criada uma única vez ───────────
+        # -- CORRECAO: Animation reutilizada — criada uma única vez -----------
         def swing_cycle(dt):
             if self.notification_count <= 0:
                 return False
@@ -655,10 +817,7 @@ class AdminScreen(Screen):
                 ).start(button)
 
     def _format_money(self, value):
-        try:
-            return f"{float(value or 0):,.2f} MZN".replace(",", " ")
-        except Exception:
-            return "0.00 MZN"
+        return format_money(value, currency="MZN")
 
     def _loss_type_label(self, code):
         return LOSS_LABELS.get(str(code or "").upper(), str(code or "Sem tipo"))
@@ -710,7 +869,7 @@ class AdminScreen(Screen):
         if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
             return None
         target = self.ids.ai_banner_container
-        ensure_center = getattr(self._intelligence, "_ensure_banner_center", None)
+        ensure_center = getattr(self._get_intelligence(), "_ensure_banner_center", None)
         if callable(ensure_center):
             try:
                 target = ensure_center()
@@ -725,6 +884,7 @@ class AdminScreen(Screen):
         target = self._get_banner_target()
         if target is None:
             return False
+        *_, render_auto_banners = _get_ai_popup_helpers()
         render_auto_banners(
             target,
             banners,
@@ -1329,18 +1489,26 @@ class AdminScreen(Screen):
             self.category_menu.dismiss()
         self.filter_products(self.search_input.text if self.search_input else "")
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     # CORRECAO 1 — queue_filter
-    # Debounce de 0.35 s — elimina disparos enquanto o utilizador digita.
-    # ══════════════════════════════════════════════════════════════════════════
+    # Pesquisa aplicada no proximo frame, usando cache em memoria.
+    # --------------------------------------------------------------------------
     def queue_filter(self, search_text):
         self._pending_search = search_text or ""
+        self._filter_token += 1
+        self._cancel_product_table_render(keep_table_enabled=True)
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
         if self._filter_ev:
             Clock.unschedule(self._filter_ev)
-        self._filter_ev = Clock.schedule_once(self._apply_queued_filter, 0.35)
+        self._filter_ev = Clock.schedule_once(self._apply_queued_filter, 0)
 
     def _apply_queued_filter(self, dt):
         self._filter_ev = None
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
         self.filter_products(self._pending_search)
 
     @staticmethod
@@ -1523,11 +1691,11 @@ class AdminScreen(Screen):
 
         return min(list(rows or []), key=priority)
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     # CORRECAO 2 — _aggregate_products_for_table
     # Nunca chamado na thread principal fora de contextos de background.
     # Mantido puro (sem side-effects) para poder ser chamado em threads.
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     def _aggregate_products_for_table(self, rows):
         grouped = {}
         ordered_keys = []
@@ -1721,10 +1889,52 @@ class AdminScreen(Screen):
             return ""
         return self._display_ids_by_product_id.get(normalized, normalized)
 
-    # ══════════════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _normalize_search_text(text):
+        normalized = unicodedata.normalize("NFKD", str(text or ""))
+        return "".join(
+            char for char in normalized
+            if not unicodedata.combining(char)
+        ).strip().lower()
+
+    @staticmethod
+    def _build_product_search_index_static(aggregated_rows, display_ids):
+        display_ids = dict(display_ids or {})
+        search_index = {}
+        for product in list(aggregated_rows or []):
+            if not product:
+                continue
+            pid = product[0] if product else None
+            try:
+                normalized_id = int(pid)
+            except (TypeError, ValueError):
+                normalized_id = None
+            display_id = (
+                display_ids.get(normalized_id, normalized_id)
+                if normalized_id is not None
+                else ""
+            )
+            source_ids = product[28] if len(product) > 28 and product[28] else (pid,)
+            catalog_key = product[26] if len(product) > 26 else pid
+            key_text = " ".join(
+                str(value or "")
+                for value in (
+                    display_id,
+                    pid,
+                    product[1] if len(product) > 1 else "",
+                    product[11] if len(product) > 11 else "",
+                    product[12] if len(product) > 12 else "",
+                    product[22] if len(product) > 22 else "",
+                    " ".join(str(sid or "") for sid in source_ids),
+                )
+            )
+            search_index[catalog_key] = AdminScreen._normalize_search_text(key_text)
+        return search_index
+
+    # --------------------------------------------------------------------------
     # CORRECAO 3 — filter_products + _apply_filter_result
-    # Loop de filtro em thread de fundo. Token descarta resultados obsoletos.
-    # ══════════════════════════════════════════════════════════════════════════
+    # Filtro usa índice em memória; load/refresh nao entram no caminho da digitação.
+    # --------------------------------------------------------------------------
     @staticmethod
     def _matches_weight_filter_mode(product, filter_mode):
         sold_by_weight = bool(len(product) > 15 and product[15])
@@ -1739,80 +1949,55 @@ class AdminScreen(Screen):
             self.category_spinner.text if self.category_spinner else "Todas as Categorias"
         )
         category = category_text if category_text != "Todas as Categorias" else "Todas"
-        search_value = (search_text or "").strip().lower()
+        search_value = self._normalize_search_text(search_text)
         filter_mode = getattr(self, "filter_mode", 0)
 
-        # Usa somente cache já agregado. Se ainda não existe, dispara carga em
-        # background e evita agregação na thread principal.
-        source_products = list(self._aggregated_products_cache or [])
-        if not source_products and self.products and not self._products_loading:
-            self.load_products()
-        display_ids = dict(self._display_ids_by_product_id)
+        source_products = self._aggregated_products_cache or []
+        if not source_products:
+            if self.products and not self._products_loading:
+                self._refresh_aggregated_products_async(reset_page=reset_page)
+            elif not self._products_loading:
+                self.load_products()
+            else:
+                self.update_product_table([], reset_page=reset_page, already_aggregated=True)
+            return
 
         self._filter_token += 1
         token = self._filter_token
-
-        def _worker():
-            filtered = []
-            for product in source_products:
-                pid = product[0] if product else None
-
-                try:
-                    normalized = int(pid)
-                except (TypeError, ValueError):
-                    normalized = None
-                display_id = (
-                    display_ids.get(normalized, normalized)
-                    if normalized is not None
-                    else ""
-                )
-
-                if len(product) > 28 and product[28]:
-                    source_ids = []
-                    for v in product[28]:
-                        try:
-                            source_ids.append(int(v))
-                        except (TypeError, ValueError):
-                            pass
-                elif pid is not None:
-                    try:
-                        source_ids = [int(pid)]
-                    except (TypeError, ValueError):
-                        source_ids = []
-                else:
-                    source_ids = []
-
-                if not search_value:
-                    search_match = True
-                else:
-                    search_match = (
-                        search_value in str(display_id).lower()
-                        or search_value in str(pid or "").lower()
-                        or (len(product) > 1  and search_value in str(product[1]  or "").lower())
-                        or (len(product) > 11 and search_value in str(product[11] or "").lower())
-                        or (len(product) > 12 and product[12]
-                            and search_value in str(product[12]).lower())
-                        or any(search_value in str(sid).lower() for sid in source_ids)
-                    )
-                category_match = (
-                    category in ("Todas", "Todas as Categorias")
-                    or (len(product) > 11 and category == product[11])
-                )
-                weight_match = AdminScreen._matches_weight_filter_mode(product, filter_mode)
-                if search_match and category_match and weight_match:
-                    filtered.append(product)
-
-            Clock.schedule_once(
-                lambda dt, f=filtered, tok=token, reset=reset_page:
-                self._apply_filter_result(f, tok, reset), 0
+        if not self._product_search_index:
+            self._product_search_index = AdminScreen._build_product_search_index_static(
+                source_products,
+                self._display_ids_by_product_id,
             )
+        if not search_value and category in ("Todas", "Todas as Categorias") and filter_mode == 0:
+            self._apply_filter_result(source_products, token, reset_page)
+            return
+        search_index = self._product_search_index or {}
+        filtered = []
+        for product in source_products:
+            if token != self._filter_token:
+                return
+            if category not in ("Todas", "Todas as Categorias") and not (
+                len(product) > 11 and category == product[11]
+            ):
+                continue
+            if not AdminScreen._matches_weight_filter_mode(product, filter_mode):
+                continue
+            if search_value:
+                catalog_key = product[26] if len(product) > 26 else product[0]
+                if search_value not in search_index.get(catalog_key, ""):
+                    continue
+            filtered.append(product)
 
-        Thread(target=_worker, daemon=True).start()
+        self._apply_filter_result(filtered, token, reset_page)
 
     def _apply_filter_result(self, filtered, token, reset_page=True):
         if token != self._filter_token:
             return
         self._current_filtered_products = filtered
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
         self.update_product_table(filtered, reset_page=reset_page, already_aggregated=True)
 
     def clear_search(self):
@@ -1823,20 +2008,32 @@ class AdminScreen(Screen):
         self.filter_products("")
 
     def refresh_products_panel(self):
-        self.load_products()
+        self.load_products(force=True)
         self.show_snackbar("A atualizar lista de produtos...")
 
     # ------------------------------------------------------------------
     # Data loading
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     # CORRECAO 4 — load_products / _apply_loaded_products
     # _aggregate_products_for_table e _rebuild_display_ids agora correm
     # inteiramente na thread de fundo — zero trabalho pesado na thread principal.
-    # ══════════════════════════════════════════════════════════════════════════
-    def load_products(self):
+    # --------------------------------------------------------------------------
+    def load_products(self, force=False):
         if self._products_loading:
-            self._pending_products_load = True
-            return
+            if force:
+                self._pending_products_load = True
+            return False
+        if not force and self._aggregated_products_cache:
+            if self._is_current_screen() and (self._products_table_dirty or not self._current_display):
+                self.filter_products(self.search_input.text if self.search_input else self._pending_search)
+            return False
+        if not force and self._products_loaded_once and not self.products:
+            if self._is_current_screen():
+                self.update_product_table([], reset_page=True, already_aggregated=True)
+            return False
+        if not force and self.products:
+            self._refresh_aggregated_products_async(reset_page=True)
+            return False
 
         token = self._products_load_token + 1
         self._products_load_token = token
@@ -1849,14 +2046,16 @@ class AdminScreen(Screen):
                 print(f"Erro ao carregar produtos: {e}")
                 rows = []
 
-            # ── Trabalho pesado na thread de fundo ───────────────────────────
+            # -- Trabalho pesado na thread de fundo ---------------------------
             aggregated = []
             display_ids = {}
+            search_index = {}
             expiry_alerts = {}
             try:
                 selected_lots = dict(self._selected_lot_ids_by_catalog_key)
                 aggregated = AdminScreen._aggregate_products_for_table_static(rows, selected_lots)
                 display_ids = AdminScreen._rebuild_display_ids_static(aggregated)
+                search_index = AdminScreen._build_product_search_index_static(aggregated, display_ids)
                 expiry_alerts = {
                     row[0]: evaluate_expiry_alert(row[13] if len(row) > 13 else None)
                     for row in rows if row
@@ -1866,12 +2065,13 @@ class AdminScreen(Screen):
 
             Clock.schedule_once(
                 lambda dt, data=rows, agg=aggregated, dids=display_ids,
-                       alerts=expiry_alerts, tok=token:
-                self._apply_loaded_products(data, agg, dids, alerts, tok),
+                       sidx=search_index, alerts=expiry_alerts, tok=token:
+                self._apply_loaded_products(data, agg, dids, sidx, alerts, tok),
                 0
             )
 
         Thread(target=worker, daemon=True).start()
+        return True
 
     def _refresh_aggregated_products_async(self, reset_page=True):
         rows = list(self.products or [])
@@ -1887,21 +2087,30 @@ class AdminScreen(Screen):
                     rows,
                     dict(self._selected_lot_ids_by_catalog_key),
                 )
+                display_ids = AdminScreen._rebuild_display_ids_static(aggregated)
+                search_index = AdminScreen._build_product_search_index_static(aggregated, display_ids)
             except Exception as exc:
                 print(f"Erro ao reagregar produtos: {exc}")
                 aggregated = []
+                display_ids = {}
+                search_index = {}
             Clock.schedule_once(
-                lambda dt, data=aggregated, tok=token:
-                self._apply_refreshed_aggregated_products(data, tok, reset_page),
+                lambda dt, data=aggregated, dids=display_ids, sidx=search_index, tok=token:
+                self._apply_refreshed_aggregated_products(data, dids, sidx, tok, reset_page),
                 0,
             )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_refreshed_aggregated_products(self, aggregated, token, reset_page):
+    def _apply_refreshed_aggregated_products(self, aggregated, display_ids, search_index, token, reset_page):
         if token != self._products_load_token:
             return
         self._aggregated_products_cache = list(aggregated or [])
+        self._display_ids_by_product_id = dict(display_ids or {})
+        self._product_search_index = dict(search_index or {})
+        self._products_table_dirty = True
+        if not self._is_current_screen():
+            return
         self.filter_products(
             self.search_input.text if self.search_input else self._pending_search,
             reset_page=reset_page,
@@ -1910,8 +2119,8 @@ class AdminScreen(Screen):
     @staticmethod
     def _aggregate_products_for_table_static(rows, selected_lot_ids_by_catalog_key=None):
         """
-        Versão estática de _aggregate_products_for_table para uso em threads.
-        Recebe seleções de lote por cópia para não tocar estado da UI.
+        Versao estatica de _aggregate_products_for_table para uso em threads.
+        Recebe selecoes de lote por copia para nao tocar estado da UI.
         """
         selected_lot_ids_by_catalog_key = dict(selected_lot_ids_by_catalog_key or {})
 
@@ -2105,7 +2314,7 @@ class AdminScreen(Screen):
 
     @staticmethod
     def _rebuild_display_ids_static(aggregated_rows):
-        """Versão estática de _rebuild_display_ids para uso em threads."""
+        """Versao estatica de _rebuild_display_ids para uso em threads."""
         ordered_groups = []
         seen = set()
 
@@ -2143,25 +2352,30 @@ class AdminScreen(Screen):
                 display_ids[product_id] = idx
         return display_ids
 
-    def _apply_loaded_products(self, rows, aggregated, display_ids, expiry_alerts, token):
+    def _apply_loaded_products(self, rows, aggregated, display_ids, search_index, expiry_alerts, token):
         if token != self._products_load_token:
             return
         self._products_loading = False
+        self._products_loaded_once = True
         self._last_products_load_at = time.perf_counter()
         self.products = list(rows or [])
         self._prune_selected_lot_ids(self.products)
 
-        # Resultados já calculados na thread de fundo
+        # Resultados ja calculados na thread de fundo
         self._aggregated_products_cache = aggregated
         self._display_ids_by_product_id = display_ids
+        self._product_search_index = dict(search_index or {})
         self._expiry_alerts_by_id = expiry_alerts
-
-        self.filter_products(self.search_input.text if self.search_input else self._pending_search)
-        self._show_expiry_dashboard_summary()
+        self._products_table_dirty = True
 
         if self._pending_products_load:
             self._pending_products_load = False
-            Clock.schedule_once(lambda dt: self.load_products(), 0.05)
+            Clock.schedule_once(lambda dt: self.load_products(force=True), 0.05)
+            return
+
+        if self._is_current_screen():
+            self.filter_products(self.search_input.text if self.search_input else self._pending_search)
+            self._show_expiry_dashboard_summary()
 
     # ------------------------------------------------------------------
     # Date formatting
@@ -2238,18 +2452,26 @@ class AdminScreen(Screen):
 
     # ------------------------------------------------------------------
     # Table rendering — CORRECAO 5
-    # ══════════════════════════════════════════════════════════════════════════
-    # Render em lotes reais: a tabela é limpa, o primeiro lote é inserido
+    # --------------------------------------------------------------------------
+    # Render em lotes reais: a tabela e limpa, o primeiro lote e inserido
     # imediatamente e os restantes chegam a cada ~16 ms via Clock.schedule_interval.
     # Isto elimina o congelamento de "162 widgets num único frame".
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     def update_product_table(self, products_to_display=None, reset_page=True, already_aggregated=False):
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
+
         if products_to_display is None:
             products_to_display = self._aggregated_products_cache or self.products
             already_aggregated = bool(self._aggregated_products_cache)
 
         if already_aggregated:
-            self._current_display = list(products_to_display or [])
+            self._current_display = (
+                products_to_display
+                if isinstance(products_to_display, list)
+                else list(products_to_display or [])
+            )
         else:
             self._aggregate_display_rows_async(products_to_display or [], reset_page=reset_page)
             return
@@ -2282,18 +2504,23 @@ class AdminScreen(Screen):
     def _apply_async_display_rows(self, aggregated, token, reset_page):
         if token != self._products_load_token:
             return
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
         self.update_product_table(aggregated, reset_page=reset_page, already_aggregated=True)
 
     def _render_current_product_page(self):
-        # Cancelar lote anterior se ainda estava em curso
-        if self._table_render_ev:
-            Clock.unschedule(self._table_render_ev)
-            self._table_render_ev = None
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            return
+
+        self._cancel_product_table_render(keep_table_enabled=False)
 
         self._table_render_token += 1
         token = self._table_render_token
+        self._products_table_dirty = False
 
-        display_rows = list(self._current_display or [])
+        display_rows = self._current_display or []
         total_rows = len(display_rows)
         page_size = max(1, int(self.PRODUCTS_PAGE_SIZE))
         total_pages = max(1, (total_rows + page_size - 1) // page_size) if total_rows else 1
@@ -2308,6 +2535,7 @@ class AdminScreen(Screen):
 
         # Limpar tabela e preparar fila de lotes
         self.product_table.disabled = True
+        self._clear_product_row_hover_bindings()
         self.product_table.clear_widgets()
         self._pending_table_rows = deque()
 
@@ -2351,6 +2579,13 @@ class AdminScreen(Screen):
             self._table_render_ev = None
             return False
 
+        if not self._is_current_screen():
+            self._products_table_dirty = True
+            if self.product_table:
+                self.product_table.disabled = False
+            self._table_render_ev = None
+            return False
+
         if not self._pending_table_rows:
             # Todos os itens foram renderizados
             if self.product_table:
@@ -2371,6 +2606,115 @@ class AdminScreen(Screen):
             self._table_render_ev = None
 
         return bool(self._pending_table_rows)
+
+    def _cancel_product_table_render(self, keep_table_enabled=True):
+        if self._table_render_ev:
+            try:
+                self._table_render_ev.cancel()
+            except Exception:
+                Clock.unschedule(self._table_render_ev)
+            self._table_render_ev = None
+        self._pending_table_rows = deque()
+        self._table_render_token += 1
+        if keep_table_enabled and self.product_table:
+            self.product_table.disabled = False
+
+    @staticmethod
+    def _blend_rgba(base, accent, factor):
+        base = list(base or [1, 1, 1, 1])
+        accent = list(accent or base)
+        while len(base) < 4:
+            base.append(1)
+        while len(accent) < 4:
+            accent.append(base[3])
+        mix = max(0.0, min(1.0, float(factor or 0.0)))
+        return [
+            (base[index] * (1.0 - mix)) + (accent[index] * mix)
+            for index in range(4)
+        ]
+
+    def _clear_product_row_hover_bindings(self):
+        for handler in list(self._product_row_hover_handlers or []):
+            try:
+                Window.unbind(mouse_pos=handler)
+            except Exception:
+                pass
+        self._product_row_hover_handlers = []
+
+    def _bind_product_row_hover(self, row_cells, base_color, palette):
+        cells = [cell for cell in list(row_cells or []) if cell is not None]
+        if not cells:
+            return
+        tokens = palette.get("tokens", {}) if isinstance(palette, dict) else {}
+        accent = tokens.get("primary", [0.15, 0.52, 0.76, 1])
+        hover_color = self._blend_rgba(base_color, accent, 0.18)
+        base = list(base_color or [1, 1, 1, 1])
+        base_border = list(palette.get("border_color", [0, 0, 0, 0.18]))
+        while len(base_border) < 4:
+            base_border.append(1)
+        hover_border = list(accent or [0.15, 0.52, 0.76, 1])
+        while len(hover_border) < 4:
+            hover_border.append(1)
+        hover_border[3] = 0.62
+        for cell in cells:
+            if hasattr(cell, "set_hover_glow_color"):
+                cell.set_hover_glow_color(accent)
+        state = {"active_cell": None}
+
+        def animate_cell(cell, hovered):
+            if cell is None or cell.parent is None:
+                return
+            target = hover_color if hovered else base
+            border_target = hover_border if hovered else base_border
+            glow_alpha = 0.18 if hovered else 0
+            Animation.cancel_all(cell, "md_bg_color", "hover_growth", "hover_glow_alpha")
+            Animation(
+                md_bg_color=target,
+                hover_growth=0,
+                hover_glow_alpha=glow_alpha,
+                d=0.13,
+                t="out_quad",
+            ).start(cell)
+            if hasattr(cell, "animate_inner_growth"):
+                cell.animate_inner_growth(hovered)
+            border_instruction = getattr(cell, "_border_color_instruction", None)
+            if border_instruction is not None:
+                border_instruction.rgba = border_target
+
+        def set_active_cell(active_cell):
+            if state["active_cell"] is active_cell:
+                return
+            previous = state["active_cell"]
+            state["active_cell"] = active_cell
+            animate_cell(previous, False)
+            animate_cell(active_cell, True)
+
+        def resolve_hover_cell(parent, pos):
+            local_x, local_y = parent.to_widget(*pos)
+            for cell in cells:
+                if (
+                    cell.x <= local_x <= cell.x + cell.width
+                    and cell.y <= local_y <= cell.y + cell.height
+                ):
+                    return cell
+            return None
+
+        def handle_mouse_pos(_window, pos):
+            parent = cells[0].parent
+            if parent is None:
+                try:
+                    Window.unbind(mouse_pos=handle_mouse_pos)
+                except Exception:
+                    pass
+                return
+            try:
+                hovered_cell = resolve_hover_cell(parent, pos)
+            except Exception:
+                hovered_cell = None
+            set_active_cell(hovered_cell)
+
+        Window.bind(mouse_pos=handle_mouse_pos)
+        self._product_row_hover_handlers.append(handle_mouse_pos)
 
     def _sync_product_pagination_controls(self, total_rows, visible_rows):
         if not self.ids:
@@ -2414,13 +2758,13 @@ class AdminScreen(Screen):
         self._render_current_product_page()
         return True
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     # CORRECAO 6 — _make_product_cell
     # Instruções de canvas criadas UMA única vez; callback só actualiza
     # coordenadas — zero alocações por evento pos/size.
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     def _make_product_cell(self, col_idx, row_h, bg_color, border_color, align='center'):
-        cell = MDBoxLayout(
+        cell = ProductTableCell(
             size_hint_x=COL_HINTS[col_idx],
             size_hint_y=None,
             height=row_h,
@@ -2429,9 +2773,11 @@ class AdminScreen(Screen):
         )
 
         with cell.canvas.after:
-            Color(*border_color)
+            _border_color_instruction = Color(*border_color)
             _right_line  = Line(width=1)
             _bottom_line = Line(width=1)
+        cell._border_color_instruction = _border_color_instruction
+        cell._base_border_color = list(border_color)
 
         def _update_borders(instance, *_):
             x, y, w, h = instance.x, instance.y, instance.width, instance.height
@@ -2461,6 +2807,11 @@ class AdminScreen(Screen):
 
         is_sold_by_weight = product[15] if len(product) > 15 else 0
         unit_label = "KG" if is_sold_by_weight else ""
+        row_cells = []
+
+        def add_row_cell(widget):
+            row_cells.append(widget)
+            self.product_table.add_widget(widget)
 
         cell = self._make_product_cell(0, row_h, row_bg_color, border_color)
         if lot_count > 1:
@@ -2486,7 +2837,7 @@ class AdminScreen(Screen):
                 bold=True,
                 font_style="Body1"
             ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         cell = self._make_product_cell(1, row_h, row_bg_color, border_color, align='left')
         cell.add_widget(MDLabel(
@@ -2503,7 +2854,7 @@ class AdminScreen(Screen):
             shorten=True,
             shorten_from="right"
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         stock_value = product[2]
         stock_text = (
@@ -2520,7 +2871,7 @@ class AdminScreen(Screen):
             font_style="Body2",
             bold=stock_value < 10
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         sold_value = product[3]
         sold_text = (
@@ -2535,7 +2886,7 @@ class AdminScreen(Screen):
             halign='center',
             font_style="Body2"
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         cell = self._make_product_cell(4, row_h, row_bg_color, border_color)
         sale_type_text = "KG" if is_sold_by_weight else "UN"
@@ -2547,7 +2898,7 @@ class AdminScreen(Screen):
             bold=True,
             font_style="Subtitle2"
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         cell = self._make_product_cell(5, row_h, row_bg_color, border_color)
         cell.add_widget(MDLabel(
@@ -2558,7 +2909,7 @@ class AdminScreen(Screen):
             bold=True,
             font_style="Body1"
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         cell = self._make_product_cell(6, row_h, row_bg_color, border_color)
         cell.add_widget(MDLabel(
@@ -2569,7 +2920,7 @@ class AdminScreen(Screen):
             bold=True,
             font_style="Body1"
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         expiry_date = str(product[13]) if len(product) > 13 and product[13] else "N/A"
         expiry_color = (
@@ -2595,7 +2946,7 @@ class AdminScreen(Screen):
             halign='center',
             font_style="Caption"
         ))
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
 
         cell = self._make_product_cell(8, row_h, row_bg_color, border_color)
         action_layout = MDBoxLayout(spacing=dp(4), padding=[dp(4), 0])
@@ -2603,7 +2954,8 @@ class AdminScreen(Screen):
         action_layout.add_widget(self.create_edit_button(product, tokens=action_tokens))
         action_layout.add_widget(self.create_delete_button(product, tokens=action_tokens))
         cell.add_widget(action_layout)
-        self.product_table.add_widget(cell)
+        add_row_cell(cell)
+        self._bind_product_row_hover(row_cells, row_bg_color, palette)
 
     # ------------------------------------------------------------------
     # Action buttons
@@ -2619,7 +2971,7 @@ class AdminScreen(Screen):
         if not product:
             self.show_snackbar("Produto nao encontrado")
             return False
-        Clock.schedule_once(lambda dt, current=product: _get_product_form_class()(self, current).open(), 0)
+        _get_product_form_class()(self, product).open()
         return True
 
     def _prompt_delete_product(self, product_id):
@@ -2669,7 +3021,7 @@ class AdminScreen(Screen):
         lot_rows = self._resolve_group_lot_rows(product)
         if not lot_rows:
             self._dismiss_lot_menu()
-            self.load_products()
+            self.load_products(force=True)
             self.show_snackbar("Nenhum lote disponivel para este grupo. A lista foi atualizada.")
             return False
 
@@ -2789,7 +3141,7 @@ class AdminScreen(Screen):
         self._open_product_details(product)
 
     def add_product(self):
-        Clock.schedule_once(lambda dt: _get_product_form_class()(self).open(), 0)
+        _get_product_form_class()(self).open()
 
     def edit_product(self, instance):
         product = getattr(instance, "product_data", None)
@@ -2823,7 +3175,7 @@ class AdminScreen(Screen):
 
         def on_success(ok):
             if ok:
-                self.load_products()
+                self.load_products(force=True)
                 self.show_snackbar("Produto eliminado com sucesso!")
                 return
             self.show_snackbar("Erro ao eliminar produto!")
@@ -2840,6 +3192,7 @@ class AdminScreen(Screen):
     # Snackbar — CORRECAO 7: objecto reutilizável, sem memory leaks
     # ------------------------------------------------------------------
     def show_snackbar(self, message):
+        message = correct_portuguese_text(message)
         # Dismiss o anterior se ainda estiver visível
         if self._snackbar is not None:
             try:
@@ -2895,21 +3248,7 @@ class AdminScreen(Screen):
         self.update_notification_badge(0)
 
     def _refresh_alerts_async(self, show_popups=True):
-        token = self._alerts_refresh_token + 1
-        self._alerts_refresh_token = token
-
-        def worker():
-            try:
-                insights = build_admin_insights(self.db) or {}
-            except Exception as exc:
-                print(f"Erro ao atualizar alertas AI: {exc}")
-                insights = {}
-            Clock.schedule_once(
-                lambda dt, data=insights, tok=token, pop=show_popups: self._apply_alerts_refresh(data, tok, pop),
-                0
-            )
-
-        Thread(target=worker, daemon=True).start()
+        return False
 
     def _apply_alerts_refresh(self, insights, token, show_popups):
         if token != self._alerts_refresh_token:
@@ -2920,22 +3259,7 @@ class AdminScreen(Screen):
             self.show_auto_ai_popups(insights=self._cached_admin_insights)
 
     def _load_ai_insights_async(self, target):
-        token = self._ai_popup_token + 1
-        self._ai_popup_token = token
-        self.show_snackbar("A preparar insights...")
-
-        def worker():
-            try:
-                insights = build_admin_insights_ai(self.db) or {}
-            except Exception as exc:
-                print(f"Erro ao carregar insights AI: {exc}")
-                insights = build_admin_insights(self.db) or {}
-            Clock.schedule_once(
-                lambda dt, kind=target, data=insights, tok=token: self._apply_ai_insights_result(kind, data, tok),
-                0
-            )
-
-        Thread(target=worker, daemon=True).start()
+        return False
 
     def _apply_ai_insights_result(self, kind, insights, token):
         if token != self._ai_popup_token:
@@ -2946,6 +3270,8 @@ class AdminScreen(Screen):
         if not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
             return
 
+        (build_auto_banner_data, build_banner_details_sections,
+         build_positive_banner, render_auto_banners) = _get_ai_popup_helpers()
         banners = build_auto_banner_data(insights)
         low_stock = insights.get("low_stock") or []
         expiry_levels = insights.get("expiry_levels") or {}
@@ -2985,7 +3311,7 @@ class AdminScreen(Screen):
                 expiry_level=banner.get("expiry_level"),
             )
         target_container = self.ids.ai_banner_container
-        ensure_center = getattr(self._intelligence, "_ensure_banner_center", None)
+        ensure_center = getattr(self._get_intelligence(), "_ensure_banner_center", None)
         if callable(ensure_center):
             try:
                 target_container = ensure_center()
@@ -3002,27 +3328,27 @@ class AdminScreen(Screen):
 
     def show_ai_insights(self, *args):
         caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
-        self._intelligence.open_history(caller=caller)
+        self._get_intelligence().open_history(caller=caller)
 
     def open_ai_menu(self, caller):
         if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
             caller = self.ids.ai_button
-        self._intelligence.open_history(caller=caller)
+        self._get_intelligence().open_history(caller=caller)
 
     def _open_ai_from_menu(self, key):
         if hasattr(self, "_ai_menu") and self._ai_menu:
             self._ai_menu.dismiss()
         caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
-        self._intelligence.open_history(caller=caller)
+        self._get_intelligence().open_history(caller=caller)
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
-        self._intelligence.refresh()
+        return None
 
     def show_ai_expiry_popup(self, *args, insights=None, on_close=None):
-        self._intelligence.refresh()
+        return None
 
     def show_auto_ai_popups(self, *args, insights=None):
-        self._intelligence.refresh()
+        return None
 
     def update_ai_badge(self, *args, insights=None):
         insights = insights or self._cached_admin_insights or {}
@@ -3042,14 +3368,9 @@ class AdminScreen(Screen):
 
         self.update_notification_badge(count)
 
-    def _poll_ai_alerts(self, dt):
-        self._intelligence.refresh()
-
-    def _start_ai_polling(self):
-        self._intelligence.start()
-
     def _stop_ai_polling(self):
-        self._intelligence.stop()
+        if self._intelligence is not None:
+            self._intelligence.stop()
 
     # ------------------------------------------------------------------
     # Lista de compras
@@ -3635,8 +3956,7 @@ class AdminScreen(Screen):
             return
         self.manager.current = "reports"
         if hasattr(reports_screen, "prepare_open_from_admin"):
-            Clock.schedule_once(lambda dt: reports_screen.prepare_open_from_admin(), 0.02)
-        Clock.schedule_once(lambda dt: reports_screen.select_date_range(), 0.12)
+            Clock.schedule_once(lambda dt: reports_screen.prepare_open_from_admin(), 0.04)
 
     def toggle_kg_products(self):
         if not hasattr(self, 'filter_mode'):
@@ -3691,6 +4011,215 @@ class AdminScreen(Screen):
             Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.02), 0.02)
             return
         Clock.schedule_once(lambda dt: screen.load_products(), 0.1)
+
+    def open_physical_inventory(self, *args):
+        try:
+            active = self.db.get_active_physical_inventory()
+        except Exception as exc:
+            self.show_snackbar(f"Erro ao consultar inventario: {exc}")
+            return
+        if active:
+            self._show_physical_inventory_workspace(active)
+            return
+
+        name_input = MDTextField(
+            hint_text="Nome do inventario",
+            text=f"Inventario {datetime.now().strftime('%d/%m/%Y')}",
+            multiline=False,
+        )
+        note_input = MDTextField(hint_text="Observacao (opcional)", multiline=False)
+        content = MDBoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(120))
+        content.add_widget(name_input)
+        content.add_widget(note_input)
+        cancel_btn = MDFlatButton(text="CANCELAR")
+        history_btn = MDFlatButton(text="HISTORICO")
+        start_btn = MDRaisedButton(text="INICIAR CONTAGEM")
+        dialog = MDDialog(
+            title="Novo inventario fisico",
+            type="custom", content_cls=content, buttons=[cancel_btn, history_btn, start_btn],
+        )
+        cancel_btn.bind(on_release=lambda _b: dialog.dismiss())
+        history_btn.bind(on_release=lambda _b: (dialog.dismiss(), self.show_physical_inventory_history()))
+
+        def start(_button):
+            app = App.get_running_app()
+            actor = getattr(app, "current_user", None) or "admin"
+            terminal = os.environ.get("COMPUTERNAME") or "ADMIN"
+            result = self.db.start_physical_inventory(name_input.text, actor, terminal, note_input.text)
+            if not result.get("ok"):
+                self.show_snackbar(result.get("message") or "Falha ao iniciar inventario")
+                return
+            dialog.dismiss()
+            self.show_snackbar(f"Inventario iniciado com {result.get('item_count', 0)} produtos")
+            self._show_physical_inventory_workspace(result.get("inventory") or {})
+
+        start_btn.bind(on_release=start)
+        dialog.open()
+
+    def show_physical_inventory_history(self):
+        rows = self.db.list_physical_inventories(limit=100) or []
+        container = MDBoxLayout(orientation="vertical", spacing=dp(7), size_hint_y=None)
+        container.bind(minimum_height=container.setter("height"))
+        if not rows:
+            container.add_widget(MDLabel(text="Nenhum inventario registado.", halign="center", size_hint_y=None, height=dp(50)))
+        status_labels = {"COUNTING": "Em contagem", "COMPLETED": "Concluido", "CANCELLED": "Cancelado"}
+        for item in rows:
+            finished_at = item.get("completed_at") or item.get("cancelled_at") or "-"
+            container.add_widget(MDLabel(
+                text=(
+                    f"#{item.get('id')}  {item.get('name')}  -  {status_labels.get(item.get('status'), item.get('status'))}\n"
+                    f"Inicio: {item.get('started_at')} | Fim: {finished_at} | "
+                    f"Contados: {item.get('counted_items', 0)}/{item.get('total_items', 0)} | "
+                    f"Divergencias: {item.get('divergent_items', 0)}"
+                ),
+                size_hint_y=None, height=dp(58), theme_text_color="Secondary",
+            ))
+        scroll = ScrollView(size_hint_y=None, height=dp(430), do_scroll_x=False)
+        scroll.add_widget(container)
+        close_btn = MDFlatButton(text="FECHAR")
+        dialog = MDDialog(
+            title="Historico de inventarios", type="custom", content_cls=scroll,
+            buttons=[close_btn],
+        )
+        close_btn.bind(on_release=lambda _b: dialog.dismiss())
+        dialog.open()
+
+    def _show_physical_inventory_workspace(self, inventory):
+        inventory_id = int(inventory.get("id"))
+        summary_label = MDLabel(size_hint_y=None, height=dp(58), theme_text_color="Secondary")
+        search_input = MDTextField(hint_text="Pesquisar produto ou ID", multiline=False)
+        results = MDBoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        results.bind(minimum_height=results.setter("height"))
+        scroll = ScrollView(size_hint_y=None, height=dp(390), do_scroll_x=False)
+        scroll.add_widget(results)
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(500))
+        content.add_widget(summary_label)
+        content.add_widget(search_input)
+        content.add_widget(scroll)
+        refresh_btn = MDFlatButton(text="PESQUISAR")
+        cancel_btn = MDFlatButton(text="CANCELAR INVENTARIO")
+        finish_btn = MDRaisedButton(text="CONCLUIR")
+        close_btn = MDFlatButton(text="FECHAR")
+        dialog = MDDialog(
+            title=f"Inventario #{inventory_id} - {inventory.get('name') or ''}",
+            type="custom", content_cls=content,
+            buttons=[close_btn, refresh_btn, cancel_btn, finish_btn],
+        )
+        close_btn.bind(on_release=lambda _b: dialog.dismiss())
+
+        def refresh(*_args):
+            summary = self.db.get_physical_inventory_summary(inventory_id) or {}
+            summary_label.text = (
+                f"Contados: {summary.get('counted_items', 0)}/{summary.get('total_items', 0)}   |   "
+                f"Pendentes: {summary.get('pending_items', 0)}   |   "
+                f"Com divergencia: {summary.get('divergent_items', 0)}"
+            )
+            rows = self.db.get_physical_inventory_items(
+                inventory_id, query=search_input.text, limit=100,
+            ) or []
+            results.clear_widgets()
+            if not rows:
+                results.add_widget(MDLabel(text="Nenhum produto encontrado.", halign="center", size_hint_y=None, height=dp(48)))
+                return
+            for item in rows:
+                row = MDBoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8), padding=[dp(6), 0])
+                counted = item.get("counted_qty")
+                count_text = "Pendente" if counted is None else f"Contado: {counted:g} {item.get('unit')} | Dif.: {float(item.get('difference_qty') or 0):+g}"
+                row.add_widget(MDLabel(
+                    text=f"{item.get('product_name')}\nSistema: {float(item.get('snapshot_qty') or 0):g} {item.get('unit')} | {count_text}",
+                    theme_text_color="Primary", size_hint_x=0.78,
+                ))
+                count_btn = MDRaisedButton(text="CONTAR", size_hint_x=None, width=dp(92))
+                count_btn.bind(on_release=lambda _b, selected=dict(item): open_count(selected))
+                row.add_widget(count_btn)
+                results.add_widget(row)
+
+        def open_count(item):
+            counted_input = MDTextField(
+                hint_text=f"Quantidade encontrada ({item.get('unit')})",
+                text="" if item.get("counted_qty") is None else str(item.get("counted_qty")),
+                input_filter="float", multiline=False,
+            )
+            note_input = MDTextField(hint_text="Observacao da contagem", text=str(item.get("count_note") or ""), multiline=False)
+            count_content = MDBoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(120))
+            count_content.add_widget(counted_input)
+            count_content.add_widget(note_input)
+            back_btn = MDFlatButton(text="VOLTAR")
+            save_btn = MDRaisedButton(text="GUARDAR")
+            count_dialog = MDDialog(
+                title=str(item.get("product_name") or "Produto"), type="custom",
+                content_cls=count_content, buttons=[back_btn, save_btn],
+            )
+            back_btn.bind(on_release=lambda _b: count_dialog.dismiss())
+
+            def save(_button):
+                text = str(counted_input.text or "").strip()
+                if not text:
+                    self.show_snackbar("Informe a quantidade encontrada")
+                    return
+                app = App.get_running_app()
+                actor = getattr(app, "current_user", None) or "admin"
+                result = self.db.record_physical_inventory_count(
+                    inventory_id, item.get("product_id"), text, actor, note_input.text,
+                )
+                if not result.get("ok"):
+                    self.show_snackbar(result.get("message") or "Falha ao guardar contagem")
+                    return
+                count_dialog.dismiss()
+                refresh()
+
+            save_btn.bind(on_release=save)
+            count_dialog.open()
+
+        def finish(allow_partial=False):
+            app = App.get_running_app()
+            actor = getattr(app, "current_user", None) or "admin"
+            result = self.db.complete_physical_inventory(inventory_id, actor, allow_partial=allow_partial)
+            if result.get("ok"):
+                dialog.dismiss()
+                self.refresh_products_panel()
+                self.show_snackbar(f"Inventario concluido: {result.get('adjustment_count', 0)} ajustes")
+                return
+            if not allow_partial and "faltam" in str(result.get("message") or "").lower():
+                confirm = MDDialog(
+                    title="Contagem incompleta",
+                    text=f"{result.get('message')}. Concluir apenas os produtos contados?",
+                    buttons=[MDFlatButton(text="NAO"), MDRaisedButton(text="CONCLUIR PARCIAL")],
+                )
+                confirm.buttons[0].bind(on_release=lambda _b: confirm.dismiss())
+                confirm.buttons[1].bind(on_release=lambda _b: (confirm.dismiss(), finish(True)))
+                confirm.open()
+                return
+            self.show_snackbar(result.get("message") or "Falha ao concluir inventario")
+
+        def cancel_inventory(_button):
+            app = App.get_running_app()
+            actor = getattr(app, "current_user", None) or "admin"
+            confirm = MDDialog(
+                title="Cancelar inventario",
+                text="As contagens serao descartadas e o stock nao sera alterado. Continuar?",
+                buttons=[MDFlatButton(text="NAO"), MDRaisedButton(text="SIM, CANCELAR")],
+            )
+            confirm.buttons[0].bind(on_release=lambda _b: confirm.dismiss())
+
+            def apply_cancel(_b):
+                result = self.db.cancel_physical_inventory(inventory_id, actor, "Cancelado pelo administrador")
+                confirm.dismiss()
+                if result.get("ok"):
+                    dialog.dismiss()
+                    self.show_snackbar("Inventario cancelado sem alterar o stock")
+                else:
+                    self.show_snackbar(result.get("message") or "Falha ao cancelar")
+
+            confirm.buttons[1].bind(on_release=apply_cancel)
+            confirm.open()
+
+        refresh_btn.bind(on_release=refresh)
+        finish_btn.bind(on_release=lambda _b: finish(False))
+        cancel_btn.bind(on_release=cancel_inventory)
+        search_input.bind(on_text_validate=refresh)
+        refresh()
+        dialog.open()
 
     def show_loss_metrics(self, *args):
         def task():
@@ -4133,31 +4662,47 @@ class AdminScreen(Screen):
 
     # ------------------------------------------------------------------
     # Lifecycle events
-    # ══════════════════════════════════════════════════════════════════════════
+    # --------------------------------------------------------------------------
     # CORRECAO 8 — on_enter
-    # As três operações de entrada são escalonadas com delays crescentes para
-    # evitar contenção de DB e manter o primeiro frame responsivo.
-    # ══════════════════════════════════════════════════════════════════════════
+    # Entrada leve: nao faz refresh, filtro, render nem rotinas secundarias.
+    # A tela fica pronta; dados so mudam por acao explicita do utilizador.
+    # --------------------------------------------------------------------------
     def on_enter(self):
         self._bind_keyboard_shortcuts()
-        stale = (time.perf_counter() - self._last_products_load_at) >= self.PRODUCTS_CACHE_SECONDS
-        if (not self.products) or stale:
-            # Pequeno delay para deixar o frame de transição renderizar primeiro
-            Clock.schedule_once(lambda dt: self.load_products(), 0.15)
-        Clock.schedule_once(self._init_badge, 0.3)
-        # IA e fraud check com delays maiores para não competir com load de produtos
-        Clock.schedule_once(lambda dt: self._start_ai_polling(), 4.0)
-        Clock.schedule_once(self.check_fraud_alerts_on_enter, 8.0)
+        self._cancel_enter_events()
+        self._get_intelligence().start()
+        self._update_responsive_layout()
+        self._init_badge(0)
+        self._schedule_product_form_preload(delay=8.0)
+        if not self._aggregated_products_cache and not self._products_loading:
+            Clock.schedule_once(lambda dt: self.load_products(), 0)
+        elif self._products_table_dirty or not self._current_display:
+            Clock.schedule_once(
+                lambda dt: self.filter_products(
+                    self.search_input.text if self.search_input else self._pending_search
+                ),
+                0,
+            )
 
     def on_leave(self):
         self._unbind_keyboard_shortcuts()
+        self._cancel_enter_events()
+        if self._filter_ev:
+            Clock.unschedule(self._filter_ev)
+            self._filter_ev = None
         self._stop_ai_polling()
         self._clear_loading_overlay()
         self._dismiss_lot_menu()
+        had_pending_render = bool(self._table_render_ev or self._pending_table_rows)
         if self._table_render_ev:
             Clock.unschedule(self._table_render_ev)
             self._table_render_ev = None
         self._pending_table_rows = deque()
+        self._clear_product_row_hover_bindings()
+        if had_pending_render:
+            self._products_table_dirty = True
+        if self.product_table:
+            self.product_table.disabled = False
         self._alerts_refresh_token += 1
         self._ai_popup_token += 1
         for attr_name in (
@@ -4175,56 +4720,6 @@ class AdminScreen(Screen):
                     pass
                 setattr(self, attr_name, None)
         self._shopping_list_payload = None
-
-    def check_fraud_alerts_on_enter(self, dt):
-        now = time.time()
-        if now < self._fraud_check_until:
-            return
-
-        self._fraud_check_until = now + 120
-        token = self._fraud_check_token + 1
-        self._fraud_check_token = token
-
-        def worker():
-            try:
-                alerts = self.db.detect_fraud_patterns(days_lookback=7) or []
-            except Exception as exc:
-                print(f"Erro ao verificar alertas: {exc}")
-                alerts = []
-            Clock.schedule_once(
-                lambda _dt, items=alerts, tok=token: self._apply_fraud_check_result(items, tok),
-                0
-            )
-
-        Thread(target=worker, daemon=True).start()
-
-    def _apply_fraud_check_result(self, alerts, token):
-        if token != self._fraud_check_token:
-            return
-        alerts = list(alerts or [])
-        high_count = sum(1 for alert in alerts if int(alert.get("severity") or 0) == 3)
-        if alerts:
-            self._render_status_banners(
-                [self._build_fraud_alerts_banner(alerts, days_lookback=7)],
-                auto_dismiss_seconds=None,
-            )
-            if high_count > 0 and high_count != self._last_fraud_log_count:
-                app = App.get_running_app()
-                actor = getattr(app, "current_user", None) or "sistema"
-                role = getattr(app, "current_role", None) or "admin"
-                try:
-                    self.db.log_action(
-                        actor,
-                        role,
-                        "FRAUD_ALERT",
-                        f"{high_count} alerta(s) critico(s) de fraude detetado(s) automaticamente",
-                    )
-                except Exception:
-                    pass
-            self._last_fraud_log_count = high_count
-            print(f"Alertas de fraude detectados: {len(alerts)}")
-            return
-        self._last_fraud_log_count = 0
 
     def show_fraud_notification_popup(self, alert_count):
         try:

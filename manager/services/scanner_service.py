@@ -5,7 +5,7 @@ from threading import Event, Lock, Thread
 from typing import Callable
 
 from manager.services.camera_service import CameraService
-from utils.vision import (
+from utils.hardware.vision import (
     build_barcode_decode_frame,
     get_vision_dependencies,
     normalize_barcode_value,

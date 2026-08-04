@@ -50,7 +50,7 @@ def import_server_app_with_fakes(api_key="secret", app_env="development"):
     fake_database_module = types.ModuleType("database.database")
     fake_database_module.Database = FakeDatabase
 
-    fake_app_config = types.ModuleType("utils.app_config")
+    fake_app_config = types.ModuleType("utils.config.app_config")
     fake_app_config.get_app_config = lambda force_reload=False: {
         "api_key": api_key,
         "db_path": "unit-test.sqlite3",
@@ -62,31 +62,31 @@ def import_server_app_with_fakes(api_key="secret", app_env="development"):
         "port": 8080,
     }
 
-    fake_paths = types.ModuleType("utils.paths")
+    fake_paths = types.ModuleType("utils.config.paths")
     fake_paths.ROOT_DIR = "."
     fake_paths.ensure_runtime_dirs = lambda *args, **kwargs: tuple()
     fake_paths.set_project_cwd = lambda: "."
 
-    fake_logging = types.ModuleType("utils.logging_setup")
+    fake_logging = types.ModuleType("utils.config.logging_setup")
     fake_logging.configure_runtime_logging = lambda *args, **kwargs: None
 
-    module_names = ["server.app", "database.database", "utils.app_config", "utils.paths", "utils.logging_setup"]
+    module_names = ["server.app", "database.database", "utils.config.app_config", "utils.config.paths", "utils.config.logging_setup"]
     saved = {name: sys.modules.get(name) for name in module_names}
     for name in module_names:
         sys.modules.pop(name, None)
 
     replacements = {
         "database.database": fake_database_module,
-        "utils.app_config": fake_app_config,
-        "utils.paths": fake_paths,
-        "utils.logging_setup": fake_logging,
+        "utils.config.app_config": fake_app_config,
+        "utils.config.paths": fake_paths,
+        "utils.config.logging_setup": fake_logging,
     }
 
     try:
         with mock.patch.dict(sys.modules, replacements), mock.patch.dict(os.environ, {"API_KEY": ""}, clear=False):
             module = importlib.import_module("server.app")
     finally:
-        for name in ("database.database", "utils.app_config", "utils.paths", "utils.logging_setup"):
+        for name in ("database.database", "utils.config.app_config", "utils.config.paths", "utils.config.logging_setup"):
             if saved[name] is None:
                 sys.modules.pop(name, None)
             else:

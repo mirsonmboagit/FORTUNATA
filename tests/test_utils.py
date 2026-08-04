@@ -10,16 +10,50 @@ from unittest import mock
 from tests.helpers import ProjectTestCase
 
 
+class PerformanceUtilityTests(ProjectTestCase):
+    def test_perf_flag_does_not_import_kivy(self):
+        from utils.core.perf_utils import should_log_perf
+
+        with mock.patch.dict("sys.modules", {"kivy.app": None}):
+            with mock.patch.dict(os.environ, {"SIGEMPE_PERF_LOGS": ""}, clear=False):
+                self.assertFalse(should_log_perf())
+
+
+class ReadabilityTests(ProjectTestCase):
+    def test_readability_enlarges_text_but_not_decorative_icons(self):
+        from utils.core.readability import MIN_BODY_FONT_SIZE, improve_readability
+
+        class Label:
+            def __init__(self, text, font_size):
+                self.text = text
+                self.font_size = font_size
+                self.line_height = 1.0
+                self.children = []
+
+            def bind(self, **_kwargs):
+                return None
+
+        label = Label("Texto importante", 10)
+        icon = Label("\ue8b6", 10)
+
+        improve_readability(label)
+        improve_readability(icon)
+
+        self.assertEqual(label.font_size, MIN_BODY_FONT_SIZE)
+        self.assertGreaterEqual(label.line_height, 1.2)
+        self.assertEqual(icon.font_size, 10)
+
+
 class VatTests(ProjectTestCase):
     def test_normalize_reference_date_accepts_common_formats(self):
-        from utils.vat import normalize_reference_date
+        from utils.business.vat import normalize_reference_date
 
         self.assertEqual(normalize_reference_date("2026-06-26"), date(2026, 6, 26))
         self.assertEqual(normalize_reference_date("26/06/2026"), date(2026, 6, 26))
         self.assertEqual(normalize_reference_date(datetime(2026, 6, 26, 9, 30)), date(2026, 6, 26))
 
     def test_resolve_vat_rule_by_historical_date(self):
-        from utils.vat import resolve_vat_rule
+        from utils.business.vat import resolve_vat_rule
 
         old_rule = resolve_vat_rule("standard", "2022-12-31")
         current_rule = resolve_vat_rule("STANDARD", "2026-01-01")
@@ -28,7 +62,7 @@ class VatTests(ProjectTestCase):
         self.assertEqual(current_rule["rate_percent"], 16.0)
 
     def test_compute_inclusive_and_exclusive_vat_breakdowns(self):
-        from utils.vat import compute_vat_breakdown
+        from utils.business.vat import compute_vat_breakdown
 
         inclusive = compute_vat_breakdown(116, quantity=2, rule_code="STANDARD", reference_date="2026-01-01")
         exclusive_rules = [
@@ -54,7 +88,7 @@ class VatTests(ProjectTestCase):
         self.assertEqual(exclusive["gross_total"], 330.0)
 
     def test_unknown_vat_choice_falls_back_to_standard(self):
-        from utils.vat import describe_vat_choice, resolve_vat_rule
+        from utils.business.vat import describe_vat_choice, resolve_vat_rule
 
         description = describe_vat_choice("DOES_NOT_EXIST", reference_date="2026-01-01")
         rule = resolve_vat_rule("DOES_NOT_EXIST", reference_date="2026-01-01")
@@ -65,7 +99,7 @@ class VatTests(ProjectTestCase):
 
 class ReceiptSecurityAndTextTests(ProjectTestCase):
     def test_receipt_policy_only_allows_completed_sales(self):
-        from utils.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
+        from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
 
         payload = {"receipt_code": "R-1"}
 
@@ -75,7 +109,7 @@ class ReceiptSecurityAndTextTests(ProjectTestCase):
         self.assertIs(resolve_receipt_data_for_emission(payload), payload)
 
     def test_security_answers_normalize_and_validate_hashes(self):
-        from utils.security_questions import check_answer, hash_answer, normalize_answer
+        from utils.business.security_questions import check_answer, hash_answer, normalize_answer
 
         hashed = hash_answer(" Joao   Mucavel ")
 
@@ -84,7 +118,7 @@ class ReceiptSecurityAndTextTests(ProjectTestCase):
         self.assertFalse(check_answer("outra resposta", hashed))
 
     def test_i18n_normalizes_languages_and_dynamic_text(self):
-        from utils.i18n import language_short, normalize_language, translate_text
+        from utils.core.i18n import language_short, normalize_language, translate_text
 
         self.assertEqual(normalize_language("pt-MZ"), "pt")
         self.assertEqual(normalize_language("zz", fallback="en"), "en")
@@ -93,8 +127,8 @@ class ReceiptSecurityAndTextTests(ProjectTestCase):
         self.assertEqual(translate_text("2 alerta(s) pendente(s)", "fr"), "2 alerte(s) en attente")
 
     def test_system_identity_and_theme_helpers(self):
-        from utils.system_identity import DEFAULT_SYSTEM_NAME, MAX_SYSTEM_NAME_LENGTH, normalize_system_name
-        from utils.theme import get_theme_tokens
+        from utils.config.system_identity import DEFAULT_SYSTEM_NAME, MAX_SYSTEM_NAME_LENGTH, normalize_system_name
+        from utils.config.theme import get_theme_tokens
 
         long_name = "  Loja   Central   " + ("X" * 80)
 
@@ -108,7 +142,7 @@ class ReceiptSecurityAndTextTests(ProjectTestCase):
         self.assertEqual(strip_html_text("<b>Arroz</b><br>Premium"), "Arroz Premium")
 
     def test_thermal_receipt_formatter_contains_totals(self):
-        from utils.thermal_printer import format_receipt_text
+        from utils.hardware.thermal_printer import format_receipt_text
 
         text = format_receipt_text(
             {
@@ -142,7 +176,7 @@ class ReceiptSecurityAndTextTests(ProjectTestCase):
 
 class ConfigAndPathTests(ProjectTestCase):
     def test_device_settings_are_clamped_and_normalized(self):
-        from utils.device_config import normalize_device_settings
+        from utils.config.device_config import normalize_device_settings
 
         settings = normalize_device_settings(
             {
@@ -161,7 +195,7 @@ class ConfigAndPathTests(ProjectTestCase):
         self.assertEqual(settings["receipt_paper_width_mm"], 80)
 
     def test_app_config_normalizers_clamp_values(self):
-        from utils.app_config import _normalize_api_config, _normalize_app_config
+        from utils.config.app_config import _normalize_api_config, _normalize_app_config
 
         api = _normalize_api_config(
             {
@@ -196,7 +230,7 @@ class ConfigAndPathTests(ProjectTestCase):
         self.assertEqual(app["api_base_url"], "http://127.0.0.1:65535")
 
     def test_runtime_api_key_is_generated_only_for_insecure_config(self):
-        from utils import app_config
+        from utils.config import app_config
 
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
@@ -208,7 +242,7 @@ class ConfigAndPathTests(ProjectTestCase):
             self.assertIn("API_KEY=", env_file.read_text(encoding="utf-8"))
 
     def test_env_loader_fallback_reads_export_and_respects_override(self):
-        from utils.env_loader import _load_dotenv_fallback
+        from utils.config.env_loader import _load_dotenv_fallback
 
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
@@ -222,7 +256,7 @@ class ConfigAndPathTests(ProjectTestCase):
                 self.assertEqual(os.environ["EXISTING"], "new")
 
     def test_path_helpers_resolve_and_create_parent_dir(self):
-        from utils.paths import ensure_parent_dir, resolve_path
+        from utils.config.paths import ensure_parent_dir, resolve_path
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

@@ -1,140 +1,75 @@
 {
-  "6001299026973": {
-    "source": "Banco Local",
+  "6009808630352": {
+    "source": "Ranxo",
     "data": {
-      "barcode": "6001299026973",
-      "name": "CLOVER ULTRA - FULL CREAM MILK",
-      "price": 105.0,
-      "cost": 105.0,
-      "stock": 20.0,
-      "is_weight": 0,
-      "sold_by_weight": false,
-      "expiry_date": "2026-05-02",
-      "status": "ATIVO",
-      "category": "Dairy Milk",
-      "quantity": "1000ml",
-      "product_id": 11,
-      "source": "local",
+      "barcode": "6009808630352",
+      "name": "Caixa de Massa esparguete Bela - 20un",
+      "price": "770.00",
+      "image": "https://www.ranxo.co.mz/wp-content/uploads/2021/02/Massa-Bela-100x100.jpeg",
       "source_chain": [
-        "Banco Local"
-      ],
-      "brand": "Clover ULTRA",
-      "image": "https://images.openfoodfacts.org/images/products/600/129/902/6973/front_en.7.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/6001299026973",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001299026973"
-    },
-    "timestamp": "2026-04-21T20:17:14.764825"
-  },
-  "8886950074658": {
-    "source": "Banco Local",
-    "data": {
-      "barcode": "8886950074658",
-      "name": "LAVA LOICA MAX-400G",
-      "price": 99.0,
-      "cost": 99.0,
-      "stock": 64.0,
-      "is_weight": 0,
-      "sold_by_weight": false,
-      "expiry_date": "2027-02-17",
-      "status": "ATIVO",
-      "category": "Higiene & Limpeza",
-      "quantity": "400g",
-      "product_id": 9,
-      "source": "local",
-      "source_chain": [
-        "Banco Local"
+        "Ranxo"
       ]
     },
-    "timestamp": "2026-04-23T11:33:33.374329"
+    "timestamp": "2026-07-30T23:34:33.957479"
   },
-  "6009710390160": {
-    "source": "Open Food Facts",
+  "6009603571997": {
+    "source": "Agregado",
     "data": {
-      "barcode": "6009710390160",
-      "name": "Rama",
-      "brand": "Rama",
-      "category": "50 63 Blended Fat With Vegetable And Animal Origins",
-      "sold_by_weight": false,
-      "image": "https://images.openfoodfacts.org/images/products/600/971/039/0160/front_en.4.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/6009710390160",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009710390160",
+      "barcode": "6009603571997",
+      "name": "Massa Esparguete Polana, 400 g",
+      "sku": "Vns-6009603571997",
+      "url_key": "vns-6009603571997-massa-esparguete-polana-400-g",
+      "price": "40",
+      "image": "https://bazara.co.mz/media/catalog/product/cache/74c1057f7991b4edb2bc7bdaa94de933/1/_/1_15.jpg",
+      "category": "Alimentos",
+      "source": "Bazara",
+      "source_url": "https://bazara.co.mz/vns-6009603571997-massa-esparguete-polana-400-g.html",
       "source_chain": [
-        "Open Food Facts"
+        "Bazara",
+        "Ranxo"
       ]
     },
-    "timestamp": "2026-04-20T15:48:36.120512"
+    "timestamp": "2026-07-31T12:53:12.815170"
   },
-  "5603675000069": {
-    "source": "Banco Local",
+  "6972663752708": {
+    "source": "Ranxo",
     "data": {
-      "barcode": "5603675000069",
-      "name": "SPRAY ACTY MULTIUSO-750ML",
-      "price": 120.0,
-      "cost": 120.0,
-      "stock": 25.0,
-      "is_weight": 0,
-      "sold_by_weight": false,
-      "expiry_date": "2029-02-17",
-      "status": "ATIVO",
-      "category": "Higiene & Limpeza",
-      "quantity": "750ml",
-      "product_id": 10,
-      "source": "local",
+      "barcode": "6972663752708",
+      "name": "Nenhum produto encontrado.",
       "source_chain": [
-        "Banco Local"
+        "Ranxo"
       ]
     },
-    "timestamp": "2026-04-23T15:16:39.541350"
+    "timestamp": "2026-07-31T12:54:54.683246"
   },
-  "5449000045478": {
-    "source": "Open Food Facts",
+  "6001565023835": {
+    "source": "Agregado",
     "data": {
-      "barcode": "5449000045478",
-      "name": "BonAqua",
-      "brand": "CocaCola",
-      "category": "Stilles Wasser",
-      "sold_by_weight": false,
-      "quantity": "1,5 l",
-      "image": "https://images.openfoodfacts.org/images/products/544/900/004/5478/front_pt.5.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/5449000045478",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000045478",
+      "barcode": "6001565023835",
+      "name": "Óleo Vegetal Somol, 2 L",
+      "sku": "VNS-6001565023835",
+      "url_key": "vns-6001565023835-Óleo-vegetal-somol-2-l",
+      "price": "300",
+      "image": "https://bazara.co.mz/media/catalog/product/cache/74c1057f7991b4edb2bc7bdaa94de933/v/n/vns-6001565023835.jpg",
+      "category": "Alimentos",
+      "source": "Bazara",
+      "source_url": "https://bazara.co.mz/vns-6001565023835-Óleo-vegetal-somol-2-l.html",
       "source_chain": [
-        "Open Food Facts"
+        "Bazara",
+        "Ranxo"
       ]
     },
-    "timestamp": "2026-05-09T16:59:47.981651"
+    "timestamp": "2026-07-31T12:55:02.869351"
   },
-  "6009678261472": {
-    "source": "Open Food Facts",
+  "6001123002760": {
+    "source": "Ranxo",
     "data": {
-      "barcode": "6009678261472",
-      "name": "MAQ washin powder",
-      "brand": "Bliss Brand",
-      "sold_by_weight": true,
-      "quantity": "2kg",
-      "image": "https://images.openfoodfacts.org/images/products/600/967/826/1472/front_en.5.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/6009678261472",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009678261472",
+      "barcode": "6001123002760",
+      "name": "Nenhum produto encontrado.",
       "source_chain": [
-        "Open Food Facts"
+        "Ranxo"
       ]
     },
-    "timestamp": "2026-05-09T17:10:47.025663"
-  },
-  "5449000664525": {
-    "source": "Open Food Facts",
-    "data": {
-      "barcode": "5449000664525",
-      "name": "Fanta pomme",
-      "brand": "Fanta",
-      "sold_by_weight": false,
-      "image": "https://images.openfoodfacts.org/images/products/544/900/066/4525/front_fr.8.400.jpg",
-      "source_url": "https://world.openfoodfacts.org/product/5449000664525",
-      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/5449000664525",
-      "source_chain": [
-        "Open Food Facts"
-      ]
-    },
-    "timestamp": "2026-05-10T14:46:21.868260"
+    "timestamp": "2026-07-31T12:56:43.538609"
   }
 }

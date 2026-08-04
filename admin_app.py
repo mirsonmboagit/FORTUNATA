@@ -4,7 +4,8 @@ from kivy.clock import Clock
 from app_base import BaseApp
 from database.provider import get_db
 from user.login import AdminLoginScreen
-from utils.paths import asset_path
+from utils.config.paths import asset_path
+from version import __version__
 
 
 class AdminApp(BaseApp):
@@ -15,7 +16,7 @@ class AdminApp(BaseApp):
         self._screen_factories = {}
 
     def build(self):
-        self.title = f"{self.system_name} - ADMIN"
+        self.title = f"{self.system_name} {__version__} - ADMIN"
         self.icon = str(asset_path('icon', 'admin.ico'))
 
         self.db = get_db()
@@ -68,31 +69,31 @@ class AdminApp(BaseApp):
         return AdminScreen(db=self.db, name='admin')
 
     def _build_settings_screen(self):
-        from utils.settings import AdminSettingsScreen
+        from utils.screens.settings import AdminSettingsScreen
         return AdminSettingsScreen(app=self, name='settings')
 
     def _build_reports_screen(self):
-        from utils.reports_screen import ReportsScreen
+        from utils.screens.reports_screen import ReportsScreen
         return ReportsScreen(db=self.db, name='reports')
 
     def _build_sales_history_screen(self):
-        from utils.sales_history_screen import SalesHistoryScreen
+        from utils.screens.sales_history_screen import SalesHistoryScreen
         return SalesHistoryScreen(db=self.db, name='sales_history')
 
     def _build_losses_screen(self):
-        from utils.losses_screen import LossesScreen
+        from utils.screens.losses_screen import LossesScreen
         return LossesScreen(db=self.db, name='losses')
 
     def _build_losses_history_screen(self):
-        from utils.losses_history_screen import LossesHistoryScreen
+        from utils.screens.losses_history_screen import LossesHistoryScreen
         return LossesHistoryScreen(db=self.db, name='losses_history')
 
     def _build_restock_screen(self):
-        from utils.restock_screen import RestockScreen
+        from utils.screens.restock_screen import RestockScreen
         return RestockScreen(db=self.db, name='restock')
 
     def _build_restock_history_screen(self):
-        from utils.restock_history_screen import RestockHistoryScreen
+        from utils.screens.restock_history_screen import RestockHistoryScreen
         return RestockHistoryScreen(db=self.db, name='restock_history')
 
 

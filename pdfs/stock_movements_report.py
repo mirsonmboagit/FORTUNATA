@@ -64,7 +64,7 @@ class StockMovementsReport(BasePDFReport):
 
         title = filters.get("title") or "MOVIMENTOS DE STOCK"
         filter_label = filters.get("filter_label") or "TODOS"
-        source_label = filters.get("source_label") or "Tela de reposicao de stock"
+        source_label = filters.get("source_label") or "Ecrã de reposição de stock"
         generated_at = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
         elements.append(Paragraph(str(title).upper(), title_style))

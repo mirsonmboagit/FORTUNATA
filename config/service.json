@@ -1,11 +1,11 @@
 {
-  "name": "SIGEMPEAPI",
-  "display_name": "SIGE MPE API Local",
+  "name": "LojaAPI",
+  "display_name": "LojaAPI",
   "description": "API local Flask/Waitress para o SIGE MPE.",
   "nssm_path": "nssm.exe",
-  "python_executable": "python",
-  "entrypoint": "server/run_api.py",
+  "python_executable": "loja/Scripts/python.exe",
+  "entrypoint": "-m server.run_api",
   "working_directory": ".",
-  "stdout_log": "logs/sigempeapi-stdout.log",
-  "stderr_log": "logs/sigempeapi-stderr.log"
+  "stdout_log": "logs/lojaapi-stdout.log",
+  "stderr_log": "logs/lojaapi-stderr.log"
 }

@@ -18,20 +18,20 @@ from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.card import MDCard
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.label import MDIcon, MDLabel
+from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
+from kivymd.uix.textfield import MDTextField
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from AI.controller import ProactiveIntelligenceController
 from database.provider import get_db
 from ui.components.admin_home_dashboard import SalesTrendChart
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton
-from ui.components.loading_overlay import ScreenLoadingController
 from ui.components.tooltip_widgets import TooltipFloatingActionButton
-from utils.ai_popups import build_positive_banner, render_auto_banners
+from utils.core.formatters import format_compact_number, format_display_value, format_money
 
 
 Builder.load_file(os.path.join(CURRENT_DIR, "admin_home_screen.kv"))
@@ -42,31 +42,15 @@ def _set_label_text_color(label, color):
 
 
 def _format_mzn(value):
-    try:
-        return f"{float(value):,.2f} MZN".replace(",", " ")
-    except Exception:
-        return "0.00 MZN"
+    return format_money(value, currency="MZN")
 
 
 def _format_value(value):
-    if value is None:
-        return "--"
-    try:
-        if isinstance(value, float):
-            return f"{value:,.2f}".replace(",", " ")
-        return str(int(value))
-    except Exception:
-        return str(value)
+    return format_display_value(value)
 
 
 def _format_compact_qty(value):
-    try:
-        amount = float(value or 0)
-    except Exception:
-        return "0"
-    if abs(amount - round(amount)) < 0.01:
-        return str(int(round(amount)))
-    return f"{amount:.2f}".rstrip("0").rstrip(".")
+    return format_compact_number(value, empty="0")
 
 
 class AdminHomeScreen(MDScreen):
@@ -74,7 +58,9 @@ class AdminHomeScreen(MDScreen):
     home_title = StringProperty("Painel do Administrador")
     home_subtitle = StringProperty("Visao geral operacional do negocio")
     datetime_text = StringProperty("")
-    status_text = StringProperty("A carregar resumo operacional...")
+    status_text = StringProperty("Painel pronto para operacao.")
+    chart_metric_text = StringProperty("Faturacao")
+    chart_period_text = StringProperty("30 dias")
 
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
@@ -84,32 +70,50 @@ class AdminHomeScreen(MDScreen):
         self._snapshot_error = None
         self._snapshot_loading = False
         self._snapshot_loaded_at = 0.0
+        self._snapshot_period_days = None
         self._snapshot_token = 0
         self._clock_ev = None
         self._sales_chart = None
+        self._chart_render_ev = None
+        self._chart_render_signature = None
+        self._chart_metric = "revenue"
+        self._chart_period_days = 30
+        self._chart_metric_menu = None
+        self._chart_period_menu = None
         self._summary_render_signature = None
         self._alerts_render_signature = None
         self._insights_render_signature = None
         self._today_sales_dialog = None
         self._today_sales_loading = False
+        self._quick_restock_dialog = None
+        self._quick_restock_product = None
+        self._quick_restock_fields = {}
+        self._quick_restock_submit_btn = None
+        self._quick_restock_busy = False
+        self._quick_action_last_key = None
+        self._quick_action_last_at = 0.0
+        self._settings_warmup_requested = False
         self._keyboard_shortcuts_bound = False
         self._last_shortcut_signature = None
         self._last_shortcut_at = 0.0
-        self._loading_controller = None
-        self._intelligence = ProactiveIntelligenceController(
-            screen=self,
-            db=self.db,
-            history_title="Historico de monitorizacao",
-            banner_columns=1,
-            auto_batch_size=2,
-            auto_stagger_seconds=2.0,
-            auto_present_enabled=True,
-        )
+        self._intelligence = None
         super().__init__(**kwargs)
 
+    def _get_intelligence(self):
+        if self._intelligence is None:
+            from AI.controller import ProactiveIntelligenceController
+            self._intelligence = ProactiveIntelligenceController(
+                screen=self,
+                db=self.db,
+                history_title="Historico de monitorizacao",
+                banner_columns=1,
+                auto_batch_size=2,
+                auto_stagger_seconds=2.0,
+                auto_present_enabled=True,
+            )
+        return self._intelligence
+
     def on_kv_post(self, base_widget):
-        self._ensure_loading_overlay()
-        self._ensure_chart_widgets()
         self._build_quick_actions()
         self._update_datetime_text()
         self._update_responsive_layout()
@@ -119,50 +123,101 @@ class AdminHomeScreen(MDScreen):
     def on_enter(self):
         self._bind_keyboard_shortcuts()
         self._start_clock()
-        self._ensure_snapshot_loaded(force=False)
-        app = App.get_running_app()
-        warmup = getattr(app, "warmup_screens", None)
-        if callable(warmup):
-            # O primeiro clique ficava lento porque a tela alvo era criada
-            # inteira apenas no momento do on_release.
-            Clock.schedule_once(
-                lambda dt: warmup(
-                    ("admin", "reports", "sales_history", "restock", "losses", "settings"),
-                    delay=0.12,
-                ),
-                0.22,
-            )
-        Clock.schedule_once(lambda dt: self._start_ai_polling(), 0.1)
+        self._start_ai_polling()
+        Clock.schedule_once(lambda dt: self._ensure_snapshot_loaded(force=False), 0.12)
+        Clock.schedule_once(lambda dt: self._warmup_settings_screen(), 8.0)
 
     def on_leave(self):
         self._unbind_keyboard_shortcuts()
+        self._dismiss_chart_menus()
         if self._clock_ev:
             self._clock_ev.cancel()
             self._clock_ev = None
         self._stop_ai_polling()
         self._snapshot_token += 1
         self._snapshot_loading = False
-        self._clear_loading_overlay()
+        if self._chart_render_ev is not None:
+            self._chart_render_ev.cancel()
+            self._chart_render_ev = None
 
     def on_size(self, *args):
         Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
 
-    def _ensure_loading_overlay(self):
-        if self._loading_controller is None:
-            self._loading_controller = ScreenLoadingController(self)
-        self._loading_controller.attach()
-        return self._loading_controller
+    def _chart_metric_options(self):
+        return [
+            ("revenue", "Faturacao"),
+            ("sales_count", "Qtd. vendas"),
+            ("stock_flow", "Fluxo stock"),
+            ("top_products", "Top produtos"),
+        ]
 
-    def _set_loading_overlay(self, key, active, message="", detail="", blocks_input=True):
-        controller = self._ensure_loading_overlay()
-        if active:
-            controller.show(key, message, detail, blocks_input=blocks_input)
-            return
-        controller.hide(key)
+    def _chart_period_options(self):
+        return [
+            (7, "7 dias"),
+            (30, "30 dias"),
+            (90, "90 dias"),
+            (365, "1 ano"),
+            (3650, "Geral"),
+        ]
 
-    def _clear_loading_overlay(self):
-        if self._loading_controller is not None:
-            self._loading_controller.clear()
+    def show_chart_metric_menu(self, caller):
+        if self._chart_metric_menu:
+            self._chart_metric_menu.dismiss()
+        items = [
+            {
+                "text": label,
+                "on_release": lambda key=key, text=label: self._set_chart_metric(key, text),
+            }
+            for key, label in self._chart_metric_options()
+        ]
+        self._chart_metric_menu = MDDropdownMenu(caller=caller, items=items, width_mult=3)
+        self._chart_metric_menu.open()
+
+    def show_chart_period_menu(self, caller):
+        if self._chart_period_menu:
+            self._chart_period_menu.dismiss()
+        items = [
+            {
+                "text": label,
+                "on_release": lambda days=days, text=label: self._set_chart_period(days, text),
+            }
+            for days, label in self._chart_period_options()
+        ]
+        self._chart_period_menu = MDDropdownMenu(caller=caller, items=items, width_mult=3)
+        self._chart_period_menu.open()
+
+    def _set_chart_metric(self, metric, label):
+        if self._chart_metric_menu:
+            self._chart_metric_menu.dismiss()
+            self._chart_metric_menu = None
+        self._chart_metric = metric
+        self.chart_metric_text = label
+        self._render_dashboard()
+
+    def _set_chart_period(self, days, label):
+        if self._chart_period_menu:
+            self._chart_period_menu.dismiss()
+            self._chart_period_menu = None
+        self._chart_period_days = int(days or 30)
+        self.chart_period_text = label
+        if self._snapshot_loading:
+            self._snapshot_token += 1
+            self._snapshot_loading = False
+        self._ensure_snapshot_loaded(force=True)
+
+    def _dismiss_chart_menus(self):
+        closed = False
+        for attr_name in ("_chart_metric_menu", "_chart_period_menu"):
+            menu = getattr(self, attr_name, None)
+            if menu is None:
+                continue
+            try:
+                menu.dismiss()
+            except Exception:
+                pass
+            setattr(self, attr_name, None)
+            closed = True
+        return closed
 
     def _bind_keyboard_shortcuts(self):
         if self._keyboard_shortcuts_bound:
@@ -223,6 +278,8 @@ class AdminHomeScreen(MDScreen):
         return False
 
     def _close_transient_panels(self):
+        if self._dismiss_chart_menus():
+            return True
         dialog = getattr(self, "_today_sales_dialog", None)
         if dialog is not None:
             self._dismiss_today_sales_dialog()
@@ -266,9 +323,12 @@ class AdminHomeScreen(MDScreen):
             self.open_stock_module()
             return True
         if "alt" in modifiers and key_name == "3":
-            self.open_reports()
+            self.open_losses_module()
             return True
         if "alt" in modifiers and key_name == "4":
+            self.open_reports()
+            return True
+        if "alt" in modifiers and key_name == "u":
             self.open_users_module()
             return True
         if "alt" in modifiers and key_name == "p":
@@ -343,19 +403,18 @@ class AdminHomeScreen(MDScreen):
         ).start(badge)
 
     def _start_ai_polling(self):
-        self._intelligence.start()
+        self._get_intelligence().start()
 
     def _stop_ai_polling(self):
-        self._intelligence.stop()
+        if self._intelligence is not None:
+            self._intelligence.stop()
 
     def _update_datetime_text(self):
         self.datetime_text = datetime.now().strftime("%d/%m/%Y | %H:%M")
 
     def _apply_hero_button_layout(self, fill_width):
         button_specs = (
-            ("hero_add_button", dp(96)),
-            ("hero_reports_button", dp(96)),
-            ("hero_pdfs_button", dp(84)),
+            ("hero_add_button", dp(104)),
         )
         for button_id, default_width in button_specs:
             button = self.ids.get(button_id)
@@ -391,32 +450,35 @@ class AdminHomeScreen(MDScreen):
         if width >= dp(1280):
             summary_cols = 4
             side_cols = 2
+            quick_cols = 2
             hero_orientation = "horizontal"
             hero_side_fill = False
             hero_height = dp(106)
             summary_height = dp(148)
             left_ratio, right_ratio = 0.67, 0.33
-            card_ratios = (0.34, 0.40, 0.26)
+            card_ratios = (0.30, 0.46, 0.24)
             hero_buttons_fill = False
         elif width >= dp(1060):
             summary_cols = 2
             side_cols = 2
+            quick_cols = 2
             hero_orientation = "horizontal"
             hero_side_fill = False
             hero_height = dp(120)
             summary_height = dp(242)
             left_ratio, right_ratio = 0.61, 0.39
-            card_ratios = (0.34, 0.40, 0.26)
+            card_ratios = (0.30, 0.46, 0.24)
             hero_buttons_fill = False
         else:
             summary_cols = 2
             side_cols = 1
+            quick_cols = 2
             hero_orientation = "vertical"
             hero_side_fill = True
             hero_height = dp(168)
             summary_height = dp(242)
             left_ratio, right_ratio = 0.57, 0.43
-            card_ratios = (0.34, 0.34, 0.32)
+            card_ratios = (0.28, 0.48, 0.24)
             hero_buttons_fill = True
 
         if summary_grid:
@@ -424,7 +486,7 @@ class AdminHomeScreen(MDScreen):
         if alerts_grid:
             alerts_grid.cols = side_cols
         if quick_actions_grid:
-            quick_actions_grid.cols = side_cols
+            quick_actions_grid.cols = quick_cols
         if insights_grid:
             insights_grid.cols = side_cols
 
@@ -460,7 +522,9 @@ class AdminHomeScreen(MDScreen):
             right_col.size_hint_x = right_ratio
 
     def _ensure_chart_widgets(self):
-        sales_host = self.ids.get("sales_chart_host") if hasattr(self, "ids") else None
+        sales_host = self.ids.get("chart_canvas_host") if hasattr(self, "ids") else None
+        if sales_host is None:
+            sales_host = self.ids.get("sales_chart_host") if hasattr(self, "ids") else None
         if sales_host and self._sales_chart is None:
             self._sales_chart = SalesTrendChart()
             self._sales_chart.size_hint_y = 1
@@ -469,11 +533,24 @@ class AdminHomeScreen(MDScreen):
     def refresh_home(self, *args):
         self._ensure_snapshot_loaded(force=True)
 
+    def _warmup_settings_screen(self):
+        if self._settings_warmup_requested or not self.manager:
+            return
+        if "settings" in self.manager.screen_names:
+            self._settings_warmup_requested = True
+            return
+        app = App.get_running_app()
+        warmup = getattr(app, "warmup_screens", None)
+        if not callable(warmup):
+            return
+        self._settings_warmup_requested = bool(warmup(("settings",), delay=0.04))
+
     def _ensure_snapshot_loaded(self, force=False):
         if self._snapshot_loading:
             return
         age = perf_counter() - self._snapshot_loaded_at
-        if not force and self._snapshot is not None and age < self.HOME_CACHE_SECONDS:
+        same_period = self._snapshot_period_days == self._chart_period_days
+        if not force and same_period and self._snapshot is not None and age < self.HOME_CACHE_SECONDS:
             self._render_dashboard()
             return
         self._load_snapshot_async()
@@ -483,21 +560,13 @@ class AdminHomeScreen(MDScreen):
         self._snapshot_token = token
         self._snapshot_loading = True
         self._snapshot_error = None
-        self._set_loading_overlay(
-            "snapshot",
-            True,
-            "A carregar painel do admin...",
-            "Estamos a preparar o resumo operacional, alertas e indicadores principais.",
-            blocks_input=False,
-        )
-        self.status_text = "A carregar resumo operacional..."
         self._render_dashboard()
 
         def worker():
             payload = None
             error = None
             try:
-                payload = self.db.get_admin_home_snapshot(lookback_days=7) or {}
+                payload = self.db.get_admin_home_snapshot(lookback_days=self._chart_period_days) or {}
             except Exception as exc:
                 error = str(exc)
             if (payload is None or payload == {}) and error is None:
@@ -515,8 +584,8 @@ class AdminHomeScreen(MDScreen):
         if token is not None and token != self._snapshot_token:
             return
         self._snapshot_loading = False
-        self._set_loading_overlay("snapshot", False)
         self._snapshot_loaded_at = perf_counter()
+        self._snapshot_period_days = self._chart_period_days
         self._snapshot_error = str(error).strip() if error else None
         self._snapshot = payload or {}
         self._render_dashboard()
@@ -527,16 +596,52 @@ class AdminHomeScreen(MDScreen):
         self._render_summary_cards(snapshot.get("summary") or {})
         self._render_alert_cards(snapshot.get("alerts") or {})
         self._render_insights(snapshot)
+        self._schedule_chart_render(snapshot)
 
+    def _schedule_chart_render(self, snapshot):
+        sales_series = snapshot.get("sales_series") or []
+        stock_series = snapshot.get("stock_flow_series") or []
+        top_products = snapshot.get("top_products") or []
+        signature = (
+            id(snapshot),
+            self._chart_metric,
+            self._chart_period_days,
+            self._snapshot_error,
+            bool(self._snapshot_loading),
+            len(sales_series),
+            len(stock_series),
+            len(top_products),
+        )
+        if signature == self._chart_render_signature:
+            return
+        self._chart_render_signature = signature
+
+        if self._chart_render_ev is not None:
+            self._chart_render_ev.cancel()
+        self._chart_render_ev = Clock.schedule_once(
+            lambda dt, data=snapshot: self._render_chart(data),
+            0,
+        )
+
+    def _render_chart(self, snapshot):
+        self._chart_render_ev = None
+        if snapshot and self._sales_chart is None:
+            self._ensure_chart_widgets()
         if self._sales_chart:
             if self._snapshot_error:
                 self._sales_chart.set_state_text("Falha ao carregar indicadores.")
             elif self._snapshot_loading and not snapshot:
-                self._sales_chart.set_state_text("A carregar tendencia de vendas...")
+                self._sales_chart.set_state_text("Indicadores a atualizar em segundo plano.")
             elif not snapshot:
-                self._sales_chart.set_state_text("Indicadores visuais serao carregados apos o resumo inicial.")
+                self._sales_chart.set_state_text("Indicadores visuais serao atualizados em segundo plano.")
             else:
-                self._sales_chart.set_series(snapshot.get("sales_series") or [])
+                self._sales_chart.set_dashboard(
+                    metric=self._chart_metric,
+                    period_label=self.chart_period_text,
+                    sales_series=snapshot.get("sales_series") or [],
+                    stock_series=snapshot.get("stock_flow_series") or [],
+                    top_products=snapshot.get("top_products") or [],
+                )
 
     def _render_header(self, snapshot):
         app = App.get_running_app()
@@ -555,7 +660,7 @@ class AdminHomeScreen(MDScreen):
         if self._snapshot_error:
             self.status_text = "Resumo indisponivel no momento."
         elif self._snapshot_loading and not snapshot:
-            self.status_text = "A carregar sinais do negocio..."
+            self.status_text = "Painel pronto. Indicadores a atualizar em segundo plano."
         else:
             summary = snapshot.get("summary") or {}
             alerts = snapshot.get("alerts") or {}
@@ -577,7 +682,7 @@ class AdminHomeScreen(MDScreen):
         if self._snapshot_error:
             return "Nao foi possivel atualizar a visao geral agora."
         if self._snapshot_loading and not snapshot:
-            return "A preparar visao geral, alertas e indicadores operacionais."
+            return "Visao geral operacional, alertas e indicadores do negocio."
 
         summary = snapshot.get("summary") or {}
         alerts = snapshot.get("alerts") or {}
@@ -587,18 +692,21 @@ class AdminHomeScreen(MDScreen):
 
         expired = int(counts.get("expired") or 0)
         critical = int(counts.get("critical_stock") or 0)
+        out_of_stock = int(counts.get("out_of_stock") or 0)
         expiring = int(counts.get("expiring_soon") or 0)
         direction = comparison.get("direction")
         delta_percent = comparison.get("delta_percent")
         peak_hour = context.get("peak_hour")
         top_product = context.get("top_product_today") or {}
 
-        if expired > 0 or critical > 0:
+        if expired > 0 or critical > 0 or out_of_stock > 0:
             parts = []
             if expired > 0:
                 parts.append(f"{expired} itens vencidos")
             if critical > 0:
                 parts.append(f"{critical} produtos com stock critico")
+            if out_of_stock > 0:
+                parts.append(f"{out_of_stock} produtos esgotados")
             return ", ".join(parts) + " pedem acao imediata."
         if expiring > 0:
             return f"Ha {expiring} produtos proximos do vencimento a acompanhar."
@@ -619,13 +727,16 @@ class AdminHomeScreen(MDScreen):
             return
 
         critical_stock = int(summary.get("critical_stock") or 0)
+        out_of_stock = int(summary.get("out_of_stock") or 0)
         theme_style = getattr(App.get_running_app(), "theme_style", "Light")
 
+        stock_callback = self.show_stock_critical_banner if critical_stock > 0 else None
+        out_callback = self.show_out_of_stock_banner if out_of_stock > 0 else None
         specs = [
-            ("Faturacao Hoje", _format_mzn(summary.get("revenue_today") or 0.0), "Receita atual do dia", "cash-multiple", "primary", self.open_reports),
+            ("Faturacao Hoje", _format_mzn(summary.get("revenue_today") or 0.0), "Receita atual do dia", "cash-multiple", "primary", self.show_today_revenue),
             ("Vendas Hoje", _format_value(summary.get("sales_today_count") or 0), "Resumo do dia", "cash-register", "success", self.open_today_sales),
-            ("Stock Critico", _format_value(critical_stock), "Reposicao prioritaria", "alert-outline", "danger" if critical_stock > 0 else "success", self.open_stock_module),
-            ("Produtos", _format_value(summary.get("total_products") or 0), "Catalogo ativo", "package-variant-closed", "info", self.go_to_products),
+            ("Stock Critico", _format_value(critical_stock), "Reposicao prioritaria", "alert-outline", "danger" if critical_stock > 0 else "success", stock_callback),
+            ("Esgotados", _format_value(out_of_stock), "Sem disponibilidade", "close-octagon-outline", "danger" if out_of_stock > 0 else "success", out_callback),
         ]
 
         signature = (theme_style, tuple((title, value, subtitle, icon_name, tone) for title, value, subtitle, icon_name, tone, _callback in specs))
@@ -696,13 +807,26 @@ class AdminHomeScreen(MDScreen):
 
         actions = [
             ("Produtos", "Catalogo", "package-variant", "primary", self.go_to_products),
-            ("Stock", "Movimentos", "warehouse", "warning", self.open_stock_module),
-            ("Relatorios", "Analise", "chart-box-outline", "info", self.open_reports),
+            ("Reposicao", "Entrada de stock", "package-variant-plus", "warning", self.open_stock_module),
+            ("Perdas", "Quebras e ajustes", "alert-circle-outline", "danger", self.open_losses_module),
+            ("Relatorios", "Analises e PDF", "chart-box-outline", "info", self.open_reports),
+            ("Definicoes", "Sistema", "cog-outline", "primary", self.go_to_settings),
             ("Utilizadores", "Acessos", "account-key-outline", "primary", self.open_users_module),
         ]
 
         for title, subtitle, icon_name, tone, callback in actions:
             grid.add_widget(self._build_quick_action_card(title, subtitle, icon_name, tone, callback))
+
+    def _run_quick_action(self, callback):
+        if not callable(callback):
+            return
+        key = id(callback)
+        now = perf_counter()
+        if key == self._quick_action_last_key and (now - self._quick_action_last_at) < 0.28:
+            return
+        self._quick_action_last_key = key
+        self._quick_action_last_at = now
+        callback()
 
     def _build_quick_action_card(self, title, subtitle, icon_name, tone, callback):
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
@@ -713,9 +837,9 @@ class AdminHomeScreen(MDScreen):
         card = Factory.HomeButtonCard(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(68),
-            padding=[dp(12), dp(10), dp(12), dp(10)],
-            spacing=dp(2),
+            height=dp(56),
+            padding=[dp(10), dp(8), dp(10), dp(8)],
+            spacing=dp(1),
             radius=[dp(12)],
             elevation=1,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
@@ -724,13 +848,13 @@ class AdminHomeScreen(MDScreen):
             hover_line_mix=0.26,
             hover_elevation_delta=2.0,
         )
-        card.bind(on_release=lambda *_: callback())
+        card.bind(on_press=lambda *_: self._run_quick_action(callback))
 
-        header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(24), spacing=dp(6))
+        header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))
         icon_chip = MDCard(
             size_hint=(None, None),
-            size=(dp(24), dp(24)),
-            radius=[dp(8)],
+            size=(dp(22), dp(22)),
+            radius=[dp(7)],
             elevation=0,
             md_bg_color=[accent[0], accent[1], accent[2], 0.14],
         )
@@ -740,11 +864,13 @@ class AdminHomeScreen(MDScreen):
         icon_chip.add_widget(icon_label)
 
         title_label = MDLabel(text=title, font_style="Caption", bold=True)
+        title_label.shorten = True
+        title_label.shorten_from = "right"
         _set_label_text_color(title_label, tokens.get("text_primary", [0.2, 0.2, 0.2, 1]))
         header.add_widget(icon_chip)
         header.add_widget(title_label)
 
-        subtitle_label = MDLabel(text=subtitle, font_style="Caption")
+        subtitle_label = MDLabel(text=subtitle, font_style="Caption", size_hint_y=None, height=dp(16))
         subtitle_label.shorten = True
         subtitle_label.shorten_from = "right"
         _set_label_text_color(subtitle_label, tokens.get("text_secondary", [0.42, 0.46, 0.50, 1]))
@@ -776,24 +902,24 @@ class AdminHomeScreen(MDScreen):
             cards.append(("Produtos vencidos", int(counts.get("expired") or 0), "danger", "calendar-remove-outline", f"{first.get('name', 'Itens expirados')} exigem retirada imediata.", self.show_expired_products_banner))
         if int(counts.get("critical_stock") or 0) > 0:
             first = low_stock_items[0] if low_stock_items else {}
-            cards.append(("Stock critico", int(counts.get("critical_stock") or 0), "warning", "alert-decagram-outline", f"{first.get('name', 'Reposicao')} esta com cobertura curta de stock.", self.open_stock_module))
+            cards.append(("Stock critico", int(counts.get("critical_stock") or 0), "warning", "alert-decagram-outline", f"{first.get('name', 'Reposicao')} esta com cobertura curta de stock.", self.show_stock_critical_banner))
         if int(counts.get("out_of_stock") or 0) > 0:
             first = out_of_stock_items[0] if out_of_stock_items else {}
-            cards.append(("Produtos esgotados", int(counts.get("out_of_stock") or 0), "danger", "close-octagon-outline", f"{first.get('name', 'Ha produtos')} ja estao sem disponibilidade.", self.go_to_products))
+            cards.append(("Produtos esgotados", int(counts.get("out_of_stock") or 0), "danger", "close-octagon-outline", f"{first.get('name', 'Ha produtos')} ja estao sem disponibilidade.", self.show_out_of_stock_banner))
         if int(counts.get("expiring_soon") or 0) > 0:
             first = expiring_items[0] if expiring_items else {}
             day_text = first.get("days_left")
             suffix = f" em {day_text} dias" if day_text is not None else ""
-            cards.append(("Validades proximas", int(counts.get("expiring_soon") or 0), "warning", "calendar-clock-outline", f"{first.get('name', 'Itens com validade')} vencem{suffix}.", self.go_to_products))
+            cards.append(("Validades proximas", int(counts.get("expiring_soon") or 0), "warning", "calendar-clock-outline", f"{first.get('name', 'Itens com validade')} vencem{suffix}.", self.show_expiring_products_banner))
         if int(counts.get("pending_approvals") or 0) > 0:
             first = pending_items[0] if pending_items else {}
-            cards.append(("Pendencias administrativas", int(counts.get("pending_approvals") or 0), "info", "clipboard-alert-outline", f"{first.get('product_name', 'Movimentos')} aguardam validacao.", self.open_stock_module))
+            cards.append(("Pendencias administrativas", int(counts.get("pending_approvals") or 0), "info", "clipboard-alert-outline", f"{first.get('product_name', 'Movimentos')} aguardam validacao.", self.show_pending_approvals_banner))
         if int(counts.get("fraud_alerts") or 0) > 0:
             first = fraud_items[0] if fraud_items else {}
-            cards.append(("Alertas operacionais", int(counts.get("fraud_alerts") or 0), "danger", "shield-alert-outline", first.get("title") or "Foram encontrados padroes a rever.", self.open_losses_module))
+            cards.append(("Alertas operacionais", int(counts.get("fraud_alerts") or 0), "danger", "shield-alert-outline", first.get("title") or "Foram encontrados padroes a rever.", self.show_operational_alerts_banner))
         if int(counts.get("negative_profit") or 0) > 0:
             first = negative_profit_items[0] if negative_profit_items else {}
-            cards.append(("Margem negativa", int(counts.get("negative_profit") or 0), "warning", "cash-remove", f"{first.get('name', 'Alguns itens')} precisam de revisao de preco.", self.open_reports))
+            cards.append(("Margem negativa", int(counts.get("negative_profit") or 0), "warning", "cash-remove", f"{first.get('name', 'Alguns itens')} precisam de revisao de preco.", self.show_negative_profit_banner))
 
         if not cards:
             cards = [("Operacao estavel", 0, "success", "check-circle-outline", "Sem alertas criticos no momento. Monitorizacao sob controlo.", self.refresh_home)]
@@ -865,59 +991,49 @@ class AdminHomeScreen(MDScreen):
 
         insights = self._build_insight_specs(snapshot)[:2]
         theme_style = getattr(App.get_running_app(), "theme_style", "Light")
-        signature = (theme_style, tuple(insights))
+        signature = (theme_style, tuple((title, text, icon_name, tone) for title, text, icon_name, tone, _callback in insights))
         if signature == self._insights_render_signature:
             return
         self._insights_render_signature = signature
         grid.clear_widgets()
 
-        for title, text, icon_name, tone in insights:
-            grid.add_widget(self._build_insight_card(title, text, icon_name, tone))
+        for title, text, icon_name, tone, callback in insights:
+            grid.add_widget(self._build_insight_card(title, text, icon_name, tone, callback))
 
     def _build_insight_specs(self, snapshot):
         summary = snapshot.get("summary") or {}
-        alerts = snapshot.get("alerts") or {}
         comparison = snapshot.get("comparison") or {}
         context = snapshot.get("context") or {}
-        counts = alerts.get("counts") or {}
         items = []
 
         top_product = context.get("top_product_today") or {}
         if top_product:
-            items.append(("Produto em destaque", f"{top_product.get('name')} lidera hoje com {_format_mzn(top_product.get('revenue') or 0.0)}.", "star-circle-outline", "primary"))
+            items.append((
+                "Produto em destaque",
+                f"{top_product.get('name')} lidera hoje com {_format_mzn(top_product.get('revenue') or 0.0)}.",
+                "star-circle-outline",
+                "primary",
+                lambda name=top_product.get("name"): self.go_to_products(query=name),
+            ))
 
         direction = comparison.get("direction")
         delta_percent = comparison.get("delta_percent")
         if direction == "above" and delta_percent is not None:
-            items.append(("Ritmo de venda", f"A receita do dia esta {abs(delta_percent):.1f}% acima da media recente.", "trending-up", "success"))
+            items.append(("Ritmo de venda", f"A receita do dia esta {abs(delta_percent):.1f}% acima da media recente.", "trending-up", "success", self.open_reports))
         elif direction == "below" and delta_percent is not None:
-            items.append(("Ritmo de venda", f"A receita do dia esta {abs(delta_percent):.1f}% abaixo da media recente.", "trending-down", "warning"))
-
-        if int(counts.get("critical_stock") or 0) > 0:
-            first = (alerts.get("low_stock_items") or [{}])[0]
-            items.append(("Reposicao prioritaria", f"{counts.get('critical_stock')} itens criticos. Priorize {first.get('name', 'os produtos mais sensiveis')}.", "package-variant-plus", "warning"))
-
-        expiry_total = int(counts.get("expired") or 0) + int(counts.get("expiring_soon") or 0)
-        if expiry_total > 0:
-            items.append(("Validade", f"{expiry_total} produtos exigem monitorizacao de validade neste momento.", "calendar-alert-outline", "danger" if int(counts.get("expired") or 0) > 0 else "warning"))
-
-        if int(counts.get("pending_approvals") or 0) > 0:
-            items.append(("Pendencias", f"{counts.get('pending_approvals')} movimento(s) aguardam validacao administrativa.", "clipboard-text-clock-outline", "info"))
-
-        if int(counts.get("fraud_alerts") or 0) > 0:
-            items.append(("Monitorizacao", f"{counts.get('fraud_alerts')} alerta(s) operacionais merecem revisao.", "shield-search-outline", "danger"))
+            items.append(("Ritmo de venda", f"A receita do dia esta {abs(delta_percent):.1f}% abaixo da media recente.", "trending-down", "warning", self.open_reports))
 
         if not items:
-            items.append(("Leitura do sistema", f"Operacao equilibrada. Receita atual do dia: {_format_mzn(summary.get('revenue_today') or 0.0)}.", "check-decagram-outline", "success"))
-            items.append(("Painel preparado", "Clientes e expansoes comerciais podem ser integrados aqui no proximo ciclo.", "rocket-launch-outline", "info"))
+            items.append(("Leitura do sistema", f"Operacao equilibrada. Receita atual do dia: {_format_mzn(summary.get('revenue_today') or 0.0)}.", "check-decagram-outline", "success", self.refresh_home))
+            items.append(("Painel preparado", "Clientes e expansoes comerciais podem ser integrados aqui no proximo ciclo.", "rocket-launch-outline", "info", None))
 
         return items[:4]
 
-    def _build_insight_card(self, title, text, icon_name, tone):
+    def _build_insight_card(self, title, text, icon_name, tone, callback=None):
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
         accent = tokens.get(tone, tokens.get("primary", [0.10, 0.35, 0.65, 1]))
 
-        card = HoverCard(
+        card = Factory.HomeButtonCard(
             orientation="vertical",
             size_hint_y=None,
             height=dp(68),
@@ -931,6 +1047,8 @@ class AdminHomeScreen(MDScreen):
             hover_line_mix=0.24,
             hover_elevation_delta=1.5,
         )
+        if callback:
+            card.bind(on_release=lambda *_: callback())
 
         header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))
         icon_chip = MDCard(size_hint=(None, None), size=(dp(22), dp(22)), radius=[dp(8)], elevation=0, md_bg_color=[accent[0], accent[1], accent[2], 0.14])
@@ -1129,9 +1247,9 @@ class AdminHomeScreen(MDScreen):
             screen.queue_enter_filter("today")
         self.manager.current = "sales_history"
         if screen and not hasattr(screen, "queue_enter_filter") and hasattr(screen, "filter_today"):
-            Clock.schedule_once(lambda dt: screen.filter_today(), 0.06)
+            Clock.schedule_once(lambda dt: screen.filter_today(), 0)
         elif screen and hasattr(screen, "request_enter_refresh"):
-            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.04), 0.04)
+            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0), 0)
 
     def _finish_today_sales_loading(self, day_label, rows, error=None):
         self._today_sales_loading = False
@@ -1194,9 +1312,78 @@ class AdminHomeScreen(MDScreen):
             return f"{int(round(amount))} {unit_text}"
         return f"{amount:.1f} {unit_text}"
 
+    def _alert_item_name(self, item, fallback="Produto"):
+        item = item or {}
+        return str(
+            item.get("name")
+            or item.get("product_name")
+            or item.get("title")
+            or fallback
+        ).strip() or fallback
+
+    def _alert_product_id(self, item):
+        item = item or {}
+        product_id = item.get("product_id")
+        return product_id if product_id not in (None, "") else None
+
+    def _alert_query(self, item):
+        return self._alert_item_name(item, fallback="")
+
+    def _stock_unit(self, item):
+        return "kg" if bool((item or {}).get("is_weight")) else "un"
+
+    def _action_button(self, text, callback):
+        return {
+            "text": text,
+            "callback": callback,
+            "dismiss_after": True,
+        }
+
+    def _build_stock_alert_banner(self, key, title, variant, icon, empty_kind="stock"):
+        items = list(self._get_home_alerts().get(key) or [])
+        if not items:
+            from utils.ai.ai_popups import build_positive_banner
+            banner = build_positive_banner(empty_kind)
+            banner["details_sections"] = [("Estado atual", ["Nenhum produto nesta prioridade agora."])]
+            return banner
+
+        messages = []
+        detail_lines = []
+        for item in items:
+            name = self._alert_item_name(item)
+            qty = self._format_banner_quantity(item.get("stock"), self._stock_unit(item))
+            days_left = item.get("days_left")
+            if days_left is None:
+                messages.append(f"{name} precisa de reposicao. Stock atual: {qty}.")
+                detail_lines.append(f"{name}: stock atual {qty}.")
+            else:
+                messages.append(f"{name} tem stock critico: {qty}, cobertura estimada de {days_left} dia(s).")
+                detail_lines.append(f"{name}: {qty}, cobertura estimada de {days_left} dia(s).")
+
+        first = items[0] if items else {}
+        return {
+            "kind": "stock",
+            "variant": variant,
+            "icon": icon,
+            "bg_color": (0.96, 0.62, 0.22, 1) if variant == "warning" else (0.93, 0.34, 0.34, 1),
+            "title": title,
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(items),
+            "urgency": 0 if variant == "danger" else 3,
+            "details_sections": [
+                ("Produtos", detail_lines),
+                ("Proxima acao", ["Abra a reposicao e registe a nova entrada de stock."]),
+            ],
+            "action_buttons": [
+                self._action_button("Repor produto", lambda item=first: self.open_restock_modal(product_item=item)),
+            ],
+        }
+
     def _build_expired_products_banner(self):
         items = list(self._get_home_alerts().get("expired_items") or [])
         if not items:
+            from utils.ai.ai_popups import build_positive_banner
             banner = build_positive_banner("expiry")
             banner["details_sections"] = [("Estado atual", ["Nenhum produto vencido na leitura atual da HOME."])]
             return banner
@@ -1204,11 +1391,13 @@ class AdminHomeScreen(MDScreen):
         messages = []
         detail_lines = []
         for item in items:
-            name = str(item.get("name") or "Produto")
+            name = self._alert_item_name(item)
             expiry_date = str(item.get("date") or "data nao informada")
             qty = self._format_banner_quantity(item.get("stock"), item.get("unit") or "un")
             messages.append(f"{name} venceu em {expiry_date}.")
             detail_lines.append(f"{name}: {qty} ainda em stock, validade {expiry_date}.")
+
+        first = items[0] if items else {}
 
         return {
             "kind": "expiry",
@@ -1228,14 +1417,162 @@ class AdminHomeScreen(MDScreen):
                     "Registe a perda ou trate a devolucao assim que possivel.",
                 ]),
             ],
+            "action_buttons": [
+                self._action_button("Registar perda", lambda item=first: self.open_losses_module(product_item=item, loss_type_label="EXPIRADO", loss_type_code="EXPIRED")),
+            ],
+        }
+
+    def _build_expiring_products_banner(self):
+        items = list(self._get_home_alerts().get("expiring_items") or [])
+        if not items:
+            from utils.ai.ai_popups import build_positive_banner
+            banner = build_positive_banner("expiry")
+            banner["details_sections"] = [("Estado atual", ["Nenhum produto proximo do vencimento agora."])]
+            return banner
+
+        messages = []
+        detail_lines = []
+        for item in items:
+            name = self._alert_item_name(item)
+            days_left = item.get("days_left")
+            expiry_date = str(item.get("date") or "data nao informada")
+            qty = self._format_banner_quantity(item.get("stock"), item.get("unit") or "un")
+            messages.append(f"{name} vence em {days_left} dia(s), validade {expiry_date}.")
+            detail_lines.append(f"{name}: {qty} em stock, vence em {expiry_date}.")
+
+        first = items[0] if items else {}
+        return {
+            "kind": "expiry",
+            "variant": "warning",
+            "icon": "calendar-clock-outline",
+            "bg_color": (0.96, 0.62, 0.22, 1),
+            "title": "Validades proximas",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(items),
+            "urgency": 7,
+            "details_sections": [
+                ("Produtos em atencao", detail_lines),
+                ("Proxima acao", ["Abra o produto para rever preco, validade ou prioridade de venda."]),
+            ],
+            "action_buttons": [
+                self._action_button("Registar perda", lambda item=first: self.open_losses_module(product_item=item)),
+            ],
+        }
+
+    def _build_pending_approvals_home_banner(self):
+        items = list(self._get_home_alerts().get("pending_items") or [])
+        messages = []
+        detail_lines = []
+        for item in items:
+            name = self._alert_item_name(item, "Movimento")
+            qty = self._format_banner_quantity(item.get("qty"), item.get("unit") or "un")
+            messages.append(f"{name}: {qty} aguardam validacao.")
+            detail_lines.append(f"{name}: {qty}, criado por {item.get('created_by') or 'utilizador nao informado'}.")
+        if not messages:
+            messages = ["Nao existem pendencias administrativas neste momento."]
+
+        first = items[0] if items else {}
+        return {
+            "kind": "approvals",
+            "variant": "info",
+            "icon": "clipboard-alert-outline",
+            "bg_color": (0.35, 0.62, 0.93, 1),
+            "title": "Pendencias administrativas",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(items),
+            "urgency": 5,
+            "details_sections": [
+                ("Movimentos pendentes", detail_lines or messages),
+                ("Proxima acao", ["Valide ou rejeite os movimentos pendentes antes de fechar o controlo de stock."]),
+            ],
+            "action_buttons": [
+                self._action_button("Validar pendencias", self.open_pending_approvals),
+            ],
+        }
+
+    def _build_operational_alerts_banner(self):
+        items = list(self._get_home_alerts().get("fraud_items") or [])
+        first = items[0] if items else {}
+        messages = [
+            f"{self._alert_item_name(item, 'Alerta')}: {item.get('description') or 'revisao recomendada'}"
+            for item in items
+        ]
+        if not messages:
+            messages = ["Sem alertas operacionais criticos neste momento."]
+        return {
+            "kind": "operational",
+            "variant": "danger" if items else "success",
+            "icon": "shield-alert-outline",
+            "bg_color": (0.93, 0.34, 0.34, 1) if items else (0.36, 0.72, 0.45, 1),
+            "title": "Alertas operacionais",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(items),
+            "urgency": 1 if items else 999,
+            "details_sections": [
+                ("Ocorrencias", messages),
+                ("Proxima acao", ["Reveja perdas, movimentos e evidencias associadas."]),
+            ],
+            "action_buttons": [
+                self._action_button("Rever perdas", self.open_losses_module),
+            ],
+        }
+
+    def _build_negative_profit_banner(self):
+        items = list(self._get_home_alerts().get("negative_profit_items") or [])
+        messages = []
+        detail_lines = []
+        for item in items:
+            name = self._alert_item_name(item)
+            profit = _format_mzn(item.get("profit_per_unit") or 0)
+            messages.append(f"{name} esta com margem negativa: {profit} por unidade.")
+            detail_lines.append(f"{name}: margem por unidade {profit}.")
+        if not messages:
+            messages = ["Nenhum produto com margem negativa na leitura atual."]
+
+        first = items[0] if items else {}
+        return {
+            "kind": "profit",
+            "variant": "warning" if items else "success",
+            "icon": "cash-remove",
+            "bg_color": (0.96, 0.62, 0.22, 1) if items else (0.36, 0.72, 0.45, 1),
+            "title": "Margem negativa",
+            "messages": messages[:5],
+            "all_messages": messages,
+            "count": len(items),
+            "urgency": 12,
+            "details_sections": [
+                ("Produtos", detail_lines or messages),
+                ("Proxima acao", ["Revise preco de venda, custo de compra e regras de margem."]),
+            ],
+            "action_buttons": [
+                self._action_button("Abrir relatorios", self.open_reports),
+            ],
         }
 
     def _show_single_home_banner(self, banner_data):
         if not banner_data or not hasattr(self, "ids") or "ai_banner_container" not in self.ids:
             return
 
+        # Home banners keep only their contextual actions. Product-navigation
+        # shortcuts are intentionally removed from this compact presentation.
+        supplied_actions = [
+            action
+            for action in (banner_data.get("action_buttons") or [])
+            if isinstance(action, dict) and str(action.get("text") or "").strip()
+        ]
+        banner_data["action_buttons"] = [
+            action
+            for action in supplied_actions
+            if not str(action.get("text") or "").strip().casefold().startswith(
+                ("ver produto", "adicionar produto")
+            )
+        ][:2]
+
         target = self.ids.ai_banner_container
-        ensure_center = getattr(self._intelligence, "_ensure_banner_center", None)
+        ensure_center = getattr(self._get_intelligence(), "_ensure_banner_center", None)
         if callable(ensure_center):
             try:
                 target = ensure_center()
@@ -1248,6 +1585,7 @@ class AdminHomeScreen(MDScreen):
             show_history([banner_data])
             return
 
+        from utils.ai.ai_popups import render_auto_banners
         render_auto_banners(
             target,
             [banner_data],
@@ -1259,13 +1597,77 @@ class AdminHomeScreen(MDScreen):
     def show_expired_products_banner(self, *args):
         self._show_single_home_banner(self._build_expired_products_banner())
 
-    def go_to_products(self, *args, open_form=False):
+    def show_stock_critical_banner(self, *args):
+        self._show_single_home_banner(
+            self._build_stock_alert_banner(
+                "low_stock_items",
+                "Stock critico",
+                "warning",
+                "alert-decagram-outline",
+            )
+        )
+
+    def show_out_of_stock_banner(self, *args):
+        self._show_single_home_banner(
+            self._build_stock_alert_banner(
+                "out_of_stock_items",
+                "Produtos esgotados",
+                "danger",
+                "close-octagon-outline",
+            )
+        )
+
+    def show_expiring_products_banner(self, *args):
+        self._show_single_home_banner(self._build_expiring_products_banner())
+
+    def show_pending_approvals_banner(self, *args):
+        self._show_single_home_banner(self._build_pending_approvals_home_banner())
+
+    def show_operational_alerts_banner(self, *args):
+        self._show_single_home_banner(self._build_operational_alerts_banner())
+
+    def show_negative_profit_banner(self, *args):
+        self._show_single_home_banner(self._build_negative_profit_banner())
+
+    def _resolve_action_lookup(self, product_item=None, product_id=None, query=None):
+        item = product_item or {}
+        resolved_id = product_id if product_id not in (None, "") else self._alert_product_id(item)
+        resolved_query = str(query or "").strip() or self._alert_query(item)
+        return resolved_id, resolved_query
+
+    def go_to_products(self, *args, open_form=False, product_item=None, product_id=None, query=None):
         screen = self._set_back_target("admin", "admin_home")
         if not screen or not self.manager:
             return
         self.manager.current = "admin"
+
+        resolved_id, resolved_query = self._resolve_action_lookup(
+            product_item=product_item,
+            product_id=product_id,
+            query=query,
+        )
+
+        def focus_product():
+            search_text = str(resolved_id or resolved_query or "").strip()
+            if not search_text:
+                return
+            if hasattr(screen, "_pending_search"):
+                screen._pending_search = search_text
+            search_input = getattr(screen, "search_input", None)
+            if search_input is None and hasattr(screen, "ids"):
+                search_input = screen.ids.get("search_input")
+            if search_input is not None:
+                search_input.text = search_text
+            if getattr(screen, "products", None):
+                if hasattr(screen, "filter_products"):
+                    screen.filter_products(search_text, reset_page=True)
+            elif hasattr(screen, "load_products"):
+                screen.load_products()
+
+        if resolved_id or resolved_query:
+            Clock.schedule_once(lambda dt: focus_product(), 0)
         if open_form and hasattr(screen, "add_product"):
-            Clock.schedule_once(lambda dt: screen.add_product(), 0.12)
+            Clock.schedule_once(lambda dt: screen.add_product(), 0)
 
     def add_product(self, *args):
         screen = self._set_back_target("admin", "admin_home")
@@ -1281,7 +1683,7 @@ class AdminHomeScreen(MDScreen):
             return
         self.manager.current = "reports"
         if screen and hasattr(screen, "prepare_open_from_admin"):
-            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0.04)
+            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0)
 
     def show_all_pdfs(self, *args):
         screen = self._set_back_target("reports", "admin_home")
@@ -1289,7 +1691,7 @@ class AdminHomeScreen(MDScreen):
             return
         if hasattr(screen, "prepare_open_from_admin"):
             Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0)
-        Clock.schedule_once(lambda dt: screen.show_pdf_viewer(), 0.05)
+        Clock.schedule_once(lambda dt: screen.show_pdf_viewer(), 0)
 
     def open_sales_history(self, *args):
         if not self.manager:
@@ -1299,7 +1701,23 @@ class AdminHomeScreen(MDScreen):
             return
         self.manager.current = "sales_history"
         if screen and hasattr(screen, "request_enter_refresh"):
-            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0.04), 0.04)
+            Clock.schedule_once(lambda dt: screen.request_enter_refresh(force=False, delay=0), 0)
+
+    def show_today_revenue(self, *args):
+        self._dismiss_today_sales_dialog()
+        summary = (self._snapshot or {}).get("summary") or {}
+        today_label = datetime.now().strftime("%d/%m/%Y")
+        revenue = _format_mzn(summary.get("revenue_today") or 0.0)
+        dialog = MDDialog(
+            title="Faturacao de Hoje",
+            text=f"Data: {today_label}\nFaturacao: {revenue}",
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+            ],
+        )
+        self._today_sales_dialog = dialog
+        dialog.bind(on_dismiss=lambda *_: setattr(self, "_today_sales_dialog", None))
+        dialog.open()
 
     def open_today_sales(self, *args):
         if self._today_sales_loading:
@@ -1307,17 +1725,6 @@ class AdminHomeScreen(MDScreen):
         self._dismiss_today_sales_dialog()
         self._today_sales_loading = True
         today_label = datetime.now().strftime("%d/%m/%Y")
-
-        loading_dialog = MDDialog(
-            title="Vendas de Hoje",
-            text=f"A carregar resumo de {today_label}...",
-            buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda _x: loading_dialog.dismiss()),
-            ],
-        )
-        self._today_sales_dialog = loading_dialog
-        loading_dialog.bind(on_dismiss=lambda *_: setattr(self, "_today_sales_dialog", None))
-        loading_dialog.open()
 
         def worker():
             rows = []
@@ -1333,25 +1740,288 @@ class AdminHomeScreen(MDScreen):
 
         Thread(target=worker, daemon=True).start()
 
-    def open_stock_module(self, *args):
+    def open_pending_approvals(self, *args):
+        screen = self._set_back_target("admin", "admin_home")
+        if not screen or not self.manager:
+            return
+        self.manager.current = "admin"
+        if hasattr(screen, "show_pending_approvals"):
+            Clock.schedule_once(lambda dt: screen.show_pending_approvals(), 0)
+
+    def open_stock_module(self, *args, product_item=None, product_id=None, query=None):
         if not self.manager:
             return
         screen = self._set_back_target("restock", "admin_home")
         if not screen:
             return
         self.manager.current = "restock"
+        resolved_id, resolved_query = self._resolve_action_lookup(
+            product_item=product_item,
+            product_id=product_id,
+            query=query,
+        )
+        if (resolved_id or resolved_query) and hasattr(screen, "open_restock_for_product"):
+            Clock.schedule_once(
+                lambda dt: screen.open_restock_for_product(product_id=resolved_id, query=resolved_query),
+                0,
+            )
+            return
         if screen and hasattr(screen, "prepare_open_from_admin"):
-            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin("IN"), 0.04)
+            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin("IN"), 0)
 
-    def open_losses_module(self, *args):
+    def _quick_restock_payload(self, product_item=None, product_id=None, query=None):
+        item = product_item or {}
+        resolved_id, resolved_query = self._resolve_action_lookup(
+            product_item=item,
+            product_id=product_id,
+            query=query,
+        )
+        name = self._alert_item_name(item, fallback=resolved_query or "Produto")
+        stock_text = self._format_banner_quantity(item.get("stock"), self._stock_unit(item))
+        return {
+            "id": resolved_id,
+            "name": name,
+            "stock_text": stock_text,
+            "is_weight": bool(item.get("is_weight")),
+        }
+
+    def _reset_quick_restock_refs(self, *args):
+        self._quick_restock_dialog = None
+        self._quick_restock_product = None
+        self._quick_restock_fields = {}
+        self._quick_restock_submit_btn = None
+        self._quick_restock_busy = False
+
+    def _dismiss_quick_restock_dialog(self, *args):
+        dialog = self._quick_restock_dialog
+        self._reset_quick_restock_refs()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _parse_restock_expiry(value):
+        text = str(value or "").strip()
+        if not text:
+            return None
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text[:19], fmt).strftime("%Y-%m-%d")
+            except Exception:
+                continue
+        raise ValueError("Data de validade invalida. Use DD/MM/AAAA.")
+
+    def _show_quick_restock_error(self, message):
+        error = MDDialog(
+            title="Reposicao de Stock",
+            text=str(message or "Falha ao registar reposicao."),
+            buttons=[MDFlatButton(text="FECHAR", on_release=lambda _btn: error.dismiss())],
+        )
+        error.open()
+
+    def _set_quick_restock_busy(self, busy):
+        self._quick_restock_busy = bool(busy)
+        button = self._quick_restock_submit_btn
+        if button is not None:
+            button.disabled = bool(busy)
+            button.text = "A REGISTAR..." if busy else "REGISTAR ENTRADA"
+
+    def _submit_quick_restock(self, *args):
+        if self._quick_restock_busy:
+            return
+        product = self._quick_restock_product or {}
+        product_id = product.get("id")
+        if product_id in (None, ""):
+            self._show_quick_restock_error("Produto sem ID valido para reposicao.")
+            return
+
+        fields = self._quick_restock_fields or {}
+        qty_text = str(fields.get("qty").text if fields.get("qty") else "").strip()
+        cost_text = str(fields.get("cost").text if fields.get("cost") else "").strip()
+        try:
+            qty = float(qty_text)
+        except Exception:
+            self._show_quick_restock_error("Quantidade invalida.")
+            return
+        try:
+            unit_cost = float(cost_text)
+        except Exception:
+            self._show_quick_restock_error("Custo unitario invalido.")
+            return
+        if qty <= 0:
+            self._show_quick_restock_error("Quantidade deve ser maior que zero.")
+            return
+        if not product.get("is_weight") and not float(qty).is_integer():
+            self._show_quick_restock_error("Para produtos por unidade, a quantidade deve ser inteira.")
+            return
+        if unit_cost <= 0:
+            self._show_quick_restock_error("Custo unitario deve ser maior que zero.")
+            return
+        try:
+            expiry_iso = self._parse_restock_expiry(fields.get("expiry").text if fields.get("expiry") else "")
+        except ValueError as exc:
+            self._show_quick_restock_error(str(exc))
+            return
+
+        app = App.get_running_app()
+        user = getattr(app, "current_user", None) if app else None
+        role = getattr(app, "current_role", "admin") if app else "admin"
+        note = str(fields.get("note").text if fields.get("note") else "").strip()
+        supplier = str(fields.get("supplier").text if fields.get("supplier") else "").strip() or None
+        invoice = str(fields.get("invoice").text if fields.get("invoice") else "").strip() or None
+
+        self._set_quick_restock_busy(True)
+
+        def worker():
+            movement_id = None
+            error = None
+            try:
+                movement_id = self.db.restock_product(
+                    product_id,
+                    qty,
+                    unit_cost,
+                    expiry_date=expiry_iso,
+                    reason="Reposicao de stock",
+                    note=note,
+                    created_by=user,
+                    created_role=role,
+                    supplier_name=supplier,
+                    invoice_number=invoice,
+                )
+            except Exception as exc:
+                error = str(exc)
+            Clock.schedule_once(
+                lambda dt, mid=movement_id, err=error: self._finish_quick_restock(mid, err),
+                0,
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _finish_quick_restock(self, movement_id, error=None):
+        self._set_quick_restock_busy(False)
+        if error or not movement_id:
+            self._show_quick_restock_error(error or "Falha ao registar entrada de stock.")
+            return
+        self._dismiss_quick_restock_dialog()
+        self.status_text = "Reposicao registada. A atualizar indicadores..."
+        self._ensure_snapshot_loaded(force=True)
+
+    def open_restock_modal(self, *args, product_item=None, product_id=None, query=None):
+        if not self.manager:
+            return
+        product = self._quick_restock_payload(
+            product_item=product_item,
+            product_id=product_id,
+            query=query,
+        )
+        if product.get("id") in (None, ""):
+            self._show_quick_restock_error("Produto sem ID valido para reposicao.")
+            return
+
+        self._dismiss_quick_restock_dialog()
+        self._quick_restock_product = product
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(292),
+        )
+        content.add_widget(
+            MDLabel(
+                text=f"Produto: {product.get('name') or '--'}",
+                theme_text_color="Primary",
+                size_hint_y=None,
+                height=dp(24),
+                shorten=True,
+                shorten_from="right",
+            )
+        )
+        content.add_widget(
+            MDLabel(
+                text=f"Stock atual: {product.get('stock_text') or '--'}",
+                theme_text_color="Secondary",
+                size_hint_y=None,
+                height=dp(22),
+            )
+        )
+
+        qty_field = MDTextField(hint_text="Quantidade *", mode="rectangle", input_filter="float")
+        cost_field = MDTextField(hint_text="Custo unitario *", mode="rectangle", input_filter="float")
+        expiry_field = MDTextField(hint_text="Validade do lote DD/MM/AAAA", mode="rectangle")
+        note_field = MDTextField(hint_text="Observacao", mode="rectangle")
+        supplier_field = MDTextField(hint_text="Fornecedor (opcional)", mode="rectangle")
+        invoice_field = MDTextField(hint_text="N. Fatura (opcional)", mode="rectangle")
+
+        first_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(8))
+        first_row.add_widget(qty_field)
+        first_row.add_widget(cost_field)
+        content.add_widget(first_row)
+
+        content.add_widget(expiry_field)
+
+        supplier_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(8))
+        supplier_row.add_widget(supplier_field)
+        supplier_row.add_widget(invoice_field)
+        content.add_widget(supplier_row)
+        content.add_widget(note_field)
+
+        self._quick_restock_fields = {
+            "qty": qty_field,
+            "cost": cost_field,
+            "expiry": expiry_field,
+            "note": note_field,
+            "supplier": supplier_field,
+            "invoice": invoice_field,
+        }
+        submit_btn = MDRaisedButton(text="REGISTAR ENTRADA", on_release=self._submit_quick_restock)
+        self._quick_restock_submit_btn = submit_btn
+        dialog = MDDialog(
+            title="Reposicao de Stock",
+            type="custom",
+            content_cls=content,
+            size_hint=(0.72, None),
+            height=dp(430),
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda _btn: self._dismiss_quick_restock_dialog()),
+                submit_btn,
+            ],
+        )
+        self._quick_restock_dialog = dialog
+        dialog.bind(on_dismiss=self._reset_quick_restock_refs)
+        dialog.open()
+        Clock.schedule_once(
+            lambda dt: setattr(qty_field, "focus", True),
+            0,
+        )
+
+    def open_losses_module(self, *args, product_item=None, product_id=None, query=None, loss_type_label=None, loss_type_code=None):
         if not self.manager:
             return
         screen = self._set_back_target("losses", "admin_home")
         if not screen:
             return
         self.manager.current = "losses"
+        resolved_id, resolved_query = self._resolve_action_lookup(
+            product_item=product_item,
+            product_id=product_id,
+            query=query,
+        )
+        if (resolved_id or resolved_query) and hasattr(screen, "open_loss_for_product"):
+            Clock.schedule_once(
+                lambda dt: screen.open_loss_for_product(
+                    product_id=resolved_id,
+                    query=resolved_query,
+                    loss_type_label=loss_type_label,
+                    loss_type_code=loss_type_code,
+                ),
+                0,
+            )
+            return
         if screen and hasattr(screen, "prepare_open_from_admin"):
-            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0.04)
+            Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0)
 
     def open_users_module(self, *args):
         if not self.manager:
@@ -1361,12 +2031,12 @@ class AdminHomeScreen(MDScreen):
             return
         self.manager.current = "settings"
         if screen and hasattr(screen, "add_user"):
-            Clock.schedule_once(lambda dt: screen.add_user(), 0.08)
+            Clock.schedule_once(lambda dt: screen.add_user(), 0)
 
     def open_ai_menu(self, caller=None):
         if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
             caller = self.ids.ai_button
-        self._intelligence.open_history(caller=caller)
+        self._get_intelligence().open_history(caller=caller)
 
     def go_to_settings(self, *args):
         if not self.manager:

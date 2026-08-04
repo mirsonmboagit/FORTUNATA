@@ -1,4 +1,4 @@
-﻿"""Adaptador dos alertas proativos para o renderer original de banners."""
+"""Adaptador dos alertas proativos para o renderer original de banners."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from kivymd.uix.dropdownitem import MDDropDownItem
 from kivymd.uix.label import MDLabel
 from kivymd.uix.menu import MDDropdownMenu
 
-from utils.ai_popups import build_auto_banner_data, clear_banner_container, render_auto_banners
+from utils.ai.ai_popups import build_auto_banner_data, clear_banner_container, render_auto_banners
 
 
 _PRIORITY = {"critico": 0, "atencao": 1, "info": 2}
@@ -209,8 +209,15 @@ def _banner_signature(items: list[dict[str, Any]]) -> tuple[Any, ...]:
     return tuple(
         (
             str(item.get("kind") or ""),
-            str(item.get("title") or ""),
-            tuple(str(message or "") for message in item.get("messages", [])[:5]),
+            str(item.get("notification_key") or ""),
+            (
+                ()
+                if item.get("notification_key")
+                else (
+                    str(item.get("title") or ""),
+                    tuple(str(message or "") for message in item.get("messages", [])[:5]),
+                )
+            ),
             int(item.get("count") or 0),
         )
         for item in items

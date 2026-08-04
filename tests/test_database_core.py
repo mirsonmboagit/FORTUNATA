@@ -62,6 +62,116 @@ class DatabaseSetupAndUserTests(TemporaryDatabaseTestCase):
 
 
 class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
+    def test_physical_inventory_counts_and_applies_audited_adjustments(self):
+        first = self.add_sample_product(description="Arroz", barcode="inv-a", stock=10)
+        second = self.add_sample_product(description="Acucar", barcode="inv-b", stock=5)
+        started = self.db.start_physical_inventory("Contagem mensal", "admin", "PC-1")
+        self.assertTrue(started["ok"])
+        inventory_id = started["inventory"]["id"]
+        self.assertEqual(started["item_count"], 2)
+
+        self.assertTrue(self.db.record_physical_inventory_count(inventory_id, first, 8, "admin")["ok"])
+        self.assertTrue(self.db.record_physical_inventory_count(inventory_id, second, 7, "admin")["ok"])
+        summary = self.db.get_physical_inventory_summary(inventory_id)
+        self.assertEqual(summary["counted_items"], 2)
+        self.assertEqual(summary["divergent_items"], 2)
+
+        completed = self.db.complete_physical_inventory(inventory_id, "admin")
+        self.assertTrue(completed["ok"])
+        self.assertEqual(completed["adjustment_count"], 2)
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (first,)), 8.0)
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (second,)), 7.0)
+        movements = self.db.cursor.execute(
+            "SELECT direction, qty, reference_table, reference_id FROM stock_movements WHERE reference_table='physical_inventories' ORDER BY product_id",
+        ).fetchall()
+        self.assertEqual(len(movements), 2)
+        self.assertTrue(all(row[2] == "physical_inventories" and row[3] == inventory_id for row in movements))
+        history = self.db.list_physical_inventories()
+        self.assertEqual(history[0]["id"], inventory_id)
+        self.assertEqual(history[0]["status"], "COMPLETED")
+        self.assertEqual(history[0]["divergent_items"], 2)
+
+    def test_physical_inventory_requires_complete_count_unless_partial_is_confirmed(self):
+        first = self.add_sample_product(description="Oleo", barcode="inv-c", stock=4)
+        self.add_sample_product(description="Sal", barcode="inv-d", stock=6)
+        inventory_id = self.db.start_physical_inventory("Parcial", "admin")["inventory"]["id"]
+        self.db.record_physical_inventory_count(inventory_id, first, 3, "admin")
+        blocked = self.db.complete_physical_inventory(inventory_id, "admin")
+        self.assertFalse(blocked["ok"])
+        self.assertIn("faltam", blocked["message"])
+        completed = self.db.complete_physical_inventory(inventory_id, "admin", allow_partial=True)
+        self.assertTrue(completed["ok"])
+
+    def test_cancelled_physical_inventory_does_not_change_stock(self):
+        product_id = self.add_sample_product(description="Leite", barcode="inv-e", stock=9)
+        inventory_id = self.db.start_physical_inventory("Cancelado", "admin")["inventory"]["id"]
+        self.db.record_physical_inventory_count(inventory_id, product_id, 1, "admin")
+        cancelled = self.db.cancel_physical_inventory(inventory_id, "admin", "Contagem incorreta")
+        self.assertTrue(cancelled["ok"])
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (product_id,)), 9.0)
+        self.assertIsNone(self.db.get_active_physical_inventory())
+
+    def test_cash_session_tracks_payment_discount_and_closing_difference(self):
+        product_id = self.add_sample_product(stock=10, sale_price=100)
+        opened = self.db.open_cash_session("maria", "POS-1", 500, "Inicio", "manager")
+        self.assertTrue(opened["ok"])
+        session_id = opened["session"]["id"]
+
+        sale_id = self.quiet(
+            self.db.add_sale,
+            product_id,
+            2,
+            90,
+            username="maria",
+            role="manager",
+            terminal_id="POS-1",
+            transaction_code="TX-1",
+            payment_method="cash",
+            discount_amount=20,
+            cash_session_id=session_id,
+        )
+        self.assertIsNotNone(sale_id)
+        summary = self.db.get_cash_session_summary(session_id)
+        self.assertEqual(summary["transaction_count"], 1)
+        self.assertEqual(summary["sales_total"], 180.0)
+        self.assertEqual(summary["discount_total"], 20.0)
+        self.assertEqual(summary["expected_cash"], 680.0)
+        sale_finance = self.fetch_one(
+            "SELECT transaction_code, payment_method, discount_amount, cash_session_id "
+            "FROM sales WHERE id = ?",
+            (sale_id,),
+        )
+        self.assertEqual(sale_finance, ("TX-1", "cash", 20.0, session_id))
+
+        closed = self.db.close_cash_session(session_id, 675, "Faltam 5 MT", "maria", "manager")
+        self.assertTrue(closed["ok"])
+        self.assertEqual(closed["summary"]["difference_amount"], -5.0)
+        self.assertIsNone(self.db.get_open_cash_session("maria", "POS-1"))
+
+    def test_cash_summary_separates_payment_methods_and_subtracts_cash_refunds(self):
+        first = self.add_sample_product(description="A", barcode="cash-a", stock=5, sale_price=100)
+        second = self.add_sample_product(description="B", barcode="card-b", stock=5, sale_price=200)
+        session = self.db.open_cash_session("maria", "POS-2", 100, role="manager")["session"]
+        cash_sale = self.quiet(
+            self.db.add_sale, first, 1, 100,
+            username="maria", terminal_id="POS-2", transaction_code="CASH-1",
+            payment_method="cash", cash_session_id=session["id"],
+        )
+        self.quiet(
+            self.db.add_sale, second, 1, 200,
+            username="maria", terminal_id="POS-2", transaction_code="CARD-1",
+            payment_method="card", cash_session_id=session["id"],
+        )
+        refunded = self.db.refund_sale_item(cash_sale, 0.5, "Cliente devolveu", "maria", "manager", "POS-2")
+        self.assertTrue(refunded["ok"])
+
+        summary = self.db.get_cash_session_summary(session["id"])
+        self.assertEqual(summary["payment_methods"]["cash"]["total"], 100.0)
+        self.assertEqual(summary["payment_methods"]["card"]["total"], 200.0)
+        self.assertEqual(summary["cash_refunds"], 50.0)
+        self.assertEqual(summary["expected_cash"], 150.0)
+
+
     def test_add_product_persists_sku_vat_and_pack_fields(self):
         product_id = self.add_sample_product(
             description="Coca Cola",

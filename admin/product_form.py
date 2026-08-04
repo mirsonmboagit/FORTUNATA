@@ -2,12 +2,14 @@
 import re
 import unicodedata
 from datetime import datetime
+from threading import Lock, Thread
 
 from kivy.uix.popup import Popup
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.image import Image
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.scrollview import ScrollView
 from kivy.graphics.texture import Texture
 from kivy.graphics import Color, RoundedRectangle
 from kivy.core.window import Window
@@ -30,15 +32,16 @@ from ui.components.tooltip_widgets import (
     TooltipRaisedButton,
     TooltipTextField,
 )
-from utils.focus_navigation import FormKeyboardController
+from utils.core.focus_navigation import FormKeyboardController
+from utils.core.i18n import correct_portuguese_text
 
-from utils.vat import (
+from utils.business.vat import (
     DEFAULT_VAT_RULE_CODE,
     VAT_RULE_CHOICES,
     describe_vat_choice,
     get_vat_choice_label,
 )
-from utils.vision import get_vision_dependencies
+from utils.hardware.vision import get_vision_dependencies
 
 
 def _row(*widgets, spacing=dp(10), height=dp(44)):
@@ -114,6 +117,8 @@ def _build_category_sources():
     source_defs = (
         ("Open Food Facts", "api.api_openfoodfacts", "OpenFoodFactsAPI"),
         ("Bazara", "api.api_bazara", "BazaraAPI"),
+        ("Ranxo", "api.api_ranxo", "RanxoAPI"),
+        ("UPCitemdb", "api.api_upcitemdb", "UPCitemdbAPI"),
     )
     sources = []
     for label, module_name, class_name in source_defs:
@@ -152,19 +157,18 @@ class ProductForm(Popup):
         self.current_camera    = 0
         self.last_barcode      = None
         self.last_barcode_time = 0
-        # ── ALTERAÇÃO 1: removido _scanner_auto_start_ev (auto-start eliminado) ──
-        self.beep_sound        = self._load_beep_sound()
+        # -- ALTERAÇÃO 1: removido _scanner_auto_start_ev (auto-start eliminado) --
+        self.beep_sound        = None
+        self._beep_sound_loaded = False
         self._vision_modules   = None
 
-        self.api_manager = _build_api_manager(
-            database=admin_screen.db,
-            on_success=self._on_api_success,
-            on_failure=self._on_api_failure,
-            on_status=self._on_api_status,
-        )
+        self.api_manager = None
+        self._api_manager_lock = Lock()
+        self._lazy_dependencies_started = False
         self._apply_theme_tokens()
 
-        self._category_sources = _build_category_sources()
+        self._category_sources = None
+        self._category_sources_lock = Lock()
         self._category_lookup_inflight = False
         self._category_lookup_barcode  = None
         self._category_lookup_token    = 0
@@ -187,8 +191,10 @@ class ProductForm(Popup):
         self._cancel_btn             = None
         self._save_btn               = None
         self._content_layout         = None
+        self._content_scroll         = None
         self._camera_section         = None
         self._form_section           = None
+        self._form_rows              = []
         self._camera_card            = None
         self._compact_layout         = None
         self._shortcut_help_dialog   = None
@@ -203,7 +209,7 @@ class ProductForm(Popup):
 
         Window.bind(on_resize=self._on_window_resize)
 
-    # ── Popup ──────────────────────────────────────────────────────────────
+    # -- Popup --------------------------------------------------------------
     def _setup_popup(self):
         self.title            = ""
         self.size_hint        = (None, None)
@@ -222,7 +228,7 @@ class ProductForm(Popup):
             self.size = (min(dp(1060), w * 0.9), min(dp(780), h * 0.94))
         self._update_responsive_layout()
 
-    # ── Theme ──────────────────────────────────────────────────────────────
+    # -- Theme --------------------------------------------------------------
     def _apply_theme_tokens(self):
         app    = App.get_running_app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
@@ -261,7 +267,7 @@ class ProductForm(Popup):
         field.text_color_normal = field.text_color
         field.text_color_focus  = self.COLOR_TEXT if filled else color
 
-    # ── Build UI ───────────────────────────────────────────────────────────
+    # -- Build UI -----------------------------------------------------------
     def _build_ui(self):
         main_card = MDCard(
             orientation = "vertical",
@@ -273,8 +279,15 @@ class ProductForm(Popup):
         )
         main_card.add_widget(self._build_header())
 
+        self._content_scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width=dp(8),
+            scroll_type=["bars", "content"],
+        )
         self._content_layout = BoxLayout(
             orientation = "horizontal",
+            size_hint_y = None,
             spacing     = dp(14),
             padding     = [dp(16), dp(16), dp(16), dp(16)],
         )
@@ -282,20 +295,22 @@ class ProductForm(Popup):
         self._form_section = self._build_form_section()
         self._content_layout.add_widget(self._camera_section)
         self._content_layout.add_widget(self._form_section)
-        main_card.add_widget(self._content_layout)
+        self._content_scroll.add_widget(self._content_layout)
+        self._content_scroll.bind(size=lambda *_: self._update_responsive_layout())
+        main_card.add_widget(self._content_scroll)
         self.content = main_card
         self._update_responsive_layout()
 
-    # ── Header ─────────────────────────────────────────────────────────────
+    # -- Header -------------------------------------------------------------
     def _build_header(self):
         header = MDCard(
             orientation = "horizontal",
             size_hint_y = None,
-            height      = dp(50),
-            padding     = [dp(18), dp(6)],
+            height      = dp(56),
+            padding     = [dp(18), dp(8), dp(10), dp(8)],
             radius      = [dp(16), dp(16), 0, 0],
             md_bg_color = self.COLOR_CARD,
-            elevation   = 2,
+            elevation   = 0,
         )
         title_label = Label(
             text        = "Adicionar Produto" if not self.product else "Editar Produto",
@@ -319,26 +334,36 @@ class ProductForm(Popup):
         header.add_widget(close_btn)
         return header
 
-    # ── Camera ─────────────────────────────────────────────────────────────
+    # -- Camera -------------------------------------------------------------
+    def _build_section_title(self, text):
+        """Cabecalho reutilizavel para manter as secoes do formulario alinhadas."""
+        label = Label(
+            text=text,
+            size_hint_y=None,
+            height=dp(36),
+            color=self.COLOR_TEXT,
+            font_size=sp(16),
+            bold=True,
+            halign="left",
+            valign="middle",
+            padding=[dp(2), 0],
+        )
+        label.bind(size=label.setter("text_size"))
+        return label
+
     def _build_camera_section(self):
         outer = MDCard(
             orientation = "vertical",
             size_hint   = (None, 1),
             width       = dp(332),
-            padding     = dp(12),
-            spacing     = dp(8),
+            padding     = dp(14),
+            spacing     = dp(10),
             radius      = [dp(12)],
             md_bg_color = self.COLOR_CARD_ALT,
-            elevation   = 1,
+            elevation   = 0,
         )
 
-        title = Label(
-            text="Scanner de Codigo", size_hint_y=None, height=dp(22),
-            color=self.COLOR_TEXT, font_size=sp(15), bold=True,
-            halign="left", valign="middle",
-        )
-        title.bind(size=title.setter("text_size"))
-        outer.add_widget(title)
+        outer.add_widget(self._build_section_title("Scanner de código"))
 
         camera_card = MDCard(
             size_hint=(1, None),
@@ -385,37 +410,45 @@ class ProductForm(Popup):
             color=self.COLOR_GRAY, font_size=sp(12), halign="center", valign="middle",
         )
         outer.add_widget(hint)
+        # Absorve a altura livre no fundo e mantem o cabecalho no topo,
+        # alinhado com a secao de informacoes.
+        outer.add_widget(BoxLayout(size_hint_y=1))
         return outer
 
-    # ── Form ───────────────────────────────────────────────────────────────
+    # -- Form ---------------------------------------------------------------
     def _build_form_section(self):
         self._create_form_fields()
 
-        sec = BoxLayout(orientation="vertical", size_hint_x=1, spacing=dp(14))
-
-        title = Label(
-            text="Informacoes do Produto", size_hint_y=None, height=dp(22),
-            color=self.COLOR_TEXT, font_size=sp(15), bold=True,
-            halign="left", valign="middle",
+        sec = MDCard(
+            orientation="vertical",
+            size_hint_x=1,
+            padding=dp(14),
+            spacing=dp(10),
+            radius=[dp(12)],
+            md_bg_color=self.COLOR_CARD_ALT,
+            elevation=0,
         )
-        title.bind(size=title.setter("text_size"))
-        sec.add_widget(title)
+        sec.add_widget(self._build_section_title("Informações do produto"))
 
-        sec.add_widget(_row(self.barcode_input, self.sku_input))
-        sec.add_widget(_row(self.description, self.category_layout))
-        sec.add_widget(_row(self.vat_rule_layout, self.vat_mode_layout))
-        sec.add_widget(_row(self.package_quantity, self.expiry_date_layout))
-        sec.add_widget(_row(self.units_per_package_input, self.pack_sale_layout))
-        sec.add_widget(_row(self.existing_stock, self.sold_stock))
-        sec.add_widget(_row(self.unit_purchase_price, self.total_purchase_price))
-        sec.add_widget(_row(self.sale_price, self.weight_switch_layout))
+        self._form_rows = [
+            _row(self.barcode_input, self.sku_input),
+            _row(self.description, self.category_layout),
+            _row(self.vat_rule_layout, self.vat_mode_layout),
+            _row(self.package_quantity, self.expiry_date_layout),
+            _row(self.units_per_package_input, self.pack_sale_layout),
+            _row(self.existing_stock, self.sold_stock),
+            _row(self.unit_purchase_price, self.total_purchase_price),
+            _row(self.sale_price, self.weight_switch_layout),
+        ]
+        for form_row in self._form_rows:
+            sec.add_widget(form_row)
         sec.add_widget(self._price_actions_layout)
         sec.add_widget(BoxLayout(size_hint_y=1))
         sec.add_widget(self._build_action_buttons())
 
         return sec
 
-    # ── Campos ─────────────────────────────────────────────────────────────
+    # -- Campos -------------------------------------------------------------
     def _create_form_fields(self):
         h  = self.FIELD_H
         fs = self.FONT_SIZE
@@ -618,7 +651,7 @@ class ProductForm(Popup):
 
         self._price_actions_layout = self._build_price_actions()
 
-    # ── Price actions ──────────────────────────────────────────────────────
+    # -- Price actions ------------------------------------------------------
     def _build_price_actions(self):
         layout = BoxLayout(
             orientation="horizontal", size_hint=(1, None), height=dp(36), spacing=dp(8),
@@ -652,7 +685,7 @@ class ProductForm(Popup):
         self._update_price_actions_state()
         return layout
 
-    # ── Action buttons ─────────────────────────────────────────────────────
+    # -- Action buttons -----------------------------------------------------
     def _build_action_buttons(self):
         layout = BoxLayout(
             orientation="horizontal", size_hint=(1, None), height=self.BUTTON_H, spacing=dp(10),
@@ -756,13 +789,23 @@ class ProductForm(Popup):
             self._shortcut_help_dialog = dialog
         dialog.open()
 
-    # ── Window resize ──────────────────────────────────────────────────────
+    # -- Window resize ------------------------------------------------------
     def _update_responsive_layout(self):
-        if not self._content_layout:
+        if not self._content_layout or not self._content_scroll:
             return
 
         compact = self.size[0] < dp(980) or Window.width < dp(1120)
+        narrow = self.size[0] < dp(760) or Window.width < dp(800)
         self._compact_layout = compact
+
+        # Em janelas estreitas cada par vira uma pilha. Em larguras normais,
+        # os campos regressam automaticamente a duas colunas.
+        for form_row in self._form_rows:
+            form_row.orientation = "vertical" if narrow else "horizontal"
+            form_row.height = dp(98) if narrow else self.FIELD_H
+            form_row.spacing = dp(6) if narrow else dp(10)
+
+        form_height = dp(1050) if narrow else dp(620)
 
         if compact:
             self._content_layout.orientation = "vertical"
@@ -775,7 +818,10 @@ class ProductForm(Popup):
                 self._camera_section.height = cam_w + dp(165)
                 self._camera_section.pos_hint = {"center_x": 0.5}
             if self._form_section:
-                self._form_section.size_hint = (1, 1)
+                self._form_section.size_hint = (1, None)
+                self._form_section.height = form_height
+            camera_height = self._camera_section.height if self._camera_section else 0
+            self._content_layout.height = camera_height + form_height + dp(34)
         else:
             self._content_layout.orientation = "horizontal"
             self._content_layout.spacing = dp(14)
@@ -788,6 +834,11 @@ class ProductForm(Popup):
                 self._camera_section.pos_hint = {}
             if self._form_section:
                 self._form_section.size_hint = (1, 1)
+                self._form_section.height = 0
+            self._content_layout.height = max(
+                dp(560),
+                self._content_scroll.height,
+            )
 
         if self._camera_card and self._camera_section:
             preview_size = self._camera_section.width - dp(24)
@@ -796,7 +847,48 @@ class ProductForm(Popup):
     def _on_window_resize(self, instance, width, height):
         self._apply_popup_size()
 
-    # ── API callbacks ──────────────────────────────────────────────────────
+    def _warm_lazy_dependencies(self, *_args):
+        if self._lazy_dependencies_started:
+            return
+        self._lazy_dependencies_started = True
+        Thread(target=self._warm_lazy_dependencies_worker, daemon=True).start()
+
+    def _warm_lazy_dependencies_worker(self):
+        self._get_api_manager()
+        self._get_category_sources()
+
+    def _get_api_manager(self):
+        if self.api_manager is not None:
+            return self.api_manager
+        with self._api_manager_lock:
+            if self.api_manager is None:
+                self.api_manager = _build_api_manager(
+                    database=self.admin_screen.db,
+                    on_success=self._on_api_success,
+                    on_failure=self._on_api_failure,
+                    on_status=self._on_api_status,
+                )
+        return self.api_manager
+
+    def _get_category_sources(self):
+        if self._category_sources is not None:
+            return self._category_sources
+        with self._category_sources_lock:
+            if self._category_sources is None:
+                self._category_sources = _build_category_sources()
+        return self._category_sources
+
+    def _api_manager_is_loading(self):
+        manager = self.api_manager
+        return bool(manager is not None and getattr(manager, "is_loading", False))
+
+    def _get_beep_sound(self):
+        if not self._beep_sound_loaded:
+            self._beep_sound_loaded = True
+            self.beep_sound = self._load_beep_sound()
+        return self.beep_sound
+
+    # -- API callbacks ------------------------------------------------------
     @staticmethod
     def _sanitize_barcode(value):
         if value is None:
@@ -818,7 +910,7 @@ class ProductForm(Popup):
     def _run_barcode_search(self, barcode, request_id):
         self._queued_barcode_request = None
         self._set_status("Buscando...", self.COLOR_PRIMARY)
-        self.api_manager.search_enriched(
+        self._get_api_manager().search_enriched(
             barcode,
             required_fields=["name", "brand", "category", "quantity", "price"],
             on_partial=lambda source, data, rid=request_id, code=barcode: self._on_api_partial(source, data, rid, code),
@@ -832,7 +924,8 @@ class ProductForm(Popup):
         self._barcode_request_id += 1
         request_id = self._barcode_request_id
         self._prepare_form_for_barcode(barcode)
-        if self.api_manager.is_loading:
+        api_manager = self._get_api_manager()
+        if api_manager.is_loading:
             self._queued_barcode_request = (request_id, barcode)
             self._set_status("A trocar de codigo...", self.COLOR_WARNING)
             return
@@ -841,7 +934,8 @@ class ProductForm(Popup):
     def _start_pending_barcode_search(self, *_args):
         if not self._queued_barcode_request:
             return
-        if self.api_manager.is_loading:
+        api_manager = self._get_api_manager()
+        if api_manager.is_loading:
             Clock.schedule_once(self._start_pending_barcode_search, 0.05)
             return
         request_id, barcode = self._queued_barcode_request
@@ -891,25 +985,36 @@ class ProductForm(Popup):
             return
         self._set_status(message, self.COLOR_PRIMARY)
 
-    # ── Fill fields ────────────────────────────────────────────────────────
+    # -- Fill fields --------------------------------------------------------
     def _fill_fields(self, data):
-        name  = data.get("name",  "")
-        brand = data.get("brand", "")
+        if not isinstance(data, dict):
+            return
+
+        name = str(data.get("name") or "").strip()
+        brand = str(data.get("brand") or "").strip()
+        if name.lower() in {"novo produto", "new product", "produto"}:
+            name = ""
         if name and not self.description.text.strip():
-            self.description.text = f"{brand} - {name}" if brand and brand.lower() not in name.lower() else name
+            full_name = name
+            if brand and self._normalize_text(brand) not in self._normalize_text(name):
+                full_name = f"{brand} - {name}"
+            self.description.text = full_name
 
         category = data.get("category")
         if category and not self.category_field.text.strip():
             self._set_category(category)
         elif not self.category_field.text.strip():
-            inferred = self._infer_category_from_name(self.description.text or name)
+            inferred = self._infer_category_from_name(self.description.text or name or brand)
             if inferred:
                 self._set_category(inferred)
                 self._register_generated_category(inferred)
 
-        quantity = (data.get("quantity") or
-                    self._extract_quantity_from_text(data.get("name", "")) or
-                    (self._extract_quantity_from_text(self.description.text) if self.description.text.strip() else None))
+        quantity = (
+            data.get("quantity") or
+            data.get("size") or
+            self._extract_quantity_from_text(name) or
+            (self._extract_quantity_from_text(self.description.text) if self.description.text.strip() else None)
+        )
         if quantity and not self.package_quantity.text.strip():
             self.package_quantity.text = str(quantity)
 
@@ -920,7 +1025,7 @@ class ProductForm(Popup):
         if data.get("sold_by_weight"):
             self._set_weight_state(True)
 
-    # ── Category helpers ───────────────────────────────────────────────────
+    # -- Category helpers ---------------------------------------------------
     def _get_admin_categories(self):
         if hasattr(self.admin_screen, "get_categories"):
             return self.admin_screen.get_categories()
@@ -1008,7 +1113,7 @@ class ProductForm(Popup):
         )
         return " ".join(m.group(0).split()) if m else None
 
-    # ── Category form popup ────────────────────────────────────────────────
+    # -- Category form popup ------------------------------------------------
     def _show_category_form(self, instance):
         content = MDCard(
             orientation="vertical", padding=[dp(24), dp(20)], spacing=dp(14),
@@ -1056,7 +1161,7 @@ class ProductForm(Popup):
         content.add_widget(btn_row)
         popup.open()
 
-    # ── Auto price calc ────────────────────────────────────────────────────
+    # -- Auto price calc ----------------------------------------------------
     @staticmethod
     def _parse_numeric_input(raw):
         text = (raw or "").strip().replace(",", ".")
@@ -1144,7 +1249,7 @@ class ProductForm(Popup):
         except Exception:
             pass
 
-    # ── Price actions ──────────────────────────────────────────────────────
+    # -- Price actions ------------------------------------------------------
     @staticmethod
     def _parse_price_value(raw):
         text = (raw or "").strip().replace(",", ".")
@@ -1177,7 +1282,7 @@ class ProductForm(Popup):
         discounted = self._discount_base_price * (1 - pct / 100)
         self._set_sale_price_value(discounted)
         self._update_price_actions_state()
-        self._show_snackbar(f"-{pct}%: {self._discount_base_price:.2f} → {discounted:.2f}", self.COLOR_PRIMARY)
+        self._show_snackbar(f"-{pct}%: {self._discount_base_price:.2f} ? {discounted:.2f}", self.COLOR_PRIMARY)
 
     def _restore_sale_price(self, instance):
         if self._discount_base_price is None:
@@ -1194,7 +1299,7 @@ class ProductForm(Popup):
         for btn in self._price_discount_buttons: btn.disabled = not can
         if self._price_revert_btn: self._price_revert_btn.disabled = self._discount_base_price is None
 
-    # ── Date picker ────────────────────────────────────────────────────────
+    # -- Date picker --------------------------------------------------------
     def _show_date_picker(self, instance):
         d = datetime.now()
         if self.expiry_date.text.strip():
@@ -1204,7 +1309,7 @@ class ProductForm(Popup):
         dp_.bind(on_save=lambda inst, v, r: setattr(self.expiry_date, "text", v.strftime("%d/%m/%Y")))
         dp_.open()
 
-    # ── Misc callbacks ─────────────────────────────────────────────────────
+    # -- Misc callbacks -----------------------------------------------------
     def _on_description_text(self, instance, value):
         if value != value.upper():
             cur = instance.cursor
@@ -1267,16 +1372,16 @@ class ProductForm(Popup):
                 if active else self.COLOR_CARD_ALT
             )
 
-    # ── Scanner ────────────────────────────────────────────────────────────
+    # -- Scanner ------------------------------------------------------------
 
     def _preload_vision_modules(self, _dt):
-        """Carrega cv2/pyzbar em background logo após o popup abrir.
-        Quando o utilizador clicar no botão de scan os módulos já estão
-        em cache e o arranque é imediato."""
+        """Carrega cv2/pyzbar em background logo apos o popup abrir.
+        Quando o utilizador clicar no botao de scan os modulos ja estao
+        em cache e o arranque e imediato."""
         try:
             self._load_vision_modules()
         except Exception:
-            pass  # o erro será reportado quando o utilizador clicar em scan
+            pass  # o erro sera reportado quando o utilizador clicar em scan
 
     def _start_scanner(self):
         if self.scanning:
@@ -1368,7 +1473,7 @@ class ProductForm(Popup):
                 cv2.putText(frame, val, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
             except Exception as e:
                 print(f"[Scanner] {e}")
-        if not codes and (now - self.last_barcode_time) > 2.5 and not self.api_manager.is_loading:
+        if not codes and (now - self.last_barcode_time) > 2.5 and not self._api_manager_is_loading():
             self._set_status("Scanner Ativo", self.COLOR_PRIMARY)
         return frame
 
@@ -1392,7 +1497,7 @@ class ProductForm(Popup):
     def _on_barcode_manual_entry(self, instance):
         self._queue_or_start_barcode_search(instance.text)
 
-    # ── Category lookup thread ─────────────────────────────────────────────
+    # -- Category lookup thread ---------------------------------------------
     def _search_category_if_missing(self, barcode):
         from threading import Thread
         if not barcode or len(barcode) < 8: return
@@ -1407,7 +1512,7 @@ class ProductForm(Popup):
 
     def _category_lookup_worker(self, barcode, token, needs_cat, needs_qty):
         found_cat = False; found_qty = False
-        for _, api in self._category_sources:
+        for _, api in self._get_category_sources():
             try: result = api.fetch(barcode)
             except Exception: result = None
             if not result: continue
@@ -1432,7 +1537,7 @@ class ProductForm(Popup):
         if token == self._category_lookup_token and barcode == self._category_lookup_barcode:
             self._category_lookup_inflight = False
 
-    # ── Save ───────────────────────────────────────────────────────────────
+    # -- Save ---------------------------------------------------------------
     def _save_product(self, instance):
         if not self._validate_fields(): return
         expiry = self._process_expiry_date()
@@ -1559,7 +1664,7 @@ class ProductForm(Popup):
                     raise RuntimeError(err or "Falha ao cadastrar produto.")
                 self._show_snackbar("Produto cadastrado!", self.COLOR_SUCCESS)
                 Clock.schedule_once(lambda dt: self._clear_fields(), 1.5)
-            self.admin_screen.load_products()
+            self.admin_screen.load_products(force=True)
         except Exception as e:
             self._show_snackbar(f"Erro ao salvar produto: {e}", self.COLOR_ERROR)
         finally: db.close()
@@ -1598,7 +1703,6 @@ class ProductForm(Popup):
         self._cost_source_field        = None
         self._update_price_actions_state()
         self._set_vat_rule(DEFAULT_VAT_RULE_CODE)
-        self.barcode_input.focus = True
 
     def _populate_fields(self):
         p = self.product
@@ -1638,7 +1742,7 @@ class ProductForm(Popup):
         self._set_vat_rule(str(p[25]) if len(p) > 25 and p[25] else DEFAULT_VAT_RULE_CODE)
         self._update_price_actions_state()
 
-    # ── Beep ───────────────────────────────────────────────────────────────
+    # -- Beep ---------------------------------------------------------------
     @staticmethod
     def _load_beep_sound():
         try:
@@ -1648,14 +1752,16 @@ class ProductForm(Popup):
         except Exception: return None
 
     def _play_beep(self):
-        if not self.beep_sound: return
+        beep_sound = self._get_beep_sound()
+        if not beep_sound: return
         try:
-            if self.beep_sound.state == "play": self.beep_sound.stop()
-            self.beep_sound.play()
+            if beep_sound.state == "play": beep_sound.stop()
+            beep_sound.play()
         except Exception: pass
 
-    # ── Snackbar / status ──────────────────────────────────────────────────
+    # -- Snackbar / status --------------------------------------------------
     def _show_snackbar(self, message, color):
+        message = correct_portuguese_text(message)
         toast = BoxLayout(size_hint=(None, None), size=(dp(320), dp(52)), padding=dp(14), opacity=0)
         with toast.canvas.before:
             Color(*color)
@@ -1675,15 +1781,17 @@ class ProductForm(Popup):
             Clock.schedule_once(_rm, 2.2)
 
     def _set_status(self, text, color):
+        text = correct_portuguese_text(text)
         self.scanner_status.text  = text
         self.scanner_status.color = color
 
-    # ── Lifecycle ──────────────────────────────────────────────────────────
+    # -- Lifecycle ----------------------------------------------------------
     def on_open(self):
-        # ── ALTERAÇÃO 3: auto-start removido — scanner só arranca quando
-        #    o utilizador clicar no botão. ──
+        # -- ALTERAÇÃO 3: auto-start removido — scanner só arranca quando
+        #    o utilizador clicar no botao. --
         if self._field_navigation:
-            self._field_navigation.activate(focus_initial=True)
+            self._field_navigation.activate(focus_initial=False)
+        Clock.schedule_once(self._warm_lazy_dependencies, 0)
 
     def on_dismiss(self):
         if self._field_navigation:

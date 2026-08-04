@@ -4,20 +4,54 @@ from kivy.clock import Clock
 from app_base import BaseApp
 from database.provider import get_db
 from user.login import ManagerLoginScreen
-from utils.paths import asset_path
+from utils.config.paths import asset_path
+from version import __version__
 
 
 class ManagerApp(BaseApp):
     # App do gerente: fluxo focado em vendas e historicos.
     theme_settings_key = "manager_theme_style"
 
+    # O gerente trabalha durante longos periodos nesta tela. Mantemos, por isso,
+    # texto maior que o padrao do KivyMD e contraste forte no tema claro.
+    _MANAGER_LIGHT_TEXT = {
+        "text_primary": [0.0, 0.0, 0.0, 1],
+        "text_secondary": [0.08, 0.08, 0.08, 1],
+        "text_muted": [0.18, 0.18, 0.18, 1],
+    }
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._increase_manager_typography()
         self._screen_manager = None
         self._screen_factories = {}
 
+    def apply_theme(self, style, persist=True):
+        super().apply_theme(style, persist=persist)
+        if self.theme_style == "Light":
+            tokens = dict(self.theme_tokens)
+            tokens.update(self._MANAGER_LIGHT_TEXT)
+            self.theme_tokens = tokens
+
+    def _increase_manager_typography(self):
+        """Aumenta estilos pequenos somente no processo do aplicativo Manager."""
+        minimum_sizes = {
+            "Body1": 17,
+            "Body2": 15,
+            "Button": 15,
+            "Caption": 14,
+            "Subtitle1": 17,
+            "Subtitle2": 15,
+        }
+        for style_name, minimum_size in minimum_sizes.items():
+            style = self.theme_cls.font_styles.get(style_name)
+            if style and len(style) > 1:
+                enlarged_style = list(style)
+                enlarged_style[1] = max(enlarged_style[1], minimum_size)
+                self.theme_cls.font_styles[style_name] = enlarged_style
+
     def build(self):
-        self.title = f"{self.system_name} - MANAGER"
+        self.title = f"{self.system_name} {__version__} - MANAGER"
         self.icon = str(asset_path('icon', 'manager.ico'))
 
         self.db = get_db()
@@ -62,15 +96,15 @@ class ManagerApp(BaseApp):
         return SalesScreen(db=self.db, name='manager')
 
     def _build_sales_history_screen(self):
-        from utils.sales_history_screen import SalesHistoryScreen
+        from utils.screens.sales_history_screen import SalesHistoryScreen
         return SalesHistoryScreen(db=self.db, name='sales_history')
 
     def _build_losses_screen(self):
-        from utils.losses_screen import LossesScreen
+        from utils.screens.losses_screen import LossesScreen
         return LossesScreen(db=self.db, name='losses')
 
     def _build_losses_history_screen(self):
-        from utils.losses_history_screen import LossesHistoryScreen
+        from utils.screens.losses_history_screen import LossesHistoryScreen
         return LossesHistoryScreen(db=self.db, name='losses_history')
 
 

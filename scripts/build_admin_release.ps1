@@ -1,12 +1,28 @@
 param(
     [switch]$Clean,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipChecks,
+    [string]$WorkPath
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $root
+
+$pythonCandidates = @(
+    (Join-Path $root ".venv\Scripts\python.exe"),
+    (Join-Path $root "loja\Scripts\python.exe")
+)
+$pythonExecutable = $pythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $pythonExecutable) {
+    $pythonExecutable = (Get-Command python -ErrorAction Stop).Source
+}
+
+if (-not $SkipChecks) {
+    & $pythonExecutable (Join-Path $root "scripts\preflight_release.py")
+    if ($LASTEXITCODE -ne 0) { throw "Preflight da release falhou." }
+}
 
 $env:KIVY_NO_FILELOG = "1"
 $env:KIVY_NO_ARGS = "1"
@@ -29,21 +45,8 @@ function Copy-OptionalScannerPackages {
         $pythonSites = @()
     }
 
-    $backupSites = @()
-    foreach ($relativeSite in @(
-        "loja\Lib\site-packages",
-        "loja_bak_pre_kivymd_restore\Lib\site-packages",
-        "loja_legacy\Lib\site-packages",
-        "loja_py314_broken_20260325\Lib\site-packages"
-    )) {
-        $site = Join-Path $root $relativeSite
-        if (Test-Path $site) {
-            $backupSites += (Resolve-Path $site).Path
-        }
-    }
-
     $candidateSites = @()
-    foreach ($site in ($pythonSites + $backupSites)) {
+    foreach ($site in $pythonSites) {
         if ($site -and ($candidateSites -notcontains $site)) {
             $candidateSites += $site
         }
@@ -135,7 +138,12 @@ if ($Clean) {
 }
 
 if (-not $SkipBuild) {
-    python -m PyInstaller --noconfirm admin_app.spec
+    $pyInstallerArgs = @("--noconfirm", "--log-level", "WARN")
+    if ($WorkPath) {
+        $pyInstallerArgs += @("--workpath", $WorkPath)
+    }
+    $pyInstallerArgs += (Join-Path $root "scripts\packaging\admin_app.spec")
+    & $pythonExecutable -m PyInstaller @pyInstallerArgs
 }
 
 $dist = Join-Path $root "dist\SIGEMPEAdmin"
@@ -194,6 +202,7 @@ Copy-Item -Force (Join-Path $root "scripts\setup_connection_wizard.ps1") (Join-P
 Copy-Item -Force (Join-Path $root "scripts\abrir_assistente_ligacao.cmd") (Join-Path $installDir "abrir_assistente_ligacao.cmd")
 Copy-Item -Force (Join-Path $root "scripts\abrir_assistente_ligacao.cmd") (Join-Path $dist "Configurar Ligacao.cmd")
 Copy-Item -Force (Join-Path $root "docs\INSTALACAO_ADMIN.md") (Join-Path $installDir "INSTALACAO_ADMIN.md")
+Copy-Item -Force (Join-Path $root "VERSION") (Join-Path $dist "VERSION")
 
 foreach ($file in @("install_service.bat", "update_service.bat", "uninstall_service.bat")) {
     $stale = Join-Path $installDir $file

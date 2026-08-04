@@ -16,7 +16,9 @@ from api.api_bazara import BazaraAPI
 from api.api_openfoodfacts import OpenFoodFactsAPI
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
 from api.api_ranxo import RanxoAPI
-from utils.paths import CACHE_DIR
+from api.api_upcitemdb import UPCitemdbAPI
+from api.api_sixty60 import Sixty60API
+from utils.config.paths import CACHE_DIR
 
 
 class APIManager:
@@ -42,10 +44,13 @@ class APIManager:
         3. APIs externas (lento, requer internet)
     """
 
-    # APIs externas
-    EXTERNAL_SOURCES = [
-        ("Open Food Facts", OpenFoodFactsAPI()),
-        ("Bazara",         BazaraAPI()),
+    # APIs externas confiaveis para consulta por codigo de barras.
+    EXTERNAL_SOURCE_CLASSES = [
+        ("Open Food Facts", OpenFoodFactsAPI),
+        ("Bazara", BazaraAPI),
+        ("Ranxo", RanxoAPI),
+        ("UPCitemdb", UPCitemdbAPI),
+        ("Sixty60", Sixty60API),
     ]
 
     def __init__(self, database, on_success: callable, on_failure: callable, on_status: callable = None):
@@ -80,6 +85,7 @@ class APIManager:
         self.use_parallel_search = False
         self.auto_save_to_offline = True  # Salvar automaticamente em arquivo
         self.max_offline_entries = 1000   # Máximo de produtos no cache offline
+        self.external_sources = self._build_external_sources()
         
         # Estatísticas
         self.stats = {
@@ -89,6 +95,15 @@ class APIManager:
             'api_hits': 0,
             'total_searches': 0
         }
+
+    def _build_external_sources(self):
+        sources = []
+        for source_name, source_class in self.EXTERNAL_SOURCE_CLASSES:
+            try:
+                sources.append((source_name, source_class()))
+            except Exception as exc:
+                print(f"[APIManager] Fonte {source_name} indisponivel: {exc}")
+        return sources
 
     def _get_cache_file_path(self):
         # Caminho do cache offline dos produtos.
@@ -513,7 +528,7 @@ class APIManager:
 
     def _search_sequential(self, barcode: str, sources=None):
         """Busca sequencial nas APIs."""
-        sources = sources or self.EXTERNAL_SOURCES
+        sources = sources or self.external_sources
         for source_name, api in sources:
             self._notify_status(f"Buscando em {source_name}...")
             
@@ -532,7 +547,7 @@ class APIManager:
     def _search_parallel(self, barcode: str, sources=None):
         """Busca paralela em todas as APIs."""
         self._notify_status("Buscando em múltiplas fontes...")
-        sources = sources or self.EXTERNAL_SOURCES
+        sources = sources or self.external_sources
         if not sources:
             return None
         
@@ -562,18 +577,47 @@ class APIManager:
     def _fetch_with_timeout(self, api, barcode: str, timeout: int):
         """Executa fetch com timeout."""
         try:
-            return api.fetch(barcode)
+            result = api.fetch(barcode)
+            return self._normalize_api_result(result, barcode)
         except Exception as e:
             return None
 
     def _get_external_sources(self, include_bazara=True):
         if include_bazara:
-            return self.EXTERNAL_SOURCES
-        return [(name, api) for name, api in self.EXTERNAL_SOURCES if name.lower() != "bazara"]
+            return self.external_sources
+        return [(name, api) for name, api in self.external_sources if name.lower() != "bazara"]
+
+    def _normalize_api_result(self, result, barcode: str):
+        if not isinstance(result, dict):
+            return None
+
+        payload = dict(result)
+        if payload.get("is_new") and self._is_placeholder_result(payload):
+            return None
+
+        has_real_value = any(
+            str(payload.get(key) or "").strip()
+            for key in ("name", "brand", "category", "quantity", "price", "image")
+        )
+        if not has_real_value:
+            return None
+
+        name = str(payload.get("name") or "").strip()
+        if name.lower() in {"novo produto", "new product", "produto"}:
+            payload.pop("name", None)
+
+        if not payload.get("barcode"):
+            payload["barcode"] = barcode
+        return payload
+
+    @staticmethod
+    def _is_placeholder_result(payload: dict) -> bool:
+        name = str(payload.get("name") or "").strip().lower()
+        return name in {"novo produto", "new product", "produto"}
 
     def _fetch_bazara_first(self, barcode: str):
         """Busca primeiro no Bazara."""
-        for source_name, api in self.EXTERNAL_SOURCES:
+        for source_name, api in self.external_sources:
             if source_name.lower() == "bazara":
                 self._notify_status("Buscando no Bazara...")
                 result = self._fetch_with_timeout(api, barcode, self.timeout_per_api)
@@ -1163,9 +1207,9 @@ class APIManager:
 
         if source_names:
             wanted = {str(name).lower() for name in source_names}
-            sources = [(n, api) for n, api in self.EXTERNAL_SOURCES if n.lower() in wanted]
+            sources = [(n, api) for n, api in self.external_sources if n.lower() in wanted]
         else:
-            sources = list(self.EXTERNAL_SOURCES)
+            sources = list(self.external_sources)
 
         if not sources:
             self._emit_prefill_progress(on_progress, stats, "Nenhuma API configurada.")

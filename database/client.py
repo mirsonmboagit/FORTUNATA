@@ -4,7 +4,7 @@ import threading
 import time
 from datetime import date, datetime
 
-from utils.app_config import get_runtime_config
+from utils.config.app_config import get_runtime_config
 
 
 LOGGER = logging.getLogger(__name__)
@@ -17,6 +17,7 @@ class DatabaseClient:
         "get_products_for_sale_page": 1.2,
         "get_products_for_sale_catalog_page": 1.2,
         "get_products_for_sale_ids": 1.2,
+        "get_products_sale_revision": 1.0,
         "get_all_products": 2.0,
         "get_all_products_page": 1.2,
         "get_products_for_losses": 2.0,
@@ -42,6 +43,8 @@ class DatabaseClient:
         "approve_",
         "reject_",
         "clear_",
+        "open_",
+        "close_",
     )
     _FALLBACK_SAFE_RPC_METHODS = {
         "get_products_for_sale_page",
@@ -78,7 +81,7 @@ class DatabaseClient:
 
     def _load_config(self):
         # Le a configuracao atual da API local.
-        return get_runtime_config(force_reload=True)
+        return get_runtime_config(force_reload=False)
 
     def _rpc(self, method, *args, **kwargs):
         # Envia a chamada remota e centraliza cache, sessao e erros.
@@ -367,8 +370,8 @@ class DatabaseClient:
     def validate_user(self, username, password):
         return self._rpc("validate_user", username, password)
 
-    def create_admin(self, username, password):
-        result = self._rpc("create_admin", username, password)
+    def create_admin(self, username, password, email=None):
+        result = self._rpc("create_admin", username, password, email=email)
         return bool(result) if result is not None else False
 
     def update_admin_credentials(self, old_username, new_username, new_password):
@@ -415,6 +418,73 @@ class DatabaseClient:
             data_owner=data_owner,
         )
         return bool(result) if result is not None else False
+
+    def update_user_email(self, username, email):
+        result = self._rpc("update_user_email", username, email)
+        return bool(result) if result is not None else False
+
+    def get_user_email_status(self, username):
+        return self._rpc("get_user_email_status", username) or {
+            "has_email": False,
+            "verified": False,
+            "masked_email": None,
+        }
+
+    def is_user_email_verified(self, username):
+        result = self._rpc("is_user_email_verified", username)
+        return bool(result) if result is not None else False
+
+    def request_email_verification(self, username, resend_seconds=60, expiry_minutes=10):
+        return self._rpc(
+            "request_email_verification",
+            username,
+            resend_seconds=resend_seconds,
+            expiry_minutes=expiry_minutes,
+        ) or {"ok": False, "reason": "rpc_error"}
+
+    def confirm_email_verification(self, username, code, max_attempts=5):
+        return self._rpc(
+            "confirm_email_verification",
+            username,
+            code,
+            max_attempts=max_attempts,
+        ) or {"ok": False, "reason": "rpc_error"}
+
+    def request_password_reset(self, username, resend_seconds=60, expiry_minutes=10):
+        return self._rpc(
+            "request_password_reset",
+            username,
+            resend_seconds=resend_seconds,
+            expiry_minutes=expiry_minutes,
+        ) or {"ok": False, "reason": "rpc_error"}
+
+    def generate_recovery_codes(self, username, count=8):
+        return self._rpc("generate_recovery_codes", username, count=count) or {
+            "ok": False, "reason": "rpc_error"
+        }
+
+    def confirm_recovery_code(self, username, code, new_password, min_password_length=8):
+        return self._rpc(
+            "confirm_recovery_code", username, code, new_password,
+            min_password_length=min_password_length,
+        ) or {"ok": False, "reason": "rpc_error"}
+
+    def confirm_password_reset(
+        self,
+        username,
+        code,
+        new_password,
+        max_attempts=5,
+        min_password_length=8,
+    ):
+        return self._rpc(
+            "confirm_password_reset",
+            username,
+            code,
+            new_password,
+            max_attempts=max_attempts,
+            min_password_length=min_password_length,
+        ) or {"ok": False, "reason": "rpc_error"}
 
     # ---------- Perguntas de seguranca ----------
     def set_security_questions(self, username, answers):
@@ -882,16 +952,44 @@ class DatabaseClient:
     def delete_manager(self, username):
         return self._rpc("delete_manager", username)
 
-    def get_user_logs(self, user_filter="", action_filter="", role_filter="", limit=100, offset=0):
+    def get_user_logs(
+        self,
+        user_filter="",
+        action_filter="",
+        role_filter="",
+        limit=100,
+        offset=0,
+        exclude_actions=None,
+        details_limit=None,
+    ):
+        kwargs = {
+            "limit": limit,
+            "offset": offset,
+        }
+        if exclude_actions:
+            kwargs["exclude_actions"] = list(exclude_actions)
+        if details_limit:
+            kwargs["details_limit"] = int(details_limit)
+
+        offset_applied = True
         result = self._rpc(
             "get_user_logs",
             user_filter,
             action_filter,
             role_filter,
-            limit=limit,
-            offset=offset,
+            **kwargs,
         )
+        if result is None and (exclude_actions or details_limit):
+            result = self._rpc(
+                "get_user_logs",
+                user_filter,
+                action_filter,
+                role_filter,
+                limit=limit,
+                offset=offset,
+            )
         if result is None:
+            offset_applied = False
             result = self._rpc(
                 "get_user_logs",
                 user_filter,
@@ -900,6 +998,16 @@ class DatabaseClient:
                 limit=limit,
             )
         rows = result or []
+        if exclude_actions:
+            ignored = {
+                str(action or "").strip().upper()
+                for action in exclude_actions
+                if str(action or "").strip()
+            }
+            if ignored:
+                rows = [row for row in rows if str(row[3] or "").upper() not in ignored]
+        if offset_applied:
+            return rows
         off = max(0, int(offset or 0))
         if limit:
             return rows[off:off + int(limit)]

@@ -1,11 +1,12 @@
-from utils.app_config import get_database_path, get_runtime_config
+from utils.config.app_config import get_database_path, get_runtime_config
 
 _MISSING = object()
 
 
 def _load_config():
-    # Carrega a configuracao atual do backend.
-    return get_runtime_config(force_reload=True)
+    # As rotinas de escrita invalidam o cache central. Evita reler todos os
+    # JSONs sempre que uma tela pede acesso ao backend.
+    return get_runtime_config(force_reload=False)
 
 
 class HybridDatabase:
@@ -15,20 +16,36 @@ class HybridDatabase:
         self.config = config
 
         from database.client import DatabaseClient
-        from database.database import Database
 
         db_path = config.get("db_path") or str(get_database_path())
+        self._db_path = db_path
         self.remote_db = remote_db if remote_db is not None else DatabaseClient(config=config)
-        if local_db is not None:
-            self.local_db = local_db
-        elif db_path:
-            self.local_db = Database(db_path=db_path)
-        else:
-            self.local_db = Database()
+        self._local_db = local_db
+        self._local_db_loaded = local_db is not None
 
         self.connection_mode = "hybrid"
         self._last_error = ""
         self._last_backend = None
+        self._active_username = None
+        self._active_role = None
+
+    @property
+    def local_db(self):
+        if self._local_db is None:
+            from database.database import Database
+
+            if self._db_path:
+                self._local_db = Database(db_path=self._db_path)
+            else:
+                self._local_db = Database()
+            self._local_db_loaded = True
+            setter = getattr(self._local_db, "set_active_user", None)
+            if callable(setter):
+                try:
+                    setter(self._active_username, self._active_role)
+                except Exception:
+                    pass
+        return self._local_db
 
     def _remote_last_error(self):
         getter = getattr(self.remote_db, "last_error", None)
@@ -98,7 +115,10 @@ class HybridDatabase:
 
     def close(self):
         self._last_error = ""
-        for db in (self.remote_db, self.local_db):
+        backends = [self.remote_db]
+        if self._local_db_loaded and self._local_db is not None:
+            backends.append(self._local_db)
+        for db in backends:
             closer = getattr(db, "close", None)
             if callable(closer):
                 try:
@@ -108,7 +128,12 @@ class HybridDatabase:
         return None
 
     def set_active_user(self, username=None, role=None):
-        for db in (self.remote_db, self.local_db):
+        self._active_username = username
+        self._active_role = role
+        backends = [self.remote_db]
+        if self._local_db_loaded and self._local_db is not None:
+            backends.append(self._local_db)
+        for db in backends:
             setter = getattr(db, "set_active_user", None)
             if callable(setter):
                 try:
@@ -159,13 +184,13 @@ class HybridDatabase:
     def _dispatch(self, method_name, *args, **kwargs):
         # Encaminha cada metodo para API ou banco local.
         remote_callable = getattr(self.remote_db, method_name, None)
-        local_callable = getattr(self.local_db, method_name, None)
 
         if callable(remote_callable) and self._remote_available():
             result = self._call_remote(remote_callable, *args, **kwargs)
             if result is not _MISSING:
                 return result
 
+        local_callable = getattr(self.local_db, method_name, None)
         if callable(local_callable):
             return self._call_local(local_callable, *args, **kwargs)
 
@@ -176,10 +201,13 @@ class HybridDatabase:
         raise AttributeError(f"'HybridDatabase' object has no attribute '{method_name}'")
 
     def __getattr__(self, name):
-        local_attr = getattr(self.local_db, name, _MISSING)
         remote_attr = getattr(self.remote_db, name, _MISSING)
 
-        if callable(local_attr) or callable(remote_attr):
+        if callable(remote_attr):
+            return lambda *args, **kwargs: self._dispatch(name, *args, **kwargs)
+
+        local_attr = getattr(self.local_db, name, _MISSING)
+        if callable(local_attr):
             return lambda *args, **kwargs: self._dispatch(name, *args, **kwargs)
 
         if local_attr is not _MISSING:

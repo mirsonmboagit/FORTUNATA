@@ -82,10 +82,10 @@ class StockReport(BasePDFReport):
         
         # Análise de status
         esgotados = len(data[data['remanescente'] == 0])
-        criticos = len(data[(data['remanescente'] > 0) & (data['remanescente'] < data['entrada'] * 0.15)])
-        baixos = len(data[(data['remanescente'] >= data['entrada'] * 0.15) & (data['remanescente'] < data['entrada'] * 0.30)])
-        medios = len(data[(data['remanescente'] >= data['entrada'] * 0.30) & (data['remanescente'] < data['entrada'] * 0.60)])
-        altos = len(data[data['remanescente'] >= data['entrada'] * 0.60])
+        criticos = len(data[(data['remanescente'] > 0) & (data['remanescente'] < data['entrada'] * 0.30)])
+        baixos = len(data[(data['remanescente'] >= data['entrada'] * 0.30) & (data['remanescente'] < data['entrada'] * 0.60)])
+        medios = len(data[(data['remanescente'] >= data['entrada'] * 0.60) & (data['remanescente'] < data['entrada'] * 0.80)])
+        altos = len(data[data['remanescente'] >= data['entrada'] * 0.80])
         
         # Taxa de vendas
         taxa_vendas = (data['sold_stock'].sum() / total_entrada * 100) if total_entrada > 0 else 0
@@ -162,22 +162,22 @@ class StockReport(BasePDFReport):
             },
             {
                 'label': 'Critico',
-                'value': len(data[(data['remanescente'] > 0) & (data['remanescente'] < data['entrada'] * 0.15)]),
+                'value': len(data[(data['remanescente'] > 0) & (data['remanescente'] < data['entrada'] * 0.30)]),
                 'color': '#e67e22',
             },
             {
                 'label': 'Baixo',
-                'value': len(data[(data['remanescente'] >= data['entrada'] * 0.15) & (data['remanescente'] < data['entrada'] * 0.30)]),
+                'value': len(data[(data['remanescente'] >= data['entrada'] * 0.30) & (data['remanescente'] < data['entrada'] * 0.60)]),
                 'color': '#f39c12',
             },
             {
                 'label': 'Medio',
-                'value': len(data[(data['remanescente'] >= data['entrada'] * 0.30) & (data['remanescente'] < data['entrada'] * 0.60)]),
+                'value': len(data[(data['remanescente'] >= data['entrada'] * 0.60) & (data['remanescente'] < data['entrada'] * 0.80)]),
                 'color': '#3498db',
             },
             {
                 'label': 'Alto',
-                'value': len(data[data['remanescente'] >= data['entrada'] * 0.60]),
+                'value': len(data[data['remanescente'] >= data['entrada'] * 0.80]),
                 'color': '#27ae60',
             },
         ]
@@ -199,7 +199,7 @@ class StockReport(BasePDFReport):
         # Filtrar produtos críticos e esgotados
         critical_stock = data[
             (data['remanescente'] == 0) | 
-            (data['remanescente'] < data['entrada'] * 0.15)
+            (data['remanescente'] < data['entrada'] * 0.30)
         ].sort_values('remanescente')
         
         if len(critical_stock) == 0:
@@ -495,11 +495,11 @@ class StockReport(BasePDFReport):
         """
         if remanescente == 0:
             return 'Esgotado'
-        elif remanescente < entrada * 0.15:
-            return 'Crítico'
         elif remanescente < entrada * 0.30:
-            return 'Baixo'
+            return 'Crítico'
         elif remanescente < entrada * 0.60:
+            return 'Baixo'
+        elif remanescente < entrada * 0.80:
             return 'Médio'
         else:
             return 'Alto'
@@ -519,7 +519,7 @@ class StockReport(BasePDFReport):
             return ('Esgotado', 'URGENTE', 'Reposição imediata')
         elif remanescente < entrada * 0.05:
             return ('Crítico', 'ALTA', 'Reposição em 24h')
-        elif remanescente < entrada * 0.15:
+        elif remanescente < entrada * 0.30:
             return ('Crítico', 'MÉDIA', 'Reposição em 72h')
         else:
             return ('Baixo', 'BAIXA', 'Monitorar estoque')

@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 from datetime import datetime, timedelta
 
-from utils.paths import TEMP_DIR
+from utils.config.paths import TEMP_DIR
 
 
 LOGGER = logging.getLogger(__name__)

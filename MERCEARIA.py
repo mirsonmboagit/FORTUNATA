@@ -1,7 +1,7 @@
 import os
 import sys
 import json
-from utils.logging_setup import configure_runtime_logging
+from utils.config.logging_setup import configure_runtime_logging
 
 try:
     sys.stdout.reconfigure(errors="replace")
@@ -24,10 +24,10 @@ from kivy.properties import DictProperty, StringProperty
 from kivy.core.text import LabelBase
 from database.provider import get_db
 from kivy.config import Config
-from utils.theme import get_theme_tokens
-from utils.i18n import language_label, language_options, language_short, normalize_language, translate
-from utils.i18n_runtime import install_i18n_hooks, localize_widget_tree
-from utils.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
+from utils.config.theme import get_theme_tokens
+from utils.core.i18n import language_label, language_options, language_short, normalize_language, translate
+from utils.core.i18n_runtime import install_i18n_hooks, localize_widget_tree
+from utils.config.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
 
 
 if sys.platform.startswith('win'):
@@ -413,31 +413,31 @@ class MainApp(MDApp):
         return AdminScreen(db=self.db, name='admin')
 
     def _build_settings_screen(self):
-        from utils.settings import AdminSettingsScreen
+        from utils.screens.settings import AdminSettingsScreen
         return AdminSettingsScreen(app=self, name='settings')
 
     def _build_reports_screen(self):
-        from utils.reports_screen import ReportsScreen
+        from utils.screens.reports_screen import ReportsScreen
         return ReportsScreen(db=self.db, name='reports')
 
     def _build_sales_history_screen(self):
-        from utils.sales_history_screen import SalesHistoryScreen
+        from utils.screens.sales_history_screen import SalesHistoryScreen
         return SalesHistoryScreen(db=self.db, name='sales_history')
 
     def _build_losses_screen(self):
-        from utils.losses_screen import LossesScreen
+        from utils.screens.losses_screen import LossesScreen
         return LossesScreen(db=self.db, name='losses')
 
     def _build_restock_screen(self):
-        from utils.restock_screen import RestockScreen
+        from utils.screens.restock_screen import RestockScreen
         return RestockScreen(db=self.db, name='restock')
 
     def _build_losses_history_screen(self):
-        from utils.losses_history_screen import LossesHistoryScreen
+        from utils.screens.losses_history_screen import LossesHistoryScreen
         return LossesHistoryScreen(db=self.db, name='losses_history')
 
     def _build_restock_history_screen(self):
-        from utils.restock_history_screen import RestockHistoryScreen
+        from utils.screens.restock_history_screen import RestockHistoryScreen
         return RestockHistoryScreen(db=self.db, name='restock_history')
 
     def on_start(self):

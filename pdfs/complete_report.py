@@ -137,9 +137,9 @@ class CompleteReport(BasePDFReport):
 
             if r["remanescente"] == 0:
                 status = "Esgotado"
-            elif r["remanescente"] < r["entrada"] * 0.15:
+            elif r["remanescente"] < r["entrada"] * 0.30:
                 status = "Crítico"
-            elif r["remanescente"] < r["entrada"] * 0.3:
+            elif r["remanescente"] < r["entrada"] * 0.60:
                 status = "Baixo"
             elif r["remanescente"] < r["entrada"] * 0.6:
                 status = "Médio"
@@ -255,7 +255,7 @@ class CompleteReport(BasePDFReport):
 
         # Produtos com estoque crítico
         produtos_esgotados = len(data[data["remanescente"] == 0])
-        produtos_criticos = len(data[data["remanescente"] < data["entrada"] * 0.15])
+        produtos_criticos = len(data[(data["remanescente"] > 0) & (data["remanescente"] < data["entrada"] * 0.30)])
 
         resumo = [
             ["INDICADOR", "VALOR", "OBSERVAÇÃO"],
@@ -423,7 +423,7 @@ class CompleteReport(BasePDFReport):
         
         critical = data[
             (data["remanescente"] == 0) | 
-            (data["remanescente"] < data["entrada"] * 0.15)
+            (data["remanescente"] < data["entrada"] * 0.30)
         ].head(5)
         
         if len(critical) > 0:

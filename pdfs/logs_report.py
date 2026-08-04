@@ -26,6 +26,8 @@ class LogsReport(BasePDFReport):
         "RUPTURE_ATTEMPT": "Tentativa com stock insuficiente",
         "UPDATE_SECURITY_QUESTIONS": "Perguntas de recuperacao atualizadas",
         "RESET_PASSWORD_QA": "Senha redefinida por perguntas",
+        "VERIFY_EMAIL": "E-mail confirmado",
+        "RESET_PASSWORD_EMAIL": "Senha redefinida por e-mail",
         "ADD_PRODUCT": "Produto adicionado",
         "UPDATE_PRODUCT": "Produto atualizado",
         "DELETE_PRODUCT": "Produto removido",

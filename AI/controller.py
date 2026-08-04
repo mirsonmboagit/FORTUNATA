@@ -205,6 +205,10 @@ class ProactiveIntelligenceController:
         if not enabled:
             self._auto_presented_once = False
             self._last_auto_present_key = ""
+            app = App.get_running_app()
+            if app is not None:
+                setattr(app, "_ai_banners_shown", False)
+                setattr(app, "_ai_banners_last_key", None)
             self.clear(reset_memory=True)
             self._update_badge(0)
         else:
@@ -234,6 +238,12 @@ class ProactiveIntelligenceController:
             insights=banner_insights,
         )
         auto_present_key = _get_banner_notification_key(history_banner_data)
+        app = App.get_running_app()
+        app_auto_present_key = (
+            str(getattr(app, "_ai_banners_last_key", "") or "")
+            if app is not None
+            else ""
+        )
         has_auto_content = (
             self.auto_present_enabled
             and self._auto_banners_enabled()
@@ -246,7 +256,18 @@ class ProactiveIntelligenceController:
             elif display_alerts:
                 should_auto_show = True
         if should_auto_show:
-            if auto_present_key != self._last_auto_present_key or not self._auto_presented_once:
+            already_presented_by_app = bool(
+                auto_present_key
+                and app_auto_present_key
+                and auto_present_key == app_auto_present_key
+            )
+            if (
+                not already_presented_by_app
+                and (
+                    auto_present_key != self._last_auto_present_key
+                    or not self._auto_presented_once
+                )
+            ):
                 if self.auto_present_as_history and history_banner_data:
                     show_history = getattr(center, "_show_history_banners", None)
                     if callable(show_history):
@@ -265,9 +286,11 @@ class ProactiveIntelligenceController:
                     )
                 self._last_auto_present_key = auto_present_key
                 self._auto_presented_once = True
+                if app is not None:
+                    setattr(app, "_ai_banners_shown", True)
+                    setattr(app, "_ai_banners_last_key", auto_present_key)
         notification_key = _get_banner_notification_key(history_banner_data)
         notification_total = _get_banner_notification_total(history_banner_data, payload=payload)
-        app = App.get_running_app()
         if app is not None and getattr(app, "_ai_notifications_seen_key", "") == notification_key:
             notification_total = 0
         self._last_notification_key = notification_key
@@ -288,6 +311,8 @@ class ProactiveIntelligenceController:
             columns=self.banner_columns,
             auto_batch_size=self.auto_batch_size,
             auto_stagger_seconds=self.auto_stagger_seconds,
+            size_hint=(1, 1),
+            pos_hint={"x": 0, "y": 0},
         )
         container.add_widget(self._banner_center)
         return self._banner_center

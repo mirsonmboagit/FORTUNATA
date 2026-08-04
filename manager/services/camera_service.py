@@ -4,7 +4,7 @@ import time
 from threading import Event, Lock, Thread
 from typing import Callable
 
-from utils.vision import get_vision_dependencies, open_optimized_camera_capture
+from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture
 
 
 PreviewPayload = tuple[int, int, int, bytes]

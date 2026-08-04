@@ -6,9 +6,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from utils.app_config import get_api_config
-from utils.logging_setup import configure_runtime_logging
-from utils.paths import ensure_runtime_dirs, set_project_cwd
+from utils.config.app_config import get_api_config
+from utils.config.logging_setup import configure_runtime_logging
+from utils.config.paths import ensure_runtime_dirs, set_project_cwd
 
 set_project_cwd()
 ensure_runtime_dirs()

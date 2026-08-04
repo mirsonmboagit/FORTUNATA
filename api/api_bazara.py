@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 import requests
 
 from api.optional_deps import BeautifulSoup, has_beautifulsoup
-from utils.paths import CACHE_DIR
+from utils.config.paths import CACHE_DIR
 
 
 class BazaraAPI:
@@ -147,20 +147,66 @@ class BazaraAPI:
             data["barcode"] = barcode
         return data or None
 
-    def fetch(self, barcode: str) -> dict | None:
+    def fetch(self, barcode: str, online: bool = True) -> dict | None:
         """
-        Busca um produto pelo codigo de barras no cache offline do Bazara.
-        Nao faz chamadas online; para preencher use o script bazara_prefill.py.
+        Busca um produto no cache offline e, se necessario, consulta o site
+        oficial do Bazara. Quando encontra online, salva no ficheiro de cache
+        para permitir a proxima adicao mesmo sem internet.
         """
         try:
-            barcode = str(barcode).strip()
+            barcode = self._normalize_barcode(barcode)
             if not barcode:
                 return None
-            return self._get_from_offline_cache(barcode)
+
+            cached = self._get_from_offline_cache(barcode)
+            if cached:
+                return cached
+
+            if not online:
+                return None
+
+            product = self.fetch_online(barcode)
+            if product:
+                self._upsert_offline_cache(barcode, product)
+                return self._get_from_offline_cache(barcode) or product
+            return None
 
         except Exception as e:
             print(f"[Bazara] Erro: {e}")
             return None
+
+    def fetch_online(self, barcode: str) -> dict | None:
+        """Consulta o site oficial do Bazara e devolve dados normalizados."""
+        barcode = self._normalize_barcode(barcode)
+        if not barcode:
+            return None
+
+        for base_url in self.BASE_URLS:
+            product = self._fetch_graphql(base_url, barcode)
+            if not product:
+                product = self._fetch_from_base(base_url, barcode)
+            product = self._prepare_product_payload(product, barcode, base_url)
+            if product:
+                return product
+        return None
+
+    @staticmethod
+    def _normalize_barcode(value) -> str:
+        if value is None:
+            return ""
+        return "".join(ch for ch in str(value) if ch.isprintable()).strip().replace(" ", "")
+
+    def _prepare_product_payload(self, product: dict | None, barcode: str, base_url: str) -> dict | None:
+        if not isinstance(product, dict):
+            return None
+        payload = dict(product)
+        if not any(str(payload.get(key) or "").strip() for key in ("name", "price", "image", "category")):
+            return None
+        payload["barcode"] = barcode
+        payload["source"] = "Bazara"
+        if payload.get("url_key") and not payload.get("source_url"):
+            payload["source_url"] = self._ensure_absolute_url(base_url, f"{payload['url_key']}.html")
+        return payload
 
     def _fetch_from_base(self, base_url: str, barcode: str) -> dict | None:
         if not has_beautifulsoup():
@@ -183,25 +229,29 @@ class BazaraAPI:
             category = self._fetch_category(product_url)
             product["category"] = self._normalize_category(category)
 
+        if product_url and not product.get("source_url"):
+            product["source_url"] = product_url
         product.pop("url", None)
         return product
 
     def _fetch_graphql(self, base_url: str, barcode: str) -> dict | None:
         items = self._graphql_items(
             base_url,
-            {"query": self.GRAPHQL_QUERY, "variables": {"search": barcode}},
+            {"query": self.GRAPHQL_QUERY_SKU, "variables": {"sku": barcode}},
         )
         if not items:
             items = self._graphql_items(
                 base_url,
-                {"query": self.GRAPHQL_QUERY_SKU, "variables": {"sku": barcode}},
+                {"query": self.GRAPHQL_QUERY, "variables": {"search": barcode}},
             )
 
         if not items:
             return None
 
-        item = items[0] or {}
+        item = self._select_graphql_item(items, barcode) or {}
         name = item.get("name") or ""
+        sku = item.get("sku") or ""
+        url_key = item.get("url_key") or ""
         image = self._extract_graphql_image(item)
         price = self._extract_graphql_price(item)
         category = self._extract_graphql_category(item)
@@ -211,10 +261,25 @@ class BazaraAPI:
 
         return {
             "name": name,
+            "sku": sku,
+            "url_key": url_key,
             "price": price,
             "image": image,
             "category": self._normalize_category(category),
         }
+
+    @staticmethod
+    def _select_graphql_item(items: list, barcode: str) -> dict | None:
+        barcode = str(barcode or "").strip()
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("sku") or "").strip() == barcode:
+                return item
+        for item in items or []:
+            if isinstance(item, dict):
+                return item
+        return None
 
     def _graphql_items(self, base_url: str, payload: dict) -> list:
         url = urljoin(base_url, self.GRAPHQL_PATH)

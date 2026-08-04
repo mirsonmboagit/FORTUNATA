@@ -9,7 +9,7 @@ import math
 import os
 import re
 
-from utils.paths import REPORTS_DIR, resolve_path
+from utils.config.paths import REPORTS_DIR, resolve_path
 
 
 class BasePDFReport:

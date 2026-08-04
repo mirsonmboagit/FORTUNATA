@@ -202,6 +202,15 @@ class HybridProviderTests(ProjectTestCase):
         self.assertTrue(db.using_remote())
         self.assertEqual(db.get_connection_status()["label"], "API")
 
+    def test_hybrid_keeps_local_database_lazy_when_remote_available(self):
+        from database.provider import HybridDatabase
+
+        remote = self.Remote()
+        db = HybridDatabase(config={"db_path": "unused.sqlite3"}, remote_db=remote)
+
+        self.assertEqual(db.get_value("x"), "remote:x")
+        self.assertFalse(db._local_db_loaded)
+
     def test_hybrid_falls_back_to_local_when_remote_unavailable(self):
         from database.provider import HybridDatabase
 

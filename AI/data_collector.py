@@ -10,7 +10,7 @@ from statistics import mean, pstdev
 from threading import Lock
 from typing import Any, Callable
 
-from utils.app_config import get_database_path
+from utils.config.app_config import get_database_path
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -221,6 +221,7 @@ class IntelligenceDataCollector:
                 p.id,
                 p.description,
                 COALESCE(p.existing_stock, 0) AS stock_atual,
+                COALESCE(p.sold_stock, 0) AS stock_vendido,
                 COALESCE(p.is_sold_by_weight, 0) AS is_weight,
                 p.expiry_date AS expiry_date,
                 COALESCE(p.sale_price, 0) AS preco_tabela,
@@ -258,7 +259,9 @@ class IntelligenceDataCollector:
         for row in rows:
             avg_daily_qty = _safe_float(row["qty_historica"]) / max(history_days, 1)
             is_weight = bool(row["is_weight"])
-            stock_min = max(0.5 if is_weight else 1.0, round(avg_daily_qty * 3, 2))
+            stock_atual = _safe_float(row["stock_atual"])
+            stock_total = stock_atual + _safe_float(row["stock_vendido"])
+            stock_min = round(stock_total * 0.30, 2)
             last_sale_at = _parse_datetime(row["last_sale_at"])
             last_sale_days = None
             if last_sale_at:
@@ -268,7 +271,7 @@ class IntelligenceDataCollector:
                 {
                     "id": int(row["id"]),
                     "descricao": str(row["description"]),
-                    "stock_atual": _safe_float(row["stock_atual"]),
+                    "stock_atual": stock_atual,
                     "stock_minimo": stock_min,
                     "is_weight": is_weight,
                     "expiry_date": row["expiry_date"],
@@ -334,7 +337,8 @@ class IntelligenceDataCollector:
                 }
             )
 
-            if stock_atual <= low_threshold:
+            stock_minimo = _safe_float(item.get("stock_minimo"))
+            if 0 < stock_atual < stock_minimo:
                 low_stock.append(
                     (
                         descricao,

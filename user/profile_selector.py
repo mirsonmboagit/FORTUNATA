@@ -8,7 +8,7 @@ from kivy.properties import StringProperty
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 
-from utils.i18n import language_options, language_short, translate
+from utils.core.i18n import language_options, language_short, translate
 
 
 Builder.load_file("user/profile_selector.kv")
