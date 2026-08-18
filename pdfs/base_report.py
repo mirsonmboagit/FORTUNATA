@@ -127,7 +127,7 @@ class BasePDFReport:
         elements.append(Paragraph(f"<b>{title}</b>", header_style))
 
         info_data = [
-            ['Tipo de Relatório:', report_type],
+            ['Relatório:', report_type],
             [
                 'Período:',
                 f"{filters['start_date'].strftime('%d/%m/%Y')} até {filters['end_date'].strftime('%d/%m/%Y')}"
@@ -135,7 +135,7 @@ class BasePDFReport:
             ['Produto:', filters.get('product', 'Todos os Produtos')],
             ['Categoria:', filters.get('category', 'Todas as Categorias')],
             ['Vendedor/Gerente:', filters.get('seller', 'Todos os Vendedores')],
-            ['Gerado em:', datetime.now().strftime('%d/%m/%Y %H:%M:%S')],
+            ['Criado em:', datetime.now().strftime('%d/%m/%Y %H:%M:%S')],
         ]
 
         info_table = Table(info_data, colWidths=[2.8 * inch, 5.2 * inch])
@@ -165,7 +165,7 @@ class BasePDFReport:
             alignment=TA_CENTER
         )
 
-        footer_text = f"Relatório gerado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        footer_text = f"Relatório criado em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         elements.append(Paragraph(footer_text, footer_style))
 
     # ─────────────────────────────────────────────
@@ -205,7 +205,7 @@ class BasePDFReport:
         value_formatter=None,
         accent_color="#2c3e50",
         sort_items=True,
-        empty_message="Sem dados para gerar o grafico.",
+        empty_message="Não há dados para mostrar neste gráfico.",
     ):
         normalized = []
         for item in items or []:
@@ -268,7 +268,7 @@ class BasePDFReport:
             String(
                 left_padding,
                 height - 32,
-                "Grafico de barras colorido preparado para impressao em PDF.",
+                "Os valores aparecem no fim de cada barra.",
                 fontName="Helvetica",
                 fontSize=7.8,
                 fillColor=colors.HexColor("#7f8c8d"),

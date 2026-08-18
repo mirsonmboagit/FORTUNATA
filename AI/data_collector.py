@@ -119,15 +119,25 @@ class IntelligenceDataCollector:
         today = date.today().isoformat()
         row = conn.execute(
             """
+            WITH transactions AS (
+                SELECT
+                    COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id) AS transaction_key,
+                    COALESCE(SUM(total_price), 0) AS total,
+                    COALESCE(SUM(quantity), 0) AS itens,
+                    MIN(sale_date) AS primeira_venda,
+                    MAX(sale_date) AS ultima_venda
+                FROM sales
+                WHERE DATE(sale_date) = ?
+                GROUP BY COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id)
+            )
             SELECT
-                COALESCE(SUM(total_price), 0) AS total,
+                COALESCE(SUM(total), 0) AS total,
                 COUNT(*) AS vendas,
-                COALESCE(SUM(quantity), 0) AS itens,
-                COALESCE(AVG(total_price), 0) AS ticket_medio,
-                MIN(sale_date) AS primeira_venda,
-                MAX(sale_date) AS ultima_venda
-            FROM sales
-            WHERE DATE(sale_date) = ?
+                COALESCE(SUM(itens), 0) AS itens,
+                COALESCE(AVG(total), 0) AS ticket_medio,
+                MIN(primeira_venda) AS primeira_venda,
+                MAX(ultima_venda) AS ultima_venda
+            FROM transactions
             """,
             (today,),
         ).fetchone()
@@ -137,7 +147,7 @@ class IntelligenceDataCollector:
             SELECT
                 strftime('%H', sale_date) AS hora,
                 COALESCE(SUM(total_price), 0) AS total,
-                COUNT(*) AS vendas
+                COUNT(DISTINCT COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id)) AS vendas
             FROM sales
             WHERE DATE(sale_date) = ?
             GROUP BY strftime('%H', sale_date)
@@ -172,7 +182,7 @@ class IntelligenceDataCollector:
             SELECT
                 DATE(sale_date) AS dia,
                 COALESCE(SUM(total_price), 0) AS total,
-                COUNT(*) AS vendas
+                COUNT(DISTINCT COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id)) AS vendas
             FROM sales
             WHERE DATE(sale_date) >= ? AND DATE(sale_date) < ?
             GROUP BY DATE(sale_date)
@@ -407,8 +417,12 @@ class IntelligenceDataCollector:
         recommendations_expiry: list[str] = []
 
         for name, stock, is_weight, _days_left, _prod_id in low_stock[:3]:
-            unit = "kg" if is_weight else "un"
-            text = f"{name}: stock baixo ({stock:.1f} {unit}) - repor"
+            if is_weight:
+                quantity = f"{stock:.1f} quilograma" if abs(stock - 1) < 0.001 else f"{stock:.1f} quilogramas"
+            else:
+                amount = int(stock) if float(stock).is_integer() else stock
+                quantity = f"{amount} unidade" if abs(stock - 1) < 0.001 else f"{amount} unidades"
+            text = f"{name}: o estoque está baixo. Restam {quantity}. Faça a reposição."
             recommendations.append(text)
             recommendations_stock.append(text)
 
@@ -421,30 +435,30 @@ class IntelligenceDataCollector:
         )
         for name, days_left, _date_str, _stock, _unit in expiry_priority[:3]:
             if days_left <= 0:
-                text = f"{name} vencido - retirar da venda"
+                text = f"{name} está vencido. Retire o produto da venda."
             elif days_left <= 7:
-                text = f"{name} vence em {days_left} dias - priorizar venda"
+                text = f"{name} vence em {days_left} dias. Dê prioridade à venda."
             else:
-                text = f"{name} vence em {days_left} dias - acompanhar"
+                text = f"{name} vence em {days_left} dias. Acompanhe a validade."
             recommendations.append(text)
             recommendations_expiry.append(text)
 
         if not recommendations:
-            recommendations.append("Tudo estavel no momento. Sem riscos imediatos de stock ou validade.")
+            recommendations.append("Tudo está estável no momento. Não há riscos imediatos de estoque ou validade.")
 
         alerts = []
         if low_stock:
-            alerts.append(f"{len(low_stock)} produtos com stock baixo.")
+            alerts.append(f"{len(low_stock)} produtos com estoque baixo.")
         if expiry_levels["vencido"]:
             alerts.append(f"{len(expiry_levels['vencido'])} produtos vencidos.")
         if expiry_levels["critico"]:
-            alerts.append(f"{len(expiry_levels['critico'])} produtos em alerta critico (7 dias).")
+            alerts.append(f"{len(expiry_levels['critico'])} produtos vencem nos próximos 7 dias.")
         if expiry_levels["alto"]:
-            alerts.append(f"{len(expiry_levels['alto'])} produtos em alerta alto (30 dias).")
+            alerts.append(f"{len(expiry_levels['alto'])} produtos vencem nos próximos 30 dias.")
         if expiry_levels["medio"]:
-            alerts.append(f"{len(expiry_levels['medio'])} produtos em alerta medio (60 dias).")
+            alerts.append(f"{len(expiry_levels['medio'])} produtos vencem nos próximos 60 dias.")
         if expiry_levels["leve"]:
-            alerts.append(f"{len(expiry_levels['leve'])} produtos em alerta leve (90 dias).")
+            alerts.append(f"{len(expiry_levels['leve'])} produtos vencem nos próximos 90 dias.")
 
         expiry_total = (
             len(expiry_levels["vencido"])
@@ -558,6 +572,8 @@ class IntelligenceDataCollector:
             """
             SELECT
                 COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL') AS terminal_id,
+                s.id AS sale_id,
+                s.transaction_code,
                 s.sale_date,
                 COALESCE(s.quantity, 0) AS quantity,
                 COALESCE(s.total_price, 0) AS total_price,
@@ -589,6 +605,7 @@ class IntelligenceDataCollector:
             by_terminal[str(row["terminal_id"])].append(
                 {
                     "sale_dt": sale_dt,
+                    "transaction_key": str(row["transaction_code"] or "").strip() or f"sale:{row['sale_id']}",
                     "quantity": _safe_float(row["quantity"]),
                     "total_price": _safe_float(row["total_price"]),
                     "unit_cost": _safe_float(row["unit_cost"]),
@@ -606,16 +623,15 @@ class IntelligenceDataCollector:
             all_today.extend(today_items)
             all_history.extend(historical_items)
 
-            historical_counts: dict[str, int] = defaultdict(int)
-            grouped_days: dict[str, list[datetime]] = defaultdict(list)
+            historical_transactions: dict[str, dict[str, datetime]] = defaultdict(dict)
             for item in historical_items:
                 day_key = item["sale_dt"].date().isoformat()
-                historical_counts[day_key] += 1
-                grouped_days[day_key].append(item["sale_dt"])
+                historical_transactions[day_key].setdefault(item["transaction_key"], item["sale_dt"])
 
-            daily_counts = list(historical_counts.values())
+            daily_counts = [len(keys) for keys in historical_transactions.values()]
             gaps_minutes = []
-            for timestamps in grouped_days.values():
+            for transactions in historical_transactions.values():
+                timestamps = list(transactions.values())
                 timestamps.sort()
                 for current, nxt in zip(timestamps, timestamps[1:]):
                     gaps_minutes.append((nxt - current).total_seconds() / 60.0)
@@ -638,7 +654,7 @@ class IntelligenceDataCollector:
             terminais.append(
                 {
                     "terminal_id": terminal_id,
-                    "vendas_hoje": len(today_items),
+                    "vendas_hoje": len({item["transaction_key"] for item in today_items}),
                     "media_vendas_dia": mean(daily_counts) if daily_counts else 0.0,
                     "ultima_venda": last_sale_at.isoformat(sep=" ") if last_sale_at else None,
                     "minutos_sem_venda": idle_minutes,
@@ -670,6 +686,6 @@ class IntelligenceDataCollector:
             "margem_percentual_historica": overall_margin_history,
             "desconto_percentual_hoje": (mean([item["discount_ratio"] for item in all_today]) * 100.0) if all_today else 0.0,
             "desconto_percentual_historico": (mean([item["discount_ratio"] for item in all_history]) * 100.0) if all_history else 0.0,
-            "total_vendas_hoje": len(all_today),
+            "total_vendas_hoje": len({item["transaction_key"] for item in all_today}),
             "ultima_venda": max((item["sale_dt"] for item in all_today), default=None),
         }

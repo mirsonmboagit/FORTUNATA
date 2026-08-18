@@ -1,0 +1,11 @@
+# Dependencias do APK SIGE MPE Manager Mobile.
+# Nao reutilizar requirements-runtime.txt: ele inclui bibliotecas Windows,
+# impressao e OpenCV/ZBar que nao pertencem ao alvo Android.
+Kivy==2.3.1
+KivyMD==1.2.0
+requests==2.32.3
+urllib3==2.3.0
+certifi==2025.1.31
+charset-normalizer==3.4.1
+idna==3.10
+typing_extensions==4.14.1

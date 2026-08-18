@@ -742,6 +742,12 @@ class DatabaseClient:
         is_promotional=False,
         terminal_id=None,
         vat_rule_code=None,
+        transaction_code=None,
+        payment_method="cash",
+        discount_amount=0.0,
+        cash_session_id=None,
+        discount_reason=None,
+        discount_authorized_by=None,
     ):
         return self._rpc(
             "add_sale",
@@ -753,6 +759,68 @@ class DatabaseClient:
             terminal_id=terminal_id,
             is_promotional=is_promotional,
             vat_rule_code=vat_rule_code,
+            transaction_code=transaction_code,
+            payment_method=payment_method,
+            discount_amount=discount_amount,
+            cash_session_id=cash_session_id,
+            discount_reason=discount_reason,
+            discount_authorized_by=discount_authorized_by,
+        )
+
+    def add_sales_transaction(
+        self,
+        transaction_code,
+        items,
+        username=None,
+        role=None,
+        terminal_id=None,
+        payment_method="cash",
+        cash_session_id=None,
+        discount_reason=None,
+        discount_authorized_by=None,
+    ):
+        return self._rpc(
+            "add_sales_transaction",
+            transaction_code,
+            items,
+            username=username,
+            role=role,
+            terminal_id=terminal_id,
+            payment_method=payment_method,
+            cash_session_id=cash_session_id,
+            discount_reason=discount_reason,
+            discount_authorized_by=discount_authorized_by,
+        ) or {"ok": False, "message": self._last_error or "rpc_error"}
+
+    # ---------- Caixa ----------
+    def get_open_cash_session(self, username=None, terminal_id=None):
+        return self._rpc(
+            "get_open_cash_session",
+            username=username,
+            terminal_id=terminal_id,
+        )
+
+    def open_cash_session(self, username, terminal_id, opening_amount=0.0, note="", role=None):
+        return self._rpc(
+            "open_cash_session",
+            username,
+            terminal_id,
+            opening_amount=opening_amount,
+            note=note,
+            role=role,
+        )
+
+    def get_cash_session_summary(self, session_id):
+        return self._rpc("get_cash_session_summary", session_id)
+
+    def close_cash_session(self, session_id, counted_amount, note="", closed_by=None, role=None):
+        return self._rpc(
+            "close_cash_session",
+            session_id,
+            counted_amount,
+            note=note,
+            closed_by=closed_by,
+            role=role,
         )
 
     def record_stock_movement(self, *args, **kwargs):

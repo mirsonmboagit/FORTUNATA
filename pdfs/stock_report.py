@@ -3,7 +3,6 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from num2words import num2words
 import pandas as pd
 from .base_report import BasePDFReport
 
@@ -41,7 +40,7 @@ class StockReport(BasePDFReport):
         self._create_header(
             elements,
             "RELATÓRIO DE ESTOQUE",
-            "Controle Completo e Análise de Movimentação de Inventário",
+            "Situação do estoque no período",
             filters
         )
         
@@ -72,42 +71,30 @@ class StockReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
-        elements.append(Paragraph("Resumo Consolidado de Estoque", title_style))
+        elements.append(Paragraph("Resumo do estoque", title_style))
         
         # Cálculos expandidos
         total_entrada = data['entrada'].sum()
         total_saida = data['saida'].sum()
         total_remanescente = data['remanescente'].sum()
-        taxa_rotatividade = (total_saida / total_entrada * 100) if total_entrada > 0 else 0
-        
-        # Análise de status
         esgotados = len(data[data['remanescente'] == 0])
         criticos = len(data[(data['remanescente'] > 0) & (data['remanescente'] < data['entrada'] * 0.30)])
         baixos = len(data[(data['remanescente'] >= data['entrada'] * 0.30) & (data['remanescente'] < data['entrada'] * 0.60)])
-        medios = len(data[(data['remanescente'] >= data['entrada'] * 0.60) & (data['remanescente'] < data['entrada'] * 0.80)])
-        altos = len(data[data['remanescente'] >= data['entrada'] * 0.80])
-        
-        # Taxa de vendas
-        taxa_vendas = (data['sold_stock'].sum() / total_entrada * 100) if total_entrada > 0 else 0
+        percentagem_vendida = (data['sold_stock'].sum() / total_entrada * 100) if total_entrada > 0 else 0
+        produtos_a_repor = criticos + baixos
         
         summary_data = [
-            ['MÉTRICA', 'VALOR', 'POR EXTENSO'],
-            ['Total de Produtos', f"{len(data)}", num2words(len(data), lang='pt')],
-            ['Estoque Total Inicial (Entrada)', f"{int(total_entrada):,}", num2words(int(total_entrada), lang='pt')],
-            ['Total de Saídas do Estoque', f"{int(total_saida):,}", num2words(int(total_saida), lang='pt')],
-            ['Total Vendido', f"{int(data['sold_stock'].sum()):,}", num2words(int(data['sold_stock'].sum()), lang='pt')],
-            ['Estoque Remanescente Atual', f"{int(total_remanescente):,}", num2words(int(total_remanescente), lang='pt')],
-            ['Taxa de Rotatividade', f"{taxa_rotatividade:.2f}%", f"{num2words(int(taxa_rotatividade), lang='pt')} por cento"],
-            ['Taxa de Vendas (Vendas/Entrada)', f"{taxa_vendas:.2f}%", f"{num2words(int(taxa_vendas), lang='pt')} por cento"],
-            ['', '', ''],
-            ['Produtos Esgotados', f"{esgotados}", num2words(esgotados, lang='pt')],
-            ['Produtos em Estoque Crítico', f"{criticos}", num2words(criticos, lang='pt')],
-            ['Produtos em Estoque Baixo', f"{baixos}", num2words(baixos, lang='pt')],
-            ['Produtos em Estoque Médio', f"{medios}", num2words(medios, lang='pt')],
-            ['Produtos em Estoque Alto', f"{altos}", num2words(altos, lang='pt')],
+            ['RESUMO', 'VALOR'],
+            ['Produtos no relatório', f"{len(data)}"],
+            ['Unidades adicionadas', f"{int(total_entrada):,}"],
+            ['Unidades vendidas', f"{int(data['sold_stock'].sum()):,}"],
+            ['Unidades em estoque', f"{int(total_remanescente):,}"],
+            ['Percentagem já vendida', f"{percentagem_vendida:.2f}%"],
+            ['Produtos sem estoque', f"{esgotados}"],
+            ['Produtos com estoque baixo', f"{produtos_a_repor}"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[3.5*inch, 2.5*inch, 4.2*inch])
+        summary_table = Table(summary_data, colWidths=[5.3*inch, 4.9*inch])
         
         summary_table.setStyle(TableStyle([
             # Cabeçalho
@@ -117,14 +104,9 @@ class StockReport(BasePDFReport):
             ('FONTSIZE', (0, 0), (-1, 0), 11),
             ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
             
-            # Separador
-            ('BACKGROUND', (0, 8), (-1, 8), colors.HexColor('#ecf0f1')),
-            ('LINEABOVE', (0, 8), (-1, 8), 1.5, colors.HexColor('#95a5a6')),
-            
             # Corpo
             ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('ROWBACKGROUNDS', (0, 1), (-1, 7), [colors.white, colors.HexColor('#f0f8f0')]),
-            ('ROWBACKGROUNDS', (0, 9), (-1, -1), [colors.white, colors.HexColor('#f0f8f0')]),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f8f0')]),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#bdc3c7')),
             ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#27ae60')),
             
@@ -132,21 +114,19 @@ class StockReport(BasePDFReport):
             ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
             ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
-            ('ALIGN', (2, 1), (2, -1), 'LEFT'),
             
             # Destaques
-            ('TEXTCOLOR', (1, 5), (1, 5), colors.HexColor('#2980b9')),
-            ('TEXTCOLOR', (1, 6), (1, 7), colors.HexColor('#8e44ad')),
-            ('FONTNAME', (1, 5), (1, 7), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (1, 3), (1, 5), colors.HexColor('#2980b9')),
+            ('FONTNAME', (1, 3), (1, 5), 'Helvetica-Bold'),
             
             # Alertas de estoque
-            ('TEXTCOLOR', (1, 9), (1, 9), colors.HexColor('#e74c3c')),  # Esgotados
-            ('TEXTCOLOR', (1, 10), (1, 10), colors.HexColor('#e67e22')),  # Críticos
-            ('FONTNAME', (1, 9), (1, 10), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (1, 6), (1, 6), colors.HexColor('#e74c3c')),
+            ('TEXTCOLOR', (1, 7), (1, 7), colors.HexColor('#e67e22')),
+            ('FONTNAME', (1, 6), (1, 7), 'Helvetica-Bold'),
             
             # Padding
-            ('TOPPADDING', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('LEFTPADDING', (0, 0), (-1, -1), 12),
             ('RIGHTPADDING', (0, 0), (-1, -1), 12),
         ]))
@@ -183,7 +163,7 @@ class StockReport(BasePDFReport):
         ]
         elements.append(
             self._build_bar_chart(
-                "Grafico de Barras: Distribuicao do Estado do Estoque",
+                "Estado do estoque",
                 chart_items,
                 value_formatter=lambda value: f"{int(round(value))} produtos",
                 accent_color="#27ae60",
@@ -214,13 +194,13 @@ class StockReport(BasePDFReport):
             fontName='Helvetica-Bold'
         )
         elements.append(Paragraph(
-            f"⚠️ ALERTA: {len(critical_stock)} Produtos Requerem Atenção Imediata",
+            f"Produtos para repor: {len(critical_stock)}",
             title_style
         ))
         
         alert_data = [[
             'Produto', 'Categoria', 'Entrada', 'Vendido', 
-            'Estoque\nAtual', 'Status', 'Prioridade', 'Ação Recomendada'
+            'Estoque\nAtual', 'Situação', 'O que fazer'
         ]]
         
         for _, row in critical_stock.head(10).iterrows():
@@ -233,13 +213,12 @@ class StockReport(BasePDFReport):
                 f"{int(row['sold_stock'])}",
                 f"{int(row['remanescente'])}",
                 status,
-                prioridade,
                 acao
             ])
         
         alert_table = Table(alert_data, colWidths=[
             2.4*inch, 1.2*inch, 0.9*inch, 0.9*inch, 
-            0.9*inch, 1.0*inch, 1.0*inch, 1.9*inch
+            0.9*inch, 1.0*inch, 2.4*inch
         ])
         
         alert_table.setStyle(TableStyle([
@@ -253,7 +232,7 @@ class StockReport(BasePDFReport):
             
             # Corpo
             ('ALIGN', (0, 1), (1, -1), 'LEFT'),
-            ('ALIGN', (2, 1), (-2, -1), 'CENTER'),
+            ('ALIGN', (2, 1), (5, -1), 'CENTER'),
             ('ALIGN', (-1, 1), (-1, -1), 'LEFT'),
             ('FONTSIZE', (0, 1), (-1, -1), 8),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#fadbd8'), colors.HexColor('#f5eaea')]),
@@ -314,12 +293,12 @@ class StockReport(BasePDFReport):
         )
         elements.append(
             Paragraph(
-                f"Alertas de Vencimento (janela de 90 dias): {len(expiry_rows)} produto(s)",
+                f"Produtos perto da validade: {len(expiry_rows)}",
                 title_style,
             )
         )
 
-        table_data = [["Produto", "Categoria", "Validade", "Dias", "Nivel"]]
+        table_data = [["Produto", "Categoria", "Validade", "Dias restantes", "Situação"]]
         for _, row in expiry_rows.head(24).iterrows():
             expiry_day = self._format_expiry_date(row.get("expiry_date"))
             days_left = row.get("expiry_days_left")
@@ -389,16 +368,15 @@ class StockReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
-        elements.append(Paragraph("Detalhamento Completo do Inventário", title_style))
+        elements.append(Paragraph("Detalhes do estoque", title_style))
         
         detail_data = [[
             'Produto', 'Categoria', 'Entrada', 'Saída', 
-            'Vendido', 'Remanes-\ncente', 'Rotati-\nvidade%', 'Status'
+            'Vendido', 'Em\nEstoque', 'Situação'
         ]]
         
         for _, row in data.iterrows():
             status = self._calculate_stock_status(row['remanescente'], row['entrada'])
-            rotatividade = (row['sold_stock'] / row['entrada'] * 100) if row['entrada'] > 0 else 0
             
             detail_data.append([
                 str(row['description'])[:26],
@@ -407,13 +385,12 @@ class StockReport(BasePDFReport):
                 f"{int(row['saida']):,}",
                 f"{int(row['sold_stock']):,}",
                 f"{int(row['remanescente']):,}",
-                f"{rotatividade:.1f}%",
                 status
             ])
         
         detail_table = Table(detail_data, colWidths=[
             2.6*inch, 1.3*inch, 1.0*inch, 1.0*inch, 
-            1.0*inch, 1.1*inch, 1.0*inch, 1.0*inch
+            1.0*inch, 1.2*inch, 1.2*inch
         ])
         
         detail_table.setStyle(TableStyle([
@@ -436,9 +413,9 @@ class StockReport(BasePDFReport):
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#95a5a6')),
             ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#16a085')),
             
-            # Destaque rotatividade
-            ('TEXTCOLOR', (6, 1), (6, -1), colors.HexColor('#8e44ad')),
-            ('FONTNAME', (6, 1), (6, -1), 'Helvetica-Bold'),
+            # Destaque de estoque atual
+            ('TEXTCOLOR', (5, 1), (5, -1), colors.HexColor('#2980b9')),
+            ('FONTNAME', (5, 1), (5, -1), 'Helvetica-Bold'),
             
             # Padding
             ('TOPPADDING', (0, 0), (-1, 0), 12),
@@ -454,30 +431,30 @@ class StockReport(BasePDFReport):
             status = detail_data[i][-1]
             if status == "Esgotado":
                 detail_table.setStyle(TableStyle([
-                    ('BACKGROUND', (7, i), (7, i), colors.HexColor('#e74c3c')),
-                    ('TEXTCOLOR', (7, i), (7, i), colors.white),
-                    ('FONTNAME', (7, i), (7, i), 'Helvetica-Bold'),
+                    ('BACKGROUND', (6, i), (6, i), colors.HexColor('#e74c3c')),
+                    ('TEXTCOLOR', (6, i), (6, i), colors.white),
+                    ('FONTNAME', (6, i), (6, i), 'Helvetica-Bold'),
                 ]))
             elif status == "Crítico":
                 detail_table.setStyle(TableStyle([
-                    ('BACKGROUND', (7, i), (7, i), colors.HexColor('#e67e22')),
-                    ('TEXTCOLOR', (7, i), (7, i), colors.white),
-                    ('FONTNAME', (7, i), (7, i), 'Helvetica-Bold'),
+                    ('BACKGROUND', (6, i), (6, i), colors.HexColor('#e67e22')),
+                    ('TEXTCOLOR', (6, i), (6, i), colors.white),
+                    ('FONTNAME', (6, i), (6, i), 'Helvetica-Bold'),
                 ]))
             elif status == "Baixo":
                 detail_table.setStyle(TableStyle([
-                    ('BACKGROUND', (7, i), (7, i), colors.HexColor('#f39c12')),
-                    ('TEXTCOLOR', (7, i), (7, i), colors.white),
+                    ('BACKGROUND', (6, i), (6, i), colors.HexColor('#f39c12')),
+                    ('TEXTCOLOR', (6, i), (6, i), colors.white),
                 ]))
             elif status == "Médio":
                 detail_table.setStyle(TableStyle([
-                    ('BACKGROUND', (7, i), (7, i), colors.HexColor('#3498db')),
-                    ('TEXTCOLOR', (7, i), (7, i), colors.white),
+                    ('BACKGROUND', (6, i), (6, i), colors.HexColor('#3498db')),
+                    ('TEXTCOLOR', (6, i), (6, i), colors.white),
                 ]))
             else:  # Alto
                 detail_table.setStyle(TableStyle([
-                    ('BACKGROUND', (7, i), (7, i), colors.HexColor('#27ae60')),
-                    ('TEXTCOLOR', (7, i), (7, i), colors.white),
+                    ('BACKGROUND', (6, i), (6, i), colors.HexColor('#27ae60')),
+                    ('TEXTCOLOR', (6, i), (6, i), colors.white),
                 ]))
         
         elements.append(detail_table)

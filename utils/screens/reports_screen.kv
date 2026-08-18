@@ -44,10 +44,10 @@
 
 <ReportsReportButton@HoverRaisedButton>:
     size_hint_y: None
-    height: dp(104)
-    radius: [dp(18)]
-    font_size: sp(15)
-    elevation: 3
+    height: dp(42)
+    radius: [dp(10)]
+    font_size: sp(13)
+    elevation: 1
     press_enabled: True
     hover_bg_mix: 0.12
     hover_line_mix: 0.24
@@ -275,7 +275,7 @@
                         # Atalhos de período
                         MDGridLayout:
                             id: quick_range_grid
-                            cols: 4
+                            cols: 5
                             spacing: dp(8)
                             size_hint_y: None
                             height: dp(42)
@@ -307,6 +307,13 @@
                                 text_color: app.theme_tokens['info']
                                 hover_accent_color: app.theme_tokens['info']
                                 on_release: root.apply_current_month_range()
+
+                            ReportsRangeButton:
+                                text: 'Este Ano'
+                                md_bg_color: app.theme_tokens['card_alt']
+                                text_color: app.theme_tokens['primary']
+                                hover_accent_color: app.theme_tokens['primary']
+                                on_release: root.apply_current_year_range()
 
                         Widget:
                             size_hint_y: None
@@ -429,6 +436,103 @@
                                 line_color: 1, 1, 1, 0.12
                                 on_release: root.refresh_screen_data()
 
+                        Widget:
+                            size_hint_y: None
+                            height: dp(18)
+
+                        MDLabel:
+                            text: 'Gerar Relatorio'
+                            font_style: 'Subtitle1'
+                            bold: True
+                            halign: 'left'
+                            theme_text_color: 'Custom'
+                            text_color: app.theme_tokens['text_primary']
+                            size_hint_y: None
+                            height: dp(28)
+
+                        MDLabel:
+                            text: root.search_summary_text
+                            font_style: 'Caption'
+                            halign: 'left'
+                            theme_text_color: 'Custom'
+                            text_color: app.theme_tokens['text_secondary']
+                            size_hint_y: None
+                            height: dp(20)
+
+                        Widget:
+                            size_hint_y: None
+                            height: dp(8)
+
+                        MDGridLayout:
+                            id: reports_grid
+                            cols: 5
+                            spacing: dp(10)
+                            size_hint_y: None
+                            height: self.minimum_height
+                            adaptive_height: True
+
+                            ReportsReportButton:
+                                id: sales_report_card
+                                text: 'Relatorio de Vendas'
+                                md_bg_color: app.theme_tokens['primary']
+                                text_color: app.theme_tokens['on_primary']
+                                hover_accent_color: [1, 1, 1, 1]
+                                line_color: 1, 1, 1, 0.14
+                                on_release: root.generate_sales_report()
+
+                            ReportsReportButton:
+                                id: stock_report_card
+                                text: 'Relatorio de Estoque'
+                                md_bg_color: app.theme_tokens['success']
+                                text_color: app.theme_tokens['on_primary']
+                                hover_accent_color: [1, 1, 1, 1]
+                                line_color: 1, 1, 1, 0.14
+                                on_release: root.generate_stock_report()
+
+                            ReportsReportButton:
+                                id: profit_report_card
+                                text: 'Relatorio de Lucro'
+                                md_bg_color: app.theme_tokens['warning']
+                                text_color: app.theme_tokens['on_primary']
+                                hover_accent_color: [1, 1, 1, 1]
+                                line_color: 1, 1, 1, 0.14
+                                on_release: root.generate_profit_report()
+
+                            ReportsReportButton:
+                                id: complete_report_card
+                                text: 'Relatorio Completo'
+                                md_bg_color: app.theme_tokens['info']
+                                text_color: app.theme_tokens['on_primary']
+                                hover_accent_color: [1, 1, 1, 1]
+                                line_color: 1, 1, 1, 0.14
+                                on_release: root.generate_complete_report()
+
+                            ReportsReportButton:
+                                id: cash_user_report_card
+                                text: 'Caixa por Utilizador'
+                                md_bg_color: app.theme_tokens['badge']
+                                text_color: app.theme_tokens['on_primary']
+                                hover_accent_color: [1, 1, 1, 1]
+                                line_color: 1, 1, 1, 0.14
+                                on_release: root.generate_cash_user_report()
+
+                        ReportsPanelCard:
+                            id: reports_empty_state
+                            size_hint_y: None
+                            height: 0
+                            opacity: 0
+                            disabled: True
+                            padding: [dp(16), dp(16), dp(16), dp(16)]
+                            md_bg_color: app.theme_tokens['card_alt']
+                            radius: [dp(8)]
+                            hover_enabled: False
+
+                            MDLabel:
+                                text: 'Nenhum relatorio combina com a pesquisa atual.'
+                                halign: 'center'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['text_primary']
+
                     # ── Imprimir gráficos ─────────────────────────────
                     MDBoxLayout:
                         size_hint_y: None
@@ -456,104 +560,6 @@
                         size_hint_y: None
                         height: self.minimum_height
                         adaptive_height: True
-
-                    # ── Título dos relatórios ────────────────────────
-                    MDBoxLayout:
-                        orientation: 'vertical'
-                        size_hint_y: None
-                        height: self.minimum_height
-                        adaptive_height: True
-
-                        MDLabel:
-                            text: 'Selecione o Tipo de Relatorio'
-                            font_style: 'Subtitle1'
-                            bold: True
-                            halign: 'left'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_primary']
-                            size_hint_y: None
-                            height: dp(32)
-
-                        MDLabel:
-                            text: root.search_summary_text
-                            font_style: 'Caption'
-                            halign: 'left'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_secondary']
-                            size_hint_y: None
-                            height: dp(20)
-
-                    # ── Grid de relatórios ───────────────────────────
-                    MDGridLayout:
-                        id: reports_grid
-                        cols: 2
-                        spacing: dp(12)
-                        size_hint_y: None
-                        height: self.minimum_height
-                        adaptive_height: True
-
-                        ReportsReportButton:
-                            id: sales_report_card
-                            text: 'Relatorio de Vendas'
-                            md_bg_color: app.theme_tokens['primary']
-                            text_color: app.theme_tokens['on_primary']
-                            hover_accent_color: [1, 1, 1, 1]
-                            line_color: 1, 1, 1, 0.14
-                            on_release: root.generate_sales_report()
-
-                        ReportsReportButton:
-                            id: stock_report_card
-                            text: 'Relatorio de Estoque'
-                            md_bg_color: app.theme_tokens['success']
-                            text_color: app.theme_tokens['on_primary']
-                            hover_accent_color: [1, 1, 1, 1]
-                            line_color: 1, 1, 1, 0.14
-                            on_release: root.generate_stock_report()
-
-                        ReportsReportButton:
-                            id: profit_report_card
-                            text: 'Relatorio de Lucro'
-                            md_bg_color: app.theme_tokens['warning']
-                            text_color: app.theme_tokens['on_primary']
-                            hover_accent_color: [1, 1, 1, 1]
-                            line_color: 1, 1, 1, 0.14
-                            on_release: root.generate_profit_report()
-
-                        ReportsReportButton:
-                            id: complete_report_card
-                            text: 'Relatorio Completo'
-                            md_bg_color: app.theme_tokens['info']
-                            text_color: app.theme_tokens['on_primary']
-                            hover_accent_color: [1, 1, 1, 1]
-                            line_color: 1, 1, 1, 0.14
-                            on_release: root.generate_complete_report()
-
-                        ReportsReportButton:
-                            id: cash_user_report_card
-                            text: 'Caixa por Utilizador'
-                            md_bg_color: app.theme_tokens['badge']
-                            text_color: app.theme_tokens['on_primary']
-                            hover_accent_color: [1, 1, 1, 1]
-                            line_color: 1, 1, 1, 0.14
-                            on_release: root.generate_cash_user_report()
-
-                    # Estado vazio da pesquisa
-                    ReportsPanelCard:
-                        id: reports_empty_state
-                        size_hint_y: None
-                        height: 0
-                        opacity: 0
-                        disabled: True
-                        padding: [dp(16), dp(16), dp(16), dp(16)]
-                        md_bg_color: app.theme_tokens['card_alt']
-                        radius: [dp(8)]
-                        hover_enabled: False
-
-                        MDLabel:
-                            text: 'Nenhum relatorio combina com a pesquisa atual.'
-                            halign: 'center'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_primary']
 
                     Widget:
                         size_hint_y: None

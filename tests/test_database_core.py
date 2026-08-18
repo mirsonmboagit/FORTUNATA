@@ -62,6 +62,63 @@ class DatabaseSetupAndUserTests(TemporaryDatabaseTestCase):
 
 
 class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
+    def test_composite_sale_is_atomic_and_idempotent(self):
+        first = self.add_sample_product(description="Agua", barcode="mob-a", stock=2, sale_price=40)
+        second = self.add_sample_product(description="Sumo", barcode="mob-b", stock=1, sale_price=60)
+        transaction_code = "MOB-ATOMIC-001"
+
+        failed = self.quiet(
+            self.db.add_sales_transaction,
+            transaction_code,
+            [
+                {"id": first, "qty": 1, "effective_unit_price": 40},
+                {"id": second, "qty": 2, "effective_unit_price": 60},
+            ],
+            username="maria",
+            role="manager",
+            terminal_id="MOBILE-1",
+            payment_method="card",
+        )
+        self.assertFalse(failed["ok"])
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (first,)), 2.0)
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales WHERE transaction_code=?", (transaction_code,)), 0)
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sale_transactions WHERE transaction_code=?", (transaction_code,)), 0)
+
+        completed = self.quiet(
+            self.db.add_sales_transaction,
+            transaction_code,
+            [
+                {"id": first, "qty": 1, "effective_unit_price": 40},
+                {"id": second, "qty": 1, "effective_unit_price": 60},
+            ],
+            username="maria",
+            role="manager",
+            terminal_id="MOBILE-1",
+            payment_method="card",
+        )
+        self.assertTrue(completed["ok"])
+        self.assertFalse(completed["idempotent"])
+        self.assertEqual(len(completed["sale_ids"]), 2)
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (first,)), 1.0)
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (second,)), 0.0)
+
+        retried = self.quiet(
+            self.db.add_sales_transaction,
+            transaction_code,
+            [
+                {"id": first, "qty": 1, "effective_unit_price": 40},
+                {"id": second, "qty": 1, "effective_unit_price": 60},
+            ],
+            username="maria",
+            role="manager",
+            terminal_id="MOBILE-1",
+            payment_method="card",
+        )
+        self.assertTrue(retried["ok"])
+        self.assertTrue(retried["idempotent"])
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales WHERE transaction_code=?", (transaction_code,)), 2)
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id=?", (first,)), 1.0)
+
     def test_physical_inventory_counts_and_applies_audited_adjustments(self):
         first = self.add_sample_product(description="Arroz", barcode="inv-a", stock=10)
         second = self.add_sample_product(description="Acucar", barcode="inv-b", stock=5)
@@ -170,6 +227,79 @@ class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
         self.assertEqual(summary["payment_methods"]["card"]["total"], 200.0)
         self.assertEqual(summary["cash_refunds"], 50.0)
         self.assertEqual(summary["expected_cash"], 150.0)
+
+    def test_refund_is_blocked_after_ten_minutes(self):
+        product_id = self.add_sample_product(stock=10, sale_price=100)
+        sale_id = self.quiet(
+            self.db.add_sale,
+            product_id,
+            1,
+            100,
+            username="maria",
+            role="manager",
+            terminal_id="POS-1",
+            transaction_code="PRAZO-1",
+        )
+        expired_at = (datetime.now() - timedelta(minutes=11)).strftime("%Y-%m-%d %H:%M:%S")
+        self.db.cursor.execute("UPDATE sales SET sale_date = ? WHERE id = ?", (expired_at, sale_id))
+        self.db.conn.commit()
+
+        result = self.db.refund_sale_item(sale_id, 1, "Cliente desistiu", "maria", "manager", "POS-1")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("10 minutos", result["message"])
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id = ?", (product_id,)), 9.0)
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales_returns WHERE sale_id = ?", (sale_id,)), 0)
+
+    def test_sales_metrics_count_transactions_instead_of_product_rows(self):
+        first = self.add_sample_product(description="Arroz", barcode="tx-a", stock=10, sale_price=100)
+        second = self.add_sample_product(description="Oleo", barcode="tx-b", stock=10, sale_price=200)
+
+        self.assertIsNotNone(
+            self.quiet(
+                self.db.add_sale, first, 1, 100,
+                username="maria", role="manager", terminal_id="POS-1", transaction_code="TX-UNICA",
+            )
+        )
+        self.assertIsNotNone(
+            self.quiet(
+                self.db.add_sale, second, 1, 200,
+                username="maria", role="manager", terminal_id="POS-1", transaction_code="TX-UNICA",
+            )
+        )
+        # Registos antigos sem codigo continuam contabilizados individualmente.
+        self.assertIsNotNone(
+            self.quiet(
+                self.db.add_sale, first, 1, 100,
+                username="maria", role="manager", terminal_id="POS-1",
+            )
+        )
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        stats = self.db.get_sales_statistics_by_date(datetime.now().strftime("%d/%m/%Y"))
+        monthly = self.db.get_monthly_sales_summary(datetime.now().month, datetime.now().year)
+        snapshot = self.db.get_admin_home_snapshot(lookback_days=7)
+        productivity = self.db.get_productivity_report_data(today, today)
+        cash_report = self.db.get_cash_user_report_data(today, today)
+        from AI.data_collector import IntelligenceDataCollector
+        intelligence_snapshot = IntelligenceDataCollector(db=self.db, default_ttl=5).collect_snapshot()
+
+        self.assertEqual(stats[0], 2)
+        self.assertEqual(stats[1], 3.0)
+        self.assertEqual(stats[2], 400.0)
+        self.assertEqual(stats[3], 200.0)
+        self.assertEqual(stats[4], 100.0)
+        self.assertEqual(stats[5], 300.0)
+        self.assertEqual(monthly[0][1], 2)
+        self.assertEqual(snapshot["summary"]["sales_today_count"], 2)
+        self.assertEqual(snapshot["summary"]["revenue_today"], 400.0)
+        self.assertEqual(productivity["summary"]["total_sales"], 2)
+        self.assertEqual(productivity["summary"]["avg_ticket"], 200.0)
+        self.assertEqual(cash_report["summary"]["total_sales"], 2)
+        self.assertEqual(cash_report["summary"]["avg_ticket"], 200.0)
+        self.assertEqual(intelligence_snapshot["vendas_hoje"]["vendas"], 2)
+        self.assertEqual(intelligence_snapshot["vendas_hoje"]["ticket_medio"], 200.0)
+        self.assertEqual(intelligence_snapshot["atividade_caixa"]["total_vendas_hoje"], 2)
 
 
     def test_add_product_persists_sku_vat_and_pack_fields(self):

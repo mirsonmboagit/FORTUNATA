@@ -295,6 +295,46 @@
                                     row_default_height: max(dp(46), root.height * 0.054)
                                     spacing: 0
                                     padding: 0
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(40)
+                        padding: [dp(10), dp(4)]
+                        spacing: dp(8)
+
+                        AdminActionButton:
+                            id: admin_prev_btn
+                            text: "Anterior"
+                            icon: "chevron-left"
+                            tooltip_text: "Pagina anterior"
+                            size_hint_x: None
+                            width: dp(112)
+                            md_bg_color: app.theme_tokens['card_alt']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_primary']
+                            disabled: True
+                            on_release: root.previous_product_page()
+
+                        MDLabel:
+                            id: admin_page_label
+                            text: "Pagina 1/1 | 0 itens"
+                            halign: "center"
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_secondary']
+                            font_size: sp(12)
+
+                        AdminActionButton:
+                            id: admin_next_btn
+                            text: "Seguinte"
+                            icon: "chevron-right"
+                            tooltip_text: "Pagina seguinte"
+                            size_hint_x: None
+                            width: dp(112)
+                            md_bg_color: app.theme_tokens['card_alt']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_primary']
+                            disabled: True
+                            on_release: root.next_product_page()
         
         FloatLayout:
             id: ai_banner_container

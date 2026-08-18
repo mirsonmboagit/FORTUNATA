@@ -33,8 +33,8 @@ class ProductivityChartsReport(BasePDFReport):
         elements = []
         self._create_header(
             elements,
-            "GRAFICOS DE PRODUTIVIDADE",
-            "Impressao exclusiva dos graficos principais do painel inteligente",
+            "GRAFICOS DE VENDAS",
+            "Vendas por dia e por caixa",
             filters,
         )
 
@@ -47,7 +47,7 @@ class ProductivityChartsReport(BasePDFReport):
         charts_table = Table(
             [[
                 self._build_chart_cell(
-                    "Grafico Diario de Vendas",
+                    "Vendas por dia",
                     daily_subtitle,
                     self._build_bar_chart(
                         "Vendas por Dia",
@@ -61,10 +61,10 @@ class ProductivityChartsReport(BasePDFReport):
                     ),
                 ),
                 self._build_chart_cell(
-                    "Grafico de Ranking por Caixa",
+                    "Vendas por caixa",
                     terminal_subtitle,
                     self._build_bar_chart(
-                        "Caixas Mais Ativos",
+                        "Caixas com mais vendas",
                         terminal_items,
                         width=4.95 * inch,
                         max_items=0,
@@ -106,9 +106,9 @@ class ProductivityChartsReport(BasePDFReport):
         total_revenue = self._to_float(summary.get("total_revenue"))
 
         intro_text = (
-            "Este documento imprime apenas os graficos principais de produtividade. "
-            f"Resumo rapido: {total_sales} venda(s), receita total de {total_revenue:,.2f} MZN "
-            f"e {active_terminals} caixa(s) ativo(s) no periodo selecionado."
+            "Este documento mostra as vendas mais importantes do período. "
+            f"Foram feitas {total_sales} venda(s), no total de {total_revenue:,.2f} MZN, "
+            f"em {active_terminals} caixa(s)."
         )
         return Paragraph(intro_text, intro_style)
 
@@ -141,7 +141,7 @@ class ProductivityChartsReport(BasePDFReport):
     def _build_daily_items(self, daily_series):
         daily_series = list(daily_series or [])
         if not daily_series:
-            return [], "Sem dias disponiveis para impressao."
+            return [], "Não há dias com vendas para mostrar."
 
         non_zero_indexes = [
             index
@@ -161,9 +161,9 @@ class ProductivityChartsReport(BasePDFReport):
         ]
 
         if len(daily_series) > len(selected_days):
-            subtitle = f"Ultimos {len(selected_days)} dias ate a venda mais recente do periodo"
+            subtitle = f"Últimos {len(selected_days)} dias até à venda mais recente"
         else:
-            subtitle = "Periodo completo selecionado"
+            subtitle = "Todo o período selecionado"
         return items, subtitle
 
     def _build_terminal_items(self, terminal_series):
@@ -177,8 +177,8 @@ class ProductivityChartsReport(BasePDFReport):
             for item in selected_terminals
         ]
         if not items:
-            return [], "Sem caixas ativos para impressao."
-        subtitle = f"Top {len(items)} caixas por numero de vendas"
+            return [], "Não há caixas com vendas para mostrar."
+        subtitle = f"{len(items)} caixa(s) com vendas no período"
         return items, subtitle
 
     def _format_day_label(self, value):

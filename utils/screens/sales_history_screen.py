@@ -37,6 +37,7 @@ from kivy.metrics import dp
 from kivy.properties import BooleanProperty, StringProperty, ListProperty
 from kivy.uix.recycleview import RecycleView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
@@ -46,6 +47,12 @@ from kivymd.uix.screen import MDScreen
 from kivymd.uix.textfield import MDTextField
 
 from database.provider import get_db
+from utils.business.sales_transactions import (
+    REFUND_WINDOW_MINUTES,
+    group_sale_records,
+    refund_window_status,
+    transaction_key,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,7 +411,7 @@ Builder.load_string("""
                         theme_text_color: "Secondary"
 
                     MDLabel:
-                        text: "Produto"
+                        text: "Produtos"
                         bold: True
                         size_hint_x: 0.38
                         halign: "left"
@@ -421,7 +428,7 @@ Builder.load_string("""
 
                     MDLabel:
                         id: header_price_lbl
-                        text: "Preço"
+                        text: "Itens"
                         bold: True
                         size_hint_x: 0.14
                         halign: "right"
@@ -437,7 +444,7 @@ Builder.load_string("""
                         theme_text_color: "Secondary"
 
                     MDLabel:
-                        text: "Ação"
+                        text: "Ver"
                         bold: True
                         size_hint_x: 0.08
                         halign: "center"
@@ -700,13 +707,17 @@ class SalesHistoryScreen(MDScreen):
     # ── Resumo ────────────────────────────────────────────────────────────────
     def _build_summary(self, rows):
         gross = refunded = 0.0
+        transaction_keys = set()
         for row in rows or []:
             gross    += float(row[4] or 0) if len(row) > 4 else 0.0
             ret_qty   = float(row[6] or 0) if len(row) > 6 else 0.0
             unit_p    = float(row[3] or 0) if len(row) > 3 else 0.0
             refunded += ret_qty * unit_p
+            transaction_code = str(row[12] if len(row) > 12 and row[12] is not None else "").strip()
+            sale_id = row[0] if len(row) > 0 else id(row)
+            transaction_keys.add(transaction_code or f"sale:{sale_id}")
         return {
-            "total_sales":    len(rows or []),
+            "total_sales":    len(transaction_keys),
             "net_revenue":    gross - refunded,
             "refunded_total": refunded,
         }
@@ -773,7 +784,21 @@ class SalesHistoryScreen(MDScreen):
             "created_by":    row[8] if len(row) > 8 else None,
             "created_role":  row[9] if len(row) > 9 else None,
             "is_promotional": bool(row[10]) if len(row) > 10 else False,
+            "transaction_code": str(row[12] if len(row) > 12 and row[12] is not None else "").strip(),
         }
+
+    @staticmethod
+    def _row_transaction_key(row, index=0):
+        sale_id = row[0] if len(row) > 0 else index
+        code = row[12] if len(row) > 12 else ""
+        return transaction_key(code, sale_id if sale_id is not None else index)
+
+    @staticmethod
+    def _refund_window_text(seconds_left, refundable):
+        if not refundable:
+            return "Estorno indisponível"
+        minutes, seconds = divmod(max(0, int(seconds_left or 0)), 60)
+        return f"Estorno: {minutes:02d}:{seconds:02d}"
 
     # ── RecycleView: montar data list (O(n) puro, sem criar widgets) ──────────
     def _display_rows(self, rows):
@@ -797,54 +822,61 @@ class SalesHistoryScreen(MDScreen):
             show_price = 1
 
         data = []
-        warning_color = C["warning"]
-        card_alt      = C["card_alt"]
-        on_primary    = C["on_primary"]
+        transactions = group_sale_records(
+            [self._row_to_dict(row) for row in (rows or [])],
+        )
 
-        for i, row in enumerate(rows or []):
-            sale         = self._row_to_dict(row)
-            sale_id      = sale["sale_id"]
-            returned_qty = sale["returned_qty"]
-            available    = sale["available_qty"]
-            price        = sale["price"]
-            total        = sale["total"]
-            is_promo     = sale["is_promotional"]
-            created_by   = sale.get("created_by") or ""
+        for i, transaction in enumerate(transactions):
+            items = transaction["items"]
+            product_names = []
+            for item in items:
+                name = str(item.get("product") or "Produto")
+                if name not in product_names:
+                    product_names.append(name)
+            displayed_names = product_names[:2]
+            if len(product_names) > 2:
+                displayed_names.append(f"+{len(product_names) - 2}")
 
-            # Meta inline (sem widgets extras)
-            meta_parts = []
-            if sale_id:
-                meta_parts.append(f"#{sale_id}")
-            if created_by and created_by != "Sistema":
-                meta_parts.append(created_by)
-            if is_promo:
+            meta_parts = [f"{transaction['item_count']} produto(s)"]
+            code = transaction.get("transaction_code") or ""
+            if code:
+                meta_parts.append(f"Venda {code}")
+            else:
+                meta_parts.append(f"Venda #{items[0].get('sale_id')}")
+            seller = str(transaction.get("created_by") or "").strip()
+            if seller and seller.lower() != "sistema":
+                meta_parts.append(seller)
+            if transaction.get("is_promotional"):
                 meta_parts.append("PROMO")
-            if returned_qty > 0:
-                meta_parts.append(f"rem:{self._fmt_qty(returned_qty)}")
-
-            total_liq  = max(0.0, total - returned_qty * price)
-            can_remove = bool(sale_id and available > 0.0001)
+            if transaction.get("refunded_total", 0.0) > 0:
+                meta_parts.append(f"est.: {self._fmt_cur(transaction['refunded_total'])}")
+            meta_parts.append(
+                self._refund_window_text(
+                    transaction.get("refund_seconds_left"),
+                    transaction.get("can_refund"),
+                )
+            )
 
             data.append({
-                "sale_data":    sale,
-                "action_callback": self.open_refund_dialog if can_remove else None,
-                "row_bg":       C["bg_even"] if i % 2 == 0 else C["bg_odd"],
-                "col_date":     self._fmt_date(sale["sale_date"]),
-                "col_product":  str(sale["product"]),
-                "col_meta":     "  ·  ".join(meta_parts),
-                "col_qty":      self._fmt_qty(sale["qty"]),
-                "col_price":    self._fmt_cur(price),
-                "col_total":    self._fmt_cur(total_liq),
-                "btn_label":    "REM" if can_remove else "OK",
-                "btn_color":    warning_color if can_remove else card_alt,
-                "btn_disabled": not can_remove,
-                "show_price":   show_price,
+                "sale_data": transaction,
+                "action_callback": self.open_transaction_dialog,
+                "row_bg": C["bg_even"] if i % 2 == 0 else C["bg_odd"],
+                "col_date": self._fmt_date(transaction.get("sale_date")),
+                "col_product": "  ·  ".join(displayed_names) or "Produtos da venda",
+                "col_meta": "  ·  ".join(meta_parts),
+                "col_qty": self._fmt_qty(transaction.get("quantity")),
+                "col_price": str(transaction.get("item_count") or 0),
+                "col_total": self._fmt_cur(transaction.get("net_total")),
+                "btn_label": "VER",
+                "btn_color": C["primary"],
+                "btn_disabled": False,
+                "show_price": show_price,
                 "col_text_pri": C["text_pri"],
                 "col_text_sec": C["text_sec"],
-                "col_primary":  C["primary"],
-                "col_success":  C["success"],
-                "w_date":  w_date,  "w_prod":  w_prod,
-                "w_qty":   w_qty,   "w_price": w_price,
+                "col_primary": C["primary"],
+                "col_success": C["success"],
+                "w_date": w_date, "w_prod": w_prod,
+                "w_qty": w_qty, "w_price": w_price,
                 "w_total": w_total, "w_action": w_action,
             })
 
@@ -957,24 +989,36 @@ class SalesHistoryScreen(MDScreen):
         return out
 
     def _filter_promo(self, rows):
-        return [r for r in rows if len(r) > 10 and bool(r[10])]
+        promo_keys = {
+            self._row_transaction_key(row, index)
+            for index, row in enumerate(rows or [])
+            if len(row) > 10 and bool(row[10])
+        }
+        return [
+            row for index, row in enumerate(rows or [])
+            if self._row_transaction_key(row, index) in promo_keys
+        ]
 
     def _apply_text_filter(self, rows):
         query = self._get_search_text()
         if not query:
             return list(rows or [])
         q = query.lower()
-        out = []
-        for row in rows or []:
+        matching_keys = set()
+        for index, row in enumerate(rows or []):
             haystack = " ".join(str(v or "") for v in (
                 row[0] if len(row) > 0 else "",
                 row[1] if len(row) > 1 else "",
                 row[8] if len(row) > 8 else "",
                 row[5] if len(row) > 5 else "",
+                row[12] if len(row) > 12 else "",
             )).lower()
             if q in haystack:
-                out.append(row)
-        return out
+                matching_keys.add(self._row_transaction_key(row, index))
+        return [
+            row for index, row in enumerate(rows or [])
+            if self._row_transaction_key(row, index) in matching_keys
+        ]
 
     def _get_search_text(self):
         if "search_input" not in self.ids:
@@ -1256,8 +1300,115 @@ class SalesHistoryScreen(MDScreen):
         self._show_initial_state()
         self._show_msg("Concluído", "Histórico de vendas eliminado com sucesso.")
 
+    # ── Detalhes da transação e estorno ───────────────────────────────────────
+    def open_transaction_dialog(self, transaction):
+        items = list((transaction or {}).get("items") or [])
+        if not items:
+            self._show_msg("Venda", "Não foi possível obter os produtos desta venda.")
+            return
+
+        seconds_left = int((transaction or {}).get("refund_seconds_left") or 0)
+        can_refund = bool((transaction or {}).get("can_refund"))
+        seller = str((transaction or {}).get("created_by") or "").strip() or "Sistema"
+        header = MDLabel(
+            text=(
+                f"{len(items)} produto(s) · Operador: {seller}\n"
+                f"Total: {self._fmt_cur((transaction or {}).get('net_total'))} MT\n"
+                f"{self._refund_window_text(seconds_left, can_refund)} "
+                f"(limite: {REFUND_WINDOW_MINUTES} min)"
+            ),
+            theme_text_color="Secondary",
+            size_hint_y=None,
+            height=dp(78),
+        )
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(390),
+        )
+        content.add_widget(header)
+        scroll = ScrollView(do_scroll_x=False, bar_width=dp(5))
+        product_list = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            size_hint_y=None,
+            padding=[dp(2), dp(2), dp(2), dp(2)],
+        )
+        product_list.bind(minimum_height=product_list.setter("height"))
+        scroll.add_widget(product_list)
+        content.add_widget(scroll)
+
+        close_btn = MDFlatButton(text="FECHAR")
+        dialog = MDDialog(
+            title="Produtos da venda",
+            type="custom",
+            content_cls=content,
+            buttons=[close_btn],
+        )
+        close_btn.bind(on_release=lambda _btn: dialog.dismiss())
+
+        for item in items:
+            available = float(item.get("available_qty") or 0.0)
+            allowed, item_seconds_left = refund_window_status(item.get("sale_date"))
+            refundable = bool(allowed and available > 0.0001)
+            row = MDBoxLayout(
+                orientation="horizontal",
+                size_hint_y=None,
+                height=dp(68),
+                spacing=dp(8),
+                padding=[dp(8), dp(5), dp(4), dp(5)],
+            )
+            returned_qty = float(item.get("returned_qty") or 0.0)
+            row.add_widget(MDLabel(
+                text=(
+                    f"[b]{item.get('product') or 'Produto'}[/b]\n"
+                    f"{self._fmt_qty(item.get('qty'))} × {self._fmt_cur(item.get('price'))} MT"
+                    + (f" · Estornado: {self._fmt_qty(returned_qty)}" if returned_qty > 0 else "")
+                ),
+                markup=True,
+                theme_text_color="Primary",
+                size_hint_x=1,
+            ))
+            if refundable:
+                button_text = "ESTORNAR"
+                button_color = self._C["warning"]
+            elif available <= 0.0001:
+                button_text = "ESTORNADO"
+                button_color = self._C["card_alt"]
+            else:
+                button_text = "EXPIRADO"
+                button_color = self._C["card_alt"]
+            refund_button = MDRaisedButton(
+                text=button_text,
+                size_hint_x=None,
+                width=dp(106),
+                disabled=not refundable,
+                md_bg_color=button_color,
+                elevation=0,
+                font_size=dp(10),
+            )
+            if refundable:
+                refund_button.bind(
+                    on_release=lambda _btn, sale=dict(item): self._open_transaction_item_refund(dialog, sale),
+                )
+            row.add_widget(refund_button)
+            product_list.add_widget(row)
+        dialog.open()
+
+    def _open_transaction_item_refund(self, transaction_dialog, sale_data):
+        transaction_dialog.dismiss()
+        self.open_refund_dialog(sale_data)
+
     # ── Diálogo de remoção de item ────────────────────────────────────────────
     def open_refund_dialog(self, sale_data):
+        refund_allowed, _seconds_left = refund_window_status((sale_data or {}).get("sale_date"))
+        if not refund_allowed:
+            self._show_msg(
+                "Estorno expirado",
+                f"O estorno só é permitido nos primeiros {REFUND_WINDOW_MINUTES} minutos após a venda.",
+            )
+            return
         available = float(sale_data.get("available_qty", 0) or 0)
         if available <= 0:
             self._show_msg("Remover item", "Esta venda não tem saldo para remover.")
@@ -1320,6 +1471,13 @@ class SalesHistoryScreen(MDScreen):
 
     def _submit_refund(self, dialog, sale_data, qty_input, reason_input, cancel_btn, confirm_btn):
         if self._refund_in_prog:
+            return
+        refund_allowed, _seconds_left = refund_window_status((sale_data or {}).get("sale_date"))
+        if not refund_allowed:
+            self._show_msg(
+                "Estorno expirado",
+                f"O prazo de {REFUND_WINDOW_MINUTES} minutos para estorno desta venda expirou.",
+            )
             return
         try:
             qty = float((qty_input.text or "").strip())
@@ -1478,6 +1636,11 @@ class SalesHistoryScreen(MDScreen):
             "end_date":     e_dt,
             "filter_label": labels.get(self.current_filter, "Todos os registos"),
             "record_count": len(sales),
+            "transaction_count": len({
+                str(sale.get("transaction_code") or "").strip()
+                or f"sale:{sale.get('sale_id') if sale.get('sale_id') is not None else index}"
+                for index, sale in enumerate(sales)
+            }),
         }
 
     # ── Utilitário ────────────────────────────────────────────────────────────

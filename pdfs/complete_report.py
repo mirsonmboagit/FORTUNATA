@@ -39,7 +39,7 @@ class CompleteReport(BasePDFReport):
         self._create_header(
             elements,
             "RELATÓRIO COMPLETO",
-            "Visão Geral Consolidada de Produtos e Desempenho Financeiro",
+            "Resumo de vendas, estoque e lucro",
             filters,
         )
 
@@ -97,7 +97,7 @@ class CompleteReport(BasePDFReport):
         )
 
         elements.append(Paragraph(
-            "TABELA-MÃE: Visão Consolidada de Produtos",
+            "Produtos do período",
             ParagraphStyle(
                 'Title',
                 parent=styles['Heading1'],
@@ -109,7 +109,7 @@ class CompleteReport(BasePDFReport):
         ))
 
         elements.append(Paragraph(
-            "Movimentação, precificação, rentabilidade, performance e status de estoque",
+            "Entradas, vendas, estoque e lucro de cada produto",
             ParagraphStyle(
                 'Subtitle',
                 parent=styles['Normal'],
@@ -120,46 +120,34 @@ class CompleteReport(BasePDFReport):
         ))
 
         header = [
-            "Produto", "Categoria", "Entrada", "Saída", "Vendido",
-            "Estoque", "Rot.%", "P.Compra", "P.Venda",
-            "Markup%", "Receita", "Lucro", "Margem%", "Status"
+            "Produto", "Categoria", "Entrada", "Vendido", "Em\nestoque",
+            "Preço de\ncompra", "Preço de\nvenda", "Total de\nvendas", "Lucro", "Situação"
         ]
 
         rows = [header]
 
         for _, r in data.iterrows():
             receita = r["sold_stock"] * r["sale_price"]
-            rot = (r["sold_stock"] / r["entrada"] * 100) if r["entrada"] else 0
-            markup = (
-                (r["sale_price"] - r["unit_purchase_price"])
-                / r["unit_purchase_price"] * 100
-            ) if r["unit_purchase_price"] else 0
 
             if r["remanescente"] == 0:
                 status = "Esgotado"
             elif r["remanescente"] < r["entrada"] * 0.30:
-                status = "Crítico"
+                status = "Muito baixo"
             elif r["remanescente"] < r["entrada"] * 0.60:
                 status = "Baixo"
-            elif r["remanescente"] < r["entrada"] * 0.6:
-                status = "Médio"
             else:
-                status = "Alto"
+                status = "Disponível"
 
             rows.append([
                 self._build_table_cell(r["description"], text_cell_style, max_len=42),
                 self._build_table_cell(r["category"], text_cell_style, max_len=24),
                 int(r["entrada"]),
-                int(r["saida"]),
                 int(r["sold_stock"]),
                 int(r["remanescente"]),
-                f"{rot:.1f}",
                 f"{r['unit_purchase_price']:.2f}",
                 f"{r['sale_price']:.2f}",
-                f"{markup:.1f}",
                 f"{receita:,.2f}",
                 f"{r['lucro_total']:,.2f}",
-                f"{r['percentual_lucro']:.1f}",
                 self._build_table_cell(status, status_cell_style, max_len=12),
             ])
 
@@ -167,9 +155,8 @@ class CompleteReport(BasePDFReport):
         SAFE_TABLE_WIDTH = 10.35 * inch
 
         colWidths = [
-            2.35, 1.30, 0.62, 0.62, 0.62, 0.70,
-            0.62, 0.74, 0.74, 0.66,
-            0.98, 0.98, 0.70, 0.80
+            2.40, 1.30, 0.72, 0.75, 0.85,
+            0.90, 0.90, 1.15, 1.15, 0.90,
         ]
 
         scale = SAFE_TABLE_WIDTH / sum(colWidths)
@@ -220,7 +207,7 @@ class CompleteReport(BasePDFReport):
             spaceAfter=8,
             fontName='Helvetica-Bold'
         )
-        title = Paragraph("RESUMO ANALÍTICO DO PERÍODO", title_style)
+        title = Paragraph("RESUMO DO PERÍODO", title_style)
         elements.append(title)
         
         subtitle_style = ParagraphStyle(
@@ -232,7 +219,7 @@ class CompleteReport(BasePDFReport):
             fontName='Helvetica-Oblique'
         )
         subtitle = Paragraph(
-            "Consolidação de indicadores-chave de performance e resultados financeiros",
+            "Veja rapidamente as vendas, o estoque e o lucro deste período.",
             subtitle_style
         )
         elements.append(subtitle)
@@ -240,50 +227,29 @@ class CompleteReport(BasePDFReport):
         # Cálculos expandidos
         total_produtos = len(data)
         total_entrada = int(data["entrada"].sum())
-        total_saida = int(data["saida"].sum())
         total_vendido = int(data["sold_stock"].sum())
         total_estoque_atual = int(data["remanescente"].sum())
         
         receita_total = data["valor_total_vendas"].sum()
         lucro_total = data["lucro_total"].sum()
-        margem_media = data["percentual_lucro"].mean()
-        
-        # Métricas de performance
-        taxa_rotatividade_geral = (total_vendido / total_entrada * 100) if total_entrada > 0 else 0
-        ticket_medio = receita_total / total_vendido if total_vendido > 0 else 0
         lucro_por_produto = lucro_total / total_produtos if total_produtos > 0 else 0
 
-        # Produtos com estoque crítico
         produtos_esgotados = len(data[data["remanescente"] == 0])
-        produtos_criticos = len(data[(data["remanescente"] > 0) & (data["remanescente"] < data["entrada"] * 0.30)])
+        produtos_com_estoque_baixo = len(
+            data[(data["remanescente"] > 0) & (data["remanescente"] < data["entrada"] * 0.60)]
+        )
 
         resumo = [
-            ["INDICADOR", "VALOR", "OBSERVAÇÃO"],
-            
-            # Seção: Inventário
-            ["Total de Produtos Analisados", f"{total_produtos}", "Produtos únicos no período"],
-            ["Entrada Total de Estoque", f"{total_entrada:,}", "Unidades adicionadas"],
-            ["Saída Total de Estoque", f"{total_saida:,}", "Unidades removidas"],
-            ["Unidades Vendidas", f"{total_vendido:,}", "Vendas confirmadas"],
-            ["Estoque Atual Disponível", f"{total_estoque_atual:,}", "Saldo em inventário"],
-            
-            # Separador visual
-            ["", "", ""],
-            
-            # Seção: Performance Financeira
-            ["Receita Total (MZN)", f"{receita_total:,.2f}", "Faturamento bruto"],
-            ["Lucro Total (MZN)", f"{lucro_total:,.2f}", "Resultado líquido"],
-            ["Margem Média de Lucro (%)", f"{margem_media:.2f}%", "Rentabilidade média"],
-            ["Ticket Médio (MZN)", f"{ticket_medio:.2f}", "Valor médio por unidade vendida"],
-            ["Lucro Médio por Produto (MZN)", f"{lucro_por_produto:,.2f}", "Rentabilidade por SKU"],
-            
-            # Separador visual
-            ["", "", ""],
-            
-            # Seção: Indicadores Operacionais
-            ["Taxa de Rotatividade Geral (%)", f"{taxa_rotatividade_geral:.2f}%", "Eficiência de vendas"],
-            ["Produtos Esgotados", f"{produtos_esgotados}", "Sem estoque disponível"],
-            ["Produtos em Estoque Crítico", f"{produtos_criticos}", "Reposição urgente necessária"],
+            ["RESUMO", "VALOR", "O QUE SIGNIFICA"],
+            ["Produtos no relatório", f"{total_produtos}", "Produtos incluídos no período"],
+            ["Unidades adicionadas", f"{total_entrada:,}", "Entradas no estoque"],
+            ["Unidades vendidas", f"{total_vendido:,}", "Vendas realizadas"],
+            ["Unidades em estoque", f"{total_estoque_atual:,}", "Disponíveis neste momento"],
+            ["Total de vendas", f"MZN {receita_total:,.2f}", "Valor vendido"],
+            ["Lucro total", f"MZN {lucro_total:,.2f}", "Valor ganho nas vendas"],
+            ["Lucro médio por produto", f"MZN {lucro_por_produto:,.2f}", "Média dos produtos do relatório"],
+            ["Produtos sem estoque", f"{produtos_esgotados}", "Já precisam de reposição"],
+            ["Produtos com estoque baixo", f"{produtos_com_estoque_baixo}", "Convém preparar a reposição"],
         ]
 
         table = Table(
@@ -299,17 +265,9 @@ class CompleteReport(BasePDFReport):
             ("FONTSIZE", (0, 0), (-1, 0), 11),
             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
             
-            # Separadores (linhas vazias)
-            ("BACKGROUND", (0, 6), (-1, 6), colors.HexColor("#ecf0f1")),
-            ("BACKGROUND", (0, 12), (-1, 12), colors.HexColor("#ecf0f1")),
-            ("LINEABOVE", (0, 6), (-1, 6), 1.5, colors.HexColor("#95a5a6")),
-            ("LINEABOVE", (0, 12), (-1, 12), 1.5, colors.HexColor("#95a5a6")),
-            
             # Corpo
             ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-            ("ROWBACKGROUNDS", (0, 1), (-1, 5), [colors.white, colors.HexColor("#f8f9fa")]),
-            ("ROWBACKGROUNDS", (0, 7), (-1, 11), [colors.white, colors.HexColor("#f8f9fa")]),
-            ("ROWBACKGROUNDS", (0, 13), (-1, -1), [colors.white, colors.HexColor("#f8f9fa")]),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f9fa")]),
             
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bdc3c7")),
             ("LINEBELOW", (0, 0), (-1, 0), 1.5, colors.HexColor("#2c3e50")),
@@ -321,11 +279,10 @@ class CompleteReport(BasePDFReport):
             ("ALIGN", (2, 1), (2, -1), "LEFT"),
             
             # Destaques
-            ("TEXTCOLOR", (1, 7), (1, 7), colors.HexColor("#27ae60")),  # Receita
-            ("TEXTCOLOR", (1, 8), (1, 8), colors.HexColor("#16a085")),  # Lucro
-            ("TEXTCOLOR", (1, 9), (1, 9), colors.HexColor("#2980b9")),  # Margem
+            ("TEXTCOLOR", (1, 5), (1, 5), colors.HexColor("#27ae60")),
+            ("TEXTCOLOR", (1, 6), (1, 6), colors.HexColor("#16a085")),
             
-            ("FONTNAME", (1, 7), (1, 9), "Helvetica-Bold"),
+            ("FONTNAME", (1, 5), (1, 6), "Helvetica-Bold"),
 
             # Padding
             ("TOPPADDING", (0, 0), (-1, 0), 12),
@@ -349,7 +306,7 @@ class CompleteReport(BasePDFReport):
         ]
         elements.append(
             self._build_bar_chart(
-                "Grafico de Barras: Produtos com Maior Receita",
+                "Produtos com mais vendas em valor",
                 chart_items,
                 value_formatter=lambda value: f"MZN {value:,.2f}",
                 accent_color="#34495e",
@@ -383,11 +340,11 @@ class CompleteReport(BasePDFReport):
         )
         
         # Top 5 produtos por lucro
-        title = Paragraph("Top 5 Produtos Mais Lucrativos", title_style)
+        title = Paragraph("Produtos com mais lucro", title_style)
         elements.append(title)
         
         top_lucro = data.nlargest(5, 'lucro_total')
-        top_data = [["#", "Produto", "Receita (MZN)", "Lucro (MZN)", "Margem %"]]
+        top_data = [["#", "Produto", "Total de vendas (MZN)", "Lucro (MZN)"]]
         
         for idx, (_, row) in enumerate(top_lucro.iterrows(), 1):
             receita = row["sold_stock"] * row["sale_price"]
@@ -396,10 +353,9 @@ class CompleteReport(BasePDFReport):
                 self._build_table_cell(row["description"], table_text_style, max_len=54),
                 f"{receita:,.2f}",
                 f"{row['lucro_total']:,.2f}",
-                f"{row['percentual_lucro']:.1f}%"
             ])
         
-        top_table = Table(top_data, colWidths=[0.4*inch, 5*inch, 1.8*inch, 1.8*inch, 1.2*inch])
+        top_table = Table(top_data, colWidths=[0.4*inch, 5.1*inch, 2.2*inch, 2.2*inch])
         top_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#27ae60")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -418,7 +374,7 @@ class CompleteReport(BasePDFReport):
         elements.append(Spacer(1, 15))
         
         # Produtos que requerem atenção
-        title2 = Paragraph("Produtos que Requerem Atenção (Estoque Crítico/Esgotado)", title_style)
+        title2 = Paragraph("Produtos para repor", title_style)
         elements.append(title2)
         
         critical = data[
@@ -431,11 +387,11 @@ class CompleteReport(BasePDFReport):
             
             for _, row in critical.iterrows():
                 if row["remanescente"] == 0:
-                    status = "Esgotado"
-                    acao = "Reposição imediata"
+                    status = "Sem estoque"
+                    acao = "Repor assim que possível"
                 else:
-                    status = "Crítico"
-                    acao = "Reposição urgente"
+                    status = "Estoque baixo"
+                    acao = "Preparar a reposição"
                 
                 critical_data.append([
                     self._build_table_cell(row["description"], table_text_style, max_len=46),
@@ -464,7 +420,7 @@ class CompleteReport(BasePDFReport):
             elements.append(critical_table)
         else:
             no_critical = Paragraph(
-                "<i>Nenhum produto em situação crítica no momento.</i>",
+                "<i>Não há produtos a repor neste momento.</i>",
                 styles['Normal']
             )
             elements.append(no_critical)

@@ -495,7 +495,7 @@ class SmtpSettingsDialog:
 
 
 class RecoveryCodesDialog:
-    """Gera codigos de emergencia que funcionam sem e-mail ou internet."""
+    """Gera codigos de emergencia sem envio por e-mail."""
 
     def __init__(self, db=None):
         self.db = db or get_db()
@@ -516,7 +516,10 @@ class RecoveryCodesDialog:
         text = "\n".join(codes)
         content = MDBoxLayout(orientation="vertical", padding=dp(18), adaptive_height=True)
         content.add_widget(MDLabel(
-            text="Guarde ou imprima estes codigos agora. Cada codigo so pode ser usado uma vez.",
+            text=(
+                "Guarde ou imprima estes codigos agora. Cada codigo so pode ser usado uma vez. "
+                "Em instalacoes ligadas a API, a aplicacao ainda precisa conseguir contactar a API."
+            ),
             theme_text_color="Secondary", size_hint_y=None, height=dp(46),
         ))
         self.output = MDTextField(text=text, multiline=True, readonly=True, mode="rectangle", size_hint_y=None, height=dp(190))

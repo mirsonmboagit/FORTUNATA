@@ -33,7 +33,7 @@ class CashUserReport(BasePDFReport):
         self._create_header(
             elements,
             "RELATORIO DE CAIXA POR UTILIZADOR",
-            "Abertura e fechamento operacional calculados pela primeira e ultima venda",
+            "Vendas por utilizador e por caixa",
             filters,
         )
         self._add_summary(elements, summary)
@@ -68,16 +68,16 @@ class CashUserReport(BasePDFReport):
             )
 
         data = [
-            ["METRICA", "VALOR"],
-            ["Utilizadores ativos", str(int(summary.get("total_users") or 0))],
-            ["Caixas/terminais ativos", str(int(summary.get("total_terminals") or 0))],
-            ["Dias com movimento", str(int(summary.get("total_days") or 0))],
-            ["Total de vendas", str(int(summary.get("total_sales") or 0))],
-            ["Receita total", f"{self._to_float(summary.get('total_revenue')):,.2f} MZN"],
-            ["Ticket medio", f"{self._to_float(summary.get('avg_ticket')):,.2f} MZN"],
-            ["Primeira abertura", self._format_datetime(summary.get("first_opening_at"))],
-            ["Ultimo fechamento", self._format_datetime(summary.get("last_closing_at"))],
-            ["Utilizador lider", leader_text],
+            ["RESUMO", "VALOR"],
+            ["Utilizadores com vendas", str(int(summary.get("total_users") or 0))],
+            ["Caixas usados", str(int(summary.get("total_terminals") or 0))],
+            ["Dias com vendas", str(int(summary.get("total_days") or 0))],
+            ["Número de vendas", str(int(summary.get("total_sales") or 0))],
+            ["Total vendido", f"{self._to_float(summary.get('total_revenue')):,.2f} MZN"],
+            ["Média por venda", f"{self._to_float(summary.get('avg_ticket')):,.2f} MZN"],
+            ["Primeira venda", self._format_datetime(summary.get("first_opening_at"))],
+            ["Última venda", self._format_datetime(summary.get("last_closing_at"))],
+            ["Quem mais vendeu", leader_text],
         ]
 
         table = Table(data, colWidths=[2.8 * inch, 7.3 * inch])
@@ -90,8 +90,8 @@ class CashUserReport(BasePDFReport):
             ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#c9d3df")),
             ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
             ("FONTSIZE", (0, 1), (-1, -1), 8.8),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ]))
         elements.append(table)
 
@@ -105,9 +105,9 @@ class CashUserReport(BasePDFReport):
             spaceAfter=8,
             fontName="Helvetica-Bold",
         )
-        elements.append(Paragraph("Resumo por Utilizador", title_style))
+        elements.append(Paragraph("Vendas por utilizador", title_style))
 
-        data = [["#", "Utilizador", "Perfil", "Vendas", "Receita", "Ticket", "Dias", "Caixas"]]
+        data = [["#", "Utilizador", "Perfil", "Vendas", "Total vendido", "Média", "Dias", "Caixas"]]
         for index, item in enumerate(user_series[:18], 1):
             data.append([
                 str(index),
@@ -149,9 +149,9 @@ class CashUserReport(BasePDFReport):
             spaceAfter=8,
             fontName="Helvetica-Bold",
         )
-        elements.append(Paragraph("Abertura e Fechamento por Caixa", title_style))
+        elements.append(Paragraph("Vendas por caixa", title_style))
 
-        data = [["Data", "Utilizador", "Caixa", "Abertura", "Fechamento", "Vendas", "Receita", "Ticket"]]
+        data = [["Data", "Utilizador", "Caixa", "Primeira venda", "Última venda", "Vendas", "Total vendido", "Média"]]
         for item in session_rows[:28]:
             data.append([
                 self._format_date(item.get("date")),

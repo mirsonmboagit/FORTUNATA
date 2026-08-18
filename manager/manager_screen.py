@@ -565,6 +565,7 @@ class SalesScreen(MDScreen):
         self._cash_dialog = None
         self._discount_authorized_by = None
         self._discount_reason = ""
+        self._responsive_layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
         Clock.schedule_once(self._post_init, 0.05)
 
     def _post_init(self, *_args):
@@ -728,7 +729,7 @@ class SalesScreen(MDScreen):
         dialog.open()
 
     def on_size(self, *_args):
-        Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
+        self._responsive_layout_trigger()
 
     def _bind_keyboard_shortcuts(self):
         if self._keyboard_shortcuts_bound:
@@ -1274,7 +1275,7 @@ class SalesScreen(MDScreen):
             self._clock_ev.cancel()
             self._clock_ev = None
 
-    def _update_responsive_layout(self):
+    def _update_responsive_layout(self, *_args):
         if not self.ids:
             return
         header_card = self.ids.get("header_card")
@@ -1291,6 +1292,7 @@ class SalesScreen(MDScreen):
         action_group_anchor = self.ids.get("action_group_anchor")
         action_group_card = self.ids.get("action_group_card")
         bottom_actions_grid = self.ids.get("bottom_actions_grid")
+        footer_metrics_card = self.ids.get("footer_metrics_card")
         footer_metrics_grid = self.ids.get("footer_metrics_grid")
 
         if not body_shell or not workspace_card or not cart_card or not summary_card or not bottom_actions_grid:
@@ -1383,9 +1385,13 @@ class SalesScreen(MDScreen):
                 card.size_hint_y = 1
                 card.height = 0
 
-        bottom_actions_grid.cols = 1 if phone else 2 if narrow or compact else 4
-        action_button_width = dp(210 if phone else 180 if narrow else 148 if compact else 172)
-        for button_id in ("finalize_btn", "receipt_btn", "cancel_btn", "hold_btn"):
+        bottom_actions_grid.cols = 1 if phone else 2 if narrow else 3 if compact else 5
+        action_button_width = (
+            max(dp(112), self.width - dp(72))
+            if phone
+            else dp(170 if narrow else 144 if compact else 132)
+        )
+        for button_id in ("finalize_btn", "receipt_btn", "cancel_btn", "hold_btn", "cash_btn"):
             button = self.ids.get(button_id)
             if button is not None:
                 button.width = action_button_width
@@ -1401,6 +1407,8 @@ class SalesScreen(MDScreen):
             )
         if footer_metrics_grid is not None:
             footer_metrics_grid.cols = 1 if phone else 3
+        if footer_metrics_card is not None:
+            footer_metrics_card.height = dp(174 if phone else 58)
 
         panel = self.ids.get("scanner_preview_card")
         if panel is not None and (self._scanner_panel_initialized or panel.opacity > 0.01):

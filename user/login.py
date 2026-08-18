@@ -945,7 +945,9 @@ class LoginScreen(MDScreen):
         ))
 
         self._forgot_user_field = MDTextField(
-            hint_text='Usuario',
+            hint_text='Nome de utilizador',
+            helper_text='Confirme este nome antes de continuar.',
+            helper_text_mode='persistent',
             mode='rectangle',
             size_hint_y=None,
             height=dp(56),
@@ -1111,7 +1113,10 @@ class LoginScreen(MDScreen):
                 field.opacity = 1 if show_reset else 0
                 field.disabled = (not show_reset) or self.operation_in_progress
         if self._forgot_user_field is not None:
-            self._forgot_user_field.disabled = show_reset or self.operation_in_progress
+            # O utilizador identifica a recuperacao. Na confirmacao fica so de
+            # leitura (em vez de desativado), para continuar legivel em todas as etapas.
+            self._forgot_user_field.readonly = show_reset
+            self._forgot_user_field.disabled = self.operation_in_progress
         if self._forgot_send_button is not None:
             self._forgot_send_button.text = 'REDEFINIR' if show_reset else 'ENVIAR CÓDIGO'
         if self._forgot_resend_button is not None:
@@ -1123,7 +1128,8 @@ class LoginScreen(MDScreen):
             return
         self._set_forgot_stage(self._forgot_stage)
         if self._forgot_user_field is not None:
-            self._forgot_user_field.disabled = bool(busy) or self._forgot_stage == 'confirm'
+            self._forgot_user_field.readonly = self._forgot_stage == 'confirm'
+            self._forgot_user_field.disabled = bool(busy)
         for field in (
             self._forgot_code_field,
             self._forgot_new_password,
@@ -1143,6 +1149,8 @@ class LoginScreen(MDScreen):
             self._forgot_resend_button.disabled = bool(busy) or self._forgot_stage != 'confirm'
         if self._forgot_cancel_button is not None:
             self._forgot_cancel_button.disabled = bool(busy)
+        if self._forgot_recovery_button is not None:
+            self._forgot_recovery_button.disabled = bool(busy)
 
     def _submit_forgot(self, *args):
         if self._forgot_stage == 'confirm':
@@ -1201,9 +1209,23 @@ class LoginScreen(MDScreen):
 
     def _open_recovery_code_dialog(self, *args):
         content = MDBoxLayout(orientation='vertical', spacing=dp(10), padding=dp(16), adaptive_height=True)
-        username = MDTextField(hint_text='Utilizador', mode='rectangle', size_hint_y=None, height=dp(56))
-        if self._forgot_user_field and self._forgot_user_field.text.strip():
-            username.text = self._forgot_user_field.text.strip()
+        active_username = (
+            self._forgot_user_field.text.strip()
+            if self._forgot_user_field and self._forgot_user_field.text.strip()
+            else ''
+        )
+        content.add_widget(MDLabel(
+            text='Recuperacao sem e-mail. Confirme o nome de utilizador e use um codigo guardado.',
+            theme_text_color='Secondary', size_hint_y=None, height=dp(42),
+        ))
+        username = MDTextField(
+            hint_text='Nome de utilizador',
+            helper_text='Utilizador em recuperacao',
+            helper_text_mode='persistent',
+            text=active_username,
+            readonly=bool(active_username),
+            mode='rectangle', size_hint_y=None, height=dp(56),
+        )
         code = MDTextField(hint_text='Código de emergência', mode='rectangle', size_hint_y=None, height=dp(56))
         new_password = MDTextField(hint_text='Nova senha (mínimo 8 caracteres)', password=True, mode='rectangle', size_hint_y=None, height=dp(56))
         confirm = MDTextField(hint_text='Confirmar nova senha', password=True, mode='rectangle', size_hint_y=None, height=dp(56))
@@ -1212,7 +1234,23 @@ class LoginScreen(MDScreen):
             content.add_widget(field)
         content.add_widget(feedback)
 
+        busy = False
+
+        cancel_button = MDFlatButton(text='CANCELAR')
+        submit_button = MDRaisedButton(text='REDEFINIR')
+
+        def set_busy(value):
+            nonlocal busy
+            busy = bool(value)
+            for field in (username, code, new_password, confirm):
+                field.disabled = busy
+            cancel_button.disabled = busy
+            submit_button.disabled = busy
+            submit_button.text = 'A REDEFINIR...' if busy else 'REDEFINIR'
+
         def submit(*_args):
+            if busy or self.operation_in_progress:
+                return
             user, raw_code = username.text.strip(), code.text.strip()
             password, repeated = new_password.text, confirm.text
             if not user or not raw_code:
@@ -1221,17 +1259,40 @@ class LoginScreen(MDScreen):
                 feedback.text = 'A nova senha deve ter no mínimo 8 caracteres.'; return
             if password != repeated:
                 feedback.text = 'As senhas não coincidem.'; return
-            result = self.db.confirm_recovery_code(user, raw_code, password)
-            if result.get('ok'):
-                dialog.dismiss()
-                self._show_message('Sucesso', 'Senha atualizada. Já pode iniciar sessão.')
-            else:
-                feedback.text = 'Código inválido ou já utilizado.'
+
+            set_busy(True)
+
+            def task():
+                return self.db.confirm_recovery_code(user, raw_code, password)
+
+            def handle_result(result, error):
+                set_busy(False)
+                if error:
+                    feedback.text = 'Não foi possível validar o código. Verifique a ligação e tente novamente.'
+                    return
+                if isinstance(result, dict) and result.get('ok'):
+                    dialog.dismiss()
+                    self._recovery_code_dialog = None
+                    self._show_message('Sucesso', 'Senha atualizada. Já pode iniciar sessão.')
+                    return
+                reason = result.get('reason') if isinstance(result, dict) else ''
+                if reason == 'weak_password':
+                    feedback.text = 'A nova senha deve ter no mínimo 8 caracteres.'
+                else:
+                    feedback.text = 'Código inválido ou já utilizado.'
+
+            self._run_background_task(
+                task,
+                handle_result,
+                busy_text='A validar código de emergência...',
+            )
 
         dialog = MDDialog(
             title='Recuperação offline', type='custom', content_cls=content, auto_dismiss=False,
-            buttons=[MDFlatButton(text='CANCELAR', on_release=lambda *_: dialog.dismiss()), MDRaisedButton(text='REDEFINIR', on_release=submit)],
+            buttons=[cancel_button, submit_button],
         )
+        cancel_button.bind(on_release=lambda *_: dialog.dismiss())
+        submit_button.bind(on_release=submit)
         self._recovery_code_dialog = dialog
         dialog.open()
 

@@ -2,13 +2,36 @@ param(
     [switch]$Clean,
     [switch]$SkipBuild,
     [switch]$SkipChecks,
-    [string]$WorkPath
+    [string]$WorkPath,
+    [string]$DistPath
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $root
+
+function Resolve-ProjectOutputPath {
+    param([string]$PathValue, [string]$Label)
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return $null
+    }
+    $resolved = if ([System.IO.Path]::IsPathRooted($PathValue)) {
+        [System.IO.Path]::GetFullPath($PathValue)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $root $PathValue))
+    }
+    $rootPath = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+    $rootPrefix = $rootPath + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label deve ficar dentro do projeto: $resolved"
+    }
+    return $resolved
+}
+
+$resolvedWorkPath = Resolve-ProjectOutputPath -PathValue $WorkPath -Label "WorkPath"
+$resolvedDistPath = Resolve-ProjectOutputPath -PathValue $DistPath -Label "DistPath"
 
 $pythonCandidates = @(
     (Join-Path $root ".venv\Scripts\python.exe"),
@@ -27,13 +50,19 @@ if (-not $SkipChecks) {
 $env:KIVY_NO_FILELOG = "1"
 $env:KIVY_NO_ARGS = "1"
 
-function Copy-OptionalScannerPackages {
-    param([string]$TargetRoot)
+function Copy-RequiredScannerPackages {
+    param(
+        [string]$TargetRoot,
+        [string]$PythonExecutable
+    )
 
     $pythonTag = ""
     $pythonSites = @()
     try {
-        $pythonOutput = python -c "import site, sys; print('PYTAG=cp%d%d' % sys.version_info[:2]); print('\n'.join(dict.fromkeys(site.getsitepackages() + [site.getusersitepackages()])))"
+        $pythonOutput = & $PythonExecutable -c "import cv2, numpy, pyzbar; from pyzbar.pyzbar import decode; from pyzbar.wrapper import ZBarSymbol; import site, sys; print('PYTAG=cp%d%d' % sys.version_info[:2]); print('\n'.join(dict.fromkeys(site.getsitepackages() + [site.getusersitepackages()])))"
+        if ($LASTEXITCODE -ne 0) {
+            throw "As dependencias obrigatorias do scanner nao podem ser importadas."
+        }
         foreach ($line in $pythonOutput) {
             if ($line -like "PYTAG=*") {
                 $pythonTag = $line.Substring(6)
@@ -42,7 +71,7 @@ function Copy-OptionalScannerPackages {
             }
         }
     } catch {
-        $pythonSites = @()
+        throw "Falha ao validar as dependencias do scanner: $($_.Exception.Message)"
     }
 
     $candidateSites = @()
@@ -109,6 +138,35 @@ function Copy-OptionalScannerPackages {
         Get-ChildItem $numpySite -Directory -Filter "numpy*.dist-info" -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item -Path $_.FullName -Destination $TargetRoot -Recurse -Force }
 
+        $requiredFiles = @(
+            (Join-Path $TargetRoot "cv2\cv2.pyd"),
+            (Join-Path $TargetRoot "pyzbar\libzbar-64.dll"),
+            (Join-Path $TargetRoot "pyzbar\libiconv.dll")
+        )
+        foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path $requiredFile)) {
+                throw "Ficheiro obrigatorio do scanner ausente: $requiredFile"
+            }
+        }
+        if (-not (Get-ChildItem (Join-Path $TargetRoot "cv2") -Filter "opencv_videoio_ffmpeg*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            throw "Backend de camera OpenCV ausente do pacote do scanner."
+        }
+        if (-not (Get-ChildItem (Join-Path $TargetRoot "numpy\_core") -Filter "_multiarray_umath*.pyd" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            throw "Biblioteca principal do NumPy ausente do pacote do scanner."
+        }
+        foreach ($requiredFile in @(
+            (Join-Path $TargetRoot "_internal\cv2\cv2.pyd"),
+            (Join-Path $TargetRoot "_internal\pyzbar\libzbar-64.dll"),
+            (Join-Path $TargetRoot "_internal\pyzbar\libiconv.dll")
+        )) {
+            if (-not (Test-Path $requiredFile)) {
+                throw "Biblioteca interna obrigatoria do scanner ausente: $requiredFile"
+            }
+        }
+        if (-not (Get-ChildItem (Join-Path $TargetRoot "_internal\cv2") -Filter "opencv_videoio_ffmpeg*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            throw "Backend interno de camera OpenCV ausente do executavel."
+        }
+
         if ($scannerSite -eq $numpySite) {
             Write-Host "Scanner por camera incluido a partir de: $scannerSite"
         } else {
@@ -117,20 +175,15 @@ function Copy-OptionalScannerPackages {
         return
     }
 
-    if (-not $scannerSite) {
-        Write-Host "Scanner por camera nao incluido: cv2/pyzbar nao encontrados nos ambientes locais."
-    } elseif (-not $numpySite) {
-        if ($pythonTag) {
-            Write-Host "Scanner por camera nao incluido: numpy compativel com $pythonTag nao encontrado."
-        } else {
-            Write-Host "Scanner por camera nao incluido: numpy nao encontrado."
-        }
-    }
+    throw "Scanner por camera nao incluido: cv2, pyzbar ou numpy compativel nao encontrado."
 }
 
 if ($Clean) {
-    foreach ($folder in @("build\manager_app", "dist\SIGEMPEManager")) {
-        $target = Join-Path $root $folder
+    $cleanFolders = @(
+        $(if ($resolvedWorkPath) { $resolvedWorkPath } else { Join-Path $root "build\manager_app" }),
+        $(if ($resolvedDistPath) { $resolvedDistPath } else { Join-Path $root "dist\SIGEMPEManager" })
+    )
+    foreach ($target in $cleanFolders) {
         if (Test-Path $target) {
             Remove-Item -LiteralPath $target -Recurse -Force
         }
@@ -139,14 +192,19 @@ if ($Clean) {
 
 if (-not $SkipBuild) {
     $pyInstallerArgs = @("--noconfirm", "--log-level", "WARN")
-    if ($WorkPath) {
-        $pyInstallerArgs += @("--workpath", $WorkPath)
+    if ($resolvedWorkPath) {
+        $pyInstallerArgs += @("--workpath", $resolvedWorkPath)
+    }
+    if ($resolvedDistPath) {
+        $pyInstallerArgs += @("--distpath", $resolvedDistPath)
     }
     $pyInstallerArgs += (Join-Path $root "scripts\packaging\manager_app.spec")
     & $pythonExecutable -m PyInstaller @pyInstallerArgs
+    if ($LASTEXITCODE -ne 0) { throw "Empacotamento do Gestor falhou." }
 }
 
-$dist = Join-Path $root "dist\SIGEMPEManager"
+$distRoot = if ($resolvedDistPath) { $resolvedDistPath } else { Join-Path $root "dist" }
+$dist = Join-Path $distRoot "SIGEMPEManager"
 if (-not (Test-Path $dist)) {
     throw "Build nao encontrado em: $dist"
 }
@@ -179,11 +237,16 @@ foreach ($folder in @("user", "utils", "manager")) {
     }
 }
 
-Copy-OptionalScannerPackages -TargetRoot $dist
+Copy-RequiredScannerPackages -TargetRoot $dist -PythonExecutable $pythonExecutable
+
+if (Get-ChildItem -LiteralPath $dist -File -Filter "SIGEMPEAPI.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1) {
+    throw "O pacote do Gestor nao pode incluir SIGEMPEAPI.exe. Use o pacote LojaAPI no servidor."
+}
 
 $distAppConfigPath = Join-Path $dist "config\app.json"
 if (Test-Path $distAppConfigPath) {
     $distAppConfig = Get-Content $distAppConfigPath -Raw | ConvertFrom-Json
+    $distAppConfig.app_env = "production"
     $distAppConfig.db_mode = "remote_strict"
     $distAppConfig.api_base_url = "http://127.0.0.1:8080"
     $distAppConfig.api_key = ""
@@ -221,7 +284,7 @@ Configuracao por cliques:
   Abra "Configurar Ligacao.cmd"
 
 No servidor principal:
-  Clique em "Preparar servidor" e depois em "Guardar ficheiro para clientes".
+  Depois de activar a API, execute "GERAR_LIGACAO_CLIENTE.bat" na pasta LojaAPI.
 
 Nos computadores cliente:
   Clique em "Importar ficheiro" e depois em "Testar e guardar".

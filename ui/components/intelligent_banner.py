@@ -41,16 +41,16 @@ def _title_for(category: str, alert_type: str) -> str:
     category = str(category or "monitorizacao").lower()
     alert_type = str(alert_type or "info").lower()
     prefix = {
-        "critico": "IA Critica",
-        "atencao": "IA em Atencao",
-        "info": "IA Monitor",
-    }.get(alert_type, "IA Monitor")
+        "critico": "Atenção",
+        "atencao": "Aviso",
+        "info": "Informação",
+    }.get(alert_type, "Informação")
     base = {
         "vendas": "Vendas",
-        "stock": "Stock",
+        "stock": "Estoque",
         "produtividade": "Produtividade",
-    }.get(category, "Operacao")
-    return f"{prefix} - {base}"
+    }.get(category, "Operação")
+    return f"{prefix}: {base}"
 
 
 def _group_alerts(alerts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -97,7 +97,8 @@ def _build_preview_messages(items: list[dict[str, Any]]) -> list[str]:
     preview = list(messages[:_MAX_ALERT_PREVIEW_LINES])
     hidden = len(messages) - len(preview)
     if hidden > 0:
-        preview.append(f"Mais {hidden} alerta(s) agrupado(s) neste banner.")
+        noun = "alerta" if hidden == 1 else "alertas"
+        preview.append(f"Há mais {hidden} {noun} neste aviso.")
     return preview
 
 
@@ -119,23 +120,30 @@ def _build_details_sections(items: list[dict[str, Any]]) -> list[tuple[str, list
     if total_items:
         severity_parts = []
         if severity_totals.get("critico"):
-            severity_parts.append(f"{severity_totals['critico']} critico(s)")
+            quantity = severity_totals["critico"]
+            noun = "alerta crítico" if quantity == 1 else "alertas críticos"
+            severity_parts.append(f"{quantity} {noun}")
         if severity_totals.get("atencao"):
-            severity_parts.append(f"{severity_totals['atencao']} em atencao")
+            quantity = severity_totals["atencao"]
+            noun = "alerta que precisa de atenção" if quantity == 1 else "alertas que precisam de atenção"
+            severity_parts.append(f"{quantity} {noun}")
         if severity_totals.get("info"):
-            severity_parts.append(f"{severity_totals['info']} informativo(s)")
-        summary = f"{total_items} alerta(s) agrupado(s) nesta categoria."
+            quantity = severity_totals["info"]
+            noun = "alerta informativo" if quantity == 1 else "alertas informativos"
+            severity_parts.append(f"{quantity} {noun}")
+        noun = "alerta" if total_items == 1 else "alertas"
+        summary = f"Há {total_items} {noun} nesta categoria."
         if severity_parts:
-            summary = f"{summary} Severidade: {', '.join(severity_parts)}."
-        sections.append(("Resumo rapido", [summary]))
+            summary = f"{summary} {', '.join(severity_parts)}."
+        sections.append(("Resumo", [summary]))
     if details_lines:
         sections.append(
             (
-                "Ocorrencias recentes",
+                "Alertas Recentes",
                 _compact_lines(
                     details_lines,
                     _MAX_ALERT_DETAIL_LINES,
-                    "Mais {hidden} ocorrencia(s) semelhante(s) no historico.",
+                    "Há mais {hidden} alertas semelhantes no histórico.",
                 ),
             )
         )

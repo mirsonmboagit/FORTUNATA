@@ -3,13 +3,37 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipChecks,
     [string]$WorkPath,
-    [string]$ReleasePath
+    [string]$ReleasePath,
+    [string]$DistPath
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $root
+
+function Resolve-ProjectOutputPath {
+    param([string]$PathValue, [string]$Label)
+
+    if ([string]::IsNullOrWhiteSpace($PathValue)) {
+        return $null
+    }
+    $resolved = if ([System.IO.Path]::IsPathRooted($PathValue)) {
+        [System.IO.Path]::GetFullPath($PathValue)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $root $PathValue))
+    }
+    $rootPath = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+    $rootPrefix = $rootPath + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label deve ficar dentro do projeto: $resolved"
+    }
+    return $resolved
+}
+
+$resolvedWorkPath = Resolve-ProjectOutputPath -PathValue $WorkPath -Label "WorkPath"
+$resolvedDistPath = Resolve-ProjectOutputPath -PathValue $DistPath -Label "DistPath"
+$resolvedReleasePath = Resolve-ProjectOutputPath -PathValue $ReleasePath -Label "ReleasePath"
 
 $pythonCandidates = @(
     (Join-Path $root ".venv\Scripts\python.exe"),
@@ -26,8 +50,12 @@ if (-not $SkipChecks) {
 }
 
 if ($Clean) {
-    foreach ($folder in @("build\LojaAPI", "dist\LojaAPI", "dist\LojaAPI_Instalador")) {
-        $target = Join-Path $root $folder
+    $cleanFolders = @(
+        $(if ($resolvedWorkPath) { $resolvedWorkPath } else { Join-Path $root "build\LojaAPI" }),
+        $(if ($resolvedDistPath) { $resolvedDistPath } else { Join-Path $root "dist\LojaAPI" }),
+        $(if ($resolvedReleasePath) { $resolvedReleasePath } else { Join-Path $root "dist\LojaAPI_Instalador" })
+    )
+    foreach ($target in $cleanFolders | Select-Object -Unique) {
         if (Test-Path $target) {
             Remove-Item -LiteralPath $target -Recurse -Force
         }
@@ -36,30 +64,31 @@ if ($Clean) {
 
 if (-not $SkipBuild) {
     $pyInstallerArgs = @("--noconfirm", "--log-level", "WARN")
-    if ($WorkPath) {
-        $pyInstallerArgs += @("--workpath", $WorkPath)
+    if ($resolvedWorkPath) {
+        $pyInstallerArgs += @("--workpath", $resolvedWorkPath)
+    }
+    if ($resolvedDistPath) {
+        $pyInstallerArgs += @("--distpath", $resolvedDistPath)
     }
     $pyInstallerArgs += (Join-Path $root "scripts\packaging\LojaAPI.spec")
     & $pythonExecutable -m PyInstaller @pyInstallerArgs
+    if ($LASTEXITCODE -ne 0) { throw "Empacotamento da API falhou." }
 }
 
-$exe = Join-Path $root "dist\LojaAPI.exe"
+$distRoot = if ($resolvedDistPath) { $resolvedDistPath } else { Join-Path $root "dist" }
+$exe = Join-Path $distRoot "LojaAPI.exe"
 if (-not (Test-Path $exe)) {
-    $exe = Join-Path $root "dist\LojaAPI\LojaAPI.exe"
+    $exe = Join-Path $distRoot "LojaAPI\LojaAPI.exe"
 }
 if (-not (Test-Path $exe)) {
-    $exe = Join-Path $root "dist\MerceariaAdmin\LojaAPI.exe"
+    $exe = Join-Path $distRoot "MerceariaAdmin\LojaAPI.exe"
 }
 if (-not (Test-Path $exe)) {
     throw "Executavel da API nao encontrado depois do build."
 }
 
-$release = if ($ReleasePath) {
-    if ([System.IO.Path]::IsPathRooted($ReleasePath)) {
-        [System.IO.Path]::GetFullPath($ReleasePath)
-    } else {
-        [System.IO.Path]::GetFullPath((Join-Path $root $ReleasePath))
-    }
+$release = if ($resolvedReleasePath) {
+    $resolvedReleasePath
 } else {
     Join-Path $root "dist\LojaAPI_Instalador"
 }
@@ -80,12 +109,16 @@ foreach ($folder in @("config", "database", "data", "logs")) {
 
 Copy-Item -Force $exe (Join-Path $release "LojaAPI.exe")
 Copy-Item -Force (Join-Path $root "ATIVAR_API.bat") (Join-Path $release "ATIVAR_API.bat")
+Copy-Item -Force (Join-Path $root "ACTUALIZAR_API.bat") (Join-Path $release "ACTUALIZAR_API.bat")
 Copy-Item -Force (Join-Path $root "INICIAR_API.bat") (Join-Path $release "INICIAR_API.bat")
+Copy-Item -Force (Join-Path $root "GERAR_LIGACAO_CLIENTE.bat") (Join-Path $release "GERAR_LIGACAO_CLIENTE.bat")
 Copy-Item -Force (Join-Path $root "COMO_ATIVAR_API.txt") (Join-Path $release "COMO_ATIVAR_API.txt")
 Copy-Item -Force (Join-Path $root "VERSION") (Join-Path $release "VERSION")
 
 New-Item -ItemType Directory -Force -Path (Join-Path $release "scripts\windows") | Out-Null
 Copy-Item -Force (Join-Path $root "scripts\windows\ativar_api.ps1") (Join-Path $release "scripts\windows\ativar_api.ps1")
+Copy-Item -Force (Join-Path $root "scripts\windows\actualizar_api.ps1") (Join-Path $release "scripts\windows\actualizar_api.ps1")
+Copy-Item -Force (Join-Path $root "scripts\windows\gerar_ligacao_cliente.ps1") (Join-Path $release "scripts\windows\gerar_ligacao_cliente.ps1")
 
 foreach ($file in @("config\api.json", "config\app.json", "config\service.json", "config\app_settings.json")) {
     $source = Join-Path $root $file
@@ -138,6 +171,13 @@ Endereco local:
 
 Para iniciar manualmente, use:
   INICIAR_API.bat
+
+Para ligar Gestor e Administrador:
+  Depois de ativar e iniciar a API, execute GERAR_LIGACAO_CLIENTE.bat.
+  Copie SIGEMPELigacao.json para cada computador cliente.
+
+Para atualizar uma instalacao existente, use:
+  ACTUALIZAR_API.bat
 "@
 
 $readme | Set-Content -Encoding UTF8 (Join-Path $release "LEIA-ME.txt")

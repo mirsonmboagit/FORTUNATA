@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 
 ROOT = Path(SPECPATH).parents[1]
@@ -61,6 +61,15 @@ for folder in ("user", "utils", "manager"):
 
 datas += collect_data_files("kivymd", includes=["*.kv", "fonts/*", "images/*"])
 
+# O scanner de camara carrega estas DLLs de forma dinamica. Inclui-las como
+# binarios garante que o executavel encontra o motor ZBar e o backend OpenCV.
+scanner_binaries = []
+for package in ("cv2", "pyzbar", "numpy"):
+    try:
+        scanner_binaries += collect_dynamic_libs(package)
+    except Exception:
+        pass
+
 hiddenimports = [
     "bcrypt",
     "cv2",
@@ -108,32 +117,10 @@ hiddenimports += _local_modules(
 
 hiddenimports = sorted(set(hiddenimports))
 
-api_hiddenimports = sorted(set([
-    "bcrypt",
-    "click",
-    "database.automation",
-    "database.database",
-    "flask",
-    "itsdangerous",
-    "jinja2",
-    "server.app",
-    "server.run_api",
-    "utils.config.app_config",
-    "utils.config.env_loader",
-    "utils.config.logging_setup",
-    "utils.config.paths",
-    "utils.core.perf_utils",
-    "utils.business.security_questions",
-    "utils.business.vat",
-    "waitress",
-    "werkzeug",
-]))
-
-
 a = Analysis(
     [str(ROOT / "manager_app.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=scanner_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -143,21 +130,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-api_a = Analysis(
-    [str(ROOT / "api_server_app.py")],
-    pathex=[str(ROOT)],
-    binaries=[],
-    datas=datas,
-    hiddenimports=api_hiddenimports,
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    noarchive=False,
-    optimize=0,
-)
 pyz = PYZ(a.pure)
-api_pyz = PYZ(api_a.pure)
 
 app_exe = EXE(
     pyz,
@@ -178,32 +151,10 @@ app_exe = EXE(
     icon=str(ROOT / "assets" / "icon" / "manager.ico"),
 )
 
-api_exe = EXE(
-    api_pyz,
-    api_a.scripts,
-    [],
-    exclude_binaries=True,
-    name="SIGEMPEAPI",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(ROOT / "assets" / "icon" / "manager.ico"),
-)
-
 coll = COLLECT(
     app_exe,
-    api_exe,
     a.binaries,
-    api_a.binaries,
     a.datas,
-    api_a.datas,
     strip=False,
     upx=False,
     upx_exclude=[],

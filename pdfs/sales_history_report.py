@@ -85,20 +85,25 @@ class SalesHistoryReport(BasePDFReport):
         gross_total = 0.0
         refunded_total = 0.0
         net_total = 0.0
-        promotional_count = 0
-        refunded_count = 0
+        transaction_keys = set()
+        promotional_transaction_keys = set()
+        refunded_transaction_keys = set()
 
-        for row in records:
+        for index, row in enumerate(records):
             total, refunded, net = self._row_financials(row)
             gross_total += total
             refunded_total += refunded
             net_total += net
+            transaction_code = str(row.get("transaction_code") or "").strip()
+            sale_id = row.get("sale_id")
+            transaction_key = transaction_code or f"sale:{sale_id if sale_id is not None else index}"
+            transaction_keys.add(transaction_key)
             if row.get("is_promotional"):
-                promotional_count += 1
+                promotional_transaction_keys.add(transaction_key)
             if self._to_float(row.get("returned_qty")) > 0:
-                refunded_count += 1
+                refunded_transaction_keys.add(transaction_key)
 
-        total_sales = len(records)
+        total_sales = len(transaction_keys)
         avg_ticket = net_total / total_sales if total_sales else 0.0
         return {
             "total_sales": total_sales,
@@ -106,8 +111,8 @@ class SalesHistoryReport(BasePDFReport):
             "refunded_total": refunded_total,
             "net_total": net_total,
             "avg_ticket": avg_ticket,
-            "promotional_count": promotional_count,
-            "refunded_count": refunded_count,
+            "promotional_count": len(promotional_transaction_keys),
+            "refunded_count": len(refunded_transaction_keys),
         }
 
     def _add_header(self, elements, filters, record_count):
@@ -148,6 +153,7 @@ class SalesHistoryReport(BasePDFReport):
                 f"{start_dt.strftime('%d/%m/%Y')} ate {end_dt.strftime('%d/%m/%Y')}",
             ],
             ["Registos exportados", str(filters.get("record_count") or record_count)],
+            ["Transacoes exportadas", str(filters.get("transaction_count") or record_count)],
             ["Gerado em", generated_at],
         ]
         info_table = Table(info_rows, colWidths=[2.0 * inch, 6.2 * inch])

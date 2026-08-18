@@ -628,25 +628,29 @@ def _build_management_snapshot(db, lookback_days=30):
             continue
         filtered_sales.append(row)
 
-    sales_count = len(filtered_sales)
+    transaction_keys = set()
+    promotional_transaction_keys = set()
     total_revenue = 0.0
-    promo_count = 0
     promo_revenue = 0.0
     by_product = defaultdict(float)
 
-    for row in filtered_sales:
+    for index, row in enumerate(filtered_sales):
         product = (row[1] if len(row) > 1 else "") or "Produto"
         unit_price = _safe_float(row[3] if len(row) > 3 else 0.0)
         total = _safe_float(row[4] if len(row) > 4 else 0.0)
         returned_qty = _safe_float(row[6] if len(row) > 6 else 0.0)
         is_promotional = bool(row[10]) if len(row) > 10 else False
+        transaction_code = str(row[12] if len(row) > 12 and row[12] is not None else "").strip()
+        sale_id = row[0] if len(row) > 0 else index
+        transaction_key = transaction_code or f"sale:{sale_id}"
 
         net_total = max(0.0, total - (returned_qty * unit_price))
         total_revenue += net_total
         by_product[product] += net_total
+        transaction_keys.add(transaction_key)
 
         if is_promotional:
-            promo_count += 1
+            promotional_transaction_keys.add(transaction_key)
             promo_revenue += net_total
 
     top_products = sorted(by_product.items(), key=lambda item: item[1], reverse=True)[:5]
@@ -690,9 +694,9 @@ def _build_management_snapshot(db, lookback_days=30):
     return {
         "lookback_days": days,
         "insights": insights,
-        "sales_count": sales_count,
+        "sales_count": len(transaction_keys),
         "total_revenue": total_revenue,
-        "promo_count": promo_count,
+        "promo_count": len(promotional_transaction_keys),
         "promo_revenue": promo_revenue,
         "top_products": top_products,
         "loss_count": loss_count,

@@ -1,0 +1,105 @@
+<MobileManagerSalesScreen>:
+    md_bg_color: app.theme_tokens['surface']
+
+    MDBoxLayout:
+        orientation: "vertical"
+        padding: [dp(12), dp(10), dp(12), dp(10)]
+        spacing: dp(8)
+
+        MDCard:
+            orientation: "horizontal"
+            size_hint_y: None
+            height: dp(58)
+            padding: [dp(14), dp(8), dp(8), dp(8)]
+            radius: [dp(16)]
+            elevation: 1
+            md_bg_color: app.theme_tokens['card']
+
+            MDBoxLayout:
+                orientation: "vertical"
+
+                MDLabel:
+                    text: "SIGE MPE · Manager"
+                    bold: True
+                    font_style: "Subtitle1"
+                    shorten: True
+
+                MDLabel:
+                    text: "Operador: " + (app.current_user or "—")
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+
+            MDIconButton:
+                icon: "server-network"
+                tooltip_text: "Alterar servidor"
+                on_release: root.change_connection()
+
+            MDIconButton:
+                icon: "logout"
+                tooltip_text: "Terminar sessao"
+                on_release: root.request_logout()
+
+        MDBoxLayout:
+            id: page_container
+            orientation: "vertical"
+
+        MDCard:
+            orientation: "horizontal"
+            size_hint_y: None
+            height: dp(70)
+            padding: [dp(14), dp(8), dp(10), dp(8)]
+            radius: [dp(16)]
+            elevation: 2
+            md_bg_color: app.theme_tokens['card']
+
+            MDBoxLayout:
+                orientation: "vertical"
+
+                MDLabel:
+                    text: "TOTAL"
+                    font_style: "Caption"
+                    theme_text_color: "Secondary"
+
+                MDLabel:
+                    text: "{:.2f} MT".format(root.total_amount)
+                    bold: True
+                    font_style: "H5"
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['success']
+
+            MDRaisedButton:
+                text: "PAGAR"
+                disabled: not root.cart_items or root.sale_in_progress
+                size_hint_x: None
+                width: dp(108)
+                md_bg_color: app.theme_tokens['success']
+                on_release: root.show_tab("payment")
+
+        MDBoxLayout:
+            size_hint_y: None
+            height: dp(50)
+            spacing: dp(6)
+
+            MDRaisedButton:
+                text: "PROD." if root.width < dp(420) else "PRODUTOS"
+                font_size: dp(10) if root.width < dp(420) else dp(12)
+                md_bg_color: app.theme_tokens['success'] if root.active_tab == 'catalog' else app.theme_tokens['primary']
+                on_release: root.show_tab("catalog")
+
+            MDRaisedButton:
+                text: "CAR. {}".format(int(root.cart_count)) if root.width < dp(420) else "CARRINHO ({})".format(int(root.cart_count))
+                font_size: dp(10) if root.width < dp(420) else dp(12)
+                md_bg_color: app.theme_tokens['success'] if root.active_tab == 'cart' else app.theme_tokens['primary']
+                on_release: root.show_tab("cart")
+
+            MDRaisedButton:
+                text: "PAGAR"
+                font_size: dp(10) if root.width < dp(420) else dp(12)
+                md_bg_color: app.theme_tokens['success'] if root.active_tab == 'payment' else app.theme_tokens['primary']
+                on_release: root.show_tab("payment")
+
+            MDRaisedButton:
+                text: "HIST." if root.width < dp(420) else "HISTORICO"
+                font_size: dp(10) if root.width < dp(420) else dp(12)
+                md_bg_color: app.theme_tokens['success'] if root.active_tab == 'history' else app.theme_tokens['primary']
+                on_release: root.show_tab("history")

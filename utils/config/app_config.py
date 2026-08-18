@@ -26,9 +26,11 @@ from utils.config.paths import (
     RECEIPTS_DIR,
     REPORTS_DIR,
     ROOT_DIR,
+    RUNTIME_ROOT_DIR,
     SERVICE_CONFIG_FILE,
     TEMP_DIR,
     ensure_runtime_dirs,
+    is_mobile_runtime,
     relativize_to_root,
     resolve_path,
 )
@@ -161,6 +163,12 @@ def _upsert_env_value(path: Path, key: str, value: str) -> None:
 
 
 def _ensure_runtime_api_key(app_payload: dict[str, Any]) -> None:
+    # Um cliente remoto (incluindo o Manager Mobile) nunca deve inventar uma
+    # chave. A chave pertence a API instalada no servidor e e configurada pelo
+    # utilizador no onboarding seguro.
+    if is_mobile_runtime() or str(app_payload.get("db_mode") or "").strip().lower() == "remote_strict":
+        return
+
     # Gera uma chave local quando a configuracao ainda esta insegura.
     current_env_key = str(os.getenv("API_KEY") or "").strip()
     current_file_key = str(app_payload.get("api_key") or "").strip()
@@ -178,7 +186,21 @@ def _ensure_runtime_api_key(app_payload: dict[str, Any]) -> None:
 def bootstrap_config_files() -> None:
     # Cria arquivos de configuracao iniciais sem apagar os existentes.
     ensure_runtime_dirs()
-    _write_json_if_missing(APP_CONFIG_FILE, copy.deepcopy(APP_DEFAULTS))
+    app_defaults = copy.deepcopy(APP_DEFAULTS)
+    if is_mobile_runtime():
+        app_defaults.update(
+            {
+                "app_env": "production",
+                "db_mode": "remote_strict",
+                "api_key": "",
+                "reports_dir": "data/reports",
+                "receipts_dir": "data/receipts",
+                "cache_dir": "data/cache",
+                "logs_dir": "logs",
+                "temp_dir": "temp",
+            }
+        )
+    _write_json_if_missing(APP_CONFIG_FILE, app_defaults)
     _write_json_if_missing(API_CONFIG_FILE, copy.deepcopy(API_DEFAULTS))
     _write_json_if_missing(SERVICE_CONFIG_FILE, copy.deepcopy(SERVICE_DEFAULTS))
     _write_json_if_missing(APP_SETTINGS_FILE, copy.deepcopy(APP_SETTINGS_DEFAULTS))
@@ -234,12 +256,12 @@ def _normalize_app_config(payload: dict[str, Any], api_cfg: dict[str, Any]) -> d
             api_host = "127.0.0.1"
         normalized["api_base_url"] = f"http://{api_host}:{api_port}"
 
-    normalized["db_path"] = str(resolve_path(normalized.get("db_path"), ROOT_DIR))
-    normalized["reports_dir"] = str(resolve_path(normalized.get("reports_dir"), ROOT_DIR))
-    normalized["receipts_dir"] = str(resolve_path(normalized.get("receipts_dir"), ROOT_DIR))
-    normalized["cache_dir"] = str(resolve_path(normalized.get("cache_dir"), ROOT_DIR))
-    normalized["logs_dir"] = str(resolve_path(normalized.get("logs_dir"), ROOT_DIR))
-    normalized["temp_dir"] = str(resolve_path(normalized.get("temp_dir"), ROOT_DIR))
+    normalized["db_path"] = str(resolve_path(normalized.get("db_path"), RUNTIME_ROOT_DIR))
+    normalized["reports_dir"] = str(resolve_path(normalized.get("reports_dir"), RUNTIME_ROOT_DIR))
+    normalized["receipts_dir"] = str(resolve_path(normalized.get("receipts_dir"), RUNTIME_ROOT_DIR))
+    normalized["cache_dir"] = str(resolve_path(normalized.get("cache_dir"), RUNTIME_ROOT_DIR))
+    normalized["logs_dir"] = str(resolve_path(normalized.get("logs_dir"), RUNTIME_ROOT_DIR))
+    normalized["temp_dir"] = str(resolve_path(normalized.get("temp_dir"), RUNTIME_ROOT_DIR))
     normalized["assets_dir"] = str(resolve_path(normalized.get("assets_dir"), ROOT_DIR))
     normalized["timeout"] = _clamp_number(
         _coerce_float(normalized.get("timeout"), APP_DEFAULTS["timeout"]),
@@ -439,6 +461,54 @@ def save_app_settings(data: dict[str, Any]) -> Path:
     return APP_SETTINGS_FILE
 
 
+def save_remote_connection(api_base_url: str, api_key: str) -> Path:
+    """Guarda a ligacao de um cliente remoto sem permitir fallback local.
+
+    A chave fica no ficheiro de ambiente privado da app; o JSON continua sem
+    segredo para que possa ser inspeccionado sem o expor acidentalmente.
+    """
+    base_url = str(api_base_url or "").strip().rstrip("/")
+    api_key = str(api_key or "").strip()
+    if not base_url.startswith(("http://", "https://")):
+        raise ValueError("O endereco da API deve comecar por http:// ou https://")
+    if len(api_key) < 16 or _is_insecure_api_key(api_key):
+        raise ValueError("Informe uma chave de API valida gerada pelo servidor")
+
+    bootstrap_config_files()
+    payload = copy.deepcopy(APP_DEFAULTS)
+    payload.update(_load_json(APP_CONFIG_FILE))
+    payload.update(
+        {
+            "app_env": "production",
+            "db_mode": "remote_strict",
+            "api_base_url": base_url,
+            "api_key": "",
+        }
+    )
+    APP_CONFIG_FILE.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _upsert_env_value(ENV_FILE, "API_KEY", api_key)
+    _upsert_env_value(ENV_FILE, "API_BASE_URL", base_url)
+    _upsert_env_value(ENV_FILE, "DB_MODE", "remote_strict")
+    os.environ["API_KEY"] = api_key
+    os.environ["API_BASE_URL"] = base_url
+    os.environ["DB_MODE"] = "remote_strict"
+    reload_configs()
+    return APP_CONFIG_FILE
+
+
+def has_remote_connection(force_reload: bool = False) -> bool:
+    config = get_app_config(force_reload=force_reload)
+    return (
+        str(config.get("db_mode") or "").strip().lower() == "remote_strict"
+        and str(config.get("api_base_url") or "").strip().startswith(("http://", "https://"))
+        and len(str(config.get("api_key") or "").strip()) >= 16
+        and not _is_insecure_api_key(config.get("api_key"))
+    )
+
+
 def get_database_path(force_reload: bool = False) -> Path:
     return Path(get_app_config(force_reload=force_reload)["db_path"])
 
@@ -461,7 +531,8 @@ def get_runtime_config(force_reload: bool = False) -> dict[str, Any]:
 def get_runtime_paths(force_reload: bool = False) -> dict[str, str]:
     _ = force_reload
     return {
-        "root_dir": str(ROOT_DIR),
+        "root_dir": str(RUNTIME_ROOT_DIR),
+        "resource_root_dir": str(ROOT_DIR),
         "config_dir": str(CONFIG_DIR),
         "assets_dir": str(ASSETS_DIR),
         "cache_dir": str(CACHE_DIR),

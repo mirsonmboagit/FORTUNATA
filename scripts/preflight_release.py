@@ -17,10 +17,14 @@ REQUIRED = (
     "admin_app.py",
     "manager_app.py",
     "api_server_app.py",
+    "GERAR_LIGACAO_CLIENTE.bat",
     "config/.env.example",
     "scripts/packaging/admin_app.spec",
     "scripts/packaging/manager_app.spec",
     "scripts/packaging/LojaAPI.spec",
+    "scripts/setup_connection_wizard.ps1",
+    "scripts/clean_release_artifacts.ps1",
+    "scripts/windows/gerar_ligacao_cliente.ps1",
 )
 
 
@@ -54,6 +58,19 @@ def check_json_configs() -> None:
             fail(f"JSON invalido em {relative}: {exc}")
 
 
+def check_client_specs_are_client_only() -> None:
+    """Evita que os clientes incluam uma segunda copia da API por engano."""
+    forbidden_markers = ("api_server_app.py", 'name="SIGEMPEAPI"')
+    for relative in (
+        "scripts/packaging/admin_app.spec",
+        "scripts/packaging/manager_app.spec",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        found = [marker for marker in forbidden_markers if marker in source]
+        if found:
+            fail(f"{relative} contem componentes da API: {', '.join(found)}")
+
+
 def check_tracked_secrets() -> None:
     result = subprocess.run(
         ["git", "ls-files", ".env", "config/.env", "database/*.db*"],
@@ -80,6 +97,7 @@ def main() -> int:
     check_required_files()
     version = check_version()
     check_json_configs()
+    check_client_specs_are_client_only()
     check_tracked_secrets()
     if not args.skip_tests:
         run_tests()

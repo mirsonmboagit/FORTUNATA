@@ -24,6 +24,7 @@ from utils.business.vat import (
     compute_vat_breakdown,
     normalize_reference_date,
 )
+from utils.business.sales_transactions import REFUND_WINDOW_MINUTES, refund_window_status
 
 NEAR_EXPIRY_DAYS = 15
 LOSS_QTY_LIMIT_UN = 10
@@ -54,6 +55,22 @@ def _safe_float(value, default=0.0):
         return float(value)
     except Exception:
         return default
+
+
+def _transaction_key_sql(table_alias=""):
+    """Expressao SQL que identifica uma transacao, incluindo registos antigos."""
+    prefix = f"{table_alias}." if table_alias else ""
+    return (
+        "COALESCE(NULLIF(TRIM("
+        f"{prefix}transaction_code"
+        "), ''), 'sale:' || "
+        f"{prefix}id)"
+    )
+
+
+def _transaction_count_sql(table_alias=""):
+    """Conta vendas finalizadas, e nao as linhas de produto que as compoem."""
+    return f"COUNT(DISTINCT {_transaction_key_sql(table_alias)})"
 
 
 def _parse_date(value):
@@ -820,6 +837,35 @@ class Database(DatabaseAutomationMixin):
             ensure_column("sales", "discount_reason", "TEXT")
             ensure_column("sales", "discount_authorized_by", "TEXT")
             ensure_column("sales", "cash_session_id", "INTEGER")
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sales_date_transaction "
+                "ON sales(sale_date, transaction_code)"
+            )
+
+            # Cabeçalho de uma venda composta. Permite que clientes remotos
+            # repitam com segurança a mesma transação após uma falha de rede:
+            # a chave da transação é única e todas as linhas são confirmadas
+            # na mesma transação SQLite.
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS sale_transactions (
+                    transaction_code TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    created_by TEXT,
+                    created_role TEXT,
+                    terminal_id TEXT,
+                    payment_method TEXT NOT NULL DEFAULT 'cash',
+                    cash_session_id INTEGER,
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'COMPLETED',
+                    owner_username TEXT
+                )
+                '''
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sale_transactions_owner_date "
+                "ON sale_transactions(owner_username, created_at)"
+            )
 
             # Abertura e fecho de caixa por operador/terminal.
             self.cursor.execute(
@@ -4316,7 +4362,7 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro geral ao buscar codigo de barras: {e}")
             return None
 
-    def add_sale(
+    def _add_sale_tx(
         self,
         product_id,
         quantity,
@@ -4332,8 +4378,9 @@ class Database(DatabaseAutomationMixin):
         cash_session_id=None,
         discount_reason=None,
         discount_authorized_by=None,
+        commit=True,
     ):
-        """Adicionar nova venda - SUPORTA QUANTIDADES DECIMAIS (KG) - ATUALIZA ESTOQUE"""
+        """Grava uma linha de venda; permite uma transacao composta atomica."""
         try:
             quantity = float(quantity)
             promo_flag = 1 if is_promotional else 0
@@ -4399,7 +4446,8 @@ class Database(DatabaseAutomationMixin):
             )
 
             if not movement_id:
-                self.conn.rollback()
+                if commit:
+                    self.conn.rollback()
                 return None
 
             self.cursor.execute("""
@@ -4456,7 +4504,8 @@ class Database(DatabaseAutomationMixin):
             ))
             sale_id = self.cursor.lastrowid
 
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
 
             self.cursor.execute("SELECT existing_stock, sold_stock FROM products WHERE id = ?", (product_id,))
             after_info = self.cursor.fetchone()
@@ -4490,14 +4539,226 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro SQL ao adicionar venda: {e}")
             import traceback
             traceback.print_exc()
-            self.conn.rollback()
+            if commit:
+                self.conn.rollback()
             return None
         except Exception as e:
             print(f"Erro geral ao adicionar venda: {e}")
             import traceback
             traceback.print_exc()
-            self.conn.rollback()
+            if commit:
+                self.conn.rollback()
             return None
+
+    def add_sale(
+        self,
+        product_id,
+        quantity,
+        sale_price,
+        username=None,
+        role=None,
+        terminal_id=None,
+        is_promotional=False,
+        vat_rule_code=None,
+        transaction_code=None,
+        payment_method="cash",
+        discount_amount=0.0,
+        cash_session_id=None,
+        discount_reason=None,
+        discount_authorized_by=None,
+    ):
+        """Regista uma linha isolada, mantendo compatibilidade com o POS desktop."""
+        return self._add_sale_tx(
+            product_id,
+            quantity,
+            sale_price,
+            username=username,
+            role=role,
+            terminal_id=terminal_id,
+            is_promotional=is_promotional,
+            vat_rule_code=vat_rule_code,
+            transaction_code=transaction_code,
+            payment_method=payment_method,
+            discount_amount=discount_amount,
+            cash_session_id=cash_session_id,
+            discount_reason=discount_reason,
+            discount_authorized_by=discount_authorized_by,
+            commit=True,
+        )
+
+    @staticmethod
+    def _transaction_item_signature(items):
+        """Assinatura minima usada para rejeitar reuso acidental de um codigo."""
+        result = []
+        for raw_item in items or []:
+            item = dict(raw_item or {})
+            product_id = int(item.get("product_id", item.get("id")) or 0)
+            quantity = round(float(item.get("quantity", item.get("qty")) or 0.0), 6)
+            unit_price = round(
+                float(item.get("sale_price", item.get("effective_unit_price", item.get("price"))) or 0.0),
+                6,
+            )
+            result.append((product_id, quantity, unit_price))
+        return sorted(result)
+
+    def add_sales_transaction(
+        self,
+        transaction_code,
+        items,
+        username=None,
+        role=None,
+        terminal_id=None,
+        payment_method="cash",
+        cash_session_id=None,
+        discount_reason=None,
+        discount_authorized_by=None,
+    ):
+        """Confirma todas as linhas de um carrinho numa unica transacao SQLite.
+
+        A mesma ``transaction_code`` pode ser reenviada depois de uma resposta
+        perdida. Se a venda ja foi concluida com os mesmos itens, devolvemos o
+        sucesso idempotente sem mexer novamente no stock.
+        """
+        code = str(transaction_code or "").strip()
+        normalized_items = [dict(item) for item in (items or []) if isinstance(item, dict)]
+        if not code:
+            return {"ok": False, "message": "Codigo de transacao obrigatorio"}
+        if not normalized_items:
+            return {"ok": False, "message": "Venda sem itens"}
+
+        try:
+            expected_signature = self._transaction_item_signature(normalized_items)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Itens de venda invalidos"}
+        if not expected_signature or any(product_id <= 0 or quantity <= 0 or price < 0 for product_id, quantity, price in expected_signature):
+            return {"ok": False, "message": "Itens de venda invalidos"}
+
+        created_by = str(username or "SYSTEM").strip() or "SYSTEM"
+        created_role = str(role or "manager").strip() or "manager"
+        normalized_payment = str(payment_method or "cash").strip().lower()
+        if normalized_payment not in {"cash", "card", "mobile", "emola"}:
+            normalized_payment = "cash"
+        normalized_terminal = str(terminal_id or "").strip() or None
+        normalized_cash_session = int(cash_session_id) if cash_session_id else None
+        owner_value = self._owner_value(created_by)
+
+        try:
+            self.cursor.execute(
+                """
+                SELECT status, item_count, created_by, created_role, terminal_id,
+                       payment_method, cash_session_id, owner_username
+                FROM sale_transactions WHERE transaction_code = ?
+                """,
+                (code,),
+            )
+            header = self.cursor.fetchone()
+            if header:
+                self.cursor.execute(
+                    "SELECT product_id, quantity, sale_price, id FROM sales "
+                    "WHERE transaction_code = ? ORDER BY id",
+                    (code,),
+                )
+                stored_rows = self.cursor.fetchall()
+                stored_signature = sorted(
+                    (int(row[0]), round(float(row[1] or 0.0), 6), round(float(row[2] or 0.0), 6))
+                    for row in stored_rows
+                )
+                metadata_matches = (
+                    int(header[1] or 0) == len(normalized_items)
+                    and str(header[2] or "") == created_by
+                    and str(header[3] or "") == created_role
+                    and (str(header[4] or "").strip() or None) == normalized_terminal
+                    and str(header[5] or "cash").strip().lower() == normalized_payment
+                    and (int(header[6]) if header[6] else None) == normalized_cash_session
+                    and str(header[7] or "") == str(owner_value or "")
+                )
+                if (
+                    str(header[0] or "").upper() == "COMPLETED"
+                    and metadata_matches
+                    and stored_signature == expected_signature
+                ):
+                    return {
+                        "ok": True,
+                        "idempotent": True,
+                        "transaction_code": code,
+                        "sale_ids": [int(row[3]) for row in stored_rows],
+                    }
+                return {"ok": False, "message": "Codigo de transacao ja pertence a outra venda"}
+
+            # Registos legados nao possuem cabecalho; protege contra duplicar
+            # uma venda se um cliente antigo tiver usado o mesmo codigo.
+            self.cursor.execute("SELECT id FROM sales WHERE transaction_code = ? LIMIT 1", (code,))
+            if self.cursor.fetchone():
+                return {"ok": False, "message": "Codigo de transacao ja existe sem cabecalho"}
+
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.cursor.execute(
+                """
+                INSERT INTO sale_transactions (
+                    transaction_code, created_at, created_by, created_role,
+                    terminal_id, payment_method, cash_session_id, item_count,
+                    status, owner_username
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSING', ?)
+                """,
+                (
+                    code,
+                    self._now_str(),
+                    created_by,
+                    created_role,
+                    normalized_terminal,
+                    normalized_payment,
+                    normalized_cash_session,
+                    len(normalized_items),
+                    owner_value,
+                ),
+            )
+
+            sale_ids = []
+            for item in normalized_items:
+                product_id = int(item.get("product_id", item.get("id")) or 0)
+                quantity = float(item.get("quantity", item.get("qty")) or 0.0)
+                unit_price = float(
+                    item.get("sale_price", item.get("effective_unit_price", item.get("price"))) or 0.0
+                )
+                sale_id = self._add_sale_tx(
+                    product_id,
+                    quantity,
+                    unit_price,
+                    username=created_by,
+                    role=created_role,
+                    terminal_id=terminal_id,
+                    is_promotional=bool(item.get("is_promotional")),
+                    vat_rule_code=item.get("vat_rule_code"),
+                    transaction_code=code,
+                    payment_method=item.get("payment_method") or normalized_payment,
+                    discount_amount=item.get("discount_amount", 0.0),
+                    cash_session_id=item.get("cash_session_id", cash_session_id),
+                    discount_reason=item.get("discount_reason", discount_reason),
+                    discount_authorized_by=item.get("discount_authorized_by", discount_authorized_by),
+                    commit=False,
+                )
+                if not sale_id:
+                    raise RuntimeError("Nao foi possivel gravar todos os itens da venda")
+                sale_ids.append(int(sale_id))
+
+            self.cursor.execute(
+                "UPDATE sale_transactions SET status = 'COMPLETED' WHERE transaction_code = ?",
+                (code,),
+            )
+            self.conn.commit()
+            return {
+                "ok": True,
+                "idempotent": False,
+                "transaction_code": code,
+                "sale_ids": sale_ids,
+            }
+        except Exception as exc:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            print(f"Erro ao concluir transacao de venda: {exc}")
+            return {"ok": False, "message": "Nao foi possivel concluir a venda"}
 
     def get_open_cash_session(self, username=None, terminal_id=None):
         """Retorna o caixa aberto do operador neste terminal."""
@@ -4506,7 +4767,7 @@ class Database(DatabaseAutomationMixin):
         if not username:
             return None
         self.cursor.execute(
-            """
+            f"""
             SELECT id, username, role, terminal_id, opened_at, opening_amount,
                    opening_note, status
             FROM cash_sessions
@@ -4560,10 +4821,10 @@ class Database(DatabaseAutomationMixin):
         if not session:
             return None
         self.cursor.execute(
-            """
+            f"""
             SELECT COALESCE(payment_method, 'cash'),
                    COALESCE(SUM(gross_total), 0),
-                   COUNT(DISTINCT COALESCE(transaction_code, 'sale:' || id)),
+                   {_transaction_count_sql()},
                    COALESCE(SUM(discount_amount), 0)
             FROM sales WHERE cash_session_id = ?
             GROUP BY COALESCE(payment_method, 'cash')
@@ -4881,7 +5142,8 @@ class Database(DatabaseAutomationMixin):
                 s.created_by,
                 s.created_role,
                 COALESCE(s.is_promotional, 0) AS is_promotional,
-                s.product_id
+                s.product_id,
+                s.transaction_code
             FROM sales s
             LEFT JOIN products p ON s.product_id = p.id
             LEFT JOIN products_archive pa ON s.product_id = pa.id
@@ -4925,7 +5187,7 @@ class Database(DatabaseAutomationMixin):
 
             self.cursor.execute(
                 """
-                SELECT id, product_id, quantity, sale_price
+                SELECT id, product_id, quantity, sale_price, sale_date
                 FROM sales
                 WHERE id = ?
                 """,
@@ -4935,7 +5197,15 @@ class Database(DatabaseAutomationMixin):
             if not sale:
                 return {"ok": False, "message": "Venda nao encontrada"}
 
-            _sid, product_id, sold_qty, sale_price = sale
+            _sid, product_id, sold_qty, sale_price, sale_date = sale
+            refund_allowed, _seconds_left = refund_window_status(sale_date)
+            if not refund_allowed:
+                return {
+                    "ok": False,
+                    "message": (
+                        f"O prazo de {REFUND_WINDOW_MINUTES} minutos para estorno desta venda expirou"
+                    ),
+                }
             sold_qty = float(sold_qty or 0)
             sale_price = float(sale_price or 0)
 
@@ -5126,16 +5396,25 @@ class Database(DatabaseAutomationMixin):
             date_obj = datetime.strptime(date_str, "%d/%m/%Y")
             formatted_date = date_obj.strftime("%Y-%m-%d")
             
-            self.cursor.execute("""
-                SELECT 
-                    COUNT(*) as total_sales,
-                    SUM(s.quantity) as total_quantity,
-                    SUM(s.total_price) as total_revenue,
-                    AVG(s.total_price) as average_sale,
-                    MIN(s.total_price) as min_sale,
-                    MAX(s.total_price) as max_sale
-                FROM sales s
-                WHERE DATE(s.sale_date) = ?
+            transaction_key = _transaction_key_sql("s")
+            self.cursor.execute(f"""
+                WITH transactions AS (
+                    SELECT
+                        {transaction_key} AS transaction_key,
+                        COALESCE(SUM(s.quantity), 0) AS total_quantity,
+                        COALESCE(SUM(s.total_price), 0) AS total_revenue
+                    FROM sales s
+                    WHERE DATE(s.sale_date) = ?
+                    GROUP BY {transaction_key}
+                )
+                SELECT
+                    COUNT(*) AS total_sales,
+                    COALESCE(SUM(total_quantity), 0) AS total_quantity,
+                    COALESCE(SUM(total_revenue), 0) AS total_revenue,
+                    COALESCE(AVG(total_revenue), 0) AS average_sale,
+                    COALESCE(MIN(total_revenue), 0) AS min_sale,
+                    COALESCE(MAX(total_revenue), 0) AS max_sale
+                FROM transactions
             """, (formatted_date,))
             
             return self.cursor.fetchone()
@@ -5146,10 +5425,10 @@ class Database(DatabaseAutomationMixin):
     def get_monthly_sales_summary(self, month, year):
         """Obter resumo de vendas mensais"""
         try:
-            self.cursor.execute("""
+            self.cursor.execute(f"""
                 SELECT 
                     DATE(s.sale_date) as date,
-                    COUNT(*) as daily_sales,
+                    {_transaction_count_sql("s")} as daily_sales,
                     SUM(s.quantity) as daily_quantity,
                     SUM(s.total_price) as daily_revenue
                 FROM sales s
@@ -5665,11 +5944,11 @@ class Database(DatabaseAutomationMixin):
                 "terminal_series": [],
             }
 
-        query = """
+        query = f"""
         SELECT
             DATE(s.sale_date) AS sale_day,
             COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL') AS terminal_id,
-            COUNT(*) AS sales_count,
+            {_transaction_count_sql("s")} AS sales_count,
             COALESCE(SUM(s.quantity), 0) AS quantity,
             COALESCE(SUM(s.total_price), 0) AS revenue,
             COALESCE(
@@ -5950,7 +6229,7 @@ class Database(DatabaseAutomationMixin):
             COALESCE(NULLIF(s.terminal_id, ''), 'CAIXA-PRINCIPAL') AS terminal_id,
             MIN(s.sale_date) AS opening_at,
             MAX(s.sale_date) AS closing_at,
-            COUNT(*) AS sales_count,
+            {_transaction_count_sql("s")} AS sales_count,
             COALESCE(SUM(s.quantity), 0) AS quantity,
             COALESCE(SUM(s.total_price), 0) AS revenue,
             MIN(s.id) AS first_sale_id,
@@ -6226,7 +6505,7 @@ class Database(DatabaseAutomationMixin):
             active_suppliers = int(self.cursor.fetchone()[0] or 0)
 
             self.cursor.execute(
-                "SELECT COUNT(*), COALESCE(SUM(total_price), 0) "
+                f"SELECT {_transaction_count_sql()}, COALESCE(SUM(total_price), 0) "
                 "FROM sales WHERE DATE(sale_date) = ?"
                 + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
                 (today_iso, owner) if owner else (today_iso,),
@@ -6264,7 +6543,7 @@ class Database(DatabaseAutomationMixin):
             movement_period_expr = "strftime('%Y-%m', created_at)" if group_by_month else "DATE(created_at)"
 
             self.cursor.execute(
-                f"SELECT {sales_period_expr} AS sale_period, COUNT(*) AS sales_count, "
+                f"SELECT {sales_period_expr} AS sale_period, {_transaction_count_sql()} AS sales_count, "
                 "COALESCE(SUM(total_price), 0) AS revenue "
                 "FROM sales WHERE DATE(sale_date) BETWEEN ? AND ? "
                 + ("AND COALESCE(owner_username, '') = ? " if owner else "")
@@ -6636,7 +6915,7 @@ class Database(DatabaseAutomationMixin):
         today = today_date.strftime("%Y-%m-%d")
 
         self.cursor.execute(
-            "SELECT COALESCE(SUM(total_price), 0), COUNT(*) "
+            f"SELECT COALESCE(SUM(total_price), 0), {_transaction_count_sql()} "
             "FROM sales WHERE DATE(sale_date) = ?",
             (today,),
         )

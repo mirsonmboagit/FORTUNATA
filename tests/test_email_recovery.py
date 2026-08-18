@@ -92,3 +92,19 @@ class EmailRecoveryTests(TemporaryDatabaseTestCase):
             )
         locked = self.db.confirm_password_reset("tentativa", "000000", "newpassword")
         self.assertEqual(locked["reason"], "too_many_attempts")
+
+    def test_emergency_code_resets_password_once(self):
+        self.assertTrue(self.db.create_user("offline", "password1", "manager"))
+
+        generated = self.db.generate_recovery_codes("offline", count=4)
+        self.assertTrue(generated["ok"])
+        self.assertEqual(len(generated["codes"]), 4)
+        code = generated["codes"][0]
+
+        result = self.db.confirm_recovery_code("offline", code, "newpassword")
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.db.validate_user("offline", "newpassword"), "manager")
+        self.assertEqual(
+            self.db.confirm_recovery_code("offline", code, "anotherpass")["reason"],
+            "invalid",
+        )

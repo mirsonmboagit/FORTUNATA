@@ -1108,9 +1108,10 @@ class AdminHomeScreen(MDScreen):
         gross_total = 0.0
         refunded_total = 0.0
         total_qty = 0.0
-        promo_sales = 0
         products = {}
         hours = {}
+        transaction_keys = set()
+        promotional_transaction_keys = set()
         recent_sales = []
 
         for row in rows:
@@ -1121,6 +1122,8 @@ class AdminHomeScreen(MDScreen):
             sale_raw = row[5] if len(row) > 5 else ""
             returned_qty = float(row[6] or 0) if len(row) > 6 else 0.0
             is_promotional = bool(row[10]) if len(row) > 10 else False
+            transaction_code = str(row[12] if len(row) > 12 and row[12] is not None else "").strip()
+            transaction_key = transaction_code or f"sale:{row[0] if row else ''}"
             sale_dt = self._parse_sale_datetime(sale_raw)
             refund_amount = returned_qty * unit_price
             net_total = max(0.0, total - refund_amount)
@@ -1129,8 +1132,9 @@ class AdminHomeScreen(MDScreen):
             gross_total += total
             refunded_total += refund_amount
             total_qty += net_qty
+            transaction_keys.add(transaction_key)
             if is_promotional:
-                promo_sales += 1
+                promotional_transaction_keys.add(transaction_key)
 
             product_bucket = products.setdefault(product_name, {"count": 0, "net_total": 0.0})
             product_bucket["count"] += 1
@@ -1138,7 +1142,7 @@ class AdminHomeScreen(MDScreen):
 
             if sale_dt is not None:
                 hour_key = sale_dt.strftime("%H:00")
-                hours[hour_key] = hours.get(hour_key, 0) + 1
+                hours.setdefault(hour_key, set()).add(transaction_key)
                 time_text = sale_dt.strftime("%H:%M")
             else:
                 time_text = "--:--"
@@ -1166,15 +1170,15 @@ class AdminHomeScreen(MDScreen):
 
         peak_hour = None
         if hours:
-            peak_hour = max(hours.items(), key=lambda item: (int(item[1]), item[0]))[0]
+            peak_hour = max(hours.items(), key=lambda item: (len(item[1]), item[0]))[0]
 
         return {
-            "total_sales": len(rows),
+            "total_sales": len(transaction_keys),
             "gross_total": gross_total,
             "refunded_total": refunded_total,
             "net_total": max(0.0, gross_total - refunded_total),
             "total_qty": total_qty,
-            "promo_sales": promo_sales,
+            "promo_sales": len(promotional_transaction_keys),
             "top_product": top_product,
             "peak_hour": peak_hour,
             "recent_sales": recent_sales[:6],
@@ -1686,9 +1690,12 @@ class AdminHomeScreen(MDScreen):
             Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0)
 
     def show_all_pdfs(self, *args):
+        if not self.manager:
+            return
         screen = self._set_back_target("reports", "admin_home")
         if not screen or not hasattr(screen, "show_pdf_viewer"):
             return
+        self.manager.current = "reports"
         if hasattr(screen, "prepare_open_from_admin"):
             Clock.schedule_once(lambda dt: screen.prepare_open_from_admin(), 0)
         Clock.schedule_once(lambda dt: screen.show_pdf_viewer(), 0)

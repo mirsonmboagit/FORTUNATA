@@ -71,6 +71,7 @@ ALLOWLIST = {
     "get_vat_rules",
     "delete_product",
     "add_sale",
+    "add_sales_transaction",
     "get_open_cash_session",
     "open_cash_session",
     "get_cash_session_summary",

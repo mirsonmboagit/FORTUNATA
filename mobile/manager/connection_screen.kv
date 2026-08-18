@@ -1,0 +1,111 @@
+<MobileConnectionScreen>:
+    endpoint_field: endpoint_field
+    api_key_field: api_key_field
+    md_bg_color: app.theme_tokens['surface']
+
+    MDScrollView:
+        do_scroll_x: False
+        bar_width: dp(4)
+
+        MDBoxLayout:
+            orientation: "vertical"
+            size_hint_y: None
+            height: self.minimum_height
+            padding: [dp(18), dp(22), dp(18), dp(18)]
+            spacing: dp(14)
+
+            Widget:
+                size_hint_y: None
+                height: dp(8)
+
+            MDLabel:
+                text: "SIGE MPE"
+                font_style: "H4"
+                bold: True
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['primary']
+                size_hint_y: None
+                height: dp(42)
+
+            MDLabel:
+                text: "Manager Mobile"
+                font_style: "H5"
+                bold: True
+                theme_text_color: "Primary"
+                size_hint_y: None
+                height: dp(38)
+
+            MDLabel:
+                text: "Este telefone trabalha directamente com a API central. Nenhuma venda e guardada localmente."
+                theme_text_color: "Secondary"
+                size_hint_y: None
+                height: self.texture_size[1] + dp(10)
+                text_size: self.width, None
+
+            MDCard:
+                orientation: "vertical"
+                padding: [dp(16), dp(14), dp(16), dp(16)]
+                spacing: dp(10)
+                radius: [dp(18)]
+                elevation: 1
+                md_bg_color: app.theme_tokens['card']
+                size_hint_y: None
+                height: form_box.minimum_height + dp(8)
+
+                MDBoxLayout:
+                    id: form_box
+                    orientation: "vertical"
+                    spacing: dp(8)
+                    adaptive_height: True
+
+                    MDLabel:
+                        text: "Ligar ao servidor"
+                        font_style: "Subtitle1"
+                        bold: True
+                        size_hint_y: None
+                        height: dp(28)
+
+                    MDTextField:
+                        id: endpoint_field
+                        hint_text: "Endereco da API (https://servidor:8080)"
+                        helper_text: "No telemovel, nao use 127.0.0.1"
+                        helper_text_mode: "on_focus"
+                        mode: "rectangle"
+                        size_hint_y: None
+                        height: dp(58)
+                        on_text_validate: root.test_and_continue()
+
+                    MDTextField:
+                        id: api_key_field
+                        hint_text: "Chave de API"
+                        helper_text: "A chave fica apenas no armazenamento privado da app"
+                        helper_text_mode: "on_focus"
+                        password: True
+                        mode: "rectangle"
+                        size_hint_y: None
+                        height: dp(58)
+                        on_text_validate: root.test_and_continue()
+
+                    MDLabel:
+                        text: root.connection_status
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['danger'] if root.status_kind == 'error' else (app.theme_tokens['success'] if root.status_kind == 'success' else app.theme_tokens['text_secondary'])
+                        size_hint_y: None
+                        height: self.texture_size[1] + dp(8)
+                        text_size: self.width, None
+
+                    MDRaisedButton:
+                        text: "A TESTAR…" if root.testing else "TESTAR E CONTINUAR"
+                        disabled: root.testing
+                        md_bg_color: app.theme_tokens['primary']
+                        size_hint_y: None
+                        height: dp(50)
+                        on_release: root.test_and_continue()
+
+            MDLabel:
+                text: "Peça ao administrador o endereco da API e uma chave de acesso. A chave nao e mostrada novamente depois de guardada."
+                theme_text_color: "Hint"
+                halign: "center"
+                size_hint_y: None
+                height: self.texture_size[1] + dp(18)
+                text_size: self.width, None

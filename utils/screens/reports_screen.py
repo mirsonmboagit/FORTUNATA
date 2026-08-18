@@ -140,13 +140,14 @@ class DateRangeDialog(MDDialog):
         ))
 
         shortcuts_layout = MDGridLayout(
-            cols=2, spacing=dp(8), size_hint_y=None, height=dp(90), adaptive_height=True,
+            cols=3, spacing=dp(8), size_hint_y=None, height=dp(90), adaptive_height=True,
         )
         for label, func in [
             ("Hoje", self.set_today),
             ("7 Dias", lambda: self.set_days(7)),
             ("30 Dias", lambda: self.set_days(30)),
             ("Este Mes", self.set_this_month),
+            ("Este Ano", self.set_this_year),
         ]:
             shortcuts_layout.add_widget(MDRaisedButton(
                 text=label,
@@ -192,6 +193,11 @@ class DateRangeDialog(MDDialog):
         today = datetime.now()
         start = datetime(today.year, today.month, 1)
         self.start_date_field.text = start.strftime("%d/%m/%Y")
+        self.end_date_field.text = today.strftime("%d/%m/%Y")
+
+    def set_this_year(self):
+        today = datetime.now()
+        self.start_date_field.text = datetime(today.year, 1, 1).strftime("%d/%m/%Y")
         self.end_date_field.text = today.strftime("%d/%m/%Y")
 
     def confirm(self):
@@ -588,7 +594,15 @@ class ReportsScreen(MDScreen):
             seller_row.orientation = "horizontal" if is_mid else "vertical"
             seller_row.height = dp(48) if is_mid else dp(76)
         if quick_range:
-            quick_range.cols = 4 if is_wide else 2
+            if width >= dp(1120):
+                quick_range.cols = 5
+                quick_range.height = dp(42)
+            elif is_mid:
+                quick_range.cols = 3
+                quick_range.height = dp(92)
+            else:
+                quick_range.cols = 2
+                quick_range.height = dp(142)
         if filter_actions:
             filter_actions.orientation = "horizontal" if is_mid else "vertical"
         for btn in filter_btns:
@@ -601,7 +615,12 @@ class ReportsScreen(MDScreen):
             else:
                 print_btn.size_hint_x = 1
         if reports_grid:
-            reports_grid.cols = 2 if is_large else 1
+            if width >= dp(1120):
+                reports_grid.cols = 5
+            elif is_mid:
+                reports_grid.cols = 3
+            else:
+                reports_grid.cols = 2
 
     # ------------------------------------------------------------------
     # Resumo de filtros
@@ -712,6 +731,13 @@ class ReportsScreen(MDScreen):
             today.replace(hour=23, minute=59, second=59, microsecond=0),
         )
 
+    def apply_current_year_range(self):
+        today = datetime.now()
+        self.set_date_range(
+            datetime(today.year, 1, 1),
+            today.replace(hour=23, minute=59, second=59, microsecond=0),
+        )
+
     # ------------------------------------------------------------------
     # Seleção de datas — SEM calendário automático
     # ------------------------------------------------------------------
@@ -802,7 +828,7 @@ class ReportsScreen(MDScreen):
         if not self.start_date or not self.end_date:
             self.show_error_popup(
                 "Por favor, selecione um periodo antes de gerar o relatorio.\n\n"
-                "Use os atalhos rapidos (Hoje, 7 Dias, 30 Dias, Este Mes) ou\n"
+                "Use os atalhos rapidos (Hoje, 7 Dias, 30 Dias, Este Mes, Este Ano) ou\n"
                 "clique em 'Selecionar Periodo' para escolher um intervalo."
             )
             return False

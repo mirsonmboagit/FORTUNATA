@@ -1,5 +1,3 @@
-import random
-
 from kivy.animation import Animation
 from kivy.app import App
 from kivy.clock import Clock
@@ -98,6 +96,32 @@ def _clean_messages(messages):
         if text:
             cleaned.append(text)
     return cleaned
+
+
+def _format_banner_quantity(value, unit):
+    """Return quantities in full words so banner text is easy to read."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    unit_text = str(unit or "").strip().lower()
+    is_weight = unit_text in {"kg", "quilo", "quilos", "quilograma", "quilogramas"}
+    if is_weight:
+        number = f"{amount:.1f}"
+        label = "quilograma" if abs(amount - 1) < 0.001 else "quilogramas"
+    else:
+        number = str(int(amount)) if amount.is_integer() else f"{amount:.1f}"
+        label = "unidade" if abs(amount - 1) < 0.001 else "unidades"
+    return f"{number} {label}"
+
+
+def _format_banner_days(value):
+    try:
+        days = max(0, int(round(float(value))))
+    except (TypeError, ValueError):
+        days = 0
+    return f"{days} dia" if days == 1 else f"{days} dias"
 
 
 def _variant_name(variant):
@@ -324,74 +348,45 @@ def _expiry_level_meta(level):
     if level == ALERT_LEVEL_VENCIDO:
         return "alert-octagon", "Produtos Vencidos", color
     if level == ALERT_LEVEL_CRITICO:
-        return "alert-circle", "Vencimento Crítico", color
+        return "alert-circle", "Produtos que Vencem em Breve", color
     if level == ALERT_LEVEL_ALTO:
-        return "alert", "Vencimento Alto", color
+        return "alert", "Produtos Próximos da Validade", color
     if level == ALERT_LEVEL_MEDIO:
-        return "calendar-alert", "Vencimento Médio", color
-    return "calendar-clock", "Vencimento Leve", color
+        return "calendar-alert", "Produtos para Acompanhar", color
+    return "calendar-clock", "Produtos com Validade a Acompanhar", color
 
 
 def _get_stock_message_variant(item_name, stock, unit, days_left):
-    del stock, unit
-    if days_left < 0:
-        variants = [
-            f"{item_name} esgotou e precisa reposição imediata",
-            f"{item_name} está sem stock disponível",
-            f"{item_name} entrou em rutura operacional",
-        ]
-    elif days_left < 10:
-        variants = [
-            f"{item_name} está no limite e pode acabar em breve",
-            f"{item_name} exige reposição prioritária",
-            f"{item_name} está com cobertura muito curta",
-        ]
-    elif days_left < 15:
-        variants = [
-            f"{item_name} está com stock reduzido",
-            f"{item_name} requer atenção ao ritmo de saída",
-            f"{item_name} está abaixo do ideal para os próximos dias",
-        ]
-    else:
-        variants = [
-            f"{item_name} está abaixo do ponto de conforto",
-            f"{item_name} merece acompanhamento de stock",
-            f"{item_name} pede reposição planeada",
-        ]
-    return random.choice(variants)
+    quantity = _format_banner_quantity(stock, unit)
+    try:
+        is_out_of_stock = float(stock) <= 0
+    except (TypeError, ValueError):
+        is_out_of_stock = False
+
+    if is_out_of_stock or float(days_left or 0) < 0:
+        return f"{item_name} está sem estoque. Faça a reposição o mais cedo possível."
+    return f"{item_name} está com estoque baixo. Restam {quantity}. Faça a reposição."
 
 
 def _get_expiry_message_variant(item_name, days_left, date_str):
     if days_left <= 2:
-        variants = [
-            f"{item_name} vence em {days_left} dias e precisa ação imediata",
-            f"{item_name} está em janela crítica de validade",
-            f"{item_name} vence já ({date_str}) e deve ganhar prioridade",
-        ]
-    elif days_left <= 7:
-        variants = [
-            f"{item_name} vence esta semana e pede aceleração de venda",
-            f"{item_name} entra em risco de validade nos próximos dias",
-            f"{item_name} está próximo do vencimento ({date_str})",
-        ]
-    else:
-        variants = [
-            f"{item_name} tem validade próxima e precisa monitorização",
-            f"{item_name} vence em {days_left} dias e deve ser acompanhado",
-            f"{item_name} entra no radar de validade ({date_str})",
-        ]
-    return random.choice(variants)
+        return (
+            f"{item_name} vence em {_format_banner_days(days_left)}, no dia {date_str}. "
+            "Dê prioridade à venda."
+        )
+    if days_left <= 7:
+        return (
+            f"{item_name} vence em {_format_banner_days(days_left)}, no dia {date_str}. "
+            "Acompanhe a venda deste produto."
+        )
+    return f"{item_name} vence em {_format_banner_days(days_left)}, no dia {date_str}."
 
 
 def _get_expiry_level_message(level, item_name, days_left, date_str):
     if level == ALERT_LEVEL_VENCIDO:
         overdue = abs(int(days_left))
-        variants = [
-            f"{item_name} está vencido há {overdue} dias",
-            f"{item_name} ultrapassou a validade em {date_str}",
-            f"{item_name} precisa retirada imediata da venda",
-        ]
-        return random.choice(variants)
+        day_text = "1 dia" if overdue == 1 else f"{overdue} dias"
+        return f"{item_name} está vencido há {day_text}, desde {date_str}. Retire-o da venda."
     return _get_expiry_message_variant(item_name, days_left, date_str)
 
 
@@ -423,19 +418,19 @@ def build_auto_banner_data(insights):
         for item in low_stock:
             if isinstance(item, (list, tuple)) and len(item) >= 4:
                 name, stock, is_weight, days_left = item[:4]
-                unit = "kg" if is_weight else "unidades"
+                unit = "quilogramas" if is_weight else "unidades"
                 messages.append(_get_stock_message_variant(name, stock, unit, days_left))
                 urgency_levels.append(days_left)
 
         min_days = min(urgency_levels) if urgency_levels else 999
         if min_days < 1:
-            title = random.choice(["Stock crítico", "Reposição urgente", "Rutura iminente"])
+            title = "Produtos sem estoque"
             icon = "alert-circle"
         elif min_days < 10:
-            title = random.choice(["Stock baixo", "Atenção ao stock", "Reposição prioritária"])
+            title = "Produtos com estoque baixo"
             icon = "alert"
         else:
-            title = random.choice(["Stock em monitorização", "Cobertura reduzida", "Acompanhamento de stock"])
+            title = "Produtos com estoque baixo"
             icon = "information-outline"
 
         banners.append(
@@ -500,10 +495,10 @@ def build_positive_banner(kind="all"):
             "variant": "success",
             "icon": "check-circle",
             "bg_color": (0.74, 0.92, 0.78, 1),
-            "title": "Stock em ordem",
+            "title": "Estoque em ordem",
             "messages": [
-                "Nenhum produto com stock baixo no momento.",
-                "A operação está estável para reposição.",
+                "Não há produtos com estoque baixo neste momento.",
+                "A reposição está em dia.",
             ],
             "count": 0,
             "urgency": 999,
@@ -531,7 +526,7 @@ def build_positive_banner(kind="all"):
         "bg_color": (0.74, 0.92, 0.78, 1),
         "title": "Tudo em ordem",
         "messages": [
-            "Sem alertas críticos de stock.",
+            "Não há alertas críticos de estoque.",
             "Sem riscos imediatos de validade.",
         ],
         "count": 0,
@@ -560,10 +555,17 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
             for item in low_stock:
                 if isinstance(item, (list, tuple)) and len(item) >= 4:
                     name, stock, is_weight, days_left = item[:4]
-                    unit = "kg" if is_weight else "un"
-                    lines.append(f"{name}: {stock:.1f} {unit} (~{days_left:.1f} dias)")
+                    unit = "quilogramas" if is_weight else "unidades"
+                    quantity = _format_banner_quantity(stock, unit)
+                    if float(stock or 0) <= 0 or float(days_left or 0) < 0:
+                        lines.append(f"{name}: o estoque está esgotado. Faça a reposição.")
+                    else:
+                        lines.append(
+                            f"{name}: restam {quantity}. "
+                            f"O estoque deve durar cerca de {_format_banner_days(days_left)}."
+                        )
             if lines:
-                sections.append(("Produtos críticos", lines))
+                sections.append(("Produtos com Estoque Baixo", lines))
 
         forecast = insights.get("stock_forecast") or []
         if forecast:
@@ -571,23 +573,22 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
             for item in forecast:
                 if item.get("days_left") is None:
                     continue
-                lines.append(f"{item.get('name')} - acaba em ~{float(item.get('days_left')):.1f} dias")
+                lines.append(
+                    f"{item.get('name')}: poderá ficar sem estoque em cerca de "
+                    f"{_format_banner_days(item.get('days_left'))}."
+                )
             if lines:
-                sections.append(("Previsão de rutura", lines))
-
-        ai_notes = (insights.get("ai_urgente_hoje") or []) + (insights.get("ai_atencao_proximos_dias") or [])
-        if ai_notes:
-            sections.append(("Análise inteligente", ai_notes))
+                sections.append(("Previsão de Reposição", lines))
 
     elif kind == "expiry":
         _add_recommendations(recommendations_expiry or recommendations_all)
         expiry_levels = _collect_expiry_levels(insights)
         level_titles = {
-            ALERT_LEVEL_VENCIDO: "Vencidos",
-            ALERT_LEVEL_CRITICO: "Crítico",
-            ALERT_LEVEL_ALTO: "Alto",
-            ALERT_LEVEL_MEDIO: "Médio",
-            ALERT_LEVEL_LEVE: "Leve",
+            ALERT_LEVEL_VENCIDO: "Produtos Vencidos",
+            ALERT_LEVEL_CRITICO: "Produtos que Vencem em Breve",
+            ALERT_LEVEL_ALTO: "Produtos Próximos da Validade",
+            ALERT_LEVEL_MEDIO: "Produtos para Acompanhar",
+            ALERT_LEVEL_LEVE: "Produtos com Validade a Acompanhar",
         }
         level_order = [
             ALERT_LEVEL_VENCIDO,
@@ -605,7 +606,17 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
                 continue
             lines = []
             for name, days_left, date_str, stock, unit in rows:
-                lines.append(f"{name}: {days_left} dias - {stock:.0f} {unit} (vence {date_str})")
+                quantity = _format_banner_quantity(stock, unit)
+                if int(days_left) <= 0:
+                    lines.append(
+                        f"{name}: está vencido desde {date_str}. Restam {quantity}. "
+                        "Retire-o da venda."
+                    )
+                else:
+                    lines.append(
+                        f"{name}: vence em {_format_banner_days(days_left)}, no dia {date_str}. "
+                        f"Restam {quantity}."
+                    )
             if lines:
                 sections.append((level_titles[level], lines))
 
@@ -618,20 +629,12 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
                 if days_to_expiry is None or days_to_sell is None:
                     continue
                 lines.append(
-                    f"{item.get('name')}: vence {days_to_expiry}d, vende ~{float(days_to_sell):.0f}d "
-                    f"(perda ~{float(item.get('loss_profit') or 0):.0f} MZN)"
+                    f"{item.get('name')}: vence em {_format_banner_days(days_to_expiry)}. "
+                    f"O estoque atual poderá durar cerca de {_format_banner_days(days_to_sell)}. "
+                    f"A perda possível de lucro é de {float(item.get('loss_profit') or 0):.0f} meticais."
                 )
             if lines:
-                sections.append(("Análise de risco", lines))
-
-        ai_notes = (insights.get("ai_urgente_hoje") or []) + (insights.get("ai_atencao_proximos_dias") or [])
-        ai_expiry = [note for note in ai_notes if any(word in note.lower() for word in ("venc", "valid", "expir"))]
-        if ai_expiry:
-            sections.append(("Análise inteligente", ai_expiry))
-
-        ai_opportunities = insights.get("ai_oportunidades") or []
-        if ai_opportunities:
-            sections.append(("Oportunidades", ai_opportunities))
+                sections.append(("Risco de Perda", lines))
 
     return sections
 
@@ -1275,6 +1278,47 @@ def _ensure_banner_surface(container):
     return shell, scroll, host
 
 
+def _build_horizontal_banner_text_scroll(text, text_color):
+    """Keep the main banner sentence complete, with horizontal scrolling if needed."""
+    scroll = ScrollView(
+        size_hint=(1, None),
+        height=dp(52),
+        do_scroll_x=True,
+        do_scroll_y=False,
+        bar_width=dp(3),
+    )
+    _apply_scroll_style(scroll)
+    label = MDLabel(
+        text=text,
+        markup=True,
+        theme_text_color="Custom",
+        text_color=text_color,
+        font_size=dp(14),
+        halign="left",
+        valign="middle",
+        size_hint=(None, None),
+    )
+
+    def _sync_label_size(*_args):
+        label.text_size = (None, None)
+        try:
+            label.texture_update()
+        except Exception:
+            pass
+        label.width = max(float(label.texture_size[0] or 0) + dp(16), float(scroll.width or 0))
+        label.height = max(float(label.texture_size[1] or 0), float(scroll.height or dp(52)))
+        needs_scroll = label.width > float(scroll.width or 0) + 1
+        scroll.do_scroll_x = needs_scroll
+        scroll.bar_width = dp(3) if needs_scroll else 0
+
+    label.bind(text=_sync_label_size)
+    scroll.bind(width=_sync_label_size, height=_sync_label_size)
+    scroll.add_widget(label)
+    _sync_label_size()
+    Clock.schedule_once(lambda _dt: _sync_label_size(), 0)
+    return scroll
+
+
 def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
     """Build the compact banner design from the project's first version."""
     card = MDCard(
@@ -1283,13 +1327,13 @@ def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
         spacing=dp(6),
         size_hint=(None, None),
         size_hint_y=None,
-        height=dp(70),
+        height=dp(78),
         md_bg_color=banner_data["bg_color"],
         radius=[10, 10, 10, 10],
         elevation=2,
         opacity=0,
     )
-    card._target_height = dp(70)
+    card._target_height = dp(78)
 
     icon_text = md_icons.get(banner_data["icon"], md_icons.get("alert", ""))
     icon = MDLabel(
@@ -1315,19 +1359,13 @@ def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
         message = messages[0] if messages else str(banner_data.get("title") or "Alerta")
     count = int(banner_data.get("count") or 0)
     if count > 1 and len(messages) > 1:
-        message = f"{message} (+{count - 1})"
-
-    text = MDLabel(
-        text=f"[b]ATENÇÃO:[/b] {message}",
-        markup=True,
-        theme_text_color="Custom",
-        text_color=(0.2, 0.2, 0.2, 1),
-        halign="left",
-        valign="middle",
-        shorten=True,
-        shorten_from="right",
+        remaining = count - 1
+        noun = "alerta" if remaining == 1 else "alertas"
+        message = f"{message} Há mais {remaining} {noun} neste aviso."
+    message_scroll = _build_horizontal_banner_text_scroll(
+        f"[b]ATENÇÃO:[/b] {message}",
+        (0.2, 0.2, 0.2, 1),
     )
-    text.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
 
     close_btn = MDIconButton(
         icon="close",
@@ -1350,10 +1388,10 @@ def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
         padding=[dp(14), dp(10), dp(10), 0],
         spacing=dp(10),
         size_hint_y=None,
-        height=dp(50),
+        height=dp(58),
     )
     content.add_widget(icon)
-    content.add_widget(text)
+    content.add_widget(message_scroll)
     content.add_widget(close_btn)
     body.add_widget(content)
 
@@ -1476,6 +1514,7 @@ def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
     card._progress = progress
     card._body = body
     card._details_box = details_box
+    card._message_scroll = message_scroll
     card._details_expanded = False
     card._base_height = body.height + (progress.height if progress else 0)
     card._toggle_btn = toggle_btn

@@ -3,7 +3,6 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from num2words import num2words
 from .base_report import BasePDFReport
 
 
@@ -40,7 +39,7 @@ class ProfitReport(BasePDFReport):
         self._create_header(
             elements,
             "RELATÓRIO DE LUCRO",
-            "Análise Detalhada de Rentabilidade e Margem de Lucro",
+            "Lucro do período",
             filters
         )
         
@@ -50,8 +49,6 @@ class ProfitReport(BasePDFReport):
         self._add_profit_chart(elements, data)
         elements.append(Spacer(1, 20))
         self._add_top_profitable_products(elements, data)
-        elements.append(Spacer(1, 18))
-        self._add_margin_analysis(elements, data)
         self._create_footer(elements)
         
         doc.build(elements)
@@ -69,7 +66,7 @@ class ProfitReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
-        elements.append(Paragraph("Resumo Financeiro e de Rentabilidade", title_style))
+        elements.append(Paragraph("Resumo do lucro", title_style))
         
         # Cálculos expandidos
         total_lucro = data['lucro_total'].sum()
@@ -81,22 +78,18 @@ class ProfitReport(BasePDFReport):
         produtos_lucrativos = len(data[data['lucro_total'] > 0])
         produtos_prejuizo = len(data[data['lucro_total'] <= 0])
         
-        # Melhor margem
-        melhor_margem = data['percentual_lucro'].max()
-        
         summary_data = [
-            ['MÉTRICA', 'VALOR', 'POR EXTENSO'],
-            ['Total de Produtos Analisados', f"{len(data)}", num2words(len(data), lang='pt')],
-            ['Produtos Lucrativos', f"{produtos_lucrativos}", num2words(produtos_lucrativos, lang='pt')],
-            ['Produtos em Prejuízo', f"{produtos_prejuizo}", num2words(produtos_prejuizo, lang='pt')],
-            ['Lucro Total Consolidado', f"MZN {total_lucro:,.2f}", f"{num2words(int(total_lucro), lang='pt')} meticais"],
-            ['Lucro Médio por Produto', f"MZN {media_lucro:,.2f}", f"{num2words(int(media_lucro), lang='pt')} meticais"],
-            ['Lucro Médio Unitário', f"MZN {lucro_unitario_medio:.2f}", f"{num2words(int(lucro_unitario_medio), lang='pt')} meticais"],
-            ['Margem de Lucro Média', f"{media_margem:.2f}%", f"{num2words(int(media_margem), lang='pt')} por cento"],
-            ['Melhor Margem Registrada', f"{melhor_margem:.2f}%", f"{num2words(int(melhor_margem), lang='pt')} por cento"],
+            ['RESUMO', 'VALOR'],
+            ['Produtos no relatório', f"{len(data)}"],
+            ['Produtos com lucro', f"{produtos_lucrativos}"],
+            ['Produtos sem lucro', f"{produtos_prejuizo}"],
+            ['Lucro total', f"MZN {total_lucro:,.2f}"],
+            ['Lucro médio por produto', f"MZN {media_lucro:,.2f}"],
+            ['Lucro médio por unidade', f"MZN {lucro_unitario_medio:.2f}"],
+            ['Lucro médio em percentagem', f"{media_margem:.2f}%"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[3.5*inch, 2.5*inch, 4.2*inch])
+        summary_table = Table(summary_data, colWidths=[5.3*inch, 4.9*inch])
         
         summary_table.setStyle(TableStyle([
             # Cabeçalho
@@ -116,15 +109,14 @@ class ProfitReport(BasePDFReport):
             ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
             ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
-            ('ALIGN', (2, 1), (2, -1), 'LEFT'),
             
             # Destaques
             ('TEXTCOLOR', (1, 4), (1, 6), colors.HexColor('#27ae60')),
-            ('FONTNAME', (1, 4), (1, 8), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 4), (1, 7), 'Helvetica-Bold'),
             
             # Padding
-            ('TOPPADDING', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('LEFTPADDING', (0, 0), (-1, -1), 12),
             ('RIGHTPADDING', (0, 0), (-1, -1), 12),
         ]))
@@ -139,7 +131,7 @@ class ProfitReport(BasePDFReport):
         ]
         elements.append(
             self._build_bar_chart(
-                "Grafico de Barras: Produtos com Maior Lucro Total",
+                "Produtos com mais lucro",
                 chart_items,
                 value_formatter=lambda value: f"MZN {value:,.2f}",
                 accent_color="#e67e22",
@@ -158,40 +150,27 @@ class ProfitReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
-        elements.append(Paragraph("Top 15 Produtos Mais Lucrativos", title_style))
+        elements.append(Paragraph("Produtos com mais lucro", title_style))
         
         top_profit = data.nlargest(15, 'lucro_total')
         
         detail_data = [[
-            '#', 'Produto', 'Qtd.\nVendida', 
-            'Lucro\nUnitário', 'Lucro\nTotal', 'Margem\n%', 'Classif.'
+            '#', 'Produto', 'Quantidade\nVendida',
+            'Lucro por\nUnidade', 'Lucro\nTotal', 'Lucro\nem %'
         ]]
         
         for idx, (_, row) in enumerate(top_profit.iterrows(), 1):
-            # Classificação da margem
-            if row['percentual_lucro'] >= 50:
-                classif = "Excelente"
-            elif row['percentual_lucro'] >= 30:
-                classif = "Ótima"
-            elif row['percentual_lucro'] >= 15:
-                classif = "Boa"
-            elif row['percentual_lucro'] > 0:
-                classif = "Regular"
-            else:
-                classif = "Prejuízo"
-            
             detail_data.append([
                 str(idx),
                 str(row['description'])[:30],
                 f"{int(row['sold_stock']):,}",
                 f"{row['lucro_unitario']:.2f}",
                 f"{row['lucro_total']:,.2f}",
-                f"{row['percentual_lucro']:.1f}%",
-                classif
+                f"{row['percentual_lucro']:.1f}%"
             ])
         
         detail_table = Table(detail_data, colWidths=[
-            0.4*inch, 3.0*inch, 1.1*inch, 1.2*inch, 1.6*inch, 1.0*inch, 1.1*inch
+            0.4*inch, 3.1*inch, 1.4*inch, 1.45*inch, 1.7*inch, 1.25*inch
         ])
         
         detail_table.setStyle(TableStyle([

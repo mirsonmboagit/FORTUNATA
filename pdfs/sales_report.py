@@ -3,7 +3,6 @@ from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from num2words import num2words
 from .base_report import BasePDFReport
 
 
@@ -40,16 +39,15 @@ class SalesReport(BasePDFReport):
         self._create_header(
             elements,
             "RELATÓRIO DE VENDAS",
-            "Análise de Desempenho Comercial e Performance de Produtos",
+            "Vendas do período",
             filters
         )
         
-        elements.append(Spacer(1, 14))
+        self._add_top_products(elements, data)
+        elements.append(Spacer(1, 18))
         self._add_executive_summary(elements, data)
         elements.append(Spacer(1, 16))
         self._add_sales_chart(elements, data)
-        elements.append(Spacer(1, 20))
-        self._add_top_products(elements, data)
         self._create_footer(elements)
         
         doc.build(elements)
@@ -68,7 +66,7 @@ class SalesReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
-        elements.append(Paragraph("Resumo Executivo de Vendas", title_style))
+        elements.append(Paragraph("Resumo de vendas", title_style))
         
         # Cálculos
         total_vendido = data['sold_stock'].sum()
@@ -78,16 +76,16 @@ class SalesReport(BasePDFReport):
         produtos_vendidos = len(data[data['sold_stock'] > 0])
         
         summary_data = [
-            ['MÉTRICA', 'VALOR', 'POR EXTENSO'],
-            ['Total de Produtos Analisados', f"{len(data)}", num2words(len(data), lang='pt')],
-            ['Produtos com Vendas', f"{produtos_vendidos}", num2words(produtos_vendidos, lang='pt')],
-            ['Total de Unidades Vendidas', f"{int(total_vendido):,}", num2words(int(total_vendido), lang='pt')],
-            ['Valor Total de Vendas', f"MZN {total_valor:,.2f}", f"{num2words(int(total_valor), lang='pt')} meticais"],
-            ['Ticket Médio por Unidade', f"MZN {ticket_medio:.2f}", f"{num2words(int(ticket_medio), lang='pt')} meticais"],
-            ['Média de Vendas por Produto', f"{media_vendas:.1f} un.", f"{num2words(int(media_vendas), lang='pt')} unidades"],
+            ['RESUMO', 'VALOR'],
+            ['Produtos no relatório', f"{len(data)}"],
+            ['Produtos com vendas', f"{produtos_vendidos}"],
+            ['Unidades vendidas', f"{int(total_vendido):,}"],
+            ['Total de vendas', f"MZN {total_valor:,.2f}"],
+            ['Valor médio por unidade vendida', f"MZN {ticket_medio:.2f}"],
+            ['Média vendida por produto', f"{media_vendas:.1f} unidades"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[3.5*inch, 2.5*inch, 4.2*inch])
+        summary_table = Table(summary_data, colWidths=[5.3*inch, 4.9*inch])
         
         summary_table.setStyle(TableStyle([
             # Cabeçalho
@@ -107,7 +105,6 @@ class SalesReport(BasePDFReport):
             ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
             ('ALIGN', (1, 1), (1, -1), 'RIGHT'),
-            ('ALIGN', (2, 1), (2, -1), 'LEFT'),
             
             # Destaques financeiros
             ('TEXTCOLOR', (1, 4), (1, 4), colors.HexColor('#27ae60')),
@@ -123,14 +120,15 @@ class SalesReport(BasePDFReport):
         elements.append(summary_table)
     
     def _add_sales_chart(self, elements, data):
-        top_sales = data.nlargest(7, 'sold_stock')
+        sold_data = data[data['sold_stock'] > 0]
+        top_sales = sold_data.nlargest(7, 'sold_stock')
         chart_items = [
             (row['description'], row['sold_stock'])
             for _, row in top_sales.iterrows()
         ]
         elements.append(
             self._build_bar_chart(
-                "Grafico de Barras: Ranking de Produtos Mais Vendidos",
+                "Produtos mais vendidos",
                 chart_items,
                 value_formatter=lambda value: f"{int(round(value))} un.",
                 accent_color="#2980b9",
@@ -149,18 +147,28 @@ class SalesReport(BasePDFReport):
             spaceAfter=10,
             fontName='Helvetica-Bold'
         )
-        elements.append(Paragraph("Top 15 Produtos Mais Vendidos", title_style))
+        elements.append(Paragraph("Tabela de Produtos Vendidos", title_style))
         
-        top_sales = data.nlargest(15, 'sold_stock')
+        sold_data = data[data['sold_stock'] > 0]
+        sold_products = sold_data.sort_values(
+            ['sold_stock', 'valor_total_vendas'],
+            ascending=[False, False],
+        )
+        if sold_products.empty:
+            elements.append(Paragraph(
+                "Não foram encontradas vendas no período selecionado.",
+                styles['Normal'],
+            ))
+            return
         
         detail_data = [[
             '#', 'Produto', 'Categoria', 
-            'Qtd.\nVendida', 'Preço\nUnit.', 'Total\nVendido', 'Part.\n%'
+            'Quantidade\nVendida', 'Preço de\nVenda', 'Total de\nVendas', 'Parte das\nVendas'
         ]]
         
-        total_geral = data['valor_total_vendas'].sum()
+        total_geral = sold_data['valor_total_vendas'].sum()
         
-        for idx, (_, row) in enumerate(top_sales.iterrows(), 1):
+        for idx, (_, row) in enumerate(sold_products.iterrows(), 1):
             participacao = (row['valor_total_vendas'] / total_geral * 100) if total_geral > 0 else 0
             
             detail_data.append([
@@ -173,9 +181,11 @@ class SalesReport(BasePDFReport):
                 f"{participacao:.1f}%"
             ])
         
-        detail_table = Table(detail_data, colWidths=[
-            0.4*inch, 3.2*inch, 1.5*inch, 1.1*inch, 1.1*inch, 1.6*inch, 0.9*inch
-        ])
+        detail_table = Table(
+            detail_data,
+            colWidths=[0.4*inch, 3.2*inch, 1.5*inch, 1.1*inch, 1.1*inch, 1.6*inch, 0.9*inch],
+            repeatRows=1,
+        )
         
         detail_table.setStyle(TableStyle([
             # Cabeçalho

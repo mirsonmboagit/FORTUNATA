@@ -4,7 +4,14 @@ import sys
 from threading import Thread
 from time import perf_counter
 from utils.config.app_config import get_app_settings, save_app_settings as persist_app_settings
-from utils.config.paths import APP_SETTINGS_FILE, ROOT_DIR, asset_path, ensure_runtime_dirs, set_project_cwd
+from utils.config.paths import (
+    APP_SETTINGS_FILE,
+    ROOT_DIR,
+    asset_path,
+    ensure_runtime_dirs,
+    is_mobile_runtime,
+    set_project_cwd,
+)
 from utils.config.logging_setup import configure_runtime_logging
 
 # Prepara caminhos, pastas e logs antes de carregar o Kivy.
@@ -15,20 +22,29 @@ configure_runtime_logging()
 from kivymd.app import MDApp
 from kivy.config import Config
 
+# O APK nao tem uma janela desktop nem permite gravar dentro do bundle.  A
+# interface mobile usa as dimensoes reais do dispositivo e o teclado nativo.
+IS_MOBILE_RUNTIME = is_mobile_runtime()
+
 # Configuracao basica da janela.
-Config.set('kivy', 'window_icon', str(asset_path('icon', 'icon4.ico')))
+if not IS_MOBILE_RUNTIME:
+    Config.set('kivy', 'window_icon', str(asset_path('icon', 'icon4.ico')))
 Config.set('kivy', 'exit_on_escape', '0')
-# Forca modo janela: fullscreen estava a causar cliques desalinhados
-# e quebra de layout em varias telas no ambiente atual.
-Config.set('graphics', 'fullscreen', '0')
-Config.set('graphics', 'minimum_width', '640')
-Config.set('graphics', 'minimum_height', '420')
+if IS_MOBILE_RUNTIME:
+    Config.set('kivy', 'keyboard_mode', 'systemanddock')
+else:
+    # Forca modo janela: fullscreen estava a causar cliques desalinhados
+    # e quebra de layout em varias telas no ambiente atual.
+    Config.set('graphics', 'fullscreen', '0')
+    Config.set('graphics', 'minimum_width', '640')
+    Config.set('graphics', 'minimum_height', '420')
 
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.properties import DictProperty, StringProperty
 from kivy.core.text import LabelBase
 from kivy.clock import Clock
+from kivy.resources import resource_add_path
 
 from utils.config.theme import get_theme_tokens
 from utils.core.i18n import language_label, language_options, language_short, normalize_language, translate
@@ -51,6 +67,13 @@ os.environ["KIVY_NO_WM_PEN"] = "1"
 BASE_DIR = str(ROOT_DIR)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+try:
+    # O APK nao usa o diretório de trabalho como raiz de recursos. Registar
+    # explicitamente a raiz do bundle mantém imagens e fontes do login
+    # disponíveis sem escrever nem depender do cwd Android.
+    resource_add_path(BASE_DIR)
+except Exception:
+    pass
 
 # Fontes customizadas
 logo_font_path = asset_path('fonts', 'h2.ttf')
@@ -131,20 +154,26 @@ def _resolve_window_constraints():
     }
 
 
-_WINDOW_CONSTRAINTS = _resolve_window_constraints()
-
-Window.size = (
-    _WINDOW_CONSTRAINTS["initial_w"],
-    _WINDOW_CONSTRAINTS["initial_h"],
-)
-Window.minimum_width = _WINDOW_CONSTRAINTS["min_w"]
-Window.minimum_height = _WINDOW_CONSTRAINTS["min_h"]
-Window.fullscreen = False
-try:
-    Window.left = max(0, int((_WINDOW_CONSTRAINTS["screen_w"] - _WINDOW_CONSTRAINTS["initial_w"]) / 2))
-    Window.top = max(0, int((_WINDOW_CONSTRAINTS["screen_h"] - _WINDOW_CONSTRAINTS["initial_h"]) / 2))
-except Exception:
-    pass
+_WINDOW_CONSTRAINTS = None
+if IS_MOBILE_RUNTIME:
+    try:
+        Window.softinput_mode = "below_target"
+    except Exception:
+        pass
+else:
+    _WINDOW_CONSTRAINTS = _resolve_window_constraints()
+    Window.size = (
+        _WINDOW_CONSTRAINTS["initial_w"],
+        _WINDOW_CONSTRAINTS["initial_h"],
+    )
+    Window.minimum_width = _WINDOW_CONSTRAINTS["min_w"]
+    Window.minimum_height = _WINDOW_CONSTRAINTS["min_h"]
+    Window.fullscreen = False
+    try:
+        Window.left = max(0, int((_WINDOW_CONSTRAINTS["screen_w"] - _WINDOW_CONSTRAINTS["initial_w"]) / 2))
+        Window.top = max(0, int((_WINDOW_CONSTRAINTS["screen_h"] - _WINDOW_CONSTRAINTS["initial_h"]) / 2))
+    except Exception:
+        pass
 
 
 class BaseApp(MDApp):
@@ -270,10 +299,11 @@ class BaseApp(MDApp):
     def on_start(self):
         if self.title:
             Window.set_title(self.title)
-        icon_path = asset_path('icon', 'icon4.ico')
-        if icon_path.exists():
-            Window.set_icon(str(icon_path))
-        Window.bind(on_request_close=self._handle_window_request_close)
+        if not IS_MOBILE_RUNTIME:
+            icon_path = asset_path('icon', 'icon4.ico')
+            if icon_path.exists():
+                Window.set_icon(str(icon_path))
+            Window.bind(on_request_close=self._handle_window_request_close)
         # A mesma passagem localiza os textos e aplica a escala minima de
         # leitura a toda a arvore, inclusive componentes adicionados depois.
         Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
@@ -334,6 +364,10 @@ class BaseApp(MDApp):
         self._automation_ev = Clock.schedule_interval(self._run_automation_tasks, 60)
 
     def _queue_optional_dependency_warmup(self):
+        # ReportLab/PyMuPDF/OpenCV/ZBar sao dependencias do executavel Windows.
+        # O cliente Android nao as empacota e nao deve tentar importa-las.
+        if IS_MOBILE_RUNTIME:
+            return
         if self._optional_warmup_started or self._optional_warmup_ev is not None:
             return
         self._optional_warmup_ev = Clock.schedule_once(
@@ -414,6 +448,9 @@ class BaseApp(MDApp):
             self._schedule_screen_warmup(delay)
 
     def change_screen_size(self, width, height):
+        if IS_MOBILE_RUNTIME:
+            # A dimensao e controlada pelo Android e pela orientacao do ecran.
+            return False
         constraints = _resolve_window_constraints()
         min_w = constraints["min_w"]
         min_h = constraints["min_h"]
