@@ -25,6 +25,7 @@ from utils.business.vat import (
     normalize_reference_date,
 )
 from utils.business.sales_transactions import REFUND_WINDOW_MINUTES, refund_window_status
+from utils.business.product_catalog import aggregate_admin_product_rows
 
 NEAR_EXPIRY_DAYS = 15
 LOSS_QTY_LIMIT_UN = 10
@@ -3954,6 +3955,53 @@ class Database(DatabaseAutomationMixin):
         except sqlite3.Error as e:
             print(f"Erro ao obter produtos paginados: {e}")
             return []
+
+    def get_all_products_catalog_page(
+        self,
+        search_text="",
+        category=None,
+        sold_by_weight=None,
+        limit=120,
+        offset=0,
+        selected_lot_ids_by_catalog_key=None,
+    ):
+        """Return one aggregated Admin catalogue page instead of the whole table.
+
+        Grouping runs next to the database, which keeps the API response small and
+        lets the Admin screen render its first rows without waiting for every lot
+        to cross the network.
+        """
+        started_at = perf_counter()
+        try:
+            rows = self.get_all_products_page(
+                search_text=search_text,
+                category=category,
+                sold_by_weight=sold_by_weight,
+                limit=None,
+                offset=0,
+            ) or []
+            grouped_rows = aggregate_admin_product_rows(
+                rows,
+                selected_lot_ids_by_catalog_key,
+            )
+            page_size = max(1, int(limit or 120))
+            page_offset = max(0, int(offset or 0))
+            page_rows = grouped_rows[page_offset:page_offset + page_size]
+            result = {
+                "rows": page_rows,
+                "has_more": (page_offset + len(page_rows)) < len(grouped_rows),
+                "total": len(grouped_rows),
+                "aggregated": True,
+            }
+            perf_log(
+                "db.get_all_products_catalog_page",
+                started_at,
+                f"rows={len(page_rows)} total={len(grouped_rows)} limit={page_size} offset={page_offset}",
+            )
+            return result
+        except Exception as exc:
+            print(f"Erro ao obter catalogo administrativo de produtos: {exc}")
+            return {"rows": [], "has_more": False, "total": 0, "aggregated": True}
 
     def get_product(self, id):
         """Obter um produto especÃƒÆ’Ã‚Â­fico"""

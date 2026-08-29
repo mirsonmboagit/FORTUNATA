@@ -62,6 +62,40 @@ class DatabaseSetupAndUserTests(TemporaryDatabaseTestCase):
 
 
 class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
+    def test_admin_catalog_page_aggregates_lots_and_keeps_selection(self):
+        first = self.add_sample_product(
+            description="Arroz Premium",
+            barcode="admin-lot-1",
+            stock=4,
+            expiry_date="2030-06-01",
+        )
+        second = self.add_sample_product(
+            description="Arroz Premium",
+            barcode="admin-lot-1",
+            stock=7,
+            expiry_date="2030-08-01",
+        )
+        self.add_sample_product(description="Feijao", barcode="admin-lot-2", stock=3)
+
+        first_page = self.db.get_all_products_catalog_page(limit=1, offset=0)
+        self.assertTrue(first_page["has_more"])
+        page = self.db.get_all_products_catalog_page(limit=10, offset=0)
+        self.assertEqual(page["total"], 2)
+        self.assertEqual(len(page["rows"]), 2)
+        rice = next(row for row in page["rows"] if row[12] == "admin-lot-1")
+        self.assertEqual(rice[2], 11.0)
+        self.assertEqual(rice[27], 2)
+
+        selected = self.db.get_all_products_catalog_page(
+            search_text="arroz",
+            selected_lot_ids_by_catalog_key={rice[26]: second},
+        )
+        selected_rice = selected["rows"][0]
+        self.assertEqual(selected_rice[0], second)
+        self.assertEqual(selected_rice[2], 7.0)
+        self.assertEqual(selected_rice[29], second)
+        self.assertIn(first, selected_rice[28])
+
     def test_composite_sale_is_atomic_and_idempotent(self):
         first = self.add_sample_product(description="Agua", barcode="mob-a", stock=2, sale_price=40)
         second = self.add_sample_product(description="Sumo", barcode="mob-b", stock=1, sale_price=60)

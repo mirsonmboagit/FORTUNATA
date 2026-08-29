@@ -20,6 +20,7 @@ class DatabaseClient:
         "get_products_sale_revision": 1.0,
         "get_all_products": 2.0,
         "get_all_products_page": 1.2,
+        "get_all_products_catalog_page": 1.2,
         "get_products_for_losses": 2.0,
         "get_products_for_restock": 2.0,
         "get_products_for_stock_control": 2.0,
@@ -51,6 +52,7 @@ class DatabaseClient:
         "get_products_for_sale_catalog_page",
         "get_products_for_sale_ids",
         "get_all_products_page",
+        "get_all_products_catalog_page",
     }
 
     def __init__(self, base_url=None, api_key=None, timeout=None, config=None):
@@ -714,6 +716,45 @@ class DatabaseClient:
         if limit:
             return rows[off:off + int(limit)]
         return rows[off:]
+
+    def get_all_products_catalog_page(
+        self,
+        search_text="",
+        category=None,
+        sold_by_weight=None,
+        limit=120,
+        offset=0,
+        selected_lot_ids_by_catalog_key=None,
+    ):
+        result = self._rpc(
+            "get_all_products_catalog_page",
+            search_text=search_text,
+            category=category,
+            sold_by_weight=sold_by_weight,
+            limit=limit,
+            offset=offset,
+            selected_lot_ids_by_catalog_key=selected_lot_ids_by_catalog_key or {},
+        )
+        if isinstance(result, dict) and "rows" in result:
+            payload = dict(result)
+            payload["aggregated"] = bool(payload.get("aggregated", True))
+            return payload
+
+        # Compatibility with older API servers: fetch the matching raw rows once
+        # and leave the aggregation/page slicing to the Admin screen.
+        rows = self.get_all_products_page(
+            search_text=search_text,
+            category=category,
+            sold_by_weight=sold_by_weight,
+            limit=None,
+            offset=0,
+        ) or []
+        return {
+            "rows": rows,
+            "has_more": False,
+            "total": None,
+            "aggregated": False,
+        }
 
     def get_product(self, product_id):
         return self._rpc("get_product", product_id)

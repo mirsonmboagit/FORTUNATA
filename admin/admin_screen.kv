@@ -276,25 +276,24 @@
                                 height: dp(1)
                                 color: app.theme_tokens['divider']
 
-                            ScrollView:
-                                size_hint_y: 1
-                                do_scroll_x: False
-                                do_scroll_y: True
+                            RecycleView:
+                                id: product_table
+                                size_hint_x: None
+                                width: table_scroll_content.width
+                                viewclass: "RecycleAdminProductRow"
+                                scroll_type: ["bars", "content"]
                                 bar_width: dp(8)
                                 bar_color: 0.18, 0.28, 0.48, 0.7
                                 bar_inactive_color: 0.18, 0.28, 0.48, 0.3
                                 effect_cls: "ScrollEffect"
 
-                                MDGridLayout:
-                                    id: product_table
-                                    cols: 9
+                                RecycleBoxLayout:
+                                    default_size: None, dp(48)
+                                    default_size_hint: 1, None
                                     size_hint_y: None
                                     height: self.minimum_height
-                                    size_hint_x: None
-                                    width: table_scroll_content.width
-                                    row_default_height: max(dp(46), root.height * 0.054)
+                                    orientation: "vertical"
                                     spacing: 0
-                                    padding: 0
 
                     MDBoxLayout:
                         size_hint_y: None

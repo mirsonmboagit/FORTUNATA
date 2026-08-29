@@ -67,6 +67,7 @@ ALLOWLIST = {
     "get_products_by_barcode",
     "get_all_products",
     "get_all_products_page",
+    "get_all_products_catalog_page",
     "get_product",
     "get_vat_rules",
     "delete_product",
