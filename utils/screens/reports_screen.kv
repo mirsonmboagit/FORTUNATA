@@ -100,7 +100,7 @@
                             height: dp(30)
 
                         MDLabel:
-                            text: 'Analise e exportacao de dados'
+                            text: 'Relatorios e exportacao'
                             font_style: 'Caption'
                             halign: 'left'
                             theme_text_color: 'Custom'
@@ -568,20 +568,51 @@
         # ── AI FAB + badge ────────────────────────────────────────────
         MDFloatingActionButton:
             id: ai_button
-            icon: "assets/icon/idea.ico"
-            elevation: 2
+            icon: "assets/icon/alert.png"
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
             pos_hint: {"right": 0.965, "y": 0.04}
             on_release: root.open_ai_menu(self)
+
+        MDFloatingActionButton:
+            id: recommendations_button
+            icon: "assets/icon/idea.ico"
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
+            pos: ai_button.x, ai_button.top + dp(10)
+            on_release: root.show_ai_recommendations(self)
+
+        MDCard:
+            id: recommendations_badge
+            size_hint: None, None
+            size: dp(26), dp(26)
+            md_bg_color: app.theme_tokens['badge']
+            radius: [dp(13)]
+            elevation: 1
+            pos: recommendations_button.right - (self.width * 0.55), recommendations_button.top - (self.height * 0.45)
+            opacity: 1
+
+            MDLabel:
+                id: recommendations_badge_label
+                text: "0"
+                halign: "center"
+                valign: "middle"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['on_primary']
+                font_size: dp(12)
+                bold: True
 
         MDCard:
             id: ai_badge
             size_hint: None, None
-            size: dp(24), dp(24)
+            size: dp(26), dp(26)
             md_bg_color: app.theme_tokens['badge']
-            radius: [dp(12)]
+            radius: [dp(13)]
             elevation: 1
             pos_hint: {"right": 0.978, "y": 0.098}
-            opacity: 0
+            opacity: 1
 
             MDLabel:
                 id: ai_badge_label

@@ -802,7 +802,7 @@ class MobileManagerSalesScreen(MDScreen):
             color=tokens.get("success"),
             disabled=self.sale_in_progress or not self.cart_items,
         ))
-        body.add_widget(self._paragraph("O recibo e o historico ficam centralizados no servidor. Esta versao nao tenta imprimir por bibliotecas Windows."))
+        body.add_widget(self._paragraph("O recibo e o historico ficam no servidor. A impressao nao esta disponivel nesta versao."))
         return scroll
 
     def _cash_session_card(self):
@@ -1033,7 +1033,7 @@ class MobileManagerSalesScreen(MDScreen):
             elif result.get("status") == "conflict":
                 self._invalidate_pending_sale()
                 name, requested, available = (result.get("conflicts") or [("Produto", 0, 0)])[0]
-                self._show_message("Stock atualizado", f"{name}: solicitado {_quantity(requested)}, disponivel {_quantity(available)}.")
+                self._show_message("Stock revisto", f"{name}: solicitado {_quantity(requested)}, disponivel {_quantity(available)}.")
             elif result.get("status") == "ok":
                 self._invalidate_pending_sale()
                 self.clear_cart()
@@ -1215,7 +1215,7 @@ class MobileManagerSalesScreen(MDScreen):
                     self._show_message("Estorno", str((result or {}).get("message") or "O estorno nao foi concluido."))
                     return
                 dialog.dismiss()
-                self._show_message("Estorno concluido", str((result or {}).get("message") or "O stock foi devolvido e o historico atualizado."))
+                self._show_message("Estorno concluido", str((result or {}).get("message") or "O stock foi devolvido e o historico revisto."))
                 self.load_history(force=True)
                 self.load_products()
 

@@ -1,4 +1,5 @@
 import builtins
+import json
 import os
 import secrets
 import sqlite3
@@ -29,9 +30,23 @@ from utils.business.product_catalog import aggregate_admin_product_rows
 
 NEAR_EXPIRY_DAYS = 15
 LOSS_QTY_LIMIT_UN = 10
-LOSS_QTY_LIMIT_KG = 5.0
+LOSS_QTY_LIMIT_KG = 10.0
 LOSS_VALUE_LIMIT_MZN = 5000
 LOSS_TYPES = {"DAMAGE", "EXPIRED", "THEFT", "ADJUSTMENT"}
+LOSS_TYPE_LABELS = {
+    "ADJUSTMENT": "Ajuste",
+    "DAMAGE": "Danificado",
+    "EXPIRED": "Expirado",
+    "THEFT": "Roubo",
+}
+EXPIRY_LOSS_REASON = "Data de validade"
+# Qualquer perda declarada por um gerente exige validacao administrativa antes
+# de alterar o stock. Os limites abaixo mantem-se apenas como parametros de
+# analise e de alertas; nao criam excecoes a esta regra.
+LOSS_TYPES_ALWAYS_REQUIRING_APPROVAL = set(LOSS_TYPES)
+LOSS_RECURRENCE_PERIODS = 3
+ARCHIVED_PRODUCT_STATUS = "ARQUIVADO"
+ARCHIVED_PRODUCT_REASON = "Removido do catalogo; historico preservado"
 
 
 def _safe_print(*args, **kwargs):
@@ -56,6 +71,20 @@ def _safe_float(value, default=0.0):
         return float(value)
     except Exception:
         return default
+
+
+def _loss_type_label(value):
+    """Traduz o código interno de perda apenas para apresentação."""
+    code = str(value or "").strip().upper()
+    return LOSS_TYPE_LABELS.get(code, code.replace("_", " ").capitalize() or "Perda")
+
+
+def _inventory_quantity(value, is_sold_by_weight=False, field_name="Quantidade"):
+    """Validate discrete stock for units while preserving decimal kg values."""
+    quantity = float(value)
+    if not bool(is_sold_by_weight) and not quantity.is_integer():
+        raise ValueError(f"{field_name} deve ser inteiro para produtos por unidade.")
+    return quantity
 
 
 def _transaction_key_sql(table_alias=""):
@@ -131,7 +160,7 @@ def _fetch_sales_velocity(db, days=14):
     owner = db._active_owner() if hasattr(db, "_active_owner") else None
     db.cursor.execute(
         "SELECT product_id, COALESCE(SUM(quantity), 0) "
-        "FROM sales WHERE DATE(sale_date) >= ? "
+        "FROM sales_history WHERE DATE(sale_date) >= ? "
         + ("AND COALESCE(owner_username, '') = ? " if owner else "")
         + "GROUP BY product_id",
         (start_date, owner) if owner else (start_date,),
@@ -147,7 +176,7 @@ def _get_product_daily_sales(db, product_id, days=14):
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     owner = db._active_owner() if hasattr(db, "_active_owner") else None
     db.cursor.execute(
-        "SELECT COALESCE(SUM(quantity), 0) FROM sales "
+        "SELECT COALESCE(SUM(quantity), 0) FROM sales_history "
         "WHERE product_id = ? AND DATE(sale_date) >= ? "
         + ("AND COALESCE(owner_username, '') = ?" if owner else ""),
         (product_id, start_date, owner) if owner else (product_id, start_date),
@@ -163,8 +192,8 @@ def _build_forecasts(db, days=14, limit=10):
     db.cursor.execute(
         "SELECT id, description, existing_stock, is_sold_by_weight, expiry_date, "
         "sale_price, unit_purchase_price "
-        "FROM products WHERE 1=1 " + scope_sql,
-        tuple(scope_params),
+        "FROM products WHERE COALESCE(status, 'ATIVO') <> ? " + scope_sql,
+        (ARCHIVED_PRODUCT_STATUS, *scope_params),
     )
     forecasts = []
     expiry_risk = []
@@ -868,7 +897,7 @@ class Database(DatabaseAutomationMixin):
                 "ON sale_transactions(owner_username, created_at)"
             )
 
-            # Abertura e fecho de caixa por operador/terminal.
+            # Abertura e fecho de caixa por atendente/terminal.
             self.cursor.execute(
                 '''
                 CREATE TABLE IF NOT EXISTS cash_sessions (
@@ -919,6 +948,25 @@ class Database(DatabaseAutomationMixin):
                 '''
             )
             ensure_column("sales_returns", "owner_username", "TEXT")
+
+            # Fonte unica para consultas historicas de vendas. Qualquer item
+            # com estorno continua preservado somente nas tabelas de auditoria
+            # (sales_returns e stock_movements), mas fica fora de historicos,
+            # indicadores e relatorios de venda.
+            self.cursor.execute("DROP VIEW IF EXISTS sales_history")
+            self.cursor.execute(
+                """
+                CREATE VIEW sales_history AS
+                SELECT s.*
+                FROM sales s
+                LEFT JOIN (
+                    SELECT sale_id, COALESCE(SUM(returned_qty), 0) AS returned_qty
+                    FROM sales_returns
+                    GROUP BY sale_id
+                ) sr ON sr.sale_id = s.id
+                WHERE COALESCE(sr.returned_qty, 0) <= 0.000001
+                """
+            )
 
             # Atualizar status default para registros antigos
             self.cursor.execute(
@@ -995,6 +1043,26 @@ class Database(DatabaseAutomationMixin):
             ensure_column("stock_movements", "supplier_name", "TEXT")
             ensure_column("stock_movements", "invoice_number", "TEXT")
             ensure_column("stock_movements", "owner_username", "TEXT")
+
+            # Fotos obrigatorias para perdas por dano. A imagem fica fora do
+            # SQLite; o banco guarda apenas o caminho privado e metadados.
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS damage_evidence (
+                id TEXT PRIMARY KEY,
+                movement_id INTEGER UNIQUE,
+                storage_path TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                analysis_json TEXT NOT NULL,
+                analysis_status TEXT NOT NULL DEFAULT 'APPROVED',
+                model TEXT,
+                analyzed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by TEXT,
+                owner_username TEXT,
+                FOREIGN KEY (movement_id) REFERENCES stock_movements(id)
+            )''')
 
             # Historico de status do produto
             self.cursor.execute('''
@@ -1127,6 +1195,7 @@ class Database(DatabaseAutomationMixin):
                     "sales",
                     "sales_returns",
                     "stock_movements",
+                    "damage_evidence",
                     "product_status_history",
                     "fraud_alerts",
                     "stock_reconciliation_issues",
@@ -1150,6 +1219,10 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_movements_owner_applied_date "
                 "ON stock_movements (owner_username, applied, created_at DESC)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_damage_evidence_owner_status_date "
+                "ON damage_evidence (owner_username, analysis_status, created_at)"
             )
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sales_returns_sale "
@@ -1221,6 +1294,10 @@ class Database(DatabaseAutomationMixin):
             )
             
             self.conn.commit()
+            try:
+                self.cleanup_unbound_damage_evidence(hours=24)
+            except Exception:
+                pass
             print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Banco de dados configurado com suporte completo a vendas por KG e sistema de perdas!")
             
         except (sqlite3.Error, ValueError) as e:
@@ -1329,6 +1406,7 @@ class Database(DatabaseAutomationMixin):
                     "sales",
                     "sales_returns",
                     "stock_movements",
+                    "damage_evidence",
                     "product_status_history",
                     "fraud_alerts",
                     "stock_reconciliation_issues",
@@ -2211,6 +2289,143 @@ class Database(DatabaseAutomationMixin):
             raise ValueError("Data de validade invalida.")
         return parsed.isoformat()
 
+    def _resolve_loss_actor(self, created_by=None, created_role=None):
+        """Usa a sessao ativa quando existir; evita confiar no papel informado pelo cliente."""
+        session_user = str(self.current_user or "").strip()
+        session_role = str(self.current_role or "").strip().lower()
+        requested_user = str(created_by or "").strip()
+        requested_role = str(created_role or "").strip().lower()
+
+        user = session_user or requested_user or None
+        role = session_role if session_role in {"admin", "manager"} else requested_role
+        return user, role
+
+    @staticmethod
+    def _is_expiry_loss_reason(reason):
+        return str(reason or "").strip().casefold() == EXPIRY_LOSS_REASON.casefold()
+
+    def _is_expired_loss_allowed(self, product_id, reason):
+        """Confirma no banco que uma perda por validade corresponde a um lote vencido."""
+        if not self._is_expiry_loss_reason(reason):
+            return False
+
+        scope_sql, scope_params = self._owner_filter()
+        self.cursor.execute(
+            f"SELECT expiry_date FROM products WHERE id = ? {scope_sql}",
+            (product_id, *scope_params),
+        )
+        row = self.cursor.fetchone()
+        expiry_date = _parse_date(row[0]) if row else None
+        # O dia indicado ainda faz parte da validade. So expira no dia seguinte.
+        return bool(expiry_date and expiry_date < date.today())
+
+    @staticmethod
+    def _shift_month(reference_date, months):
+        month_index = (reference_date.year * 12 + reference_date.month - 1) + int(months)
+        return date(month_index // 12, (month_index % 12) + 1, 1)
+
+    def _manager_loss_history(self, username, since_date):
+        """Datas e quantidades das perdas ainda validas do mesmo gerente."""
+        username = str(username or "").strip()
+        if not username:
+            return [], (0.0, 0.0)
+
+        loss_types = tuple(sorted(LOSS_TYPES))
+        placeholders = ",".join(["?"] * len(loss_types))
+        scope_sql, scope_params = self._owner_filter("sm")
+        day_start = date.today().isoformat() + " 00:00:00"
+        self.cursor.execute(
+            f"""
+            SELECT sm.created_at,
+                   COALESCE(SUM(CASE WHEN UPPER(COALESCE(sm.unit, 'UN')) = 'UN' THEN sm.qty ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN UPPER(COALESCE(sm.unit, '')) = 'KG' THEN sm.qty ELSE 0 END), 0)
+            FROM stock_movements sm
+            WHERE sm.created_by = ?
+              AND LOWER(COALESCE(sm.created_role, '')) = 'manager'
+              AND sm.direction = 'OUT'
+              AND sm.movement_type IN ({placeholders})
+              AND COALESCE(sm.approval_status, 'APPROVED') IN ('APPROVED', 'PENDING')
+              AND sm.created_at >= ?
+              {scope_sql}
+            GROUP BY sm.created_at
+            ORDER BY sm.created_at ASC
+            """,
+            (username, *loss_types, since_date.isoformat() + " 00:00:00", *scope_params),
+        )
+        rows = self.cursor.fetchall()
+
+        self.cursor.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN UPPER(COALESCE(sm.unit, 'UN')) = 'UN' THEN sm.qty ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN UPPER(COALESCE(sm.unit, '')) = 'KG' THEN sm.qty ELSE 0 END), 0)
+            FROM stock_movements sm
+            WHERE sm.created_by = ?
+              AND LOWER(COALESCE(sm.created_role, '')) = 'manager'
+              AND sm.direction = 'OUT'
+              AND sm.movement_type IN ({placeholders})
+              AND COALESCE(sm.approval_status, 'APPROVED') IN ('APPROVED', 'PENDING')
+              AND sm.created_at >= ?
+              {scope_sql}
+            """,
+            (username, *loss_types, day_start, *scope_params),
+        )
+        daily_totals = self.cursor.fetchone() or (0.0, 0.0)
+        return rows, (_safe_float(daily_totals[0]), _safe_float(daily_totals[1]))
+
+    def _manager_loss_recurrence_reason(self, username):
+        """Deteta tres dias, semanas ou meses consecutivos com perdas do gerente."""
+        current_day = date.today()
+        earliest_month = self._shift_month(
+            current_day.replace(day=1),
+            -(LOSS_RECURRENCE_PERIODS - 1),
+        )
+        rows, _daily_totals = self._manager_loss_history(username, earliest_month)
+        loss_days = {_parse_date(row[0]) for row in rows}
+        loss_days.discard(None)
+        loss_days.add(current_day)  # Inclui a perda que esta a ser analisada.
+
+        if all((current_day - timedelta(days=index)) in loss_days for index in range(LOSS_RECURRENCE_PERIODS)):
+            return f"Perdas em {LOSS_RECURRENCE_PERIODS} dias consecutivos"
+
+        current_week = current_day - timedelta(days=current_day.weekday())
+        loss_weeks = {day_value - timedelta(days=day_value.weekday()) for day_value in loss_days}
+        if all(
+            (current_week - timedelta(days=7 * index)) in loss_weeks
+            for index in range(LOSS_RECURRENCE_PERIODS)
+        ):
+            return f"Perdas em {LOSS_RECURRENCE_PERIODS} semanas consecutivas"
+
+        current_month = current_day.replace(day=1)
+        loss_months = {day_value.replace(day=1) for day_value in loss_days}
+        if all(
+            self._shift_month(current_month, -index) in loss_months
+            for index in range(LOSS_RECURRENCE_PERIODS)
+        ):
+            return f"Perdas em {LOSS_RECURRENCE_PERIODS} meses consecutivos"
+        return None
+
+    def _loss_approval_reason(self, movement_code, qty, unit_cost, is_by_weight, created_by, created_role):
+        """Devolve o motivo para uma perda registada por gerente ficar pendente."""
+        if str(created_role or "").strip().lower() != "manager":
+            return None
+        movement_code = str(movement_code or "").upper()
+        if movement_code in LOSS_TYPES_ALWAYS_REQUIRING_APPROVAL:
+            return "Perda registada por gerente requer aprovacao administrativa"
+        return None
+
+    def _loss_requires_admin_approval(self, movement_code, qty, unit_cost, is_by_weight, created_by, created_role):
+        return bool(
+            self._loss_approval_reason(
+                movement_code,
+                qty,
+                unit_cost,
+                is_by_weight,
+                created_by,
+                created_role,
+            )
+        )
+
     @staticmethod
     def _expiry_order_clause(prefix=""):
         column = f"{prefix}expiry_date" if prefix else "expiry_date"
@@ -2434,6 +2649,8 @@ class Database(DatabaseAutomationMixin):
         qty = float(qty)
         if qty <= 0:
             return None
+        if not is_by_weight and not qty.is_integer():
+            return None
 
         if unit_cost is None:
             unit_cost = float(product[2] or 0)
@@ -2517,6 +2734,192 @@ class Database(DatabaseAutomationMixin):
         )
         return cursor.lastrowid
 
+    # ==================== FOTO OBRIGATORIA DE DANO ====================
+    def create_damage_evidence(
+        self,
+        evidence_id,
+        storage_path,
+        sha256,
+        mime_type,
+        file_size,
+        analysis,
+        created_by=None,
+    ):
+        """Persiste uma foto anexada que ainda nao esta ligada a uma perda."""
+        analysis = dict(analysis or {})
+        attached = bool(analysis.get("attached") or analysis.get("approved"))
+        if not evidence_id or not storage_path or not attached:
+            return False
+        # Em API, a sessao ativa e a fonte de autoridade; o campo enviado pelo
+        # cliente nao pode ser usado para aceder a uma evidencia de outro dono.
+        owner = self._active_owner() or self._owner_value(created_by)
+        now_str = self._now_str()
+        try:
+            self.cursor.execute(
+                """
+                INSERT INTO damage_evidence (
+                    id, storage_path, sha256, mime_type, file_size,
+                    analysis_json, analysis_status, model, analyzed_at,
+                    created_at, created_by, owner_username
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(evidence_id), str(storage_path), str(sha256), str(mime_type),
+                    int(file_size), json.dumps(analysis, ensure_ascii=False, sort_keys=True),
+                    "ATTACHED" if analysis.get("attached") else "APPROVED",
+                    str(analysis.get("model") or ""), now_str, now_str,
+                    created_by, owner,
+                ),
+            )
+            self.conn.commit()
+            return True
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            print(f"Erro ao guardar evidencia de dano: {exc}")
+            self.conn.rollback()
+            return False
+
+    def cleanup_unbound_damage_evidence(self, hours=24):
+        """Remove referencias de fotos anexadas que nunca foram usadas."""
+        try:
+            cutoff = (datetime.now() - timedelta(hours=max(1.0, float(hours)))).isoformat(timespec="seconds")
+            owner = self._active_owner()
+            where = ["movement_id IS NULL", "created_at < ?"]
+            params = [cutoff]
+            if owner:
+                where.append("COALESCE(owner_username, '') = ?")
+                params.append(owner)
+            self.cursor.execute(
+                "SELECT id, storage_path FROM damage_evidence WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+            rows = self.cursor.fetchall()
+            if rows:
+                self.cursor.execute(
+                    "DELETE FROM damage_evidence WHERE " + " AND ".join(where),
+                    tuple(params),
+                )
+                self.conn.commit()
+            paths = [row[1] for row in rows]
+            if paths:
+                try:
+                    from utils.business.damage_evidence import remove_stored_evidence
+                    for path in paths:
+                        remove_stored_evidence(path)
+                except Exception:
+                    pass
+            return paths
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            print(f"Erro ao limpar evidencias expiradas: {exc}")
+            self.conn.rollback()
+            return []
+
+    def delete_damage_evidence(self, evidence_id):
+        """Descarta uma evidencia ainda nao associada e devolve o caminho do ficheiro."""
+        if not evidence_id:
+            return None
+        try:
+            owner = self._active_owner()
+            where = ["id = ?", "movement_id IS NULL"]
+            params = [str(evidence_id)]
+            if owner:
+                where.append("COALESCE(owner_username, '') = ?")
+                params.append(owner)
+            self.cursor.execute(
+                "SELECT storage_path FROM damage_evidence WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+            self.cursor.execute(
+                "DELETE FROM damage_evidence WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+            self.conn.commit()
+            try:
+                from utils.business.damage_evidence import remove_stored_evidence
+                remove_stored_evidence(row[0])
+            except Exception:
+                pass
+            return row[0]
+        except sqlite3.Error as exc:
+            print(f"Erro ao remover evidencia de dano: {exc}")
+            self.conn.rollback()
+            return None
+
+    def _attached_damage_evidence(self, evidence_id, created_by=None):
+        """Obtem uma foto anexada, livre e pertencente ao mesmo dono."""
+        if not evidence_id:
+            return None
+        owner = self._active_owner() or self._owner_value(created_by)
+        self.cursor.execute(
+            """
+            SELECT id, storage_path
+            FROM damage_evidence
+            WHERE id = ?
+              AND analysis_status IN ('ATTACHED', 'APPROVED')
+              AND movement_id IS NULL
+              AND COALESCE(owner_username, '') = ?
+            """,
+            (str(evidence_id), owner),
+        )
+        return self.cursor.fetchone()
+
+    def get_damage_evidence(self, evidence_id):
+        """Devolve metadados da foto, sem expor o caminho privado da imagem."""
+        if not evidence_id:
+            return None
+        try:
+            owner = self._active_owner()
+            where = ["id = ?"]
+            params = [str(evidence_id)]
+            if owner:
+                where.append("COALESCE(owner_username, '') = ?")
+                params.append(owner)
+            self.cursor.execute(
+                """
+                SELECT id, movement_id, sha256, mime_type, file_size, analysis_json,
+                       analysis_status, model, analyzed_at, created_at, created_by
+                FROM damage_evidence WHERE """ + " AND ".join(where),
+                tuple(params),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+            try:
+                analysis = json.loads(row[5] or "{}")
+            except (TypeError, ValueError):
+                analysis = {}
+            return {
+                "id": row[0], "movement_id": row[1], "sha256": row[2],
+                "mime_type": row[3], "file_size": row[4], "analysis": analysis,
+                "status": row[6], "model": row[7], "analyzed_at": row[8],
+                "created_at": row[9], "created_by": row[10],
+            }
+        except sqlite3.Error as exc:
+            print(f"Erro ao obter evidencia de dano: {exc}")
+            return None
+
+    def get_damage_evidence_storage_path(self, evidence_id):
+        """Uso interno da API para servir a imagem apos validar o dono."""
+        if not evidence_id:
+            return None
+        try:
+            owner = self._active_owner()
+            where = ["id = ?"]
+            params = [str(evidence_id)]
+            if owner:
+                where.append("COALESCE(owner_username, '') = ?")
+                params.append(owner)
+            self.cursor.execute(
+                "SELECT storage_path FROM damage_evidence WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+            row = self.cursor.fetchone()
+            return row[0] if row else None
+        except sqlite3.Error:
+            return None
+
     def record_stock_movement(
         self,
         product_id,
@@ -2535,9 +2938,69 @@ class Database(DatabaseAutomationMixin):
         unit_price=None,
         supplier_name=None,
         invoice_number=None,
+        evidence_id=None,
     ):
         """Registra movimento e aplica no stock imediatamente."""
         try:
+            movement_code = str(movement_type or "").upper()
+            direction_code = str(direction or "").upper()
+            reason = str(reason or "").strip()
+            if direction_code == "OUT" and movement_code in LOSS_TYPES and not reason:
+                return None
+
+            if direction_code == "OUT" and movement_code == "EXPIRED":
+                if not self._is_expired_loss_allowed(product_id, reason):
+                    return None
+
+            if direction_code == "OUT" and movement_code in LOSS_TYPES:
+                created_by, created_role = self._resolve_loss_actor(created_by, created_role)
+                # Mantem a regra no banco tambem para chamadas que nao passem
+                # pela tela de perdas (API, importacoes ou futuras interfaces).
+                self.cursor.execute(
+                    """
+                    SELECT unit_purchase_price, is_sold_by_weight
+                    FROM products WHERE id = ?
+                    """,
+                    (product_id,),
+                )
+                loss_product = self.cursor.fetchone()
+                if not loss_product:
+                    return None
+                effective_cost = unit_cost if unit_cost is not None else loss_product[0]
+                if self._loss_requires_admin_approval(
+                    movement_code,
+                    qty,
+                    effective_cost,
+                    loss_product[1],
+                    created_by,
+                    created_role,
+                ):
+                    return self.request_stock_movement(
+                        product_id,
+                        movement_code,
+                        qty,
+                        reason,
+                        created_by,
+                        created_role,
+                        terminal_id=terminal_id,
+                        note=note,
+                        evidence_path=evidence_path,
+                        reference_table=reference_table,
+                        reference_id=reference_id,
+                        unit_cost=unit_cost,
+                        unit_price=unit_price,
+                        direction=direction,
+                        evidence_id=evidence_id,
+                    )
+
+            attached_evidence = None
+            if direction_code == "OUT" and movement_code == "DAMAGE":
+                attached_evidence = self._attached_damage_evidence(evidence_id, created_by)
+                if not attached_evidence:
+                    return None
+                # O caminho vem apenas da foto anexada, nunca de texto do cliente.
+                evidence_path = attached_evidence[1]
+
             movement_id = self._record_stock_movement_tx(
                 self.cursor,
                 product_id,
@@ -2564,6 +3027,19 @@ class Database(DatabaseAutomationMixin):
             if not movement_id:
                 self.conn.rollback()
                 return None
+            if attached_evidence:
+                self.cursor.execute(
+                    """
+                    UPDATE damage_evidence
+                    SET movement_id = ?
+                    WHERE id = ? AND movement_id IS NULL
+                      AND analysis_status IN ('ATTACHED', 'APPROVED')
+                    """,
+                    (movement_id, attached_evidence[0]),
+                )
+                if self.cursor.rowcount != 1:
+                    self.conn.rollback()
+                    return None
             self.conn.commit()
             return movement_id
         except sqlite3.Error as e:
@@ -2587,9 +3063,29 @@ class Database(DatabaseAutomationMixin):
         unit_cost=None,
         unit_price=None,
         direction=None,
+        evidence_id=None,
     ):
         """Registra movimento e decide se precisa aprovacao."""
         try:
+            movement_code = str(movement_type or "").upper()
+            direction_code = str(direction or "").upper()
+            reason = str(reason or "").strip()
+            if direction is None:
+                if movement_code in LOSS_TYPES or movement_code == "SALE":
+                    direction = "OUT"
+                elif movement_code == "RETURN":
+                    direction = "IN"
+                direction_code = str(direction or "").upper()
+
+            if direction_code == "OUT" and movement_code in LOSS_TYPES and not reason:
+                return None
+            if direction_code == "OUT" and movement_code == "EXPIRED":
+                if not self._is_expired_loss_allowed(product_id, reason):
+                    return None
+
+            if direction_code == "OUT" and movement_code in LOSS_TYPES:
+                created_by, created_role = self._resolve_loss_actor(created_by, created_role)
+
             self.cursor.execute(
                 """
                 SELECT existing_stock, unit_purchase_price, sale_price, is_sold_by_weight
@@ -2610,22 +3106,35 @@ class Database(DatabaseAutomationMixin):
             if qty <= 0:
                 return None
 
-            if direction is None:
-                if movement_type in LOSS_TYPES or movement_type == "SALE":
-                    direction = "OUT"
-                elif movement_type == "RETURN":
-                    direction = "IN"
+            attached_evidence = None
+            if direction_code == "OUT" and movement_code == "DAMAGE":
+                attached_evidence = self._attached_damage_evidence(evidence_id, created_by)
+                if not attached_evidence:
+                    return None
+                evidence_path = attached_evidence[1]
 
             if direction == "OUT" and stock_before < qty:
                 return None
 
-            needs_approval = False
-            if movement_type in LOSS_TYPES:
-                qty_limit = LOSS_QTY_LIMIT_KG if is_by_weight else LOSS_QTY_LIMIT_UN
-                if qty > qty_limit or (qty * unit_cost) > LOSS_VALUE_LIMIT_MZN:
-                    needs_approval = True
+            approval_reason = None
+            needs_approval = (
+                direction_code == "OUT"
+                and movement_code in LOSS_TYPES
+            )
+            if needs_approval:
+                approval_reason = self._loss_approval_reason(
+                    movement_code,
+                    qty,
+                    unit_cost,
+                    is_by_weight,
+                    created_by,
+                    created_role,
+                )
+                needs_approval = bool(approval_reason)
 
             if needs_approval:
+                approval_note = f"Aprovacao administrativa: {approval_reason}"
+                note = f"{note} | {approval_note}" if note else approval_note
                 movement_id = self._record_stock_movement_tx(
                     self.cursor,
                     product_id,
@@ -2650,6 +3159,19 @@ class Database(DatabaseAutomationMixin):
                 if not movement_id:
                     self.conn.rollback()
                     return None
+                if attached_evidence:
+                    self.cursor.execute(
+                        """
+                        UPDATE damage_evidence
+                        SET movement_id = ?
+                        WHERE id = ? AND movement_id IS NULL
+                          AND analysis_status IN ('ATTACHED', 'APPROVED')
+                        """,
+                        (movement_id, attached_evidence[0]),
+                    )
+                    if self.cursor.rowcount != 1:
+                        self.conn.rollback()
+                        return None
                 self.conn.commit()
                 return movement_id
 
@@ -2668,6 +3190,7 @@ class Database(DatabaseAutomationMixin):
                 terminal_id=terminal_id,
                 unit_cost=unit_cost,
                 unit_price=unit_price,
+                evidence_id=evidence_id,
             )
         except sqlite3.Error as e:
             print(f"Erro ao solicitar movimento: {e}")
@@ -2679,7 +3202,7 @@ class Database(DatabaseAutomationMixin):
         try:
             self.cursor.execute(
                 """
-                SELECT product_id, movement_type, direction, qty, approval_status, applied
+                SELECT product_id, movement_type, direction, qty, approval_status, applied, reason
                 FROM stock_movements WHERE id = ?
                 """,
                 (movement_id,),
@@ -2688,8 +3211,11 @@ class Database(DatabaseAutomationMixin):
             if not row:
                 return False
 
-            product_id, movement_type, direction, qty, approval_status, applied = row
+            product_id, movement_type, direction, qty, approval_status, applied, reason = row
             if approval_status != "PENDING" or applied:
+                return False
+
+            if movement_type == "EXPIRED" and not self._is_expired_loss_allowed(product_id, reason):
                 return False
 
             self.cursor.execute(
@@ -2762,6 +3288,59 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao aprovar movimento: {e}")
             self.conn.rollback()
             return False
+
+    def approve_all_pending_stock_movements(self, approved_by):
+        """Tenta aprovar todas as perdas pendentes e devolve um resumo seguro."""
+        try:
+            pending = list(self.get_pending_approvals() or [])
+            approved_ids = []
+            failed_ids = []
+            for row in pending:
+                movement_id = row[0] if row else None
+                if movement_id is None:
+                    continue
+                if self.approve_stock_movement(movement_id, approved_by):
+                    approved_ids.append(movement_id)
+                else:
+                    failed_ids.append(movement_id)
+            return {
+                "approved_ids": approved_ids,
+                "failed_ids": failed_ids,
+                "approved_count": len(approved_ids),
+                "failed_count": len(failed_ids),
+            }
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            print(f"Erro ao aprovar perdas pendentes: {e}")
+            self.conn.rollback()
+            return {
+                "approved_ids": [],
+                "failed_ids": [],
+                "approved_count": 0,
+                "failed_count": 0,
+            }
+
+    def get_stock_movement_approval_status(self, movement_id):
+        """Retorna o estado de aprovacao do movimento acabado de solicitar."""
+        try:
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                f"""
+                SELECT approval_status, applied
+                FROM stock_movements
+                WHERE id = ? {scope_sql}
+                """,
+                (movement_id, *scope_params),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "approval_status": str(row[0] or ""),
+                "applied": bool(row[1]),
+            }
+        except sqlite3.Error as e:
+            print(f"Erro ao obter estado de aprovacao: {e}")
+            return None
 
     def reject_stock_movement(self, movement_id, rejected_by=None):
         """Rejeita movimento pendente sem alterar o stock."""
@@ -2883,7 +3462,7 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 """
                 SELECT COALESCE(SUM(total_price), 0)
-                FROM sales
+                FROM sales_history
                 WHERE sale_date BETWEEN ? AND ?
                 """,
                 (start, end),
@@ -3083,6 +3662,49 @@ class Database(DatabaseAutomationMixin):
             self.conn.rollback()
             return None
 
+    def get_loss_history_items(self, start_dt, end_dt, limit=300):
+        """Lista registos individuais para o historico com referencia da evidencia."""
+        start = self._to_dt_str(start_dt, end=False)
+        end = self._to_dt_str(end_dt, end=True)
+        try:
+            loss_types = list(LOSS_TYPES)
+            placeholders = ",".join(["?"] * len(loss_types))
+            params = [*loss_types, start, end]
+            where_owner, owner_params = self._owner_filter("sm")
+            params.extend(owner_params)
+            limit_clause = "LIMIT ?" if limit else ""
+            if limit:
+                params.append(int(limit))
+            self.cursor.execute(
+                f"""
+                SELECT sm.id, sm.created_at,
+                       COALESCE(p.description, pa.description) AS product_name,
+                       sm.movement_type, sm.qty, sm.unit, sm.total_cost,
+                       sm.total_price, sm.reason, sm.note, sm.created_by,
+                       de.id AS evidence_id
+                FROM stock_movements sm
+                LEFT JOIN products p ON sm.product_id = p.id
+                LEFT JOIN products_archive pa ON sm.product_id = pa.id
+                LEFT JOIN damage_evidence de ON de.movement_id = sm.id
+                WHERE sm.applied = 1
+                  AND sm.direction = 'OUT'
+                  AND sm.movement_type IN ({placeholders})
+                  AND sm.created_at BETWEEN ? AND ?
+                  {where_owner}
+                ORDER BY sm.created_at DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            )
+            columns = (
+                "movement_id", "created_at", "product", "movement_type", "qty", "unit",
+                "total_cost", "total_price", "reason", "note", "created_by", "evidence_id",
+            )
+            return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+        except sqlite3.Error as exc:
+            print(f"Erro ao obter historico de perdas: {exc}")
+            return []
+
     def get_loss_records(self, start_dt, end_dt, limit=200):
         """Lista detalhada de perdas no perÃƒÆ’Ã‚Â­odo."""
         start = self._to_dt_str(start_dt, end=False)
@@ -3201,7 +3823,7 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 """
                 SELECT COALESCE(SUM(total_price), 0)
-                FROM sales
+                FROM sales_history
                 WHERE sale_date BETWEEN ? AND ?
                 """,
                 (start, end),
@@ -3296,7 +3918,18 @@ class Database(DatabaseAutomationMixin):
         start_date = end_date - timedelta(days=days_lookback)
         
         alerts = []
-        
+        # Esta analise e chamada pelo monitor em segundo plano. Nao pode
+        # reutilizar ``self.cursor``, pois a interface pode estar a executar
+        # outra consulta no mesmo instante (SQLite nao permite uso recursivo
+        # de um cursor). Uma conexao de leitura isolada evita esse conflito.
+        try:
+            fraud_conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+            fraud_conn.execute("PRAGMA busy_timeout = 30000")
+            fraud_cursor = fraud_conn.cursor()
+        except sqlite3.Error as e:
+            print(f"Erro ao iniciar deteccao de fraude: {e}")
+            return []
+
         # 1. Utilizadores com perdas acima da mÃƒÆ’Ã‚Â©dia
         try:
             start = self._to_dt_str(start_date, end=False)
@@ -3304,47 +3937,49 @@ class Database(DatabaseAutomationMixin):
             loss_types = list(LOSS_TYPES)
             placeholders = ",".join(["?"] * len(loss_types))
             
-            self.cursor.execute(
+            fraud_cursor.execute(
                 f"""
                 SELECT 
                     created_by,
                     COUNT(*) as loss_count,
-                    COALESCE(SUM(total_cost), 0) as total_cost
+                    COALESCE(SUM(ABS(qty)), 0) as total_quantity
                 FROM stock_movements
-                WHERE applied = 1
+                WHERE COALESCE(approval_status, 'APPROVED') IN ('PENDING', 'APPROVED')
                   AND direction = 'OUT'
                   AND movement_type IN ({placeholders})
                   AND created_at BETWEEN ? AND ?
                   AND created_by IS NOT NULL
+                  AND LOWER(COALESCE(created_role, '')) = 'manager'
                 GROUP BY created_by
                 """,
                 (*loss_types, start, end),
             )
             
-            users_data = self.cursor.fetchall()
+            users_data = fraud_cursor.fetchall()
             
             if len(users_data) >= 2:
-                costs = [row[2] for row in users_data]
-                avg_cost = sum(costs) / len(costs)
-                threshold = avg_cost * 1.5
+                quantities = [float(row[2] or 0) for row in users_data]
+                avg_quantity = sum(quantities) / len(quantities)
+                threshold = avg_quantity * 1.5
                 
-                for user, count, cost in users_data:
-                    if cost > threshold:
-                        percentage_above = ((cost - avg_cost) / avg_cost) * 100
+                for user, count, quantity in users_data:
+                    quantity = float(quantity or 0)
+                    if avg_quantity > 0 and quantity > threshold:
+                        percentage_above = ((quantity - avg_quantity) / avg_quantity) * 100
                         severity = 3 if percentage_above > 100 else (2 if percentage_above > 50 else 1)
                         
                         alerts.append({
                             'alert_type': 'HIGH_LOSS_USER',
                             'severity': severity,
                             'title': f'Utilizador com perdas elevadas: {user}',
-                            'description': f'{user} registou perdas de {cost:.2f} MZN ({percentage_above:.1f}% acima da mÃƒÆ’Ã‚Â©dia)',
+                            'description': f'{user} registou {quantity:.2f} unidade(s) em {count} perda(s) ({percentage_above:.1f}% acima da media de quantidade)',
                             'related_user': user,
                             'related_product_id': None,
                             'data': {
                                 'user': user,
                                 'loss_count': count,
-                                'total_cost': cost,
-                                'average_cost': avg_cost,
+                                'total_quantity': quantity,
+                                'average_quantity': avg_quantity,
                                 'percentage_above': percentage_above
                             }
                         })
@@ -3353,42 +3988,44 @@ class Database(DatabaseAutomationMixin):
         
         # 2. Produtos com perdas repetidas
         try:
-            self.cursor.execute(
+            fraud_cursor.execute(
                 f"""
                 SELECT 
                     sm.product_id,
                     COALESCE(p.description, pa.description),
                     COUNT(*) as loss_count,
-                    COALESCE(SUM(sm.total_cost), 0) as total_cost
+                    COALESCE(SUM(ABS(sm.qty)), 0) as total_quantity
                 FROM stock_movements sm
                 LEFT JOIN products p ON sm.product_id = p.id
                 LEFT JOIN products_archive pa ON sm.product_id = pa.id
-                WHERE sm.applied = 1
+                WHERE COALESCE(sm.approval_status, 'APPROVED') IN ('PENDING', 'APPROVED')
                   AND sm.direction = 'OUT'
                   AND sm.movement_type IN ({placeholders})
                   AND sm.created_at BETWEEN ? AND ?
+                  AND LOWER(COALESCE(sm.created_role, '')) = 'manager'
                 GROUP BY sm.product_id
-                HAVING loss_count >= 3
-                ORDER BY loss_count DESC
+                HAVING total_quantity >= 3
+                ORDER BY total_quantity DESC
                 """,
                 (*loss_types, start, end),
             )
             
-            for product_id, description, count, cost in self.cursor.fetchall():
-                severity = 3 if count >= 10 else (2 if count >= 6 else 1)
+            for product_id, description, count, quantity in fraud_cursor.fetchall():
+                quantity = float(quantity or 0)
+                severity = 3 if quantity >= 10 else (2 if quantity >= 6 else 1)
                 
                 alerts.append({
                     'alert_type': 'REPEATED_PRODUCT_LOSS',
                     'severity': severity,
                     'title': f'Produto com perdas repetidas: {description}',
-                    'description': f'{description} teve {count} registos de perda totalizando {cost:.2f} MZN',
+                    'description': f'{description} acumulou {quantity:.2f} unidade(s) em {count} registo(s) de perda',
                     'related_user': None,
                     'related_product_id': product_id,
                     'data': {
                         'product_id': product_id,
                         'product_name': description,
                         'loss_count': count,
-                        'total_cost': cost
+                        'total_quantity': quantity
                     }
                 })
         except Exception as e:
@@ -3396,7 +4033,7 @@ class Database(DatabaseAutomationMixin):
         
         # 3. Perdas fora do horÃƒÆ’Ã‚Â¡rio (22h-6h)
         try:
-            self.cursor.execute(
+            fraud_cursor.execute(
                 f"""
                 SELECT 
                     id,
@@ -3404,12 +4041,14 @@ class Database(DatabaseAutomationMixin):
                     created_by,
                     created_at,
                     movement_type,
-                    total_cost
+                    qty,
+                    unit
                 FROM stock_movements
-                WHERE applied = 1
+                WHERE COALESCE(approval_status, 'APPROVED') IN ('PENDING', 'APPROVED')
                   AND direction = 'OUT'
                   AND movement_type IN ({placeholders})
                   AND created_at BETWEEN ? AND ?
+                  AND LOWER(COALESCE(created_role, '')) = 'manager'
                   AND (
                       CAST(strftime('%H', created_at) AS INTEGER) >= 22
                       OR CAST(strftime('%H', created_at) AS INTEGER) < 6
@@ -3420,15 +4059,16 @@ class Database(DatabaseAutomationMixin):
                 (*loss_types, start, end),
             )
             
-            for row in self.cursor.fetchall():
-                movement_id, product_id, user, created_at, movement_type, cost = row
+            for row in fraud_cursor.fetchall():
+                movement_id, product_id, user, created_at, movement_type, quantity, unit = row
                 time_str = created_at.split()[1] if ' ' in created_at else 'N/A'
+                movement_label = _loss_type_label(movement_type)
                 
                 alerts.append({
                     'alert_type': 'OFF_HOURS_LOSS',
                     'severity': 2,
                     'title': f'Perda fora do horÃƒÆ’Ã‚Â¡rio: {user}',
-                    'description': f'Perda registada ÃƒÆ’Ã‚Â s {time_str} por {user} ({movement_type}, {cost:.2f} MZN)',
+                    'description': f'Perda de {float(quantity or 0):.2f} {unit or "un"} registada às {time_str} por {user} ({movement_label})',
                     'related_user': user,
                     'related_product_id': product_id,
                     'data': {
@@ -3436,7 +4076,8 @@ class Database(DatabaseAutomationMixin):
                         'user': user,
                         'time': time_str,
                         'movement_type': movement_type,
-                        'cost': cost
+                        'quantity': float(quantity or 0),
+                        'unit': unit or 'un'
                     }
                 })
         except Exception as e:
@@ -3444,49 +4085,55 @@ class Database(DatabaseAutomationMixin):
         
         # 4. Perdas sem evidencia (acima de 50% do limite)
         try:
-            high_value_threshold = LOSS_VALUE_LIMIT_MZN * 0.5
+            quantity_threshold = LOSS_QTY_LIMIT_UN
             
-            self.cursor.execute(
+            fraud_cursor.execute(
                 f"""
                 SELECT 
                     id,
                     product_id,
                     created_by,
                     movement_type,
-                    total_cost
+                    qty,
+                    unit
                 FROM stock_movements
-                WHERE applied = 1
+                WHERE COALESCE(approval_status, 'APPROVED') IN ('PENDING', 'APPROVED')
                   AND direction = 'OUT'
                   AND movement_type IN ({placeholders})
                   AND created_at BETWEEN ? AND ?
-                  AND total_cost >= ?
+                  AND LOWER(COALESCE(created_role, '')) = 'manager'
+                  AND ABS(COALESCE(qty, 0)) >= ?
                   AND (evidence_path IS NULL OR evidence_path = '')
-                ORDER BY total_cost DESC
+                ORDER BY ABS(COALESCE(qty, 0)) DESC
                 LIMIT 10
                 """,
-                (*loss_types, start, end, high_value_threshold),
+                (*loss_types, start, end, quantity_threshold),
             )
             
-            for row in self.cursor.fetchall():
-                movement_id, product_id, user, movement_type, cost = row
+            for row in fraud_cursor.fetchall():
+                movement_id, product_id, user, movement_type, quantity, unit = row
+                quantity = float(quantity or 0)
+                movement_label = _loss_type_label(movement_type)
                 
                 alerts.append({
                     'alert_type': 'NO_EVIDENCE',
                     'severity': 2,
-                    'title': f'Perda sem evidencia: {cost:.2f} MZN',
-                    'description': f'{user} registou {movement_type} de {cost:.2f} MZN sem foto/comprovativo',
+                    'title': f'Perda sem evidência: {quantity:.2f} {unit or "un"}',
+                    'description': f'{user} registou {movement_label.lower()} de {quantity:.2f} {unit or "un"} sem foto/comprovativo',
                     'related_user': user,
                     'related_product_id': product_id,
                     'data': {
                         'movement_id': movement_id,
                         'user': user,
                         'movement_type': movement_type,
-                        'cost': cost
+                        'quantity': quantity,
+                        'unit': unit or 'un'
                     }
                 })
         except Exception as e:
             print(f"Erro ao detectar perdas sem evidencia: {e}")
         
+        fraud_conn.close()
         return sorted(alerts, key=lambda x: x['severity'], reverse=True)
 
     # ==================== NOVO: APROVAÃƒÆ’Ã¢â‚¬Â¡ÃƒÆ’Ã¢â‚¬Â¢ES PENDENTES ====================
@@ -3630,7 +4277,17 @@ class Database(DatabaseAutomationMixin):
     ):
         """Adicionar um novo produto ao banco de dados"""
         try:
-            incoming_stock = float(existing_stock)
+            is_sold_by_weight = bool(is_sold_by_weight)
+            incoming_stock = _inventory_quantity(
+                existing_stock,
+                is_sold_by_weight,
+                "Estoque inicial",
+            )
+            sold_stock = _inventory_quantity(
+                sold_stock,
+                is_sold_by_weight,
+                "Estoque vendido",
+            )
             sale_price = float(sale_price)
             total_purchase_price = float(total_purchase_price)
             unit_purchase_price = float(unit_purchase_price)
@@ -3711,7 +4368,7 @@ class Database(DatabaseAutomationMixin):
                 description=description,
                 category=category,
                 existing_stock=incoming_stock,
-                sold_stock=float(sold_stock),
+                sold_stock=sold_stock,
                 sale_price=sale_price,
                 total_purchase_price=total_purchase_price,
                 unit_purchase_price=unit_purchase_price,
@@ -3806,7 +4463,7 @@ class Database(DatabaseAutomationMixin):
             self.conn.commit()
             
             tipo = "KG" if is_sold_by_weight else "UNIDADE"
-            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Produto {id} atualizado com sucesso! | Tipo: {tipo}")
+            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Produto {id} guardado com sucesso! | Tipo: {tipo}")
             
         except (sqlite3.Error, ValueError) as e:
             print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao atualizar produto: {e}")
@@ -3815,7 +4472,7 @@ class Database(DatabaseAutomationMixin):
             self.conn.rollback()
     
     def delete_product(self, id, username=None):
-        """Excluir produto (hard delete) e arquivar histÃƒÆ’Ã‚Â³rico"""
+        """Elimina produtos sem historico e arquiva os que ja foram utilizados."""
         try:
             user = username or "SYSTEM"
             scope_sql, scope_params = self._owner_filter()
@@ -3834,6 +4491,18 @@ class Database(DatabaseAutomationMixin):
             row = self.cursor.fetchone()
             if not row:
                 return False
+
+            if row[14] == ARCHIVED_PRODUCT_STATUS:
+                return True
+
+            if self._product_has_related_records(id):
+                return self.set_product_status(
+                    id,
+                    ARCHIVED_PRODUCT_STATUS,
+                    ARCHIVED_PRODUCT_REASON,
+                    user,
+                    source="MANUAL",
+                )
 
             deleted_at = self._now_str()
             self.cursor.execute(
@@ -3858,6 +4527,38 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao eliminar produto: {e}")
             self.conn.rollback()
             return False
+
+    def _product_has_related_records(self, product_id):
+        """Indica se o produto e referenciado por alguma chave estrangeira.
+
+        A verificacao usa o proprio esquema SQLite, para que novas tabelas que
+        referenciem ``products`` tambem bloqueiem a eliminacao fisica.
+        """
+        tables = self.cursor.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+
+        for (table_name,) in tables:
+            quoted_table = '"' + str(table_name).replace('"', '""') + '"'
+            foreign_keys = self.cursor.execute(
+                f"PRAGMA foreign_key_list({quoted_table})"
+            ).fetchall()
+            for foreign_key in foreign_keys:
+                referenced_table = foreign_key[2]
+                column_name = foreign_key[3]
+                referenced_column = foreign_key[4]
+                if referenced_table != "products" or referenced_column not in (None, "id"):
+                    continue
+
+                quoted_column = '"' + str(column_name).replace('"', '""') + '"'
+                self.cursor.execute(
+                    f"SELECT 1 FROM {quoted_table} WHERE {quoted_column} = ? LIMIT 1",
+                    (product_id,),
+                )
+                if self.cursor.fetchone():
+                    return True
+        return False
 
     def get_all_products(self):
         """Obter todos os produtos - COM SUPORTE A KG"""
@@ -3912,9 +4613,9 @@ class Database(DatabaseAutomationMixin):
                     p.allow_pack_sale,
                     p.vat_rule_code
                 FROM products p
-                WHERE 1=1
+                WHERE COALESCE(p.status, 'ATIVO') <> ?
             """
-            params = []
+            params = [ARCHIVED_PRODUCT_STATUS]
             scope_sql, scope_params = self._owner_filter("p")
             query += scope_sql
             params.extend(scope_params)
@@ -4266,9 +4967,10 @@ class Database(DatabaseAutomationMixin):
                     p.vat_rule_code
                 FROM products p
                 WHERE p.is_sold_by_weight = 1
+                  AND COALESCE(p.status, 'ATIVO') <> ?
                 {scope_sql}
                 ORDER BY p.description ASC
-            """, tuple(scope_params))
+            """, (ARCHIVED_PRODUCT_STATUS, *scope_params))
             results = self.cursor.fetchall()
             print(f"ÃƒÂ¢Ã…Â¡Ã¢â‚¬â€œÃƒÂ¯Ã‚Â¸Ã‚Â Produtos vendidos por KG: {len(results)}")
             return results
@@ -4357,8 +5059,9 @@ class Database(DatabaseAutomationMixin):
                 WHERE barcode IS NOT NULL
                   AND TRIM(barcode) != ''
                   AND LOWER(TRIM(barcode)) = LOWER(TRIM(?))
+                  AND COALESCE(status, 'ATIVO') <> ?
             """
-            params = [barcode_clean]
+            params = [barcode_clean, ARCHIVED_PRODUCT_STATUS]
             scope_sql, scope_params = self._owner_filter()
             query += scope_sql
             params.extend(scope_params)
@@ -4442,7 +5145,8 @@ class Database(DatabaseAutomationMixin):
 
             scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(f"""
-                SELECT description, existing_stock, sold_stock, is_sold_by_weight, unit_purchase_price, vat_rule_code
+                SELECT description, existing_stock, sold_stock, is_sold_by_weight,
+                       unit_purchase_price, vat_rule_code, status
                 FROM products
                 WHERE id = ?
                 {scope_sql}
@@ -4452,6 +5156,10 @@ class Database(DatabaseAutomationMixin):
 
             if not product_info:
                 print(f"Erro: Produto ID {product_id} nao encontrado!")
+                return None
+
+            if product_info[6] == ARCHIVED_PRODUCT_STATUS:
+                print(f"Erro: Produto ID {product_id} esta arquivado e nao pode ser vendido!")
                 return None
 
             product_name = product_info[0]
@@ -4809,7 +5517,7 @@ class Database(DatabaseAutomationMixin):
             return {"ok": False, "message": "Nao foi possivel concluir a venda"}
 
     def get_open_cash_session(self, username=None, terminal_id=None):
-        """Retorna o caixa aberto do operador neste terminal."""
+        """Retorna o caixa aberto do atendente neste terminal."""
         username = str(username or self.current_user or "").strip()
         terminal_id = str(terminal_id or "POS").strip() or "POS"
         if not username:
@@ -5011,9 +5719,9 @@ class Database(DatabaseAutomationMixin):
                        CASE WHEN COALESCE(is_sold_by_weight, 0) = 1 THEN 'KG' ELSE 'UN' END,
                        COALESCE(existing_stock, 0)
                 FROM products
-                WHERE 1=1{scope_sql}
+                WHERE COALESCE(status, 'ATIVO') <> ?{scope_sql}
                 """,
-                (inventory_id, *scope_params),
+                (inventory_id, ARCHIVED_PRODUCT_STATUS, *scope_params),
             )
             item_count = self.cursor.rowcount
             self.conn.commit()
@@ -5192,7 +5900,7 @@ class Database(DatabaseAutomationMixin):
                 COALESCE(s.is_promotional, 0) AS is_promotional,
                 s.product_id,
                 s.transaction_code
-            FROM sales s
+            FROM sales_history s
             LEFT JOIN products p ON s.product_id = p.id
             LEFT JOIN products_archive pa ON s.product_id = pa.id
             LEFT JOIN (
@@ -5451,7 +6159,7 @@ class Database(DatabaseAutomationMixin):
                         {transaction_key} AS transaction_key,
                         COALESCE(SUM(s.quantity), 0) AS total_quantity,
                         COALESCE(SUM(s.total_price), 0) AS total_revenue
-                    FROM sales s
+                    FROM sales_history s
                     WHERE DATE(s.sale_date) = ?
                     GROUP BY {transaction_key}
                 )
@@ -5479,7 +6187,7 @@ class Database(DatabaseAutomationMixin):
                     {_transaction_count_sql("s")} as daily_sales,
                     SUM(s.quantity) as daily_quantity,
                     SUM(s.total_price) as daily_revenue
-                FROM sales s
+                FROM sales_history s
                 WHERE strftime('%m', s.sale_date) = ? AND strftime('%Y', s.sale_date) = ?
                 GROUP BY DATE(s.sale_date)
                 ORDER BY DATE(s.sale_date) DESC
@@ -5548,8 +6256,10 @@ class Database(DatabaseAutomationMixin):
                 SELECT id, description, barcode, existing_stock, is_sold_by_weight
                 FROM products
                 WHERE barcode IS NOT NULL AND barcode != ''
+                  AND COALESCE(status, 'ATIVO') <> ?
                 ORDER BY id
-                """
+                """,
+                (ARCHIVED_PRODUCT_STATUS,),
             )
             return self.cursor.fetchall()
         except sqlite3.Error as e:
@@ -5593,10 +6303,11 @@ class Database(DatabaseAutomationMixin):
                        expiry_date, status, vat_rule_code
                 FROM products
                 WHERE existing_stock > 0
+                  AND COALESCE(status, 'ATIVO') <> ?
                 {scope_sql}
                 ORDER BY LOWER(COALESCE(description, '')) ASC, {self._expiry_order_clause()}
                 """,
-                tuple(scope_params),
+                (ARCHIVED_PRODUCT_STATUS, *scope_params),
             )
             return self.cursor.fetchall()
         except sqlite3.Error as e:
@@ -5611,22 +6322,27 @@ class Database(DatabaseAutomationMixin):
                 f"""
                 SELECT id, description, existing_stock, sale_price,
                        unit_purchase_price, barcode, is_sold_by_weight,
-                       expiry_date, status, vat_rule_code
+                       expiry_date, status, vat_rule_code, sold_stock
                 FROM products
-                WHERE 1=1
+                WHERE COALESCE(status, 'ATIVO') <> ?
                 {scope_sql}
                 ORDER BY LOWER(COALESCE(description, '')) ASC, {self._expiry_order_clause()}
                 """,
-                tuple(scope_params),
+                (ARCHIVED_PRODUCT_STATUS, *scope_params),
             )
             rows = self.cursor.fetchall()
             if not include_velocity:
-                return rows
+                # Preserva o formato histórico para os outros ecrãs. A coluna
+                # extra só é usada pela previsão de compras.
+                return [row[:10] for row in rows]
 
             velocity = _fetch_sales_velocity(self, days=velocity_days)
             enriched = []
             for row in rows:
-                pid, name, stock, price, cost, barcode, is_weight, exp, status, vat_rule_code = row
+                (
+                    pid, name, stock, price, cost, barcode, is_weight, exp,
+                    status, vat_rule_code, sold_stock,
+                ) = row
                 stock_val = _safe_float(stock, 0.0)
                 avg_daily = _safe_float(velocity.get(pid, 0.0), 0.0)
                 days_left = (stock_val / avg_daily) if avg_daily > 0 else None
@@ -5644,6 +6360,7 @@ class Database(DatabaseAutomationMixin):
                         vat_rule_code,
                         avg_daily,
                         days_left,
+                        sold_stock,
                     )
                 )
 
@@ -5675,12 +6392,13 @@ class Database(DatabaseAutomationMixin):
                     p.is_sold_by_weight,
                     p.expiry_date,
                     p.status,
-                    MAX(sm.created_at) AS last_stock_update_at
+                    MAX(sm.created_at) AS last_stock_update_at,
+                    p.sold_stock
                 FROM products p
                 LEFT JOIN stock_movements sm
                     ON sm.product_id = p.id
                    AND sm.applied = 1
-                WHERE 1=1
+                WHERE COALESCE(p.status, 'ATIVO') <> ?
                 {scope_sql}
                 GROUP BY
                     p.id,
@@ -5691,11 +6409,14 @@ class Database(DatabaseAutomationMixin):
                     p.barcode,
                     p.is_sold_by_weight,
                     p.expiry_date,
-                    p.status
+                    p.status,
+                    p.sold_stock
                 """,
-                tuple(scope_params),
+                (ARCHIVED_PRODUCT_STATUS, *scope_params),
             )
             rows = self.cursor.fetchall()
+            if not include_velocity:
+                return [row[:10] for row in rows]
 
             velocity = _fetch_sales_velocity(self, days=velocity_days) if include_velocity else {}
             enriched = []
@@ -5711,6 +6432,7 @@ class Database(DatabaseAutomationMixin):
                     exp,
                     status,
                     last_update_at,
+                    sold_stock,
                 ) = row
                 stock_val = _safe_float(stock, 0.0)
                 avg_daily = _safe_float(velocity.get(pid, 0.0), 0.0) if include_velocity else 0.0
@@ -5729,6 +6451,7 @@ class Database(DatabaseAutomationMixin):
                         avg_daily,
                         days_left,
                         last_update_at,
+                        sold_stock,
                     )
                 )
 
@@ -5842,8 +6565,9 @@ class Database(DatabaseAutomationMixin):
             scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
                 "SELECT DISTINCT category FROM products "
-                "WHERE category IS NOT NULL AND category != ''" + scope_sql + " ORDER BY category",
-                tuple(scope_params),
+                "WHERE category IS NOT NULL AND category != '' "
+                "AND COALESCE(status, 'ATIVO') <> ?" + scope_sql + " ORDER BY category",
+                (ARCHIVED_PRODUCT_STATUS, *scope_params),
             )
             return [row[0] for row in self.cursor.fetchall()]
         except sqlite3.Error as e:
@@ -5856,7 +6580,7 @@ class Database(DatabaseAutomationMixin):
             scope_sql, scope_params = self._owner_filter("s")
             self.cursor.execute(f"""
                 SELECT DISTINCT COALESCE(NULLIF(TRIM(s.created_by), ''), 'Sistema') AS username
-                FROM sales s
+                FROM sales_history s
                 WHERE 1=1
                 {scope_sql}
                 ORDER BY username COLLATE NOCASE
@@ -5902,9 +6626,9 @@ class Database(DatabaseAutomationMixin):
                        ROUND(COALESCE(SUM(sold_stock), 0), 6),
                        COALESCE(MAX(id), 0),
                        COALESCE(MAX(status_updated_at), '')
-                FROM products WHERE 1=1
+                FROM products WHERE COALESCE(status, 'ATIVO') <> ?
                 """ + scope_sql,
-                tuple(scope_params),
+                (ARCHIVED_PRODUCT_STATUS, *scope_params),
             )
             row = self.cursor.fetchone() or (0, 0, 0, 0, "")
             return "|".join(str(value) for value in row)
@@ -5926,7 +6650,7 @@ class Database(DatabaseAutomationMixin):
             COALESCE(SUM(s.quantity), 0) as sold_in_period,
             COALESCE(SUM(s.total_price), 0) as total_sales
         FROM products p
-        LEFT JOIN sales s
+        LEFT JOIN sales_history s
             ON p.id = s.product_id
            AND s.sale_date BETWEEN ? AND ?
         WHERE 1=1
@@ -6025,7 +6749,7 @@ class Database(DatabaseAutomationMixin):
             ) AS avg_discount_ratio,
             MIN(s.sale_date) AS first_sale_at,
             MAX(s.sale_date) AS last_sale_at
-        FROM sales s
+                FROM sales_history s
         LEFT JOIN products p ON s.product_id = p.id
         LEFT JOIN products_archive pa ON s.product_id = pa.id
         WHERE s.sale_date BETWEEN ? AND ?
@@ -6282,7 +7006,7 @@ class Database(DatabaseAutomationMixin):
             COALESCE(SUM(s.total_price), 0) AS revenue,
             MIN(s.id) AS first_sale_id,
             MAX(s.id) AS last_sale_id
-        FROM sales s
+        FROM sales_history s
         WHERE s.sale_date BETWEEN ? AND ?
         {seller_sql}
         {owner_sql}
@@ -6470,6 +7194,7 @@ class Database(DatabaseAutomationMixin):
                     "revenue_today": 0.0,
                     "revenue_month": 0.0,
                     "total_users": 0,
+                    "user_logs_today": 0,
                     "total_clients": None,
                     "active_suppliers": 0,
                 },
@@ -6545,6 +7270,13 @@ class Database(DatabaseAutomationMixin):
             total_users = int(self.cursor.fetchone()[0] or 0)
 
             self.cursor.execute(
+                "SELECT COUNT(*) FROM user_logs WHERE DATE(timestamp) = ?"
+                + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
+                (today_iso, owner) if owner else (today_iso,),
+            )
+            user_logs_today = int(self.cursor.fetchone()[0] or 0)
+
+            self.cursor.execute(
                 "SELECT COUNT(DISTINCT supplier_name) FROM stock_movements "
                 "WHERE supplier_name IS NOT NULL AND TRIM(supplier_name) != ''"
                 + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
@@ -6554,7 +7286,7 @@ class Database(DatabaseAutomationMixin):
 
             self.cursor.execute(
                 f"SELECT {_transaction_count_sql()}, COALESCE(SUM(total_price), 0) "
-                "FROM sales WHERE DATE(sale_date) = ?"
+                "FROM sales_history WHERE DATE(sale_date) = ?"
                 + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
                 (today_iso, owner) if owner else (today_iso,),
             )
@@ -6564,7 +7296,7 @@ class Database(DatabaseAutomationMixin):
 
             self.cursor.execute(
                 "SELECT COALESCE(SUM(total_price), 0) "
-                "FROM sales WHERE strftime('%m', sale_date) = ? AND strftime('%Y', sale_date) = ?"
+                "FROM sales_history WHERE strftime('%m', sale_date) = ? AND strftime('%Y', sale_date) = ?"
                 + (" AND COALESCE(owner_username, '') = ?" if owner else ""),
                 (month_key, year_key, owner) if owner else (month_key, year_key),
             )
@@ -6593,7 +7325,7 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 f"SELECT {sales_period_expr} AS sale_period, {_transaction_count_sql()} AS sales_count, "
                 "COALESCE(SUM(total_price), 0) AS revenue "
-                "FROM sales WHERE DATE(sale_date) BETWEEN ? AND ? "
+                "FROM sales_history WHERE DATE(sale_date) BETWEEN ? AND ? "
                 + ("AND COALESCE(owner_username, '') = ? " if owner else "")
                 + f"GROUP BY {sales_period_expr} ORDER BY {sales_period_expr} ASC",
                 (start_iso, today_iso, owner) if owner else (start_iso, today_iso),
@@ -6628,7 +7360,7 @@ class Database(DatabaseAutomationMixin):
                 "SELECT COALESCE(p.description, pa.description), "
                 "COALESCE(SUM(s.quantity), 0) AS total_qty, "
                 "COALESCE(SUM(s.total_price), 0) AS total_revenue "
-                "FROM sales s "
+                "FROM sales_history s "
                 "LEFT JOIN products p ON s.product_id = p.id "
                 "LEFT JOIN products_archive pa ON s.product_id = pa.id "
                 "WHERE DATE(s.sale_date) BETWEEN ? AND ? "
@@ -6650,7 +7382,7 @@ class Database(DatabaseAutomationMixin):
                 "SELECT COALESCE(p.description, pa.description), "
                 "COALESCE(SUM(s.quantity), 0) AS total_qty, "
                 "COALESCE(SUM(s.total_price), 0) AS total_revenue "
-                "FROM sales s "
+                "FROM sales_history s "
                 "LEFT JOIN products p ON s.product_id = p.id "
                 "LEFT JOIN products_archive pa ON s.product_id = pa.id "
                 "WHERE DATE(s.sale_date) = ? "
@@ -6670,7 +7402,7 @@ class Database(DatabaseAutomationMixin):
 
             self.cursor.execute(
                 "SELECT strftime('%H', sale_date) AS hour_key, COALESCE(SUM(total_price), 0) AS total_revenue "
-                "FROM sales WHERE DATE(sale_date) = ? "
+                "FROM sales_history WHERE DATE(sale_date) = ? "
                 + ("AND COALESCE(owner_username, '') = ? " if owner else "")
                 + "GROUP BY hour_key ORDER BY total_revenue DESC LIMIT 1",
                 (today_iso, owner) if owner else (today_iso,),
@@ -6838,6 +7570,7 @@ class Database(DatabaseAutomationMixin):
                 "revenue_today": revenue_today,
                 "revenue_month": revenue_month,
                 "total_users": total_users,
+                "user_logs_today": user_logs_today,
                 "total_clients": None,
                 "active_suppliers": active_suppliers,
             }
@@ -6885,6 +7618,7 @@ class Database(DatabaseAutomationMixin):
         offset=0,
         exclude_actions=None,
         details_limit=None,
+        date_filter=None,
     ):
         """Obter logs do sistema com filtros"""
         details_expr = "details"
@@ -6918,6 +7652,18 @@ class Database(DatabaseAutomationMixin):
             query += " AND role = ?"
             params.append(role_filter)
 
+        if date_filter:
+            try:
+                selected_date = datetime.strptime(str(date_filter), "%Y-%m-%d")
+            except (TypeError, ValueError):
+                return []
+            next_date = selected_date + timedelta(days=1)
+            query += " AND timestamp >= ? AND timestamp < ?"
+            params.extend((
+                selected_date.strftime("%Y-%m-%d 00:00:00"),
+                next_date.strftime("%Y-%m-%d 00:00:00"),
+            ))
+
         if exclude_actions:
             ignored = [
                 str(action or "").strip().upper()
@@ -6935,12 +7681,18 @@ class Database(DatabaseAutomationMixin):
             params.append(int(limit))
             params.append(max(0, int(offset or 0)))
 
+        read_cursor = self.conn.cursor()
         try:
-            self.cursor.execute(query, params)
-            return self.cursor.fetchall()
+            # Os logs sao consultados numa thread pelo painel. Um cursor
+            # exclusivo evita concorrer com as consultas da Home no cursor
+            # partilhado e mantem a abertura do popup imediata.
+            read_cursor.execute(query, params)
+            return read_cursor.fetchall()
         except sqlite3.Error as e:
             print(f"Erro ao obter logs: {e}")
             return []
+        finally:
+            read_cursor.close()
 
     def clear_user_logs(self):
         """Apagar todos os logs"""
@@ -6964,7 +7716,7 @@ class Database(DatabaseAutomationMixin):
 
         self.cursor.execute(
             f"SELECT COALESCE(SUM(total_price), 0), {_transaction_count_sql()} "
-            "FROM sales WHERE DATE(sale_date) = ?",
+            "FROM sales_history WHERE DATE(sale_date) = ?",
             (today,),
         )
         total_sales, total_count = self.cursor.fetchone()
@@ -6973,7 +7725,7 @@ class Database(DatabaseAutomationMixin):
 
         self.cursor.execute(
             "SELECT COALESCE(p.description, pa.description), COALESCE(SUM(s.total_price), 0) AS total_val "
-            "FROM sales s "
+            "FROM sales_history s "
             "LEFT JOIN products p ON s.product_id = p.id "
             "LEFT JOIN products_archive pa ON s.product_id = pa.id "
             "WHERE DATE(s.sale_date) = ? "
@@ -6985,7 +7737,7 @@ class Database(DatabaseAutomationMixin):
 
         self.cursor.execute(
             "SELECT strftime('%H', sale_date) AS h, COALESCE(SUM(total_price), 0) AS total_val "
-            "FROM sales WHERE DATE(sale_date) = ? "
+            "FROM sales_history WHERE DATE(sale_date) = ? "
             "GROUP BY h ORDER BY total_val DESC LIMIT 1",
             (today,),
         )
@@ -7012,6 +7764,9 @@ class Database(DatabaseAutomationMixin):
             "WHERE profit_per_unit < 0 ORDER BY profit_per_unit ASC"
         )
         negative_profit = self.cursor.fetchall()
+        # Os Insights do administrador incluem os mesmos padroes usados pelo
+        # botao de fraude; apenas perdas de gerente entram nesta analise.
+        fraud_alerts = self.detect_fraud_patterns(days_lookback=30) or []
 
         self.cursor.execute(
             "SELECT description, expiry_date, existing_stock, is_sold_by_weight "
@@ -7092,6 +7847,8 @@ class Database(DatabaseAutomationMixin):
             alerts.append(f"{len(expiry_levels['leve'])} produtos em alerta leve (90 dias).")
         if negative_profit:
             alerts.append(f"{len(negative_profit)} produtos com lucro negativo.")
+        if fraud_alerts:
+            alerts.append(f"{len(fraud_alerts)} alertas de fraude requerem verificacao.")
 
         recommendations = []
         recommendations_stock = []
@@ -7137,6 +7894,7 @@ class Database(DatabaseAutomationMixin):
             + len(expiry_levels["medio"])
             + len(expiry_levels["leve"])
             + len(negative_profit)
+            + len(fraud_alerts)
         )
 
         expiry_total = (
@@ -7161,6 +7919,7 @@ class Database(DatabaseAutomationMixin):
             "stock_forecast": forecasts,
             "expiry_risk": expiry_risk,
             "negative_profit": negative_profit,
+            "fraud_alerts": fraud_alerts,
             "alert_count": alert_count,
             "badge_counts": {
                 "stock": len(low_stock),
@@ -7172,7 +7931,8 @@ class Database(DatabaseAutomationMixin):
                 "expiry_total": expiry_total,
                 "expiry_7": len(expiring_7),
                 "expiry_15": len(expiring_15),
-                "total": len(low_stock) + expiry_total,
+                "fraud": len(fraud_alerts),
+                "total": len(low_stock) + expiry_total + len(fraud_alerts),
             },
         }
 
@@ -7200,6 +7960,17 @@ class Database(DatabaseAutomationMixin):
     ):
         """Atualizar produto existente"""
         try:
+            is_sold_by_weight = bool(is_sold_by_weight)
+            existing_stock = _inventory_quantity(
+                existing_stock,
+                is_sold_by_weight,
+                "Estoque atual",
+            )
+            sold_stock = _inventory_quantity(
+                sold_stock,
+                is_sold_by_weight,
+                "Estoque vendido",
+            )
             sale_price = float(sale_price)
             total_purchase_price = float(total_purchase_price)
             unit_purchase_price = float(unit_purchase_price)
@@ -7229,8 +8000,8 @@ class Database(DatabaseAutomationMixin):
                 (
                     description,
                     category,
-                    float(existing_stock),
-                    float(sold_stock),
+                    existing_stock,
+                    sold_stock,
                     sale_price,
                     total_purchase_price,
                     unit_purchase_price,

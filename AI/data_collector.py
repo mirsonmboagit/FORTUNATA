@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from math import ceil
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from statistics import mean, pstdev
@@ -80,6 +81,7 @@ class IntelligenceDataCollector:
         return self.collect_snapshot()["atividade_caixa"]
 
     def _build_snapshot(self) -> dict[str, Any]:
+        fraud_alerts = self._get_fraud_alerts()
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             stock_produtos = self._query_stock_produtos(conn)
@@ -91,8 +93,21 @@ class IntelligenceDataCollector:
                 "stock_produtos": stock_produtos,
                 "vendas_por_produto": vendas_por_produto,
                 "atividade_caixa": self._query_atividade_caixa(conn),
-                "banner_insights": self._build_banner_insights(stock_produtos),
+                "banner_insights": self._build_banner_insights(
+                    stock_produtos,
+                    fraud_alerts=fraud_alerts,
+                ),
             }
+
+    def _get_fraud_alerts(self) -> list[dict[str, Any]]:
+        """Reutiliza a regra central de fraude, sem criar uma segunda regra na IA."""
+        detector = getattr(self.db, "detect_fraud_patterns", None)
+        if not callable(detector):
+            return []
+        try:
+            return [dict(item) for item in list(detector(days_lookback=30) or []) if isinstance(item, dict)]
+        except Exception:
+            return []
 
     def _cached(self, key: str, ttl: float, builder: Callable[[], Any]) -> Any:
         now = datetime.now().timestamp()
@@ -126,7 +141,7 @@ class IntelligenceDataCollector:
                     COALESCE(SUM(quantity), 0) AS itens,
                     MIN(sale_date) AS primeira_venda,
                     MAX(sale_date) AS ultima_venda
-                FROM sales
+                FROM sales_history
                 WHERE DATE(sale_date) = ?
                 GROUP BY COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id)
             )
@@ -148,7 +163,7 @@ class IntelligenceDataCollector:
                 strftime('%H', sale_date) AS hora,
                 COALESCE(SUM(total_price), 0) AS total,
                 COUNT(DISTINCT COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id)) AS vendas
-            FROM sales
+            FROM sales_history
             WHERE DATE(sale_date) = ?
             GROUP BY strftime('%H', sale_date)
             ORDER BY hora
@@ -183,7 +198,7 @@ class IntelligenceDataCollector:
                 DATE(sale_date) AS dia,
                 COALESCE(SUM(total_price), 0) AS total,
                 COUNT(DISTINCT COALESCE(NULLIF(TRIM(transaction_code), ''), 'sale:' || id)) AS vendas
-            FROM sales
+            FROM sales_history
             WHERE DATE(sale_date) >= ? AND DATE(sale_date) < ?
             GROUP BY DATE(sale_date)
             ORDER BY dia
@@ -248,13 +263,13 @@ class IntelligenceDataCollector:
                     COALESCE(SUM(quantity), 0) AS qty_total,
                     COALESCE(SUM(total_price), 0) AS rev_total,
                     MAX(sale_date) AS last_sale_at
-                FROM sales
+                FROM sales_history
                 WHERE DATE(sale_date) >= ?
                 GROUP BY product_id
             ) hist ON hist.product_id = p.id
             LEFT JOIN (
                 SELECT product_id, COALESCE(SUM(quantity), 0) AS qty_today
-                FROM sales
+                FROM sales_history
                 WHERE DATE(sale_date) = DATE('now')
                 GROUP BY product_id
             ) today ON today.product_id = p.id
@@ -271,7 +286,10 @@ class IntelligenceDataCollector:
             is_weight = bool(row["is_weight"])
             stock_atual = _safe_float(row["stock_atual"])
             stock_total = stock_atual + _safe_float(row["stock_vendido"])
-            stock_min = round(stock_total * 0.30, 2)
+            stock_min_raw = stock_total * 0.30
+            # Produtos por unidade nao podem ter um minimo fracionado. A
+            # previsao conserva decimais apenas para produtos vendidos por kg.
+            stock_min = round(stock_min_raw, 2) if is_weight else float(ceil(stock_min_raw))
             last_sale_at = _parse_datetime(row["last_sale_at"])
             last_sale_days = None
             if last_sale_at:
@@ -304,6 +322,7 @@ class IntelligenceDataCollector:
         stock_produtos: list[dict[str, Any]],
         low_threshold: float = 5.0,
         forecast_days: int = 14,
+        fraud_alerts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Reconstrói os sinais clássicos dos banners de stock e validade."""
         today = date.today()
@@ -320,6 +339,7 @@ class IntelligenceDataCollector:
         }
         forecasts: list[dict[str, Any]] = []
         expiry_risk: list[dict[str, Any]] = []
+        fraud_alerts = [dict(item) for item in list(fraud_alerts or []) if isinstance(item, dict)]
 
         for item in stock_produtos:
             descricao = str(item.get("descricao") or "Produto")
@@ -334,6 +354,8 @@ class IntelligenceDataCollector:
             if media_diaria > 0:
                 days_left = stock_atual / media_diaria
                 recommended_qty = max(0.0, (media_diaria * forecast_days) - stock_atual)
+                if not is_weight:
+                    recommended_qty = float(ceil(recommended_qty))
 
             forecasts.append(
                 {
@@ -416,13 +438,15 @@ class IntelligenceDataCollector:
         recommendations_stock: list[str] = []
         recommendations_expiry: list[str] = []
 
-        for name, stock, is_weight, _days_left, _prod_id in low_stock[:3]:
-            if is_weight:
-                quantity = f"{stock:.1f} quilograma" if abs(stock - 1) < 0.001 else f"{stock:.1f} quilogramas"
+        for name, stock, _is_weight, days_left, _prod_id in low_stock[:3]:
+            stock_value = _safe_float(stock)
+            coverage_days = _safe_float(days_left, -1)
+            if stock_value <= 0 or coverage_days < 0:
+                text = f"{name}: confirme a encomenda e a data de entrega."
+            elif coverage_days <= 2:
+                text = f"{name}: encomende hoje e confirme o prazo com o fornecedor."
             else:
-                amount = int(stock) if float(stock).is_integer() else stock
-                quantity = f"{amount} unidade" if abs(stock - 1) < 0.001 else f"{amount} unidades"
-            text = f"{name}: o estoque está baixo. Restam {quantity}. Faça a reposição."
+                text = f"{name}: programe a compra e confirme preço e disponibilidade com o fornecedor."
             recommendations.append(text)
             recommendations_stock.append(text)
 
@@ -447,6 +471,8 @@ class IntelligenceDataCollector:
             recommendations.append("Tudo está estável no momento. Não há riscos imediatos de estoque ou validade.")
 
         alerts = []
+        if fraud_alerts:
+            alerts.append(f"{len(fraud_alerts)} alertas de fraude requerem verificacao.")
         if low_stock:
             alerts.append(f"{len(low_stock)} produtos com estoque baixo.")
         if expiry_levels["vencido"]:
@@ -480,9 +506,11 @@ class IntelligenceDataCollector:
             "expiry_levels": expiry_levels,
             "stock_forecast": forecasts[:20],
             "expiry_risk": expiry_risk[:20],
-            "alert_count": len(low_stock) + expiry_total,
+            "fraud_alerts": fraud_alerts,
+            "alert_count": len(low_stock) + expiry_total + len(fraud_alerts),
             "badge_counts": {
                 "stock": len(low_stock),
+                "fraud": len(fraud_alerts),
                 "expiry_vencido": len(expiry_levels["vencido"]),
                 "expiry_critico": len(expiry_levels["critico"]),
                 "expiry_alto": len(expiry_levels["alto"]),
@@ -491,7 +519,7 @@ class IntelligenceDataCollector:
                 "expiry_total": expiry_total,
                 "expiry_7": len(expiring_7),
                 "expiry_15": len(expiring_15),
-                "total": len(low_stock) + expiry_total,
+                "total": len(low_stock) + expiry_total + len(fraud_alerts),
             },
         }
 
@@ -513,7 +541,7 @@ class IntelligenceDataCollector:
                 COALESCE(MAX(COALESCE(p.sale_price, pa.sale_price, s.sale_price)), 0) AS preco_tabela,
                 COALESCE(MAX(COALESCE(p.unit_purchase_price, pa.unit_purchase_price, 0)), 0) AS custo_unitario,
                 MAX(s.sale_date) AS ultima_venda
-            FROM sales s
+            FROM sales_history s
             LEFT JOIN products p ON s.product_id = p.id
             LEFT JOIN products_archive pa ON s.product_id = pa.id
             WHERE DATE(s.sale_date) >= ?
@@ -581,7 +609,7 @@ class IntelligenceDataCollector:
                 COALESCE(COALESCE(p.sale_price, pa.sale_price), s.sale_price) AS reference_price,
                 COALESCE(COALESCE(p.unit_purchase_price, pa.unit_purchase_price), 0) AS unit_cost,
                 COALESCE(s.is_promotional, 0) AS is_promotional
-            FROM sales s
+            FROM sales_history s
             LEFT JOIN products p ON s.product_id = p.id
             LEFT JOIN products_archive pa ON s.product_id = pa.id
             WHERE DATE(s.sale_date) >= ?

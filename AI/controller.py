@@ -53,6 +53,25 @@ def _get_banner_notification_total(
     return len(list(banner_data or []))
 
 
+def _build_recommendation_banner_data(
+    insights: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    helper = getattr(intelligent_banner_module, "build_recommendation_banner_data", None)
+    if callable(helper):
+        return helper(insights or {})
+    return []
+
+
+def _get_recommendation_total(insights: dict[str, Any] | None = None) -> int:
+    total = 0
+    for banner in _build_recommendation_banner_data(insights):
+        try:
+            total += max(0, int(banner.get("count") or 0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return total
+
+
 class SharedIntelligenceHub:
     """Servico compartilhado por todas as telas para evitar trabalho duplicado."""
 
@@ -156,6 +175,8 @@ class ProactiveIntelligenceController:
         if not self._is_enabled():
             self.clear()
             self._update_badge(0)
+            self._update_recommendation_badge(0)
+            self._update_loss_alert_badges(0)
             return
         self._ensure_banner_center()
         self.hub.subscribe(self._listener)
@@ -164,12 +185,15 @@ class ProactiveIntelligenceController:
     def stop(self) -> None:
         self.hub.unsubscribe(self._listener)
         self.clear()
+        self._update_badge(0)
+        self._update_recommendation_badge(0)
+        self._update_loss_alert_badges(0)
 
     def refresh(self) -> None:
         if self._is_enabled():
             self.hub.request_refresh()
 
-    def open_history(self, caller: Any = None) -> None:
+    def open_alerts(self, caller: Any = None) -> None:
         center = self._ensure_banner_center()
         snapshot = self.hub.alert_manager.snapshot()
         active_items = snapshot.get("active_alerts", [])
@@ -200,6 +224,18 @@ class ProactiveIntelligenceController:
         self.hub.mark_all_seen()
         self._update_badge(0)
 
+    def open_history(self, caller: Any = None) -> None:
+        """Alias de compatibilidade para os chamadores antigos de alertas."""
+        self.open_alerts(caller=caller)
+
+    def open_recommendations(self, caller: Any = None) -> None:
+        center = self._ensure_banner_center()
+        insights = self._last_payload.get("banner_insights", {})
+        banner_data = _build_recommendation_banner_data(insights)
+        if not banner_data:
+            return
+        center.open_recommendations(caller=caller, insights=insights)
+
     def set_enabled(self, enabled: bool) -> None:
         self.hub.set_enabled(enabled)
         if not enabled:
@@ -211,6 +247,8 @@ class ProactiveIntelligenceController:
                 setattr(app, "_ai_banners_last_key", None)
             self.clear(reset_memory=True)
             self._update_badge(0)
+            self._update_recommendation_badge(0)
+            self._update_loss_alert_badges(0)
         else:
             self.start()
 
@@ -295,10 +333,22 @@ class ProactiveIntelligenceController:
             notification_total = 0
         self._last_notification_key = notification_key
         self._update_badge(notification_total)
+        self._update_recommendation_badge(_get_recommendation_total(banner_insights))
+        badge_counts = banner_insights.get("badge_counts") or {}
+        fraud_count = badge_counts.get("fraud", len(banner_insights.get("fraud_alerts") or []))
+        self._update_loss_alert_badges(fraud_count)
 
     def _update_badge(self, count: int) -> None:
         if hasattr(self.screen, "update_notification_badge"):
             self.screen.update_notification_badge(count)
+
+    def _update_recommendation_badge(self, count: int) -> None:
+        if hasattr(self.screen, "update_recommendation_badge"):
+            self.screen.update_recommendation_badge(count)
+
+    def _update_loss_alert_badges(self, count: int) -> None:
+        if hasattr(self.screen, "update_loss_alert_badges"):
+            self.screen.update_loss_alert_badges(count)
 
     def _ensure_banner_center(self) -> IntelligentBannerCenter:
         if self._banner_center:

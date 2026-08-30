@@ -40,12 +40,28 @@ class DetailPopup(Popup):
             "info": _theme_color("info", [0.25, 0.45, 0.75, 1]),
             "on_primary": _theme_color("on_primary", [1, 1, 1, 1]),
         }
+        # O popup e usado sobre uma tela escura. Estas cores locais mantem
+        # contraste consistente, inclusive em temas com tons muito apagados.
+        self._tokens.update({
+            "card": [0.075, 0.090, 0.115, 1],
+            "card_alt": [0.125, 0.145, 0.180, 1],
+            "text_primary": [0.96, 0.97, 0.99, 1],
+            "text_secondary": [0.73, 0.78, 0.86, 1],
+            "primary": [0.16, 0.50, 0.82, 1],
+            "success": [0.28, 0.86, 0.52, 1],
+            "warning": [1.00, 0.76, 0.28, 1],
+            "danger": [1.00, 0.40, 0.42, 1],
+            "info": [0.35, 0.70, 1.00, 1],
+            "on_primary": [1, 1, 1, 1],
+        })
 
         self._compact = None
 
         self.title = ""
         self.separator_height = 0
         self.background = ""
+        self.background_color = [0, 0, 0, 0]
+        self.border = [0, 0, 0, 0]
         self.auto_dismiss = True
         self.size_hint = (None, None)
         self._apply_size()
@@ -58,7 +74,9 @@ class DetailPopup(Popup):
         if w < dp(720):
             self.size = (w * 0.95, h * 0.95)
         else:
-            self.size = (min(dp(920), w * 0.85), min(dp(760), h * 0.9))
+            # A tabela possui campos financeiros e de stock. Em desktop, uma
+            # largura maior evita valores cortados e permite uma fonte legivel.
+            self.size = (min(dp(1040), w * 0.90), min(dp(820), h * 0.92))
         self._compact = w < dp(720)
 
     def _on_resize(self, *_):
@@ -73,8 +91,8 @@ class DetailPopup(Popup):
     def _build_content(self):
         container = MDCard(
             orientation="vertical",
-            padding=dp(16),
-            spacing=dp(12),
+            padding=dp(20) if not self._compact else dp(16),
+            spacing=dp(14) if not self._compact else dp(12),
             radius=[dp(12)],
             md_bg_color=self._tokens["card"],
             elevation=4,
@@ -93,8 +111,8 @@ class DetailPopup(Popup):
         header = MDCard(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(56) if self._compact else dp(64),
-            padding=[dp(12), dp(10)],
+            height=dp(64) if self._compact else dp(76),
+            padding=[dp(14), dp(12)],
             spacing=dp(12),
             radius=[dp(10)],
             md_bg_color=self._tokens["card_alt"],
@@ -110,7 +128,7 @@ class DetailPopup(Popup):
             valign="middle",
             theme_text_color="Custom",
             text_color=self._tokens["primary"],
-            font_size=dp(24) if self._compact else dp(28),
+            font_size=sp(26) if self._compact else sp(32),
         )
         icon.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         header.add_widget(icon)
@@ -119,6 +137,7 @@ class DetailPopup(Popup):
         title = MDLabel(
             text="Detalhes do Produto",
             font_style="Subtitle1",
+            font_size=sp(19) if self._compact else sp(21),
             bold=True,
             theme_text_color="Custom",
             text_color=self._tokens["text_primary"],
@@ -126,6 +145,7 @@ class DetailPopup(Popup):
         subtitle = MDLabel(
             text=str(desc),
             font_style="Body2",
+            font_size=sp(15) if self._compact else sp(17),
             theme_text_color="Custom",
             text_color=self._tokens["text_secondary"],
             shorten=True,
@@ -134,6 +154,7 @@ class DetailPopup(Popup):
         meta = MDLabel(
             text=f"Categoria: {category}",
             font_style="Caption",
+            font_size=sp(13) if self._compact else sp(14),
             theme_text_color="Custom",
             text_color=self._tokens["text_secondary"],
             shorten=True,
@@ -147,8 +168,17 @@ class DetailPopup(Popup):
         return header
 
     def _build_body(self):
-        scroll = ScrollView(do_scroll_x=False)
-        body = MDBoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        scroll = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(8),
+            bar_color=_tint(self._tokens["primary"], 0.78),
+            bar_inactive_color=_tint(self._tokens["text_secondary"], 0.32),
+        )
+        body = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(8) if not self._compact else dp(6),
+            size_hint_y=None,
+        )
         body.bind(minimum_height=body.setter("height"))
 
         if not self._compact:
@@ -156,8 +186,8 @@ class DetailPopup(Popup):
             header_row = MDCard(
                 orientation="horizontal",
                 size_hint_y=None,
-                height=dp(32),
-                padding=[dp(10), 0],
+                height=dp(42),
+                padding=[dp(12), 0],
                 radius=[dp(6)],
                 elevation=0,
                 md_bg_color=self._tokens["primary"],
@@ -168,7 +198,8 @@ class DetailPopup(Popup):
                 theme_text_color="Custom",
                 text_color=self._tokens["on_primary"],
                 bold=True,
-                size_hint_x=0.45,
+                font_size=sp(16),
+                size_hint_x=0.42,
             ))
             header_row.add_widget(MDLabel(
                 text="Valor",
@@ -176,7 +207,8 @@ class DetailPopup(Popup):
                 theme_text_color="Custom",
                 text_color=self._tokens["on_primary"],
                 bold=True,
-                size_hint_x=0.55,
+                font_size=sp(16),
+                size_hint_x=0.58,
             ))
             body.add_widget(header_row)
 
@@ -188,12 +220,13 @@ class DetailPopup(Popup):
         return scroll
 
     def _build_footer(self):
-        footer = MDBoxLayout(size_hint_y=None, height=dp(44))
+        footer = MDBoxLayout(size_hint_y=None, height=dp(52))
         footer.add_widget(MDBoxLayout())
         close_btn = MDRaisedButton(
             text="Fechar",
             md_bg_color=self._tokens["primary"],
             text_color=self._tokens["on_primary"],
+            font_size=sp(15),
             on_release=self.dismiss,
             size_hint_x=None,
             width=dp(120),
@@ -318,28 +351,30 @@ class DetailPopup(Popup):
             ("Status", status_value, status_level),
             ("Fonte", self._get(17, "N/A"), None),
             ("Motivo", self._get(18, "N/A"), None),
-            ("Atualizado em", self._format_datetime(self._get(19, "")) or "N/A", None),
-            ("Atualizado por", self._get(20, "N/A"), None),
+            ("Alterado em", self._format_datetime(self._get(19, "")) or "N/A", None),
+            ("Alterado por", self._get(20, "N/A"), None),
         ])
 
         compact = self._compact
-        row_height = dp(52) if compact else dp(28)
-        label_hint = 1 if compact else 0.45
-        value_hint = 1 if compact else 0.55
+        row_height = dp(58) if compact else dp(40)
+        label_hint = 1 if compact else 0.42
+        value_hint = 1 if compact else 0.58
         value_halign = "left" if compact else "right"
-        row_padding = [dp(10), dp(6)] if compact else [dp(10), 0]
+        row_padding = [dp(12), dp(7)] if compact else [dp(12), 0]
         row_orientation = "vertical" if compact else "horizontal"
+        label_font_size = sp(14) if compact else sp(14.5)
+        value_font_size = sp(15) if compact else sp(15.5)
 
         for idx, (label, value, highlight) in enumerate(rows_data):
             bg = self._tokens["card_alt"] if idx % 2 == 0 else self._tokens["card"]
             if highlight == "danger":
-                bg = _tint(self._tokens["danger"], 0.16)
+                bg = _tint(self._tokens["danger"], 0.24)
             elif highlight == "warning":
-                bg = _tint(self._tokens["warning"], 0.16)
+                bg = _tint(self._tokens["warning"], 0.24)
             elif highlight == "info":
-                bg = _tint(self._tokens["info"], 0.16)
+                bg = _tint(self._tokens["info"], 0.24)
             elif highlight == "success":
-                bg = _tint(self._tokens["success"], 0.16)
+                bg = _tint(self._tokens["success"], 0.24)
             row = MDCard(
                 orientation=row_orientation,
                 size_hint_y=None,
@@ -355,7 +390,8 @@ class DetailPopup(Popup):
                 halign="left",
                 theme_text_color="Custom",
                 text_color=self._tokens["text_secondary"],
-                font_style="Caption",
+                font_style="Body2",
+                font_size=label_font_size,
                 size_hint_x=label_hint,
                 shorten=True,
                 shorten_from="right",
@@ -376,9 +412,10 @@ class DetailPopup(Popup):
                 halign=value_halign,
                 theme_text_color="Custom",
                 text_color=value_color,
-                font_style="Body2" if compact else "Caption",
+                font_style="Body2",
+                font_size=value_font_size,
                 size_hint_x=value_hint,
-                bold=highlight in ("danger", "info"),
+                bold=True,
                 shorten=True,
                 shorten_from="right",
             )

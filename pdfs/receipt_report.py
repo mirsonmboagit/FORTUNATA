@@ -17,8 +17,8 @@ class ReceiptReport(BasePDFReport):
         super().__init__(output_dir=output_dir)
 
     def _get_operator_timestamp_filename(self, receipt_data):
-        operator = str((receipt_data or {}).get("operator") or "Operador").strip()
-        safe_operator = self._sanitize_name(operator) or "Operador"
+        operator = str((receipt_data or {}).get("operator") or "Atendente").strip()
+        safe_operator = self._sanitize_name(operator) or "Atendente"
         safe_report_type = self._sanitize_name("recibo_venda")
         now = datetime.now()
         date_folder = now.strftime("%Y-%m-%d")

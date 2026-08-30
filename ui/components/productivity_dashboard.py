@@ -165,9 +165,9 @@ def _describe_terminal_performance(item, position, summary=None):
     if avg_ticket > 0:
         diff_ratio = (item_ticket - avg_ticket) / avg_ticket
         if diff_ratio >= 0.12:
-            return "Ticket medio acima do padrao do periodo."
+            return "Valor medio por venda acima do padrao do periodo."
         if diff_ratio <= -0.12:
-            return "Ticket medio abaixo da media do periodo."
+            return "Valor medio por venda abaixo da media do periodo."
 
     return "Operacao consistente no periodo."
 
@@ -194,7 +194,7 @@ class ProductivityKpiStrip(MDGridLayout):
         specs = [
             ("sales", "Vendas", _theme("primary", (0.15, 0.52, 0.76, 1))),
             ("revenue", "Receita", _theme("success", (0.19, 0.65, 0.33, 1))),
-            ("ticket", "Ticket Medio", _theme("warning", (0.86, 0.57, 0.17, 1))),
+            ("ticket", "Valor medio por venda", _theme("warning", (0.86, 0.57, 0.17, 1))),
             ("terminals", "Caixas Ativos", _theme("info", (0.12, 0.55, 0.72, 1))),
         ]
         for key, title, accent in specs:
@@ -274,7 +274,7 @@ class ProductivityKpiStrip(MDGridLayout):
             cards["revenue"]["subtitle"].text = "Sem pico relevante"
 
         cards["ticket"]["value"].text = _format_mzn(summary.get("avg_ticket"))
-        cards["ticket"]["subtitle"].text = f"Desc. medio: {_format_percent(summary.get('avg_discount_percent'))}"
+        cards["ticket"]["subtitle"].text = f"Desconto medio: {_format_percent(summary.get('avg_discount_percent'))}"
 
         cards["terminals"]["value"].text = _format_count(summary.get("active_terminals"))
         cards["terminals"]["subtitle"].text = f"Margem media: {_format_percent(summary.get('avg_margin_percent'))}"
@@ -489,9 +489,9 @@ class DailyProductivityChart(_BaseChartCard):
                     "lines": [
                         f"{values[index]} vendas | {_format_mzn(revenues[index])}",
                         (
-                            f"Ticket medio: {_format_mzn(revenues[index] / values[index])}"
+                            f"Valor medio por venda: {_format_mzn(revenues[index] / values[index])}"
                             if values[index] > 0
-                            else "Ticket medio: 0.00 MZN"
+                            else "Valor medio por venda: 0.00 MZN"
                         )
                         + f" | Quantidade: {_format_quantity(quantities[index])}",
                         (
@@ -519,8 +519,8 @@ class DailyProductivityChart(_BaseChartCard):
 class TerminalRankingChart(_BaseChartCard):
     def __init__(self, **kwargs):
         super().__init__(
-            title="Ranking por Caixa",
-            subtitle="Ordenado por numero de vendas no periodo",
+            title="Vendas por caixa",
+            subtitle="Caixas com mais vendas no periodo",
             height=dp(332),
             **kwargs,
         )
@@ -596,7 +596,7 @@ class TerminalRankingChart(_BaseChartCard):
                     "title": str(labels[index]),
                     "lines": [
                         f"Posicao #{index + 1} | {values[index]} vendas",
-                        f"Receita: {_format_mzn(revenues[index])} | Ticket medio: {_format_mzn(avg_tickets[index])}",
+                        f"Receita: {_format_mzn(revenues[index])} | Valor medio por venda: {_format_mzn(avg_tickets[index])}",
                         f"Margem: {_format_percent(margins[index])} | Desconto medio: {_format_percent(discounts[index])}",
                         (
                             f"Dias ativos: {active_days[index]} | "
@@ -609,7 +609,7 @@ class TerminalRankingChart(_BaseChartCard):
                 }
             )
 
-        self.subtitle_label.text = f"Top {len(top_items)} caixas ativos no período"
+        self.subtitle_label.text = f"{len(top_items)} caixas com mais vendas no periodo"
         figure.subplots_adjust(left=0.2, right=0.97, top=0.9, bottom=0.14)
         self.set_figure(figure, hover_items=hover_items)
 
@@ -635,7 +635,7 @@ class ProductivityInsightsCard(HoverCard):
         self.line_width = 1.0
 
         self.title_label = MDLabel(
-            text="Insights Inteligentes",
+            text="Resumo do periodo",
             font_style="Subtitle1",
             bold=True,
             size_hint_y=None,
@@ -691,14 +691,14 @@ class ProductivityDashboard(MDCard):
         )
         self.header_box.bind(minimum_height=self.header_box.setter("height"))
         self.title_label = MDLabel(
-            text="Produtividade Inteligente",
+            text="Produtividade",
             font_style="H6",
             bold=True,
             size_hint_y=None,
             height=dp(28),
         )
         self.subtitle_label = MDLabel(
-            text="Analise por caixa com base apenas no periodo selecionado",
+            text="Vendas por caixa no periodo selecionado.",
             font_style="Caption",
             size_hint_y=None,
             height=dp(18),

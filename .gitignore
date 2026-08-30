@@ -42,6 +42,7 @@ config/.env
 
 # Dados/artefactos gerados em runtime
 data/cache/
+data/evidence/
 data/receipts/
 data/reports/
 temp/

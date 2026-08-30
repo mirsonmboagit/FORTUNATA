@@ -967,7 +967,7 @@ class ProductForm(Popup):
                 return
             self._fill_fields(data)
             self._set_status("OK", self.COLOR_SUCCESS)
-            self._show_snackbar("Dados atualizados", self.COLOR_SUCCESS)
+            self._show_snackbar("Alteracoes guardadas", self.COLOR_SUCCESS)
         finally:
             if request_id is not None:
                 Clock.schedule_once(self._start_pending_barcode_search, 0)
@@ -1352,6 +1352,10 @@ class ProductForm(Popup):
             )
         if hasattr(self, "pack_sale_state_btn"):
             self.pack_sale_state_btn.disabled = bool(active)
+        if hasattr(self, "existing_stock"):
+            self.existing_stock.input_filter = "float" if active else "int"
+        if hasattr(self, "sold_stock"):
+            self.sold_stock.input_filter = "float" if active else "int"
         if hasattr(self, "units_per_package_input"):
             self.units_per_package_input.disabled = bool(active)
         if active:
@@ -1560,6 +1564,22 @@ class ProductForm(Popup):
         if self.is_sold_by_weight_switch.active and getattr(self.allow_pack_sale_switch, "active", False):
             self._show_snackbar("Produto por KG nao pode vender embalagem fechada.", self.COLOR_ERROR)
             return False
+        if not self.is_sold_by_weight_switch.active:
+            for field, label in (
+                (self.existing_stock, "Estoque atual"),
+                (self.sold_stock, "Vendido"),
+            ):
+                try:
+                    quantity = float(field.text.strip() or "0")
+                except (TypeError, ValueError):
+                    self._show_snackbar(f"{label} deve ser um numero inteiro.", self.COLOR_ERROR)
+                    return False
+                if not quantity.is_integer():
+                    self._show_snackbar(
+                        f"{label} deve ser inteiro para produtos por unidade.",
+                        self.COLOR_ERROR,
+                    )
+                    return False
         if getattr(self.allow_pack_sale_switch, "active", False):
             raw_units = self.units_per_package_input.text.strip()
             try:
@@ -1642,12 +1662,12 @@ class ProductForm(Popup):
                     err = _last_error()
                     if not err:
                         self._show_snackbar(
-                            "Servidor desatualizado: dados de embalagem nao foram salvos. Reinicie o server.",
+                            "A versao do servidor e antiga; os dados da embalagem nao foram guardados. Reinicie o servidor.",
                             self.COLOR_WARNING,
                         )
                 if err:
                     raise RuntimeError(err)
-                self._show_snackbar("Produto atualizado!", self.COLOR_SUCCESS)
+                self._show_snackbar("Produto guardado!", self.COLOR_SUCCESS)
                 Clock.schedule_once(lambda dt: self.dismiss(), 1.5)
             else:
                 product_id = _do_add(include_pack_fields=True)
@@ -1657,7 +1677,7 @@ class ProductForm(Popup):
                     err = _last_error()
                     if not err:
                         self._show_snackbar(
-                            "Servidor desatualizado: dados de embalagem nao foram salvos. Reinicie o server.",
+                            "A versao do servidor e antiga; os dados da embalagem nao foram guardados. Reinicie o servidor.",
                             self.COLOR_WARNING,
                         )
                 if err or not product_id:

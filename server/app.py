@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from flask import Flask, current_app, jsonify, request
+from flask import Flask, current_app, jsonify, request, send_file
 
 from utils.config.app_config import get_api_config, get_app_config
 from utils.config.logging_setup import configure_runtime_logging
@@ -86,6 +86,11 @@ ALLOWLIST = {
     "complete_physical_inventory",
     "cancel_physical_inventory",
     "record_stock_movement",
+    "request_stock_movement",
+    "get_stock_movement_approval_status",
+    "get_loss_history_items",
+    "get_damage_evidence",
+    "delete_damage_evidence",
     "restock_product",
     "get_sales_by_date",
     "get_sales_by_date_range",
@@ -118,6 +123,7 @@ ALLOWLIST = {
     "detect_fraud_patterns",
     "get_pending_approvals",
     "approve_stock_movement",
+    "approve_all_pending_stock_movements",
     "reject_stock_movement",
     "delete_stock_movement",
     "log_action",
@@ -269,6 +275,7 @@ def create_app():
     flask_app.config["RUNTIME"] = runtime
     flask_app.config["DB_INSTANCE"] = Database(db_path=runtime["db_path"])
     flask_app.config["DB_LOCK"] = Lock()
+    flask_app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 + 65536
 
     @flask_app.get("/health")
     def health():
@@ -328,6 +335,73 @@ def create_app():
             LOGGER.exception("RPC method failed: %s", method)
             error = "internal_error" if _is_production(runtime) else str(exc)
             return jsonify({"ok": False, "error": error}), 500
+
+    @flask_app.post("/loss-evidence/upload")
+    @flask_app.post("/loss-evidence/analyze")
+    def upload_loss_evidence():
+        """Recebe e guarda a foto obrigatoria, sem analise automatica."""
+        if not _check_key():
+            return _unauthorized()
+        username = str(request.headers.get("X-USER") or "").strip()
+        role = str(request.headers.get("X-ROLE") or "").strip()
+        if not username:
+            return jsonify({"ok": False, "error": "session_required"}), 400
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return jsonify({"ok": False, "error": "image_required"}), 400
+        try:
+            raw = upload.read()
+            from utils.business.damage_evidence import (
+                DamageEvidenceError,
+                create_damage_evidence_from_image,
+                prepare_damage_image,
+            )
+
+            prepared = prepare_damage_image(raw, upload.filename)
+            db = flask_app.config["DB_INSTANCE"]
+            with flask_app.config["DB_LOCK"]:
+                db.set_active_user(username, role)
+                result = create_damage_evidence_from_image(db, prepared, created_by=username)
+            result.pop("storage_path", None)
+            return jsonify({"ok": True, "result": _normalize(result)})
+        except DamageEvidenceError as exc:
+            return jsonify({"ok": False, "error": "upload_failed", "message": str(exc)}), 422
+        except Exception:
+            LOGGER.exception("loss evidence upload failed")
+            return jsonify({"ok": False, "error": "internal_error"}), 500
+
+    @flask_app.get("/loss-evidence/<evidence_id>")
+    def download_loss_evidence(evidence_id):
+        """Serve uma imagem apenas depois de validar a chave e o dono atual."""
+        if not _check_key():
+            return _unauthorized()
+        username = str(request.headers.get("X-USER") or "").strip()
+        role = str(request.headers.get("X-ROLE") or "").strip()
+        if not username:
+            return jsonify({"ok": False, "error": "session_required"}), 400
+        try:
+            db = flask_app.config["DB_INSTANCE"]
+            with flask_app.config["DB_LOCK"]:
+                db.set_active_user(username, role)
+                evidence = db.get_damage_evidence(evidence_id)
+                relative_path = db.get_damage_evidence_storage_path(evidence_id)
+            if not evidence or not relative_path:
+                return jsonify({"ok": False, "error": "not_found"}), 404
+            # Importacao tardia preserva os testes que substituem paths por stubs.
+            from utils.config.paths import resolve_path
+
+            path = resolve_path(relative_path)
+            if not path.is_file():
+                return jsonify({"ok": False, "error": "file_not_found"}), 404
+            return send_file(
+                path,
+                mimetype=evidence.get("mime_type") or "application/octet-stream",
+                as_attachment=False,
+                download_name=f"evidencia-{evidence_id}",
+            )
+        except Exception:
+            LOGGER.exception("loss evidence download failed")
+            return jsonify({"ok": False, "error": "internal_error"}), 500
 
     return flask_app
 

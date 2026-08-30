@@ -40,17 +40,17 @@ def _severity_style(alert_type: str) -> tuple[str, tuple[float, float, float, fl
 def _title_for(category: str, alert_type: str) -> str:
     category = str(category or "monitorizacao").lower()
     alert_type = str(alert_type or "info").lower()
-    prefix = {
-        "critico": "Atenção",
-        "atencao": "Aviso",
-        "info": "Informação",
-    }.get(alert_type, "Informação")
     base = {
         "vendas": "Vendas",
-        "stock": "Estoque",
+        "stock": "Stock",
         "produtividade": "Produtividade",
     }.get(category, "Operação")
-    return f"{prefix}: {base}"
+    suffix = {
+        "critico": "crítico",
+        "atencao": "a acompanhar",
+        "info": "em destaque",
+    }.get(alert_type, "em destaque")
+    return f"{base} {suffix}"
 
 
 def _group_alerts(alerts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -97,8 +97,7 @@ def _build_preview_messages(items: list[dict[str, Any]]) -> list[str]:
     preview = list(messages[:_MAX_ALERT_PREVIEW_LINES])
     hidden = len(messages) - len(preview)
     if hidden > 0:
-        noun = "alerta" if hidden == 1 else "alertas"
-        preview.append(f"Há mais {hidden} {noun} neste aviso.")
+        preview.append(f"Mais {hidden} para ver nos detalhes.")
     return preview
 
 
@@ -111,7 +110,7 @@ def _build_details_sections(items: list[dict[str, Any]]) -> list[tuple[str, list
         mensagem = str(item.get("mensagem") or "").strip()
         detalhes = str(item.get("detalhes") or "").strip()
         if detalhes:
-            details_lines.append(f"{mensagem}: {detalhes}")
+            details_lines.append(f"{mensagem} {detalhes}")
         elif mensagem:
             details_lines.append(mensagem)
 
@@ -121,29 +120,26 @@ def _build_details_sections(items: list[dict[str, Any]]) -> list[tuple[str, list
         severity_parts = []
         if severity_totals.get("critico"):
             quantity = severity_totals["critico"]
-            noun = "alerta crítico" if quantity == 1 else "alertas críticos"
-            severity_parts.append(f"{quantity} {noun}")
+            severity_parts.append(f"{quantity} crítico" if quantity == 1 else f"{quantity} críticos")
         if severity_totals.get("atencao"):
             quantity = severity_totals["atencao"]
-            noun = "alerta que precisa de atenção" if quantity == 1 else "alertas que precisam de atenção"
-            severity_parts.append(f"{quantity} {noun}")
+            severity_parts.append(f"{quantity} para atenção")
         if severity_totals.get("info"):
             quantity = severity_totals["info"]
-            noun = "alerta informativo" if quantity == 1 else "alertas informativos"
-            severity_parts.append(f"{quantity} {noun}")
+            severity_parts.append(f"{quantity} informativo" if quantity == 1 else f"{quantity} informativos")
         noun = "alerta" if total_items == 1 else "alertas"
-        summary = f"Há {total_items} {noun} nesta categoria."
+        summary = f"{total_items} {noun} para verificar."
         if severity_parts:
             summary = f"{summary} {', '.join(severity_parts)}."
         sections.append(("Resumo", [summary]))
     if details_lines:
         sections.append(
             (
-                "Alertas Recentes",
+                "Itens a verificar",
                 _compact_lines(
                     details_lines,
                     _MAX_ALERT_DETAIL_LINES,
-                    "Há mais {hidden} alertas semelhantes no histórico.",
+                    "Mais {hidden} alertas no histórico.",
                 ),
             )
         )
@@ -187,6 +183,7 @@ def _insights_have_issues(insights: dict[str, Any] | None) -> bool:
         or expiry_levels.get("leve")
         or insights.get("expiring_7")
         or insights.get("expiring_15")
+        or insights.get("fraud_alerts")
     )
 
 
@@ -271,6 +268,85 @@ def build_history_banner_data(
     banner_data.extend(_alerts_to_banner_data(merged_alerts[:12]))
     banner_data.sort(key=_banner_sort_key)
     return banner_data
+
+
+def build_recommendation_banner_data(
+    insights: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Converte as ações sugeridas pela IA em cartões próprios de recomendação."""
+    payload = insights or {}
+
+    def _unique_lines(values: Any) -> list[str]:
+        lines: list[str] = []
+        seen: set[str] = set()
+        for value in list(values or []):
+            line = str(value or "").strip()
+            key = line.casefold()
+            if not line or key in seen:
+                continue
+            seen.add(key)
+            lines.append(line)
+        return lines
+
+    stock_lines = _unique_lines(payload.get("recommendations_stock"))
+    expiry_lines = _unique_lines(payload.get("recommendations_expiry"))
+    ai_lines = _unique_lines(payload.get("recommendations_ai"))
+    used = {line.casefold() for line in stock_lines + expiry_lines}
+    general_lines = [
+        line
+        for line in _unique_lines(payload.get("recommendations"))
+        if line.casefold() not in used
+    ]
+
+    groups = (
+        [("Recomendações da IA", "lightbulb-on-outline", "ai", ai_lines)]
+        if ai_lines
+        else [
+            ("Reposição sugerida", "package-variant-plus", "stock", stock_lines),
+            ("Validades a priorizar", "calendar-check-outline", "expiry", expiry_lines),
+            ("Sugestões automáticas", "lightbulb-on-outline", "general", general_lines),
+        ]
+    )
+    banners: list[dict[str, Any]] = []
+    for urgency, (title, icon, kind, lines) in enumerate(groups, start=1):
+        if not lines:
+            continue
+        banners.append(
+            {
+                "kind": f"recommendation_{kind}",
+                "variant": "info",
+                "icon": icon,
+                "bg_color": (0.89, 0.91, 1.0, 0.98),
+                "title": title,
+                "messages": lines[:3],
+                "all_messages": lines,
+                "count": len(lines),
+                "details_sections": [("Ações recomendadas", lines)],
+                "urgency": urgency,
+                "notification_key": repr(("recommendation", kind, tuple(lines))),
+            }
+        )
+
+    if not banners:
+        banners.append(
+            {
+                "kind": "recommendation_ok",
+                "variant": "success",
+                "icon": "check-circle-outline",
+                "bg_color": (0.74, 0.92, 0.78, 1),
+                "title": "Recomendações IA",
+                "messages": ["Não há ações prioritárias neste momento."],
+                "all_messages": ["Não há ações prioritárias neste momento."],
+                "count": 0,
+                "details_sections": [
+                    ("Estado atual", ["A operação está estável na última análise."])
+                ],
+                "urgency": 999,
+                "notification_key": "recommendation:positive",
+            }
+        )
+
+    return banners
 
 
 def get_banner_notification_total(banner_data: list[dict[str, Any]] | None = None) -> int:
@@ -499,7 +575,7 @@ class IntelligentBannerCenter(FloatLayout):
             options_map["Todos os banners"] = list(banner_data)
 
         for index, item in enumerate(banner_data, start=1):
-            title = str(item.get("title") or "Banner inteligente").strip()
+            title = str(item.get("title") or "Aviso").strip()
             count = int(item.get("count") or len(item.get("messages") or []))
             label = f"{index}. {title}"
             if count > 0:
@@ -554,7 +630,13 @@ class IntelligentBannerCenter(FloatLayout):
             self._dismiss_history_picker_menu()
             return False
 
-    def _open_history_picker(self, banner_data: list[dict[str, Any]]) -> None:
+    def _open_history_picker(
+        self,
+        banner_data: list[dict[str, Any]],
+        *,
+        dialog_title: str = "Selecionar alerta",
+        helper_text: str | None = None,
+    ) -> None:
         self._dismiss_history_picker()
 
         dialog_width = min(max(dp(320), Window.width * 0.40), dp(420))
@@ -571,9 +653,10 @@ class IntelligentBannerCenter(FloatLayout):
 
         helper_label = MDLabel(
             text=(
-                "Escolha qual banner deseja visualizar."
+                helper_text
+                or "Escolha o item que deseja visualizar."
                 if has_choices
-                else "Nao ha banners registados no momento."
+                else "Não há itens registados no momento."
             ),
             font_style="Caption",
             size_hint_y=None,
@@ -615,7 +698,7 @@ class IntelligentBannerCenter(FloatLayout):
         picker_button.bind(on_release=lambda *_: menu.open())
 
         dialog = MDDialog(
-            title="Selecionar banner",
+            title=dialog_title,
             type="custom",
             content_cls=content,
             size_hint=(None, None),
@@ -662,4 +745,26 @@ class IntelligentBannerCenter(FloatLayout):
         self._manual_view_active = False
         if self._open_history_dropdown(caller, banner_data):
             return
-        self._open_history_picker(banner_data)
+        self._open_history_picker(
+            banner_data,
+            dialog_title="Selecionar alerta",
+            helper_text="Escolha o alerta que deseja visualizar.",
+        )
+
+    def open_recommendations(
+        self,
+        caller: Any = None,
+        insights: dict[str, Any] | None = None,
+    ) -> None:
+        if insights is not None:
+            self.current_insights = dict(insights)
+        banner_data = build_recommendation_banner_data(self.current_insights)
+        self._dismiss_history_picker()
+        self._manual_view_active = False
+        if self._open_history_dropdown(caller, banner_data):
+            return
+        self._open_history_picker(
+            banner_data,
+            dialog_title="Recomendações IA",
+            helper_text="Escolha a recomendação que deseja visualizar.",
+        )

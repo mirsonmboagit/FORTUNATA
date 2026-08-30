@@ -111,7 +111,7 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
         lines.append(_center(f"Ref. {receipt_code}", width))
     lines.append(_line(width))
     lines.append(_left_right("Data", receipt_data.get("issued_at") or "", width))
-    lines.append(_left_right("Operador", receipt_data.get("operator") or "Sistema", width))
+    lines.append(_left_right("Atendente", receipt_data.get("operator") or "Sistema", width))
     lines.append(_line(width))
 
     for item in receipt_data.get("items") or []:

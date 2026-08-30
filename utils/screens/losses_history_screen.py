@@ -15,8 +15,10 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from database.provider import get_db
+from database.provider import get_db, uses_remote_backend
 from utils.screens.reports_screen import DateRangeDialog
+from utils.config.paths import resolve_path, temp_path
+from kivy.uix.image import Image
 
 
 Builder.load_file(str(Path(__file__).with_name("losses_history_screen.kv")))
@@ -112,19 +114,21 @@ class LossesHistoryScreen(MDScreen):
         if not hasattr(self, "ids") or "header_date" not in self.ids:
             return
         if self.compact_mode:
-            self.ids.header_date.size_hint_x = 0.18
-            self.ids.header_product.size_hint_x = 0.42
+            self.ids.header_date.size_hint_x = 0.17
+            self.ids.header_product.size_hint_x = 0.36
             self.ids.header_type.size_hint_x = 0.16
             self.ids.header_qty.size_hint_x = 0.12
             self.ids.header_cost.size_hint_x = 0.12
             self._set_header_state(self.ids.header_user, False, 0)
+            self._set_header_state(self.ids.header_evidence, True, 0.07)
         else:
-            self.ids.header_date.size_hint_x = 0.16
-            self.ids.header_product.size_hint_x = 0.36
+            self.ids.header_date.size_hint_x = 0.14
+            self.ids.header_product.size_hint_x = 0.30
             self.ids.header_type.size_hint_x = 0.14
             self.ids.header_qty.size_hint_x = 0.10
             self.ids.header_cost.size_hint_x = 0.12
             self._set_header_state(self.ids.header_user, True, 0.12)
+            self._set_header_state(self.ids.header_evidence, True, 0.08)
 
     def load_losses_table(self, *args):
         if not hasattr(self, "ids") or "losses_list" not in self.ids:
@@ -141,13 +145,12 @@ class LossesHistoryScreen(MDScreen):
 
         def worker():
             try:
-                rows = self.db.get_loss_records(start_dt, end_dt, limit=300) or []
-                aggregated = self._aggregate_loss_rows(rows)
+                rows = self.db.get_loss_history_items(start_dt, end_dt, limit=300) or []
             except Exception as exc:
                 print(f"Erro ao carregar perdas: {exc}")
-                aggregated = []
+                rows = []
             Clock.schedule_once(
-                lambda dt, data=aggregated, tok=token: self._apply_loaded_losses(data, tok),
+                lambda dt, data=rows, tok=token: self._apply_loaded_losses(data, tok),
                 0
             )
 
@@ -308,7 +311,20 @@ class LossesHistoryScreen(MDScreen):
             return None
 
     def _create_loss_row(self, row, index, theme=None):
-        created_at, product, movement_type, qty, unit, total_cost, total_price, reason, created_by = row
+        if isinstance(row, dict):
+            created_at = row.get("created_at")
+            product = row.get("product")
+            movement_type = row.get("movement_type")
+            qty = row.get("qty")
+            unit = row.get("unit")
+            total_cost = row.get("total_cost")
+            total_price = row.get("total_price")
+            reason = row.get("reason")
+            created_by = row.get("created_by")
+            evidence_id = row.get("evidence_id")
+        else:
+            created_at, product, movement_type, qty, unit, total_cost, total_price, reason, created_by = row
+            evidence_id = None
         theme = theme or {
             "bg_even": _theme_color("surface_alt", [0.98, 0.99, 1, 1]),
             "bg_odd": _theme_color("card", [1, 1, 1, 1]),
@@ -339,9 +355,9 @@ class LossesHistoryScreen(MDScreen):
             qty_str = f"{qty} {unit}"
         cost_str = f"{float(total_cost or 0):.2f} MZN"
         if self.compact_mode:
-            date_hint, product_hint, type_hint, qty_hint, cost_hint = 0.18, 0.42, 0.16, 0.12, 0.12
+            date_hint, product_hint, type_hint, qty_hint, cost_hint, evidence_hint = 0.17, 0.36, 0.16, 0.12, 0.12, 0.07
         else:
-            date_hint, product_hint, type_hint, qty_hint, cost_hint, user_hint = 0.16, 0.36, 0.14, 0.10, 0.12, 0.12
+            date_hint, product_hint, type_hint, qty_hint, cost_hint, user_hint, evidence_hint = 0.14, 0.30, 0.14, 0.10, 0.12, 0.12, 0.08
 
         line = MDBoxLayout(
             size_hint_y=None,
@@ -405,6 +421,16 @@ class LossesHistoryScreen(MDScreen):
                 shorten_from="right",
             ))
 
+        if movement_type == "DAMAGE" and evidence_id:
+            line.add_widget(MDFlatButton(
+                text="FOTO",
+                size_hint_x=evidence_hint,
+                font_size=dp(10),
+                on_release=lambda _x, item=dict(row): self.open_damage_evidence(item),
+            ))
+        else:
+            line.add_widget(Widget(size_hint_x=evidence_hint))
+
         container = MDBoxLayout(
             orientation="vertical",
             size_hint_y=None,
@@ -414,6 +440,73 @@ class LossesHistoryScreen(MDScreen):
         container.add_widget(line)
         container.add_widget(Widget(size_hint_y=None, height=dp(1)))
         return container
+
+    def _uses_remote_evidence_service(self):
+        module_name = str(getattr(self.db.__class__, "__module__", ""))
+        return module_name.startswith("database.client") or uses_remote_backend(self.db)
+
+    def open_damage_evidence(self, row):
+        """Abre a foto anexada sem expor caminhos privados no historico."""
+        evidence_id = (row or {}).get("evidence_id") if isinstance(row, dict) else None
+        if not evidence_id:
+            self._show_simple_dialog("Foto", "Esta perda nao possui foto anexada.")
+            return
+
+        def worker():
+            try:
+                evidence = self.db.get_damage_evidence(evidence_id)
+                if not evidence:
+                    return {"ok": False, "message": "Evidencia nao encontrada ou sem permissao."}
+                if self._uses_remote_evidence_service():
+                    image = self.db.download_damage_evidence(evidence_id)
+                    data = (image or {}).get("data")
+                    mime_type = (image or {}).get("mime_type") or evidence.get("mime_type")
+                else:
+                    relative_path = self.db.get_damage_evidence_storage_path(evidence_id)
+                    data = resolve_path(relative_path).read_bytes() if relative_path else b""
+                    mime_type = evidence.get("mime_type")
+                if not data:
+                    return {"ok": False, "message": "A imagem da evidencia ja nao esta disponivel."}
+                suffix = {"image/png": ".png", "image/webp": ".webp"}.get(str(mime_type), ".jpg")
+                preview_path = temp_path("evidence-previews", f"{evidence_id}{suffix}")
+                preview_path.parent.mkdir(parents=True, exist_ok=True)
+                preview_path.write_bytes(data)
+                return {"ok": True, "evidence": evidence, "preview_path": str(preview_path)}
+            except Exception as exc:
+                return {"ok": False, "message": f"Nao foi possivel abrir a evidencia: {exc}"}
+
+        def finish():
+            result = worker()
+            Clock.schedule_once(lambda _dt, payload=result: self._show_damage_evidence(payload, row), 0)
+
+        Thread(target=finish, daemon=True).start()
+
+    def _show_damage_evidence(self, result, row):
+        if not result.get("ok"):
+            self._show_simple_dialog("Evidencia", result.get("message") or "Falha ao abrir evidencia.")
+            return
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=dp(6))
+        content.add_widget(Image(
+            source=result["preview_path"], allow_stretch=True, keep_ratio=True,
+            size_hint_y=None, height=dp(230),
+        ))
+        content.add_widget(MDLabel(
+            text=f"Motivo registado: {(row or {}).get('reason') or '—'}",
+            size_hint_y=None, height=dp(24), font_size=dp(11),
+        ))
+        note = str((row or {}).get("note") or "").strip()
+        if note:
+            content.add_widget(MDLabel(
+                text=f"Observacao: {note}",
+                size_hint_y=None, height=dp(32), font_size=dp(11),
+            ))
+        dialog = MDDialog(
+            title="Foto do produto danificado",
+            type="custom",
+            content_cls=content,
+            buttons=[MDFlatButton(text="Fechar", on_release=lambda _x: dialog.dismiss())],
+        )
+        dialog.open()
 
     def export_losses_pdf(self, *args):
         dialog = DateRangeDialog(database=self.db, callback=self._generate_losses_pdf)

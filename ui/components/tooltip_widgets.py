@@ -10,6 +10,49 @@ from kivymd.uix.tooltip import MDTooltip
 DEFAULT_TOOLTIP_DELAY = 0.18
 
 
+def set_attention_shake(widget, active: bool, interval_seconds: float = 2.5) -> None:
+    """Aplica um abano discreto e repetido a qualquer botão de notificação."""
+    if widget is None:
+        return
+
+    event = getattr(widget, "_attention_shake_event", None)
+    if not active:
+        if event is not None:
+            event.cancel()
+            widget._attention_shake_event = None
+        rest_pos = getattr(widget, "_attention_shake_rest_pos", None)
+        Animation.cancel_all(widget)
+        if rest_pos is not None and getattr(widget, "parent", None) is not None:
+            widget.pos = rest_pos
+        return
+
+    if event is not None:
+        return
+
+    def shake(_dt=0):
+        if getattr(widget, "parent", None) is None:
+            widget._attention_shake_event = None
+            return False
+        x, y = widget.pos
+        widget._attention_shake_rest_pos = (x, y)
+        distance = dp(4)
+        Animation.cancel_all(widget)
+        (
+            Animation(x=x + distance, duration=0.10, transition="out_sine")
+            + Animation(x=x - distance, duration=0.16, transition="in_out_sine")
+            + Animation(x=x + distance * 0.70, duration=0.14, transition="in_out_sine")
+            + Animation(x=x - distance * 0.45, duration=0.12, transition="in_out_sine")
+            + Animation(x=x, duration=0.10, transition="out_sine")
+        ).start(widget)
+        return True
+
+    widget._attention_shake_event = Clock.schedule_interval(
+        shake,
+        max(1.0, float(interval_seconds or 2.5)),
+    )
+    shake()
+
+
 class _TooltipCleanupBase:
     def __init__(self, **kwargs):
         kwargs.setdefault("tooltip_display_delay", DEFAULT_TOOLTIP_DELAY)

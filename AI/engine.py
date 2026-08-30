@@ -11,11 +11,14 @@ Alert = dict[str, Any]
 
 def _format_number(value: float) -> str:
     value = float(value or 0.0)
-    return str(int(value)) if value.is_integer() else f"{value:.1f}"
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.1f}".replace(".", ",")
 
 
 def _format_money(value: float) -> str:
-    return f"{float(value or 0.0):.2f} meticais"
+    amount = f"{float(value or 0.0):.2f}".rstrip("0").rstrip(".")
+    return f"{amount.replace('.', ',')} meticais"
 
 
 def _format_quantity(value: float, singular: str = "unidade", plural: str = "unidades") -> str:
@@ -62,16 +65,13 @@ def analisar_vendas(snapshot: dict[str, Any]) -> list[Alert]:
         return []
 
     ratio = total_hoje / media_total
-    detalhes = (
-        f"Hoje foram vendidos {_format_money(total_hoje)}. "
-        f"A média semanal é de {_format_money(media_total)}."
-    )
+    detalhes = f"Hoje: {_format_money(total_hoje)}. Média semanal: {_format_money(media_total)}."
     if ratio < 0.70:
         return [
             _alerta(
                 "critico",
                 "vendas",
-                "As vendas de hoje estão muito abaixo da média semanal.",
+                "Vendas de hoje muito abaixo da média.",
                 detalhes,
             )
         ]
@@ -80,7 +80,7 @@ def analisar_vendas(snapshot: dict[str, Any]) -> list[Alert]:
             _alerta(
                 "atencao",
                 "vendas",
-                "As vendas de hoje estão abaixo da média semanal.",
+                "Vendas de hoje abaixo da média.",
                 detalhes,
             )
         ]
@@ -89,7 +89,7 @@ def analisar_vendas(snapshot: dict[str, Any]) -> list[Alert]:
             _alerta(
                 "info",
                 "vendas",
-                "As vendas de hoje estão acima da média semanal.",
+                "Vendas de hoje acima da média.",
                 detalhes,
             )
         ]
@@ -113,10 +113,9 @@ def analisar_stock(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "critico",
                     "stock",
-                    f"Stock critico: o estoque de {descricao} está baixo. "
-                    f"Restam {_format_quantity(stock_atual, unit_singular, unit_plural)}.",
-                    f"O mínimo definido é de {_format_quantity(stock_minimo, unit_singular, unit_plural)}. "
-                    f"A média de saída é de {_format_quantity(media_diaria, unit_singular, unit_plural)} por dia.",
+                    f"Stock critico: {descricao}. Restam {_format_quantity(stock_atual, unit_singular, unit_plural)}.",
+                    f"Mínimo recomendado: {_format_quantity(stock_minimo, unit_singular, unit_plural)}. "
+                    f"Saída média: {_format_quantity(media_diaria, unit_singular, unit_plural)} por dia.",
                 )
             )
 
@@ -125,9 +124,9 @@ def analisar_stock(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "info",
                     "stock",
-                    f"A saída de {descricao} está acima do normal hoje.",
-                    f"O total vendido hoje é de {_format_quantity(qty_hoje, unit_singular, unit_plural)}. "
-                    f"A média diária é de {_format_quantity(media_diaria, unit_singular, unit_plural)}.",
+                    f"{descricao}: saída acima do normal hoje.",
+                    f"Hoje: {_format_quantity(qty_hoje, unit_singular, unit_plural)}. "
+                    f"Média diária: {_format_quantity(media_diaria, unit_singular, unit_plural)}.",
                 )
             )
 
@@ -150,9 +149,9 @@ def analisar_produtos_parados(snapshot: dict[str, Any], dias_sem_venda: int = 14
             _alerta(
                 "atencao",
                 "stock",
-                f"{descricao} está sem vendas há {int(last_sale_days)} dias.",
-                f"Restam {_format_quantity(stock_atual)}. "
-                f"O estoque mínimo definido é de {_format_quantity(stock_minimo)}.",
+                f"{descricao}: sem vendas há {int(last_sale_days)} dias.",
+                f"Stock atual: {_format_quantity(stock_atual)}. "
+                f"Mínimo recomendado: {_format_quantity(stock_minimo)}.",
             )
         )
     return alerts
@@ -176,8 +175,8 @@ def analisar_produtividade(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "atencao",
                     "produtividade",
-                    f"O caixa {terminal_id} ainda não registou vendas hoje.",
-                    f"A média diária é de {_format_sales_count(media_vendas)}.",
+                    f"Caixa {terminal_id}: sem vendas hoje.",
+                    f"Média diária: {_format_sales_count(media_vendas)}.",
                 )
             )
             continue
@@ -186,9 +185,8 @@ def analisar_produtividade(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "atencao",
                     "produtividade",
-                    f"O caixa {terminal_id} está há {minutos_sem_venda:.0f} minutos sem registar vendas.",
-                    f"O limite definido é de {limite:.0f} minutos. "
-                    + _format_sales_registration(vendas_hoje),
+                    f"Caixa {terminal_id}: sem vendas há {minutos_sem_venda:.0f} minutos.",
+                    f"Limite: {limite:.0f} minutos. " + _format_sales_registration(vendas_hoje),
                 )
             )
 
@@ -200,9 +198,8 @@ def analisar_produtividade(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "critico",
                     "produtividade",
-                    "A margem de lucro de hoje está abaixo do habitual.",
-                    f"Hoje a margem é de {margem_hoje:.2f}%. "
-                    f"A margem habitual é de {margem_hist:.2f}%.",
+                    "Margem de hoje abaixo do habitual.",
+                    f"Hoje: {margem_hoje:.2f}%. Habitual: {margem_hist:.2f}%.",
                 )
             )
 
@@ -215,9 +212,8 @@ def analisar_produtividade(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "atencao",
                     "produtividade",
-                    "Os descontos de hoje estão acima do habitual.",
-                    f"Hoje os descontos são de {desconto_hoje:.2f}%. "
-                    f"A média habitual é de {desconto_hist:.2f}%.",
+                    "Descontos de hoje acima do habitual.",
+                    f"Hoje: {desconto_hoje:.2f}%. Habitual: {desconto_hist:.2f}%.",
                 )
             )
         elif desconto_hist == 0 and desconto_hoje >= 5.0:
@@ -225,8 +221,8 @@ def analisar_produtividade(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "atencao",
                     "produtividade",
-                    "Foram aplicados descontos hoje, mas ainda não existe histórico para comparação.",
-                    f"O desconto médio de hoje é de {desconto_hoje:.2f}%.",
+                    "Há descontos hoje, mas ainda não há histórico para comparar.",
+                    f"Desconto médio de hoje: {desconto_hoje:.2f}%.",
                 )
             )
 
@@ -249,9 +245,8 @@ def detectar_anomalias(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "critico",
                     "vendas",
-                    "O faturamento de hoje está muito abaixo do habitual.",
-                    f"Hoje o faturamento é de {_format_money(total_hoje)}. "
-                    f"A média é de {_format_money(media_total)}.",
+                    "Faturamento de hoje muito abaixo do habitual.",
+                    f"Hoje: {_format_money(total_hoje)}. Média: {_format_money(media_total)}.",
                 )
             )
         elif z_score >= 2.0:
@@ -259,9 +254,8 @@ def detectar_anomalias(snapshot: dict[str, Any]) -> list[Alert]:
                 _alerta(
                     "info",
                     "vendas",
-                    "O faturamento de hoje está acima do habitual.",
-                    f"Hoje o faturamento é de {_format_money(total_hoje)}. "
-                    f"A média é de {_format_money(media_total)}.",
+                    "Faturamento de hoje acima do habitual.",
+                    f"Hoje: {_format_money(total_hoje)}. Média: {_format_money(media_total)}.",
                 )
             )
 
@@ -279,9 +273,8 @@ def detectar_anomalias(snapshot: dict[str, Any]) -> list[Alert]:
                     _alerta(
                         "info",
                         "stock",
-                        f"A venda de {descricao} está acima do normal hoje.",
-                        f"O total vendido hoje é de {_format_quantity(qty_hoje)}. "
-                        f"A média diária é de {_format_quantity(media_qty)}.",
+                        f"{descricao}: venda acima do normal hoje.",
+                        f"Hoje: {_format_quantity(qty_hoje)}. Média diária: {_format_quantity(media_qty)}.",
                     )
                 )
         elif qty_hoje >= media_qty * 2.0:
@@ -289,9 +282,8 @@ def detectar_anomalias(snapshot: dict[str, Any]) -> list[Alert]:
                     _alerta(
                         "info",
                         "stock",
-                        f"A venda de {descricao} está acima do normal hoje.",
-                        f"O total vendido hoje é de {_format_quantity(qty_hoje)}. "
-                        f"A média diária é de {_format_quantity(media_qty)}.",
+                        f"{descricao}: venda acima do normal hoje.",
+                        f"Hoje: {_format_quantity(qty_hoje)}. Média diária: {_format_quantity(media_qty)}.",
                 )
             )
     return alerts

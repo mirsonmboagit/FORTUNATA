@@ -9,7 +9,13 @@ from threading import Thread
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDRectangleFlatButton, MDIconButton
+from kivymd.uix.button import (
+    MDRaisedButton,
+    MDFlatButton,
+    MDRectangleFlatButton,
+    MDRectangleFlatIconButton,
+    MDIconButton,
+)
 from kivymd.uix.textfield import MDTextField
 from kivymd.uix.label import MDLabel, MDIcon
 from kivymd.uix.card import MDCard
@@ -29,6 +35,7 @@ from database.provider import get_db, uses_remote_backend
 from AI.controller import ProactiveIntelligenceController
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton
 from ui.components.loading_overlay import ScreenLoadingController
+from ui.components.tooltip_widgets import set_attention_shake
 from utils.config.device_config import get_device_settings, save_device_settings
 from utils.config.env_loader import load_dotenv
 from utils.core.focus_navigation import FormKeyboardController
@@ -762,7 +769,7 @@ class ChangeAdminDataDialog:
                     updated_username,
                     'admin',
                     'UPDATE_ADMIN',
-                    'Dados do admin atualizados'
+                    'Dados do administrador alterados'
                 )
 
                 if app:
@@ -772,7 +779,7 @@ class ChangeAdminDataDialog:
                     app._ai_banners_shown = False
 
                 self.dialog.dismiss()
-                self.show_message('Sucesso', 'Dados atualizados com sucesso!')
+                self.show_message('Sucesso', 'Alteracoes guardadas com sucesso!')
 
         except sqlite3.IntegrityError:
             self.show_message('Erro', 'Nome de usuario ja existe')
@@ -1288,6 +1295,9 @@ class DeleteManagerDialog:
 
 class SystemLogsDialog:
     # Dialogo simples para consultar e exportar logs.
+    _ALL_USERS_LABEL = "Todos os utilizadores"
+    _ALL_ACTIONS_LABEL = "Todas as ações"
+
     def __init__(self):
         self.dialog = None
         self.search_btn = None
@@ -1296,24 +1306,68 @@ class SystemLogsDialog:
         self._loading_logs = False
         self._exporting_logs = False
         self._visible_limit = 80
-        self._render_batch_size = 12
-        self._render_event = None
+        self._logs_request_token = 0
+        self._logs_render_token = 0
+        self._logs_render_ev = None
+        self._updating_filter_options = False
+        self._known_users = set()
+        self._known_actions = set()
+        self._action_option_values = {}
+        self._filter_menus = {}
+        self._user_filter_values = [self._ALL_USERS_LABEL]
+        self._action_filter_values = [self._ALL_ACTIONS_LABEL]
         self._action_labels = {
             "LOGIN": "Login realizado",
             "LOGOUT": "Logout realizado",
             "CREATE_USER": "Usuário criado",
             "DELETE_USER": "Usuário removido",
-            "UPDATE_ADMIN": "Dados do admin atualizados",
+            "UPDATE_ADMIN": "Dados do administrador alterados",
             "ADD_PRODUCT": "Produto adicionado",
-            "UPDATE_PRODUCT": "Produto atualizado",
+            "UPDATE_PRODUCT": "Produto alterado",
             "DELETE_PRODUCT": "Produto removido",
             "SALE": "Venda registrada",
             "CANCEL_SALE": "Venda cancelada",
             "SAVE_RECEIPT": "Recibo salvo",
             "REGISTER_LOSS": "Perda registrada",
             "APPROVE_LOSS": "Perda aprovada",
+            "APPROVE_ALL_LOSSES": "Todas as perdas aprovadas",
             "REJECT_LOSS": "Perda rejeitada",
         }
+        # Rótulos mostrados ao utilizador. Os códigos técnicos continuam
+        # internos, apenas para filtrar e consultar a base de dados.
+        self._action_labels.update({
+            "LOGIN": "Início de sessão",
+            "LOGOUT": "Sessão terminada",
+            "ACCESS_ATTEMPT": "Tentativa de acesso",
+            "ACCESS_DENIED": "Acesso negado",
+            "CREATE_USER": "Utilizador criado",
+            "DELETE_USER": "Utilizador removido",
+            "UPDATE_ADMIN": "Dados do administrador atualizados",
+            "UPDATE_SECURITY_QUESTIONS": "Perguntas de recuperação atualizadas",
+            "RESET_PASSWORD_QA": "Palavra-passe redefinida",
+            "RESET_PASSWORD_EMAIL": "Palavra-passe redefinida por e-mail",
+            "VERIFY_EMAIL": "E-mail confirmado",
+            "ADD_PRODUCT": "Produto adicionado",
+            "UPDATE_PRODUCT": "Produto atualizado",
+            "DELETE_PRODUCT": "Produto removido",
+            "OPEN_CASH": "Caixa aberto",
+            "CLOSE_CASH": "Caixa fechado",
+            "START_INVENTORY": "Inventário iniciado",
+            "COMPLETE_INVENTORY": "Inventário concluído",
+            "CANCEL_INVENTORY": "Inventário cancelado",
+            "SALE": "Venda registada",
+            "CANCEL_SALE": "Venda cancelada",
+            "REFUND_SALE": "Venda estornada",
+            "REMOVE_SALE_ITEM": "Item removido da venda",
+            "SAVE_RECEIPT": "Recibo guardado",
+            "PRINT_RECEIPT": "Recibo impresso",
+            "EXPORT_SALES": "Relatório de vendas exportado",
+            "EXPORT_SALES_PDF": "Relatório de vendas em PDF exportado",
+            "REGISTER_LOSS": "Perda registada",
+            "APPROVE_LOSS": "Perda aprovada",
+            "APPROVE_ALL_LOSSES": "Todas as perdas aprovadas",
+            "REJECT_LOSS": "Perda rejeitada",
+        })
         
     def _theme_tokens(self):
         app = App.get_running_app()
@@ -1333,6 +1387,119 @@ class SystemLogsDialog:
         field.line_color_focus = tokens.get("primary", [0.10, 0.35, 0.65, 1])
         field.hint_text_color_normal = tokens.get("text_muted", [0.55, 0.60, 0.70, 1])
         field.hint_text_color_focus = tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])
+
+    def _build_filter_spinner(self, text, *, filter_name, size_hint_x=0.5):
+        tokens = self._theme_tokens()
+        return MDRectangleFlatIconButton(
+            text=text,
+            icon="chevron-down",
+            size_hint_x=size_hint_x,
+            size_hint_y=None,
+            height=dp(42),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_primary", [0.15, 0.20, 0.30, 1]),
+            icon_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
+            line_color=tokens.get("divider", [0, 0, 0, 0.12]),
+            on_release=lambda *_args: self._open_filter_menu(filter_name),
+        )
+
+    def _selected_user_filter(self):
+        selected = getattr(self.user_filter, "text", "").strip()
+        return "" if selected == self._ALL_USERS_LABEL else selected
+
+    def _selected_action_filter(self):
+        selected = getattr(self.action_filter, "text", "").strip()
+        if selected == self._ALL_ACTIONS_LABEL:
+            return ""
+        return self._action_option_values.get(selected, selected)
+
+    def _action_option_label(self, action):
+        action = str(action or "").strip()
+        if not action:
+            return "Ação não identificada"
+        label = self._action_labels.get(action)
+        if label:
+            return label
+        # As novas ações gravadas no sistema também ficam legíveis, sem expor
+        # os identificadores técnicos com sublinhados.
+        return action.replace("_", " ").lower().capitalize()
+
+    def _refresh_filter_options(self, logs=()):
+        """Atualiza as opcoes sem disparar uma nova consulta."""
+        for _log_id, username, _role, action, _details, _timestamp in logs or ():
+            username = str(username or "").strip()
+            action = str(action or "").strip()
+            if username:
+                self._known_users.add(username)
+            if action:
+                self._known_actions.add(action)
+
+        user_values = [self._ALL_USERS_LABEL] + sorted(
+            self._known_users,
+            key=str.casefold,
+        )
+        self._action_option_values = {}
+        action_values = [self._ALL_ACTIONS_LABEL]
+        for action in sorted(
+            self._known_actions,
+            key=lambda item: self._action_option_label(item).casefold(),
+        ):
+            option = self._action_option_label(action)
+            self._action_option_values[option] = action
+            action_values.append(option)
+
+        self._updating_filter_options = True
+        try:
+            self._user_filter_values = user_values
+            self._action_filter_values = action_values
+            if self.user_filter and self.user_filter.text not in user_values:
+                self.user_filter.text = self._ALL_USERS_LABEL
+            if self.action_filter and self.action_filter.text not in action_values:
+                self.action_filter.text = self._ALL_ACTIONS_LABEL
+        finally:
+            self._updating_filter_options = False
+
+    def _open_filter_menu(self, filter_name):
+        is_user_filter = filter_name == "user"
+        caller = self.user_filter if is_user_filter else self.action_filter
+        values = self._user_filter_values if is_user_filter else self._action_filter_values
+        if caller is None:
+            return
+
+        items = [
+            {
+                "viewclass": "OneLineListItem",
+                "text": value,
+                "height": dp(46),
+                "on_release": lambda selected=value, name=filter_name: self._set_filter_value(name, selected),
+            }
+            for value in values
+        ]
+        previous_menu = self._filter_menus.get(filter_name)
+        if previous_menu is not None:
+            previous_menu.dismiss()
+        menu = MDDropdownMenu(
+            caller=caller,
+            items=items,
+            width_mult=4.2,
+            max_height=dp(280),
+            position="bottom",
+        )
+        self._filter_menus[filter_name] = menu
+        menu.open()
+
+    def _set_filter_value(self, filter_name, value):
+        target = self.user_filter if filter_name == "user" else self.action_filter
+        if target is not None:
+            target.text = str(value or "")
+        menu = self._filter_menus.pop(filter_name, None)
+        if menu is not None:
+            menu.dismiss()
+        self._on_filter_selected()
+
+    def _on_filter_selected(self, *_args):
+        if not self._updating_filter_options and not self._loading_logs:
+            self.load_logs()
 
     def _make_label(self, text="", *, font_style="Body1", color=None, bold=False, halign="left", markup=False):
         tokens = self._theme_tokens()
@@ -1385,6 +1552,7 @@ class SystemLogsDialog:
             "SAVE_RECEIPT": ("content-save", "info"),
             "REGISTER_LOSS": ("alert-circle-outline", "warning"),
             "APPROVE_LOSS": ("check-decagram-outline", "success"),
+            "APPROVE_ALL_LOSSES": ("check-decagram-outline", "success"),
             "REJECT_LOSS": ("close-octagon-outline", "danger"),
         }
         return styles.get(action, ("information", "primary"))
@@ -1393,33 +1561,27 @@ class SystemLogsDialog:
         tokens = self._theme_tokens()
         content = MDBoxLayout(
             orientation='vertical',
-            spacing=dp(10),
-            padding=dp(10),
+            spacing=dp(8),
+            padding=dp(8),
             adaptive_height=True,
             md_bg_color=tokens.get("surface", [0.96, 0.96, 0.98, 1])
         )
         
         filter_box = MDBoxLayout(
             orientation='horizontal',
-            spacing=dp(10),
+            spacing=dp(8),
             size_hint_y=None,
-            height=dp(56)
+            height=dp(42)
         )
         
-        self.user_filter = MDTextField(
-            hint_text='Filtrar por usuário',
-            mode='rectangle',
-            size_hint_x=0.5
+        self.user_filter = self._build_filter_spinner(
+            self._ALL_USERS_LABEL,
+            filter_name="user",
         )
-        
-        self.action_filter = MDTextField(
-            hint_text='Filtrar por ação',
-            mode='rectangle',
-            size_hint_x=0.5
+        self.action_filter = self._build_filter_spinner(
+            self._ALL_ACTIONS_LABEL,
+            filter_name="action",
         )
-        
-        self._style_text_field(self.user_filter)
-        self._style_text_field(self.action_filter)
         filter_box.add_widget(self.user_filter)
         filter_box.add_widget(self.action_filter)
         content.add_widget(filter_box)
@@ -1428,18 +1590,19 @@ class SystemLogsDialog:
             orientation='horizontal',
             spacing=dp(8),
             size_hint_y=None,
-            height=dp(40)
+            height=dp(34)
         )
         role_label = self._make_label(
             text='Somente gerente',
             color=tokens.get("text_primary", [0.15, 0.20, 0.30, 1]),
         )
         role_label.size_hint_x = None
-        role_label.width = dp(140)
+        role_label.width = dp(128)
         self.manager_only = MDCheckbox(active=False)
         self.manager_only.selected_color = tokens.get("primary", [0.10, 0.35, 0.65, 1])
         self.manager_only.unselected_color = tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])
         self.manager_only.disabled_color = tokens.get("text_muted", [0.55, 0.60, 0.70, 1])
+        self.manager_only.bind(active=self._on_filter_selected)
         role_box.add_widget(role_label)
         role_box.add_widget(self.manager_only)
         role_box.add_widget(self._make_label(""))
@@ -1447,15 +1610,15 @@ class SystemLogsDialog:
 
         btn_row = MDBoxLayout(
             orientation='horizontal',
-            spacing=dp(10),
+            spacing=dp(8),
             size_hint_y=None,
-            height=dp(40)
+            height=dp(36)
         )
         
         search_btn = MDRaisedButton(
-            text='BUSCAR',
+            text='ATUALIZAR',
             size_hint_y=None,
-            height=dp(40),
+            height=dp(36),
             md_bg_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
             theme_text_color='Custom',
             text_color=tokens.get("on_primary", [1, 1, 1, 1]),
@@ -1464,7 +1627,7 @@ class SystemLogsDialog:
         export_btn = MDRectangleFlatButton(
             text='EXPORTAR PDF',
             size_hint_y=None,
-            height=dp(40),
+            height=dp(36),
             theme_text_color='Custom',
             text_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
             line_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
@@ -1473,7 +1636,7 @@ class SystemLogsDialog:
         clear_btn = MDRectangleFlatButton(
             text='LIMPAR LOGS',
             size_hint_y=None,
-            height=dp(40),
+            height=dp(36),
             theme_text_color='Custom',
             text_color=tokens.get("danger", [0.90, 0.30, 0.30, 1]),
             line_color=tokens.get("danger", [0.90, 0.30, 0.30, 1]),
@@ -1488,7 +1651,7 @@ class SystemLogsDialog:
         content.add_widget(btn_row)
         
         from kivymd.uix.scrollview import MDScrollView
-        scroll = MDScrollView(size_hint=(1, None), height=dp(400))
+        scroll = MDScrollView(size_hint=(1, None), height=dp(300))
         
         self.logs_list = MDBoxLayout(
             orientation='vertical',
@@ -1504,7 +1667,7 @@ class SystemLogsDialog:
             title='Logs do Sistema',
             type='custom',
             content_cls=content,
-            size_hint=(0.9, 0.9),
+            size_hint=(0.78, 0.78),
             buttons=[
                 MDFlatButton(
                     text='FECHAR',
@@ -1515,8 +1678,26 @@ class SystemLogsDialog:
             ]
         )
         
-        self.load_logs()
         self.dialog.open()
+        # A janela é aberta antes de iniciar a consulta. A leitura decorre em
+        # segundo plano e não pode impedir o primeiro desenho do diálogo.
+        self.load_logs()
+        self.dialog.bind(on_dismiss=lambda *_args: self._cancel_log_work())
+
+    def _cancel_log_render(self):
+        self._logs_render_token += 1
+        event = self._logs_render_ev
+        self._logs_render_ev = None
+        if event is not None:
+            try:
+                event.cancel()
+            except Exception:
+                pass
+
+    def _cancel_log_work(self):
+        self._logs_request_token += 1
+        self._cancel_log_render()
+        self._loading_logs = False
 
     def _set_logs_busy_state(self, *, loading=None, exporting=None):
         if loading is not None:
@@ -1525,21 +1706,17 @@ class SystemLogsDialog:
             self._exporting_logs = bool(exporting)
         if self.search_btn:
             self.search_btn.disabled = self._loading_logs or self._exporting_logs
-            self.search_btn.text = 'A BUSCAR...' if self._loading_logs else 'BUSCAR'
+            self.search_btn.text = 'A ATUALIZAR...' if self._loading_logs else 'ATUALIZAR'
         if self.export_btn:
             self.export_btn.disabled = self._loading_logs or self._exporting_logs
             self.export_btn.text = 'A EXPORTAR...' if self._exporting_logs else 'EXPORTAR PDF'
         if self.clear_btn:
             self.clear_btn.disabled = self._loading_logs or self._exporting_logs
-
-    def _cancel_pending_render(self):
-        event = getattr(self, "_render_event", None)
-        if event is not None:
-            try:
-                event.cancel()
-            except Exception:
-                pass
-        self._render_event = None
+        for spinner in (getattr(self, "user_filter", None), getattr(self, "action_filter", None)):
+            if spinner:
+                spinner.disabled = self._loading_logs or self._exporting_logs
+        if getattr(self, "manager_only", None):
+            self.manager_only.disabled = self._loading_logs or self._exporting_logs
 
     def _compact_log_details(self, details, max_chars=260):
         text = " ".join(str(details or "").split())
@@ -1556,21 +1733,21 @@ class SystemLogsDialog:
 
         log_card = MDCard(
             orientation='horizontal',
-            padding=dp(15),
-            spacing=dp(15),
+            padding=dp(10),
+            spacing=dp(10),
             size_hint_y=None,
             adaptive_height=True,
-            radius=[10],
+            radius=[8],
             md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1])
         )
         log_card.bind(minimum_height=log_card.setter("height"))
 
-        icon_box = AnchorLayout(size_hint_x=None, width=dp(50))
+        icon_box = AnchorLayout(size_hint_x=None, width=dp(38))
         log_icon = MDIcon(
             icon=icon,
             size_hint=(None, None),
-            size=(dp(32), dp(32)),
-            font_size=dp(32),
+            size=(dp(26), dp(26)),
+            font_size=dp(26),
             theme_text_color='Custom',
             text_color=self._tone_color(tone),
             halign='center',
@@ -1580,10 +1757,10 @@ class SystemLogsDialog:
         icon_box.add_widget(log_icon)
         log_card.add_widget(icon_box)
 
-        info_box = MDBoxLayout(orientation='vertical', spacing=dp(5), adaptive_height=True, size_hint_y=None)
+        info_box = MDBoxLayout(orientation='vertical', spacing=dp(3), adaptive_height=True, size_hint_y=None)
         info_box.bind(minimum_height=info_box.setter("height"))
 
-        header = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(25))
+        header = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(22))
         user_label = self._make_label(
             text=f'[b]{username or "Sistema"}[/b] ({role or "sem perfil"})',
             markup=True,
@@ -1622,32 +1799,49 @@ class SystemLogsDialog:
         log_card.add_widget(info_box)
         return log_card
 
-    def _render_logs_incrementally(self, logs, tokens):
-        self._cancel_pending_render()
-        logs = list(logs or [])
-        total = len(logs)
+    def _render_logs(self, logs, tokens, request_token):
+        """Desenha a lista em lotes para nunca prender a interface."""
+        self._cancel_log_render()
+        render_token = self._logs_render_token
+        rows = list(logs or [])
+        batch_size = 8
+        next_index = 0
 
-        def add_batch(start_index):
-            end_index = min(start_index + self._render_batch_size, total)
-            for log in logs[start_index:end_index]:
-                self.logs_list.add_widget(self._build_log_card(log, tokens))
+        # A consulta já terminou; filtros e o botão Fechar voltam a responder
+        # enquanto os cartões restantes são acrescentados nos frames seguintes.
+        self._set_logs_busy_state(loading=False)
 
-            if end_index < total:
-                self._render_event = Clock.schedule_once(
-                    lambda _dt, next_index=end_index: add_batch(next_index),
-                    0,
-                )
+        def render_next_batch(_dt=0):
+            nonlocal next_index
+            if (
+                request_token != self._logs_request_token
+                or render_token != self._logs_render_token
+                or self.dialog is None
+            ):
                 return
 
-            self._render_event = None
-            self._set_logs_busy_state(loading=False)
+            end_index = min(next_index + batch_size, len(rows))
+            for log in rows[next_index:end_index]:
+                self.logs_list.add_widget(self._build_log_card(log, tokens))
+            next_index = end_index
 
-        add_batch(0)
+            if next_index < len(rows):
+                self._logs_render_ev = Clock.schedule_once(render_next_batch, 0)
+            else:
+                self._logs_render_ev = None
 
-    def _fetch_logs(self, limit=100):
-        user_filter = self.user_filter.text.strip() if hasattr(self, 'user_filter') else ''
-        action_filter = self.action_filter.text.strip() if hasattr(self, 'action_filter') else ''
-        role_filter = 'manager' if getattr(self, 'manager_only', None) and self.manager_only.active else ''
+        render_next_batch()
+
+    def _current_log_filters(self):
+        """Lê os controlos na thread da interface antes da consulta."""
+        return (
+            self._selected_user_filter(),
+            self._selected_action_filter(),
+            'manager' if getattr(self, 'manager_only', None) and self.manager_only.active else '',
+        )
+
+    def _fetch_logs(self, limit=100, filters=None):
+        user_filter, action_filter, role_filter = filters or self._current_log_filters()
         excluded_actions = ('LOGIN', 'LOGOUT')
 
         with get_db() as db:
@@ -1666,10 +1860,13 @@ class SystemLogsDialog:
                 return filtered[: int(limit)] if limit else filtered
 
     def load_logs(self):
-        if self._loading_logs or not hasattr(self, 'logs_list'):
+        if not hasattr(self, 'logs_list'):
             return
+        self._logs_request_token += 1
+        request_token = self._logs_request_token
+        self._cancel_log_render()
         tokens = self._theme_tokens()
-        self._cancel_pending_render()
+        filters = self._current_log_filters()
         self.logs_list.clear_widgets()
         self.logs_list.add_widget(self._build_state_label(
             'A carregar logs recentes...',
@@ -1681,12 +1878,17 @@ class SystemLogsDialog:
             logs = None
             error = None
             try:
-                logs = self._fetch_logs(limit=self._visible_limit)
+                logs = self._fetch_logs(limit=self._visible_limit, filters=filters)
             except Exception as exc:
                 error = exc
-            Clock.schedule_once(lambda dt, rows=logs, err=error: apply_result(rows, err), 0)
+            Clock.schedule_once(
+                lambda dt, rows=logs, err=error, token=request_token: apply_result(rows, err, token),
+                0,
+            )
 
-        def apply_result(logs, error):
+        def apply_result(logs, error, token):
+            if token != self._logs_request_token or self.dialog is None:
+                return
             self.logs_list.clear_widgets()
             if error:
                 self._set_logs_busy_state(loading=False)
@@ -1704,7 +1906,8 @@ class SystemLogsDialog:
                 ))
                 return
 
-            self._render_logs_incrementally(logs, tokens)
+            self._refresh_filter_options(logs)
+            self._render_logs(logs, tokens, token)
 
         Thread(target=worker, daemon=True).start()
 
@@ -1732,15 +1935,33 @@ class SystemLogsDialog:
         dialog.open()
 
     def _clear_logs(self, dialog):
-        try:
-            with get_db() as db:
-                if not db.clear_user_logs():
-                    raise RuntimeError('Falha ao apagar logs')
-            dialog.dismiss()
+        dialog.dismiss()
+        self._logs_request_token += 1
+        self._cancel_log_render()
+        self._set_logs_busy_state(loading=True)
+
+        def worker():
+            error = None
+            try:
+                with get_db() as db:
+                    if not db.clear_user_logs():
+                        raise RuntimeError('Falha ao apagar logs')
+            except Exception as exc:
+                error = str(exc)
+            Clock.schedule_once(lambda _dt, detail=error: apply_result(detail), 0)
+
+        def apply_result(error):
+            self._set_logs_busy_state(loading=False)
+            if error:
+                self._show_simple_dialog('Erro', f'Falha ao apagar logs: {error}')
+                return
+            self._known_users.clear()
+            self._known_actions.clear()
+            self._refresh_filter_options()
             self.load_logs()
             self._show_simple_dialog('Sucesso', 'Logs apagados com sucesso.')
-        except Exception as e:
-            self._show_simple_dialog('Erro', f'Falha ao apagar logs: {e}')
+
+        Thread(target=worker, daemon=True).start()
 
     def _show_simple_dialog(self, title, message):
         tokens = self._theme_tokens()
@@ -1759,6 +1980,7 @@ class SystemLogsDialog:
         dialog.open()
 
     def _action_to_label(self, action):
+        return self._action_option_label(action)
         if not action:
             return "Ação desconhecida"
         label = self._action_labels.get(action)
@@ -1771,16 +1993,21 @@ class SystemLogsDialog:
             return
 
         filters = {
-            "user": self.user_filter.text.strip(),
-            "action": self.action_filter.text.strip(),
+            "user": self._selected_user_filter(),
+            "action": self._selected_action_filter(),
             "role": "manager" if self.manager_only.active else "todos",
         }
+        fetch_filters = (
+            filters["user"],
+            filters["action"],
+            "manager" if filters["role"] == "manager" else "",
+        )
         self._set_logs_busy_state(exporting=True)
 
         def worker():
             result = {"status": "empty", "pdf_path": None, "error": None}
             try:
-                logs = self._fetch_logs(limit=None)
+                logs = self._fetch_logs(limit=None, filters=fetch_filters)
                 if logs:
                     result["status"] = "ok"
                     result["pdf_path"] = _get_logs_report_class()().generate(logs, filters)
@@ -1862,7 +2089,7 @@ class EnhancedSystemLogsDialog:
             "LOGOUT": "Logout realizado",
             "CREATE_USER": "Usuario criado",
             "DELETE_USER": "Usuario removido",
-            "UPDATE_ADMIN": "Dados do admin atualizados",
+            "UPDATE_ADMIN": "Dados do administrador alterados",
             "UPDATE_SECURITY_QUESTIONS": "Perguntas de recuperacao atualizadas",
             "RESET_PASSWORD_QA": "Senha redefinida por perguntas",
             "VERIFY_EMAIL": "E-mail confirmado",
@@ -1877,7 +2104,7 @@ class EnhancedSystemLogsDialog:
             "VERIFY_EMAIL": "E-mail confirmado",
             "RESET_PASSWORD_EMAIL": "Senha redefinida por e-mail",
             "ADD_PRODUCT": "Produto adicionado",
-            "UPDATE_PRODUCT": "Produto atualizado",
+            "UPDATE_PRODUCT": "Produto alterado",
             "DELETE_PRODUCT": "Produto removido",
             "SALE": "Venda registrada",
             "CANCEL_SALE": "Venda cancelada",
@@ -1885,6 +2112,7 @@ class EnhancedSystemLogsDialog:
             "SAVE_RECEIPT": "Recibo salvo",
             "REGISTER_LOSS": "Perda registrada",
             "APPROVE_LOSS": "Perda aprovada",
+            "APPROVE_ALL_LOSSES": "Todas as perdas aprovadas",
             "REJECT_LOSS": "Perda rejeitada",
         }
 
@@ -1947,6 +2175,7 @@ class EnhancedSystemLogsDialog:
             "SAVE_RECEIPT": ("content-save", "info"),
             "REGISTER_LOSS": ("alert-circle-outline", "warning"),
             "APPROVE_LOSS": ("check-decagram-outline", "success"),
+            "APPROVE_ALL_LOSSES": ("check-decagram-outline", "success"),
             "REJECT_LOSS": ("close-octagon-outline", "danger"),
         }
         return styles.get(action, ("information", "primary"))
@@ -1969,6 +2198,7 @@ class EnhancedSystemLogsDialog:
             "SAVE_RECEIPT": {"icon": "content-save", "tone": "info"},
             "REGISTER_LOSS": {"icon": "alert-circle-outline", "tone": "warning"},
             "APPROVE_LOSS": {"icon": "check-decagram-outline", "tone": "success"},
+            "APPROVE_ALL_LOSSES": {"icon": "check-decagram-outline", "tone": "success"},
             "REJECT_LOSS": {"icon": "close-octagon-outline", "tone": "danger"},
         }
 
@@ -3060,7 +3290,7 @@ class SystemStatusDialog:
             self.content.add_widget(self._row(label, value))
 
         self.content.add_widget(MDLabel(
-            text=f"Atualizado em {status.get('generated_at') or '-'}",
+            text=f"Gerado em {status.get('generated_at') or '-'}",
             font_style='Caption',
             theme_text_color='Secondary',
             size_hint_y=None,
@@ -3147,6 +3377,7 @@ class SystemStatusDialog:
 class AdminSettingsScreen(MDScreen):
     # Tela de configuracoes do administrador.
     notification_count = NumericProperty(0)
+    recommendation_count = NumericProperty(0)
     monitor_enabled = BooleanProperty(True)
     auto_banners_enabled = BooleanProperty(True)
     api_ai_enabled = BooleanProperty(True)
@@ -3167,11 +3398,12 @@ class AdminSettingsScreen(MDScreen):
         self.back_target = "admin_home"
         self.name = 'settings'
         self.notification_count = 0
+        self.recommendation_count = 0
         self._ai_poll_ev = None
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
             db=self.db,
-            history_title="Historico de monitorizacao",
+            history_title="Historico de avisos",
             auto_present_enabled=False,
         )
         self._api_toggle_ready = False
@@ -3440,7 +3672,7 @@ class AdminSettingsScreen(MDScreen):
                 pass
         if self._system_name_dialog is not None:
             self._system_name_dialog.dismiss()
-        self.show_message("Sucesso", "Nome do sistema atualizado.")
+        self.show_message("Sucesso", "Nome do sistema guardado.")
 
     def open_language_menu(self, caller=None):
         if getattr(self, "_language_menu", None):
@@ -3802,7 +4034,7 @@ class AdminSettingsScreen(MDScreen):
             )
 
             intro = MDLabel(
-                text="Atualize a chave e o modelo usados nas leituras avancadas do Gemini.",
+                text="Defina a chave e o modelo da integracao externa.",
                 theme_text_color="Secondary",
                 size_hint_y=None,
                 height=dp(40),
@@ -3818,7 +4050,7 @@ class AdminSettingsScreen(MDScreen):
             content.add_widget(self._gemini_status_label)
 
             self._gemini_api_key_field = MDTextField(
-                hint_text="Nova chave Gemini (opcional)",
+                hint_text="Nova chave de acesso (opcional)",
                 helper_text="Se deixar vazio, a chave atual e mantida.",
                 helper_text_mode="persistent",
                 password=True,
@@ -3829,8 +4061,8 @@ class AdminSettingsScreen(MDScreen):
             content.add_widget(self._gemini_api_key_field)
 
             self._gemini_model_field = MDTextField(
-                hint_text="Modelo Gemini",
-                helper_text="Ex.: models/gemini-2.5-flash",
+                hint_text="Modelo do servico",
+                helper_text="Ex.: nome-do-modelo",
                 helper_text_mode="persistent",
                 mode="rectangle",
                 size_hint_y=None,
@@ -3839,7 +4071,7 @@ class AdminSettingsScreen(MDScreen):
             content.add_widget(self._gemini_model_field)
 
             self._gemini_settings_dialog = MDDialog(
-                title="Configurar Gemini",
+                title="Configurar apoio externo",
                 type="custom",
                 content_cls=content,
                 buttons=[
@@ -3850,11 +4082,11 @@ class AdminSettingsScreen(MDScreen):
 
         env_values = self._read_env_values()
         current_key = str(env_values.get("GEMINI_API_KEY") or "").strip()
-        current_model = str(env_values.get("GEMINI_MODEL") or "models/gemini-2.5-flash").strip()
+        current_model = str(env_values.get("GEMINI_MODEL") or "models/gemini-3.6-flash").strip()
 
         if self._gemini_status_label is not None:
             self._gemini_status_label.text = (
-                f"Chave atual: {self._mask_secret(current_key)} | Modelo atual: {current_model}"
+                f"Chave atual: {self._mask_secret(current_key)} | Servico atual: {current_model}"
             )
         if self._gemini_api_key_field is not None:
             self._gemini_api_key_field.text = ""
@@ -3866,7 +4098,7 @@ class AdminSettingsScreen(MDScreen):
     def _save_gemini_settings(self):
         env_values = self._read_env_values()
         current_key = str(env_values.get("GEMINI_API_KEY") or "").strip()
-        current_model = str(env_values.get("GEMINI_MODEL") or "models/gemini-2.5-flash").strip()
+        current_model = str(env_values.get("GEMINI_MODEL") or "models/gemini-3.6-flash").strip()
 
         typed_key = (
             self._gemini_api_key_field.text.strip()
@@ -3880,14 +4112,14 @@ class AdminSettingsScreen(MDScreen):
         )
 
         final_key = typed_key or current_key
-        final_model = typed_model or current_model or "models/gemini-2.5-flash"
+        final_model = typed_model or current_model or "models/gemini-3.6-flash"
         lowered_key = final_key.lower()
 
         if not final_key:
-            self.show_message("Erro", "Informe uma chave Gemini valida.")
+            self.show_message("Erro", "Informe uma chave de acesso valida.")
             return
         if lowered_key in {"changeme", "your_api_key_here", "your_gemini_key_here"}:
-            self.show_message("Erro", "Informe uma chave Gemini real.")
+            self.show_message("Erro", "Informe uma chave de acesso real.")
             return
         if final_key == current_key and final_model == current_model and not typed_key:
             self.show_message("Aviso", "Nenhuma alteracao foi feita.")
@@ -3900,12 +4132,12 @@ class AdminSettingsScreen(MDScreen):
             })
             load_dotenv(override=True)
         except Exception as exc:
-            self.show_message("Erro", f"Nao foi possivel atualizar o Gemini: {exc}")
+            self.show_message("Erro", f"Nao foi possivel guardar o apoio externo: {exc}")
             return
 
         if self._gemini_settings_dialog:
             self._gemini_settings_dialog.dismiss()
-        self.show_message("Sucesso", "Configuracao do Gemini atualizada.")
+        self.show_message("Sucesso", "Configuracao de apoio externo guardada.")
 
     def _build_vat_input(self, text="", hint_text="", helper_text="", input_filter=None):
         field = MDTextField(
@@ -4099,11 +4331,16 @@ class AdminSettingsScreen(MDScreen):
 
     def open_vat_settings(self):
         self._vat_rule_form_rows = []
+        # Mantem o editor confortavel em ecras grandes, sem transforma-lo num
+        # painel de largura total. Os cartoes continuam acessiveis pela rolagem.
+        dialog_height = min(Window.height * 0.82, dp(650))
+        dialog_width = min(dp(1040), max(dp(300), Window.width - dp(48)))
+        content_height = max(dp(280), dialog_height - dp(120))
         wrapper = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(12),
+            spacing=dp(10),
             size_hint_y=None,
-            height=dp(640),
+            height=content_height,
         )
         app = App.get_running_app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
@@ -4167,8 +4404,9 @@ class AdminSettingsScreen(MDScreen):
             title="Regras de IVA",
             type="custom",
             content_cls=wrapper,
-            size_hint=(0.94, None),
-            height=min(Window.height * 0.92, dp(760)),
+            size_hint=(None, None),
+            width=dialog_width,
+            height=dialog_height,
             buttons=[
                 MDFlatButton(text="Restaurar oficiais", on_release=lambda _x: self._reset_vat_rules_from_dialog(dialog)),
                 MDFlatButton(text="Cancelar", on_release=lambda _x: dialog.dismiss()),
@@ -4700,7 +4938,7 @@ class AdminSettingsScreen(MDScreen):
             else:
                 lines = [
                     "PDF gerado com sucesso.",
-                    f"Produtos atualizados: {result.get('updated', 0)}",
+                    f"Produtos alterados: {result.get('updated', 0)}",
                     f"Etiquetas: {result.get('labels', 0)}",
                     f"Erros: {result.get('errors', 0)}",
                     f"Arquivo: {pdf_path}",
@@ -4944,7 +5182,7 @@ class AdminSettingsScreen(MDScreen):
         if message:
             lines.append(message)
         lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
-        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Alterados: {stats.get('updated', 0)}")
         lines.append(f"Movidos: {stats.get('moved', 0)}")
         lines.append(f"Sem codigo de barras: {stats.get('no_barcode', 0)}")
         lines.append(f"Erros: {stats.get('errors', 0)}")
@@ -4976,7 +5214,7 @@ class AdminSettingsScreen(MDScreen):
         lines = [
             "Backfill concluido.",
             f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
-            f"Atualizados: {stats.get('updated', 0)}",
+            f"Alterados: {stats.get('updated', 0)}",
             f"Movidos: {stats.get('moved', 0)}",
             f"Sem codigo de barras: {stats.get('no_barcode', 0)}",
             f"Erros: {stats.get('errors', 0)}",
@@ -5044,7 +5282,7 @@ class AdminSettingsScreen(MDScreen):
         lines.append(f"Encontrados: {stats.get('found', 0)}")
         lines.append(f"Sucessos: {stats.get('success', 0)}")
         lines.append(f"Novos: {stats.get('new', 0)}")
-        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Alterados: {stats.get('updated', 0)}")
         lines.append(f"Sem resultado: {stats.get('missing', 0)}")
         lines.append(f"Erros: {stats.get('errors', 0)}")
         self._ranxo_prefill_dialog.text = "\n".join(lines)
@@ -5060,7 +5298,7 @@ class AdminSettingsScreen(MDScreen):
             f"Encontrados: {stats.get('found', 0)}",
             f"Sucessos: {stats.get('success', 0)}",
             f"Novos: {stats.get('new', 0)}",
-            f"Atualizados: {stats.get('updated', 0)}",
+            f"Alterados: {stats.get('updated', 0)}",
             f"Sem resultado: {stats.get('missing', 0)}",
             f"Erros: {stats.get('errors', 0)}",
         ]
@@ -5129,7 +5367,7 @@ class AdminSettingsScreen(MDScreen):
             lines.append(message)
         lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
         lines.append(f"Encontrados: {stats.get('found', 0)}")
-        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Alterados: {stats.get('updated', 0)}")
         lines.append(f"Erros: {stats.get('errors', 0)}")
         self._ranxo_prefill_dialog.text = "\n".join(lines)
 
@@ -5142,7 +5380,7 @@ class AdminSettingsScreen(MDScreen):
             "Atualizacao concluida.",
             f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
             f"Encontrados: {stats.get('found', 0)}",
-            f"Atualizados: {stats.get('updated', 0)}",
+            f"Alterados: {stats.get('updated', 0)}",
             f"Erros: {stats.get('errors', 0)}",
         ]
         self._ranxo_prefill_dialog.text = "\n".join(lines)
@@ -5210,7 +5448,7 @@ class AdminSettingsScreen(MDScreen):
             lines.append(message)
         lines.append(f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}")
         lines.append(f"Encontrados: {stats.get('found', 0)}")
-        lines.append(f"Atualizados: {stats.get('updated', 0)}")
+        lines.append(f"Alterados: {stats.get('updated', 0)}")
         lines.append(f"Erros: {stats.get('errors', 0)}")
         self._ranxo_prefill_dialog.text = "\n".join(lines)
 
@@ -5223,7 +5461,7 @@ class AdminSettingsScreen(MDScreen):
             "Atualizacao concluida.",
             f"Processados: {stats.get('processed', 0)}/{stats.get('total', 0)}",
             f"Encontrados: {stats.get('found', 0)}",
-            f"Atualizados: {stats.get('updated', 0)}",
+            f"Alterados: {stats.get('updated', 0)}",
             f"Erros: {stats.get('errors', 0)}",
         ]
         self._ranxo_prefill_dialog.text = "\n".join(lines)
@@ -5233,8 +5471,11 @@ class AdminSettingsScreen(MDScreen):
     # ------------------------------------------------------------------
     def _init_badge(self, dt):
         """Inicializa o badge de notificacoes"""
-        if hasattr(self.ids, 'ai_badge'):
-            self.ids.ai_badge.opacity = 0
+        for badge_id in ('ai_badge', 'recommendations_badge'):
+            badge = self.ids.get(badge_id)
+            if badge is not None:
+                badge.opacity = 1
+                badge.size = (dp(26), dp(26))
 
     def add_notification(self):
         """Adiciona uma nova notificacao"""
@@ -5248,19 +5489,38 @@ class AdminSettingsScreen(MDScreen):
 
     def update_notification_badge(self, count):
         """Atualiza o badge e controla a animacao vibrante"""
-        self.notification_count = count
+        self.notification_count = max(0, int(count or 0))
 
         if not hasattr(self.ids, 'ai_badge') or not hasattr(self.ids, 'ai_badge_label'):
             return
 
-        self.ids.ai_badge_label.text = str(count)
+        self.ids.ai_badge_label.text = str(self.notification_count)
 
-        if count > 0:
+        if self.notification_count > 0:
             self._show_badge()
-            self._start_swing_animation()
+            set_attention_shake(self.ids.get('ai_button'), True)
         else:
-            self._hide_badge()
-            self._stop_swing_animation()
+            self.ids.ai_badge.opacity = 1
+            self.ids.ai_badge.size = (dp(26), dp(26))
+            set_attention_shake(self.ids.get('ai_button'), False)
+
+    def update_recommendation_badge(self, count):
+        self.recommendation_count = max(0, int(count or 0))
+        badge = self.ids.get('recommendations_badge') if hasattr(self, 'ids') else None
+        label = self.ids.get('recommendations_badge_label') if hasattr(self, 'ids') else None
+        if badge is None or label is None:
+            return
+        label.text = str(self.recommendation_count)
+        Animation.cancel_all(badge)
+        if self.recommendation_count > 0:
+            badge.opacity = 1
+            badge.size = (dp(0), dp(0))
+            Animation(size=(dp(26), dp(26)), duration=0.25, transition='out_back').start(badge)
+            set_attention_shake(self.ids.get('recommendations_button'), True)
+            return
+        badge.opacity = 1
+        badge.size = (dp(26), dp(26))
+        set_attention_shake(self.ids.get('recommendations_button'), False)
 
     def _show_badge(self):
         """Mostra o badge com animacao pop"""
@@ -5271,7 +5531,7 @@ class AdminSettingsScreen(MDScreen):
         self.ids.ai_badge.opacity = 1
 
         anim = Animation(
-            size=(dp(24), dp(24)),
+            size=(dp(26), dp(26)),
             duration=0.3,
             transition='out_back'
         )
@@ -5373,11 +5633,16 @@ class AdminSettingsScreen(MDScreen):
     def open_ai_menu(self, caller=None):
         if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
             caller = self.ids.ai_button
-        self._intelligence.open_history(caller=caller)
+        self._intelligence.open_alerts(caller=caller)
+
+    def show_ai_recommendations(self, caller=None):
+        if caller is None and hasattr(self, "ids") and "recommendations_button" in self.ids:
+            caller = self.ids.recommendations_button
+        self._intelligence.open_recommendations(caller=caller)
 
     def _open_ai_from_menu(self, key):
         caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
-        self._intelligence.open_history(caller=caller)
+        self._intelligence.open_alerts(caller=caller)
 
     def open_ai_assistant(self, *args):
         caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None

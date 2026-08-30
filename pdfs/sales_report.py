@@ -9,7 +9,7 @@ from .base_report import BasePDFReport
 class SalesReport(BasePDFReport):
     """
     Gera relatório de vendas em PDF com análise profissional.
-    Apresenta dados de desempenho de vendas e top produtos.
+    Apresenta dados de desempenho de vendas e produtos mais vendidos.
     """
     
     def generate(self, data, filters):
@@ -136,7 +136,7 @@ class SalesReport(BasePDFReport):
         )
 
     def _add_top_products(self, elements, data):
-        """Adiciona seção de top 15 produtos mais vendidos (expandido)."""
+        """Adiciona a secao dos 15 produtos mais vendidos."""
         styles = getSampleStyleSheet()
         
         title_style = ParagraphStyle(

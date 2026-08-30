@@ -181,7 +181,7 @@ def assess_system_alerts(status: dict[str, Any], now: datetime | None = None) ->
         alerts.append({
             "level": "ok",
             "code": "system_ok",
-            "message": "Nenhum alerta operacional encontrado.",
+            "message": "Sem alertas.",
         })
 
     return alerts

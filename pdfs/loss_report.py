@@ -196,7 +196,7 @@ class LossReport(BasePDFReport):
         elements.append(table)
 
     def _add_by_product(self, elements, rows):
-        self._add_section_title(elements, "Top 10 Produtos com Perdas", "#c0392b")
+        self._add_section_title(elements, "10 Produtos com Mais Perdas", "#c0392b")
 
         data = [["Produto", "Eventos", "Custo Total"]]
         for _, name, count, total_cost in rows or []:

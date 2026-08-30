@@ -80,5 +80,20 @@
       "source_url": "https://bazara.co.mz/vns-6001565023835-Óleo-vegetal-somol-2-l.html"
     },
     "timestamp": "2026-07-31T12:54:56.238523"
+  },
+  "6009522301262": {
+    "source": "Bazara",
+    "data": {
+      "barcode": "6009522301262",
+      "name": "Maionese Crosse & Blackwell, 750 g",
+      "sku": "Vns-6009522301262",
+      "url_key": "vns-6009522301262-maionese-crosse-&-blackwell-750-g",
+      "price": "220",
+      "image": "https://bazara.co.mz/media/catalog/product/cache/74c1057f7991b4edb2bc7bdaa94de933/s/m/sm-6009522301262.jpg",
+      "category": "Alimentos",
+      "source": "Bazara",
+      "source_url": "https://bazara.co.mz/vns-6009522301262-maionese-crosse-&-blackwell-750-g.html"
+    },
+    "timestamp": "2026-08-23T18:29:21.051197"
   }
 }

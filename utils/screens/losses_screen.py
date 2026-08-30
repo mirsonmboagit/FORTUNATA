@@ -13,15 +13,18 @@ from kivymd.uix.list import TwoLineListItem
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.menu import MDDropdownMenu
-from kivy.properties import NumericProperty, ObjectProperty
-from database.provider import get_db
+from kivy.properties import NumericProperty, ObjectProperty, StringProperty
+from database.provider import get_db, uses_remote_backend
 from datetime import date, datetime
 from threading import Thread
 from time import perf_counter
+from pathlib import Path
 import time
 import os
 from ui.components.tooltip_widgets import TooltipIconButton
-from utils.hardware.vision import get_vision_dependencies
+from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture
+from utils.business.damage_evidence import DamageEvidenceError, create_local_damage_evidence
+from utils.config.paths import temp_path
 
 def _theme_color(name, fallback):
     app = App.get_running_app()
@@ -34,6 +37,26 @@ LOSS_TYPES = [
     ("ROUBO", "THEFT"),
     ("AJUSTE", "ADJUSTMENT"),
 ]
+EXPIRY_LOSS_REASON = "Data de validade"
+LOSS_REASONS = {
+    "DAMAGE": (
+        "Produto danificado",
+        "Embalagem danificada",
+        "Produto quebrado",
+        "Contaminacao confirmada",
+    ),
+    "EXPIRED": (EXPIRY_LOSS_REASON,),
+    "THEFT": (
+        "Furto confirmado",
+        "Roubo reportado",
+        "Desaparecimento em inventario",
+    ),
+    "ADJUSTMENT": (
+        "Contagem de stock",
+        "Correcao de inventario",
+        "Diferenca de stock",
+    ),
+}
 
 
 class LossesFloatingScannerPanel(MDCard):
@@ -156,10 +179,13 @@ Builder.load_file(os.path.join(os.path.dirname(__file__), "losses_screen.kv"))
 
 class LossesScreen(MDScreen):
     db = ObjectProperty(None)
+    selected_loss_type = StringProperty("")
+    selected_loss_reason = StringProperty("")
     PRODUCTS_CACHE_SECONDS = 5
     ENTER_REFRESH_DELAY_SECONDS = 0.08
     PRODUCT_RENDER_BATCH_SIZE = 20
     SCANNER_AUTO_START_DELAY_SECONDS = 0.18
+    DAMAGE_CAMERA_MAX_INDEX = 8
     
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
@@ -168,8 +194,8 @@ class LossesScreen(MDScreen):
         self.back_target = "admin_home"
         self.products = []
         self.selected_product = None
-        self.selected_loss_type = None
         self.loss_menu = None
+        self.reason_menu = None
         # Scanner
         self.scanning = False
         self.camera = None
@@ -195,6 +221,16 @@ class LossesScreen(MDScreen):
         self._scanner_panel_initialized = False
         self._saving_loss = False
         self._pending_product_focus = None
+        self.damage_evidence_id = None
+        self.damage_evidence_source = None
+        self._damage_analysis_in_progress = False
+        self.damage_camera = None
+        self.damage_camera_index = 0
+        self.damage_camera_running = False
+        self._damage_camera_frame = None
+        self._damage_camera_snapshot_path = None
+        self._damage_camera_cleanup_path = None
+        self._damage_camera_panel_initialized = False
         
         Clock.schedule_once(self.init_screen, 0.1)
 
@@ -248,6 +284,7 @@ class LossesScreen(MDScreen):
         self._cancel_scanner_auto_start()
         self._stop_products_render()
         self.stop_scanner(hide_panel=True)
+        self.close_damage_camera_panel()
 
     def on_size(self, *args):
         Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
@@ -332,6 +369,58 @@ class LossesScreen(MDScreen):
 
         Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
 
+    def _ensure_damage_camera_panel_geometry(self, reset=False):
+        if not hasattr(self, "ids") or "damage_camera_preview_card" not in self.ids:
+            return
+
+        panel = self.ids.damage_camera_preview_card
+        width = self.width or dp(1200)
+        height = self.height or dp(760)
+        compact = width < dp(1120)
+        max_width = max(dp(220), width - dp(20))
+        max_height = max(dp(230), height - dp(20))
+        min_width = min(panel.min_panel_width, max_width)
+        min_height = min(panel.min_panel_height, max_height)
+
+        if reset or not self._damage_camera_panel_initialized:
+            if width < dp(760):
+                default_width = min(max_width, max(min_width, width - dp(20)))
+                default_height = min(max_height, max(min_height, dp(310)))
+                default_x = max(dp(10), (width - default_width) / 2)
+                default_y = dp(10)
+            elif compact:
+                default_width = min(max_width, max(min_width, dp(300)))
+                default_height = min(max_height, max(min_height, dp(330)))
+                default_x = max(dp(14), width - default_width - dp(14))
+                default_y = dp(14)
+            else:
+                default_width = min(max_width, max(min_width, dp(350)))
+                default_height = min(max_height, max(min_height, dp(360)))
+                default_x = max(dp(18), width - default_width - dp(18))
+                default_y = dp(18)
+
+            panel.size = (default_width, default_height)
+            panel.pos = (default_x, default_y)
+            self._damage_camera_panel_initialized = True
+
+        if hasattr(panel, "clamp_to_parent"):
+            panel.clamp_to_parent()
+
+    def _set_damage_camera_preview_visible(self, visible, reset_geometry=False):
+        if not hasattr(self, "ids") or "damage_camera_preview_card" not in self.ids:
+            return
+
+        panel = self.ids.damage_camera_preview_card
+        if visible:
+            panel.opacity = 1
+            panel.disabled = False
+            self._ensure_damage_camera_panel_geometry(reset=reset_geometry)
+        else:
+            panel.opacity = 0
+            panel.disabled = True
+
+        Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
+
     def close_scanner_panel(self):
         self._cancel_scanner_auto_start()
         self.stop_scanner(status_text="Scanner fechado", hide_panel=True)
@@ -346,6 +435,7 @@ class LossesScreen(MDScreen):
         content_column = self.ids.content_column
         selected_meta = self.ids.selected_product_meta_row
         scanner_preview = self.ids.scanner_preview_card
+        damage_camera_preview = self.ids.damage_camera_preview_card
         scanner_buttons = self.ids.scanner_buttons_row
         loss_type_row = self.ids.loss_type_qty_row
         loss_type_btn = self.ids.loss_type_btn
@@ -354,8 +444,13 @@ class LossesScreen(MDScreen):
         selected_meta.orientation = "vertical" if compact else "horizontal"
         selected_meta.height = dp(58) if compact else dp(20)
         self._ensure_scanner_panel_geometry()
+        self._ensure_damage_camera_panel_geometry()
         scanner_buttons.width = dp(116) if compact else dp(132)
-        bottom_padding = scanner_preview.height + dp(34) if scanner_preview.opacity > 0.01 else dp(16)
+        visible_panel_height = max(
+            scanner_preview.height if scanner_preview.opacity > 0.01 else 0,
+            damage_camera_preview.height if damage_camera_preview.opacity > 0.01 else 0,
+        )
+        bottom_padding = visible_panel_height + dp(34) if visible_panel_height else dp(16)
         content_column.padding = [dp(16), dp(16), dp(16), bottom_padding]
         loss_type_row.orientation = "vertical" if compact else "horizontal"
         loss_type_row.height = dp(104) if compact else dp(52)
@@ -402,6 +497,14 @@ class LossesScreen(MDScreen):
         self.manager.current = "losses_history"
 
     # ========== UI STATE MANAGEMENT (NOVO) ==========
+    def _loss_form_target_height(self):
+        """Mantem o formulario ajustado ao seu conteudo, sem areas vazias."""
+        return dp(800 if self.selected_loss_type == "DAMAGE" else 460)
+
+    def _scroll_loss_form_to_top(self, _dt=0):
+        if "losses_scroll" in self.ids:
+            self.ids.losses_scroll.scroll_y = 1
+
     def update_ui_state(self):
         """Atualiza visibilidade dos cards baseado no estado"""
         if self.current_step == 1:
@@ -424,7 +527,7 @@ class LossesScreen(MDScreen):
         elif self.current_step == 2:
             # Step 2: Preencher perda
             self._hide_card(self.ids.search_card)
-            self._show_card(self.ids.loss_form_card, 480)
+            self._show_card(self.ids.loss_form_card, self._loss_form_target_height())
             self._show_card(self.ids.selected_product_card, 80)
             
             # Atualizar indicadores
@@ -960,21 +1063,24 @@ class LossesScreen(MDScreen):
         self.ids.qty_input.text = "1"
         self.ids.qty_input.input_filter = "float" if is_weight else "int"
         
-        # Auto-preencher se expirado
+        # Um produto identificado como vencido sugere o tipo; o motivo continua
+        # uma escolha controlada, nunca texto livre.
         if status == "EXPIRADO":
             self.set_loss_type("EXPIRADO", "EXPIRED")
-            self.ids.reason_input.text = "Produto expirado automaticamente detectado"
         else:
             # Limpar tipo e motivo anteriores
-            self.selected_loss_type = None
+            self.selected_loss_type = ""
+            self.selected_loss_reason = ""
             self.ids.loss_type_btn.text = "Selecionar Tipo"
-            self.ids.reason_input.text = ""
+            self.ids.reason_spinner_btn.text = "Selecionar motivo"
         
+        self._update_damage_evidence_visibility()
         self.update_summary()
         
         # Avançar para step 2
         self.current_step = 2
         self.update_ui_state()
+        Clock.schedule_once(self._scroll_loss_form_to_top, 0.35)
 
     def clear_selection(self):
         """Limpa seleção e volta para step 1"""
@@ -1001,22 +1107,356 @@ class LossesScreen(MDScreen):
         self.loss_menu.open()
 
     def set_loss_type(self, label, code):
-        """Define tipo de perda e auto-preenche motivo"""
+        """Define o tipo e preenche automaticamente o motivo de validade."""
         self.selected_loss_type = code
         self.ids.loss_type_btn.text = label
-        
-        # Auto-preencher motivo baseado no tipo
-        if code == "EXPIRED" and not self.ids.reason_input.text:
-            self.ids.reason_input.text = "Produto expirado"
-        elif code == "DAMAGE" and not self.ids.reason_input.text:
-            self.ids.reason_input.text = "Produto danificado durante armazenamento"
-        elif code == "THEFT" and not self.ids.reason_input.text:
-            self.ids.reason_input.text = "Perda por roubo"
-        elif code == "ADJUSTMENT" and not self.ids.reason_input.text:
-            self.ids.reason_input.text = "Ajuste de inventário"
+        self.selected_loss_reason = EXPIRY_LOSS_REASON if code == "EXPIRED" else ""
+        self.ids.reason_spinner_btn.text = (
+            f"Motivo: {EXPIRY_LOSS_REASON} (automatico)"
+            if code == "EXPIRED"
+            else "Selecionar motivo"
+        )
+        self._update_damage_evidence_visibility()
+        if self.current_step == 2:
+            self._show_card(self.ids.loss_form_card, self._loss_form_target_height())
         
         if self.loss_menu:
             self.loss_menu.dismiss()
+
+    def open_reason_menu(self):
+        """Abre a lista de motivos permitidos; validade ja vem preenchida."""
+        if not self.selected_loss_type or self.selected_loss_type == "EXPIRED":
+            return
+        if self.reason_menu:
+            self.reason_menu.dismiss()
+        reasons = LOSS_REASONS.get(self.selected_loss_type, ())
+        self.reason_menu = MDDropdownMenu(
+            caller=self.ids.reason_spinner_btn,
+            items=[
+                {
+                    "text": reason,
+                    "on_release": lambda *_args, value=reason: self.set_loss_reason(value),
+                }
+                for reason in reasons
+            ],
+            width_mult=5,
+        )
+        self.reason_menu.open()
+
+    def set_loss_reason(self, reason):
+        self.selected_loss_reason = str(reason or "").strip()
+        self.ids.reason_spinner_btn.text = self.selected_loss_reason or "Selecionar motivo"
+        if self.reason_menu:
+            self.reason_menu.dismiss()
+
+    @staticmethod
+    def _is_product_expired(expiry_date):
+        if not expiry_date:
+            return False
+        text = str(expiry_date).strip()
+        if not text:
+            return False
+        try:
+            return datetime.fromisoformat(text).date() < date.today()
+        except ValueError:
+            for date_format in ("%Y-%m-%d", "%d/%m/%Y"):
+                try:
+                    return datetime.strptime(text, date_format).date() < date.today()
+                except ValueError:
+                    continue
+        return False
+
+    # ========== EVIDENCIA INTELIGENTE DE DANO ==========
+    def _update_damage_evidence_visibility(self):
+        if not hasattr(self, "ids") or "damage_evidence_card" not in self.ids:
+            return
+        enabled = self.selected_loss_type == "DAMAGE"
+        card = self.ids.damage_evidence_card
+        card.opacity = 1 if enabled else 0
+        card.disabled = not enabled
+        card.height = dp(326) if enabled else 0
+        if not enabled:
+            self.close_damage_camera_panel()
+            self._clear_damage_evidence_attempt()
+            self.ids.damage_evidence_status.text = ""
+
+    def _clear_damage_evidence_attempt(self):
+        """Remove da interface uma foto que nao pode servir de evidencia.
+
+        As capturas da camara sao temporarias e sao removidas pelo respetivo
+        ciclo de limpeza. O formulario nao aceita ficheiros externos.
+        """
+        self.damage_evidence_id = None
+        self.damage_evidence_source = None
+        if not hasattr(self, "ids"):
+            return
+        if "damage_evidence_file" in self.ids:
+            self.ids.damage_evidence_file.text = ""
+        if "damage_evidence_preview" in self.ids:
+            self.ids.damage_evidence_preview.source = ""
+            self.ids.damage_evidence_preview.opacity = 0
+
+    def _set_damage_camera_status(self, text, color=None):
+        if "damage_camera_status" in self.ids:
+            self.ids.damage_camera_status.text = text
+            self.ids.damage_camera_status.text_color = color or _theme_color(
+                "text_secondary", [0.5, 0.5, 0.5, 1]
+            )
+
+    def _set_damage_camera_controls(self, captured=False):
+        if "damage_camera_capture_btn" not in self.ids:
+            return
+        self.ids.damage_camera_capture_btn.disabled = bool(captured)
+        self.ids.damage_camera_use_btn.disabled = not captured
+        self.ids.damage_camera_retake_btn.disabled = not captured
+
+    def _discard_damage_camera_snapshot(self):
+        path = self._damage_camera_snapshot_path
+        self._damage_camera_snapshot_path = None
+        if not path:
+            return
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _cleanup_confirmed_damage_capture(self):
+        path = self._damage_camera_cleanup_path
+        self._damage_camera_cleanup_path = None
+        if not path:
+            return
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def capture_damage_image(self):
+        """Abre a camara; o anexo da foto depende de confirmacao manual."""
+        self.open_damage_camera()
+
+    def open_damage_camera(self):
+        """Abre a pre-visualizacao flutuante para uma captura manual."""
+        if self.selected_loss_type != "DAMAGE" or self._damage_analysis_in_progress:
+            return
+        if self.scanning:
+            self.stop_scanner(hide_panel=True)
+        self._discard_damage_camera_snapshot()
+        self._set_damage_camera_preview_visible(True, reset_geometry=True)
+        self._set_damage_camera_controls(captured=False)
+        self._set_damage_camera_status("A iniciar a camera...")
+        self.ids.damage_evidence_status.text = "Enquadre o dano e toque em CAPTURAR. A foto nao sera usada sem confirmacao."
+        self.start_damage_camera()
+
+    def start_damage_camera(self):
+        if self.damage_camera_running and self.damage_camera:
+            return
+        self.damage_camera_running = True
+        Clock.unschedule(self.open_damage_camera_device)
+        Clock.unschedule(self.preview_damage_camera_frame)
+        Clock.schedule_once(self.open_damage_camera_device, 0.08)
+
+    def open_damage_camera_device(self, _dt):
+        if not self.damage_camera_running:
+            return
+        try:
+            import cv2
+
+            self.close_damage_camera_device(clear_preview=False)
+            self.damage_camera = open_optimized_camera_capture(
+                cv2,
+                self.damage_camera_index,
+                width=640,
+                height=480,
+                preview_fps=20,
+            )
+            if not self.damage_camera or not self.damage_camera.isOpened():
+                raise RuntimeError("Camera nao encontrada")
+            self._set_damage_camera_status(
+                "Camera pronta. Capture apenas quando o dano estiver nitido.",
+                _theme_color("success", [0.2, 0.7, 0.3, 1]),
+            )
+            Clock.schedule_interval(self.preview_damage_camera_frame, 1 / 20)
+        except Exception:
+            self.damage_camera_running = False
+            self.close_damage_camera_device(clear_preview=False)
+            self._set_damage_camera_status(
+                "Camera indisponivel. Use TROCAR CAMERA para selecionar Iriun Webcam.",
+                _theme_color("danger", [0.9, 0.2, 0.2, 1]),
+            )
+
+    def close_damage_camera_device(self, clear_preview=True):
+        if self.damage_camera:
+            try:
+                self.damage_camera.release()
+            except Exception:
+                pass
+            self.damage_camera = None
+        self._damage_camera_frame = None
+        if clear_preview and "damage_camera_image" in self.ids:
+            self.ids.damage_camera_image.texture = None
+
+    def stop_damage_camera(self, hide_panel=False, clear_preview=True):
+        self.damage_camera_running = False
+        Clock.unschedule(self.open_damage_camera_device)
+        Clock.unschedule(self.preview_damage_camera_frame)
+        self.close_damage_camera_device(clear_preview=clear_preview)
+        if hide_panel:
+            self._set_damage_camera_preview_visible(False)
+
+    def close_damage_camera_panel(self):
+        self.stop_damage_camera(hide_panel=True)
+        self._discard_damage_camera_snapshot()
+        self._set_damage_camera_controls(captured=False)
+
+    def preview_damage_camera_frame(self, _dt):
+        if not self.damage_camera_running or not self.damage_camera:
+            return
+        try:
+            ok, frame = self.damage_camera.read()
+            if not ok or frame is None:
+                return
+            self._damage_camera_frame = frame.copy()
+            self._show_damage_camera_frame(frame)
+        except Exception:
+            self._set_damage_camera_status(
+                "A leitura da camera falhou. Tente TROCAR CAMERA.",
+                _theme_color("danger", [0.9, 0.2, 0.2, 1]),
+            )
+
+    def _show_damage_camera_frame(self, frame):
+        try:
+            import cv2
+
+            texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt="bgr")
+            texture.blit_buffer(cv2.flip(frame, 0).tobytes(), colorfmt="bgr", bufferfmt="ubyte")
+            self.ids.damage_camera_image.texture = texture
+        except Exception:
+            pass
+
+    def capture_damage_camera_frame(self):
+        """Guarda o frame apresentado; o anexo so inicia apos confirmacao explicita."""
+        if not self.damage_camera_running or self._damage_camera_frame is None:
+            self._set_damage_camera_status(
+                "Aguarde a pre-visualizacao da camera antes de capturar.",
+                _theme_color("warning", [0.9, 0.7, 0.1, 1]),
+            )
+            return
+        try:
+            import cv2
+
+            self._discard_damage_camera_snapshot()
+            path = temp_path("damage-captures", f"damage-{datetime.now():%Y%m%d-%H%M%S-%f}.jpg")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not cv2.imwrite(str(path), self._damage_camera_frame):
+                raise RuntimeError("Nao foi possivel guardar a foto capturada")
+            self._damage_camera_snapshot_path = str(path)
+            self.stop_damage_camera(clear_preview=False)
+            self._set_damage_camera_controls(captured=True)
+            self._set_damage_camera_status(
+                "Foto capturada. Confirme UTILIZAR FOTO para a anexar ou REPETIR para tirar outra.",
+                _theme_color("info", [0.15, 0.65, 0.85, 1]),
+            )
+        except Exception as exc:
+            self._set_damage_camera_status(
+                f"Falha ao capturar: {exc}",
+                _theme_color("danger", [0.9, 0.2, 0.2, 1]),
+            )
+
+    def use_damage_camera_snapshot(self):
+        path = self._damage_camera_snapshot_path
+        if not path or not Path(path).is_file():
+            self._set_damage_camera_status(
+                "Capture uma foto antes de a utilizar.",
+                _theme_color("warning", [0.9, 0.7, 0.1, 1]),
+            )
+            return
+        self._damage_camera_snapshot_path = None
+        self._damage_camera_cleanup_path = str(path)
+        self.stop_damage_camera(hide_panel=True)
+        self._attach_captured_damage_image(str(path))
+
+    def retake_damage_camera_photo(self):
+        self._discard_damage_camera_snapshot()
+        self._set_damage_camera_controls(captured=False)
+        self._set_damage_camera_status("A iniciar a camera para uma nova foto...")
+        self.start_damage_camera()
+
+    def switch_damage_camera(self):
+        self._discard_damage_camera_snapshot()
+        self.damage_camera_index = (self.damage_camera_index + 1) % self.DAMAGE_CAMERA_MAX_INDEX
+        self.stop_damage_camera(clear_preview=True)
+        self._set_damage_camera_controls(captured=False)
+        self._set_damage_camera_status(
+            "A procurar outra camera. O Iriun Webcam surge como uma camera virtual.",
+            _theme_color("info", [0.15, 0.65, 0.85, 1]),
+        )
+        self.start_damage_camera()
+
+    def _uses_remote_evidence_service(self):
+        module_name = str(getattr(self.db.__class__, "__module__", ""))
+        return module_name.startswith("database.client") or uses_remote_backend(self.db)
+
+    def _attach_captured_damage_image(self, source_path):
+        """Prepara e anexa apenas uma foto produzida pela camera desta sessao."""
+        if self.selected_loss_type != "DAMAGE" or self._damage_analysis_in_progress:
+            return
+        try:
+            capture_root = temp_path("damage-captures").resolve()
+            captured_path = Path(str(source_path)).resolve()
+            captured_path.relative_to(capture_root)
+            if not captured_path.is_file():
+                raise ValueError
+        except (OSError, ValueError):
+            self.show_dialog(
+                "Captura obrigatoria",
+                "Para registar dano, capture a foto agora pela camera do sistema.",
+            )
+            return
+        self._damage_analysis_in_progress = True
+        self.damage_evidence_id = None
+        self.damage_evidence_source = str(captured_path)
+        self.ids.damage_evidence_status.text = "A anexar a foto..."
+        self.ids.damage_evidence_file.text = captured_path.name
+        self.ids.damage_evidence_preview.source = str(captured_path)
+        self.ids.damage_evidence_preview.opacity = 1
+        app = App.get_running_app()
+        user = getattr(app, "current_user", None)
+
+        def worker():
+            try:
+                if self._uses_remote_evidence_service():
+                    result = self.db.upload_damage_evidence(str(captured_path))
+                    if result is None:
+                        error = getattr(self.db, "last_error", lambda: "")()
+                        raise DamageEvidenceError(error or "Nao foi possivel contactar o servidor para anexar a foto.")
+                else:
+                    result = create_local_damage_evidence(self.db, captured_path, created_by=user)
+                return {"ok": True, "result": result}
+            except DamageEvidenceError as exc:
+                return {"ok": False, "message": str(exc)}
+            except Exception as exc:
+                return {"ok": False, "message": f"Nao foi possivel anexar a foto: {exc}"}
+
+        def finish():
+            payload = worker()
+            Clock.schedule_once(lambda _dt, data=payload: self._apply_damage_attachment(data), 0)
+
+        Thread(target=finish, daemon=True).start()
+
+    def _apply_damage_attachment(self, payload):
+        self._damage_analysis_in_progress = False
+        self._cleanup_confirmed_damage_capture()
+        if not payload.get("ok"):
+            self._clear_damage_evidence_attempt()
+            self.ids.damage_evidence_status.text = payload.get("message") or "Nao foi possivel anexar a foto."
+            return
+        result = payload.get("result") or {}
+        if result.get("attached") and result.get("evidence_id"):
+            self.damage_evidence_id = result["evidence_id"]
+            self.ids.damage_evidence_status.text = result.get("message") or "Foto anexada. Pode registar a perda."
+            return
+        self._clear_damage_evidence_attempt()
+        self.ids.damage_evidence_status.text = result.get("message") or "Nao foi possivel anexar a foto. Tente outra imagem."
 
     # ========== RESUMO ==========
     def on_qty_change(self, text):
@@ -1099,14 +1539,33 @@ class LossesScreen(MDScreen):
             self.show_dialog("Erro", f"Quantidade maior que stock disponivel ({stock:.1f})")
             return
 
-        # Motivo obrigat??rio
-        reason = self.ids.reason_input.text.strip()
+        # O motivo e sempre escolhido na lista; para validade ele ja aparece
+        # automaticamente e a data e conferida antes da chamada ao banco.
+        if self.selected_loss_type == "EXPIRED":
+            reason = self.selected_loss_reason
+            if reason != EXPIRY_LOSS_REASON:
+                self.show_dialog("Motivo obrigatorio", "O motivo automatico para este tipo e 'Data de validade'.")
+                return
+            if not self._is_product_expired(exp):
+                self.show_dialog(
+                    "Produto nao expirado",
+                    "A perda nao foi registada porque a data de validade ainda nao expirou.",
+                )
+                return
+        else:
+            reason = self.selected_loss_reason
         if not reason:
-            self.show_dialog("Erro", "Motivo e obrigatorio")
+            self.show_dialog("Motivo obrigatorio", "Selecione um motivo na lista.")
             return
 
         note = self.ids.note_input.text.strip()
-        evidence = self.ids.evidence_input.text.strip() or None
+        evidence_id = self.damage_evidence_id
+        if self.selected_loss_type == "DAMAGE" and not evidence_id:
+            self.show_dialog(
+                "Foto necessaria",
+                "Tire ou escolha uma foto nitida que mostre o dano antes de continuar.",
+            )
+            return
 
         app = App.get_running_app()
         user = getattr(app, "current_user", None)
@@ -1117,24 +1576,28 @@ class LossesScreen(MDScreen):
 
         def worker():
             try:
-                movement_id = self.db.record_stock_movement(
+                movement_id = self.db.request_stock_movement(
                     pid,
                     loss_type,
                     qty,
-                    "OUT",
-                    reason=reason,
+                    reason,
+                    user,
+                    role,
+                    direction="OUT",
                     note=note,
-                    evidence_path=evidence,
-                    created_by=user,
-                    created_role=role,
+                    evidence_id=evidence_id,
                     unit_cost=cost,
                     unit_price=price,
                 )
                 if not movement_id:
                     return {"ok": False, "message": "Erro ao registrar perda no banco de dados"}
 
+                approval = self.db.get_stock_movement_approval_status(movement_id) or {}
+                approval_status = str(approval.get("approval_status") or "APPROVED").upper()
+                is_pending = approval_status == "PENDING"
+
                 stock_before = float(stock)
-                stock_after = stock_before - float(qty)
+                stock_after = stock_before if is_pending else stock_before - float(qty)
                 self._append_loss_log({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "movement_id": movement_id,
@@ -1146,7 +1609,7 @@ class LossesScreen(MDScreen):
                     "unit": "KG" if is_weight else "UN",
                     "reason": reason,
                     "note": note,
-                    "evidence_path": evidence,
+                    "evidence_id": evidence_id,
                     "user": user,
                     "role": role,
                     "unit_cost": float(cost or 0),
@@ -1155,13 +1618,15 @@ class LossesScreen(MDScreen):
                     "total_price": float(price or 0) * float(qty),
                     "stock_before": stock_before,
                     "stock_after": stock_after,
+                    "approval_status": approval_status,
                 })
                 if user:
                     try:
-                        self.db.log_action(user, role, "REGISTER_LOSS", f"{loss_type} | {name} | {qty}")
+                        action = "REQUEST_LOSS_APPROVAL" if is_pending else "REGISTER_LOSS"
+                        self.db.log_action(user, role, action, f"{loss_type} | {name} | {qty}")
                     except Exception:
                         pass
-                return {"ok": True}
+                return {"ok": True, "pending": is_pending}
             except Exception as exc:
                 print(f"Erro: {exc}")
                 return {"ok": False, "message": f"Erro ao registrar perda: {exc}"}
@@ -1171,7 +1636,13 @@ class LossesScreen(MDScreen):
             if not result.get("ok"):
                 self.show_dialog("Erro", result.get("message") or "Erro ao registrar perda.")
                 return
-            self.show_dialog("Sucesso", "Perda registrada com sucesso!")
+            if result.get("pending"):
+                self.show_dialog(
+                    "Aguardando aprovacao",
+                    "A perda foi enviada para validacao do administrador. O stock nao foi alterado.",
+                )
+            else:
+                self.show_dialog("Sucesso", "Perda registrada com sucesso!")
             self.clear_form()
             self.load_products()
             self.current_step = 1
@@ -1200,12 +1671,17 @@ class LossesScreen(MDScreen):
     def clear_form(self):
         """Limpa o formulário"""
         self.selected_product = None
-        self.selected_loss_type = None
+        self.selected_loss_type = ""
+        self.selected_loss_reason = ""
         self.ids.loss_type_btn.text = "Selecionar Tipo"
         self.ids.qty_input.text = ""
-        self.ids.reason_input.text = ""
+        self.ids.reason_spinner_btn.text = "Selecionar motivo"
         self.ids.note_input.text = ""
-        self.ids.evidence_input.text = ""
+        self._clear_damage_evidence_attempt()
+        if "damage_evidence_card" in self.ids:
+            self.close_damage_camera_panel()
+            self.ids.damage_evidence_status.text = ""
+            self._update_damage_evidence_visibility()
         self.ids.selected_name.text = "Produto Selecionado"
         self.ids.selected_stock.text = "Stock: --"
         self.ids.selected_unit.text = "Tipo: --"

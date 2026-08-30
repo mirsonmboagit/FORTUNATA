@@ -16,6 +16,7 @@
                 right_action_items: [["format-list-bulleted", lambda x: root.open_losses_history(), "Historico de perdas"], ["barcode-scan", lambda x: root.toggle_scanner(), "Ativar scanner"]]
 
             ScrollView:
+                id: losses_scroll
                 do_scroll_x: False
                 do_scroll_y: True
 
@@ -47,7 +48,7 @@
                         MDLabel:
                             id: step1_label
                             text: "Selecionar Produto"
-                            font_size: dp(12)
+                            font_size: dp(14)
                             bold: True
                             theme_text_color: "Primary"
 
@@ -62,7 +63,7 @@
                         MDLabel:
                             id: step2_label
                             text: "Informacoes da Perda"
-                            font_size: dp(12)
+                            font_size: dp(14)
                             theme_text_color: "Hint"
 
                     MDCard:
@@ -115,19 +116,19 @@
                             MDLabel:
                                 id: selected_stock
                                 text: "Stock: --"
-                                font_size: dp(11)
+                                font_size: dp(14)
                                 theme_text_color: "Secondary"
 
                             MDLabel:
                                 id: selected_unit
                                 text: "Tipo: --"
-                                font_size: dp(11)
+                                font_size: dp(14)
                                 theme_text_color: "Secondary"
 
                             MDLabel:
                                 id: selected_price
                                 text: "Preco: --"
-                                font_size: dp(11)
+                                font_size: dp(14)
                                 theme_text_color: "Secondary"
 
                     MDCard:
@@ -201,8 +202,8 @@
                     MDCard:
                         id: loss_form_card
                         orientation: "vertical"
-                        padding: dp(12)
-                        spacing: dp(10)
+                        padding: dp(14)
+                        spacing: dp(12)
                         elevation: 2
                         radius: [dp(10)]
                         md_bg_color: app.theme_tokens['card']
@@ -214,8 +215,9 @@
                             text: "Detalhes da Perda"
                             font_style: "Subtitle1"
                             bold: True
+                            font_size: dp(18)
                             size_hint_y: None
-                            height: dp(28)
+                            height: dp(30)
 
                         MDBoxLayout:
                             id: loss_type_qty_row
@@ -226,6 +228,7 @@
                             MDRaisedButton:
                                 id: loss_type_btn
                                 text: "Selecionar Tipo"
+                                font_size: dp(16)
                                 md_bg_color: app.theme_tokens['warning']
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens['on_primary']
@@ -237,61 +240,151 @@
                                 hint_text: "Qtd"
                                 input_filter: "int"
                                 mode: "rectangle"
+                                font_size: dp(16)
                                 on_text: root.on_qty_change(self.text)
                                 size_hint_x: 0.45
 
-                        MDTextField:
-                            id: reason_input
-                            hint_text: "Motivo da perda (obrigatorio)"
-                            mode: "rectangle"
+                        MDRaisedButton:
+                            id: reason_spinner_btn
+                            text: "Selecionar motivo"
+                            font_size: dp(16)
+                            md_bg_color: app.theme_tokens['warning']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
                             size_hint_y: None
-                            height: dp(48)
+                            height: dp(52)
+                            disabled: not root.selected_loss_type or root.selected_loss_type == "EXPIRED"
+                            on_release: root.open_reason_menu()
 
                         MDTextField:
                             id: note_input
                             hint_text: "Observacao adicional (opcional)"
                             mode: "rectangle"
+                            font_size: dp(16)
                             size_hint_y: None
-                            height: dp(48)
+                            height: dp(52)
 
-                        MDTextField:
-                            id: evidence_input
-                            hint_text: "Caminho da evidencia (opcional)"
-                            mode: "rectangle"
+                        MDCard:
+                            id: damage_evidence_card
+                            orientation: "vertical"
+                            padding: dp(10)
+                            spacing: dp(6)
+                            elevation: 0
+                            radius: [dp(8)]
+                            md_bg_color: app.theme_tokens['card_alt']
                             size_hint_y: None
-                            height: dp(48)
+                            height: 0
+                            opacity: 0
+                            disabled: True
+
+                            MDBoxLayout:
+                                id: damage_evidence_content
+                                orientation: "horizontal"
+                                spacing: dp(16)
+
+                                MDBoxLayout:
+                                    id: damage_evidence_info
+                                    orientation: "vertical"
+                                    size_hint_x: 0.52
+                                    spacing: dp(10)
+
+                                    MDLabel:
+                                        text: "Foto obrigatoria do dano"
+                                        bold: True
+                                        font_size: dp(18)
+                                        size_hint_y: None
+                                        height: dp(30)
+
+                                    MDLabel:
+                                        text: "Capture uma foto nitida do produto danificado pela camera. Fotos existentes no computador nao sao aceites."
+                                        font_size: dp(15)
+                                        theme_text_color: "Secondary"
+                                        size_hint_y: None
+                                        height: dp(52)
+                                        text_size: self.width, None
+                                        valign: "middle"
+
+                                    MDBoxLayout:
+                                        spacing: dp(10)
+                                        size_hint_y: None
+                                        height: dp(44)
+
+                                        MDRaisedButton:
+                                            text: "ABRIR CAMARA"
+                                            font_size: dp(15)
+                                            md_bg_color: app.theme_tokens['primary']
+                                            on_release: root.open_damage_camera()
+
+                                    Widget:
+
+                                MDCard:
+                                    id: damage_evidence_preview_shell
+                                    orientation: "vertical"
+                                    size_hint_x: 0.48
+                                    padding: dp(8)
+                                    spacing: dp(6)
+                                    elevation: 0
+                                    radius: [dp(10)]
+                                    md_bg_color: app.theme_tokens['card']
+
+                                    Image:
+                                        id: damage_evidence_preview
+                                        source: ""
+                                        opacity: 0
+                                        allow_stretch: True
+                                        keep_ratio: True
+
+                                    MDLabel:
+                                        id: damage_evidence_file
+                                        text: ""
+                                        font_size: dp(14)
+                                        shorten: True
+                                        theme_text_color: "Secondary"
+                                        size_hint_y: None
+                                        height: dp(22)
+
+                                    MDLabel:
+                                        id: damage_evidence_status
+                                        text: ""
+                                        font_size: dp(14)
+                                        theme_text_color: "Secondary"
+                                        size_hint_y: None
+                                        height: dp(48)
+                                        text_size: self.width, None
+                                        valign: "middle"
 
                         MDSeparator:
+                            size_hint_y: None
                             height: dp(1)
 
                         MDLabel:
                             text: "Impacto Financeiro"
-                            font_size: dp(11)
+                            font_size: dp(16)
                             bold: True
                             size_hint_y: None
-                            height: dp(20)
+                            height: dp(26)
 
                         MDBoxLayout:
                             orientation: "vertical"
                             size_hint_y: None
-                            height: dp(50)
+                            height: dp(60)
                             spacing: dp(4)
 
                             MDBoxLayout:
                                 size_hint_y: None
-                                height: dp(22)
+                                height: dp(28)
                                 spacing: dp(8)
 
                                 MDLabel:
                                     text: "Custo do produto:"
-                                    font_size: dp(11)
+                                    font_size: dp(14)
                                     theme_text_color: "Secondary"
                                     size_hint_x: 0.5
 
                                 MDLabel:
                                     id: cost_label
                                     text: "0.00 MZN"
-                                    font_size: dp(11)
+                                    font_size: dp(15)
                                     bold: True
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['success']
@@ -299,19 +392,19 @@
 
                             MDBoxLayout:
                                 size_hint_y: None
-                                height: dp(22)
+                                height: dp(28)
                                 spacing: dp(8)
 
                                 MDLabel:
                                     text: "Receita perdida:"
-                                    font_size: dp(11)
+                                    font_size: dp(14)
                                     theme_text_color: "Secondary"
                                     size_hint_x: 0.5
 
                                 MDLabel:
                                     id: revenue_label
                                     text: "0.00 MZN"
-                                    font_size: dp(11)
+                                    font_size: dp(15)
                                     bold: True
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['danger']
@@ -320,12 +413,13 @@
                         MDRaisedButton:
                             id: submit_loss_btn
                             text: "REGISTRAR PERDA"
+                            font_size: dp(16)
                             md_bg_color: app.theme_tokens['danger']
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['on_primary']
                             on_release: root.submit_loss()
                             size_hint_y: None
-                            height: dp(48)
+                            height: dp(52)
 
         LossesFloatingScannerPanel:
             id: scanner_preview_card
@@ -418,3 +512,97 @@
                     size: dp(34), dp(34)
                     hint_text: "Fechar scanner"
                     on_release: root.close_scanner_panel()
+
+        LossesFloatingScannerPanel:
+            id: damage_camera_preview_card
+            orientation: "vertical"
+            size_hint: None, None
+            size: dp(350), dp(360)
+            pos: root.width - self.width - dp(16), dp(16)
+            md_bg_color: app.theme_tokens['card_alt']
+            radius: [dp(14)]
+            elevation: 5
+            padding: dp(10)
+            spacing: dp(8)
+            opacity: 0
+            disabled: True
+
+            MDBoxLayout:
+                size_hint_y: None
+                height: dp(28)
+                spacing: dp(6)
+
+                MDLabel:
+                    text: "Camera de evidencia"
+                    bold: True
+                    font_size: dp(12)
+                    theme_text_color: "Primary"
+
+                MDLabel:
+                    text: "Arraste no topo"
+                    halign: "right"
+                    font_size: dp(10)
+                    theme_text_color: "Hint"
+
+                TooltipIconButton:
+                    icon: "close"
+                    size_hint: None, None
+                    size: dp(28), dp(28)
+                    md_bg_color: app.theme_tokens['danger']
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['on_primary']
+                    hint_text: "Fechar camera"
+                    on_release: root.close_damage_camera_panel()
+
+            MDCard:
+                size_hint_y: 1
+                radius: [dp(12)]
+                elevation: 0
+                md_bg_color: app.theme_tokens['card']
+                padding: dp(4)
+
+                Image:
+                    id: damage_camera_image
+                    fit_mode: "contain"
+
+            MDLabel:
+                id: damage_camera_status
+                text: "A preparar a camera..."
+                halign: "center"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_secondary']
+                font_size: dp(10)
+                size_hint_y: None
+                height: dp(30)
+
+            MDBoxLayout:
+                size_hint_y: None
+                height: dp(36)
+                spacing: dp(6)
+
+                MDRaisedButton:
+                    id: damage_camera_capture_btn
+                    text: "CAPTURAR"
+                    md_bg_color: app.theme_tokens['primary']
+                    on_release: root.capture_damage_camera_frame()
+
+                MDFlatButton:
+                    id: damage_camera_use_btn
+                    text: "UTILIZAR FOTO"
+                    disabled: True
+                    on_release: root.use_damage_camera_snapshot()
+
+            MDBoxLayout:
+                size_hint_y: None
+                height: dp(32)
+                spacing: dp(4)
+
+                MDFlatButton:
+                    id: damage_camera_retake_btn
+                    text: "REPETIR"
+                    disabled: True
+                    on_release: root.retake_damage_camera_photo()
+
+                MDFlatButton:
+                    text: "TROCAR CAMERA"
+                    on_release: root.switch_damage_camera()

@@ -344,7 +344,7 @@ def backfill_barcodes(delay=0.2, limit=None, on_progress=None):
     cache_file.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
     _emit_progress(on_progress, stats, "Backfill concluido.")
     print(
-        "Processados: {processed}/{total} | Atualizados: {updated} | "
+        "Processados: {processed}/{total} | Alterados: {updated} | "
         "Movidos: {moved} | Sem codigo de barras: {no_barcode} | "
         "Erros: {errors}".format(**stats)
     )

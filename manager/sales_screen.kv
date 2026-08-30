@@ -1,119 +1,177 @@
 #:kivy 2.0
 
 <QuickProductCard>:
-    orientation: "horizontal"
+    orientation: "vertical"
     size_hint_y: None
-    height: dp(78)
-    padding: [dp(10), dp(8), dp(10), dp(8)]
-    spacing: dp(10)
+    height: dp(94)
+    padding: [dp(12), dp(10), dp(12), dp(10)]
+    spacing: 0
     radius: [dp(12)]
     elevation: 1
     md_bg_color: app.theme_tokens['card']
 
-    MDCard:
-        size_hint: None, None
-        size: dp(44), dp(44)
-        radius: [dp(10)]
-        elevation: 0
-        md_bg_color: app.theme_tokens['card_alt']
-
-        AnchorLayout:
-            anchor_x: "center"
-            anchor_y: "center"
-
-            MDIcon:
-                id: product_icon
-                icon: "package-variant-closed"
-                size_hint: None, None
-                size: dp(22), dp(22)
-                text_size: self.size
-                halign: "center"
-                valign: "middle"
-                theme_text_color: "Custom"
-                text_color: app.theme_tokens['info']
-                font_size: dp(22)
-
     MDBoxLayout:
-        orientation: "vertical"
-        spacing: dp(2)
+        id: compact_product_name_row
+        size_hint_y: None
+        height: 0
+        opacity: 0
+        disabled: True
 
         MDLabel:
-            id: product_name_label
+            id: compact_product_name
             text: ""
             bold: True
-            font_style: "Subtitle1"
+            font_size: dp(16)
             theme_text_color: "Custom"
             text_color: app.theme_tokens['text_primary']
-            shorten: True
-            shorten_from: "right"
+            shorten: False
+            max_lines: 2
+            valign: "middle"
+            text_size: self.width, None
 
         MDLabel:
-            id: product_meta_label
+            id: compact_product_price
             text: ""
-            font_size: dp(14)
-            theme_text_color: "Custom"
-            text_color: app.theme_tokens['text_secondary']
-            shorten: True
-            shorten_from: "right"
-
-    MDBoxLayout:
-        orientation: "vertical"
-        size_hint_x: None
-        width: dp(92)
-        spacing: dp(1)
-
-        MDLabel:
-            id: product_price_label
-            text: ""
+            size_hint_x: None
+            width: dp(90)
             halign: "right"
+            valign: "middle"
             bold: True
-            font_style: "Subtitle1"
+            font_size: dp(17)
             theme_text_color: "Custom"
             text_color: app.theme_tokens['success']
-
-        MDLabel:
-            id: product_mode_label
-            text: ""
-            halign: "right"
-            font_size: dp(14)
-            theme_text_color: "Custom"
-            text_color: app.theme_tokens['text_secondary']
+            text_size: self.size
 
     MDBoxLayout:
+        id: product_content_row
         orientation: "horizontal"
-        size_hint_x: None
-        width: dp(132)
-        spacing: dp(6)
+        spacing: dp(10)
 
-        TooltipIconButton:
-            id: view_product_btn
-            icon: "eye-outline"
-            icon_size: sp(18)
-            theme_text_color: "Custom"
-            text_color: app.theme_tokens['text_primary']
+        MDCard:
+            id: product_icon_shell
+            size_hint: None, None
+            size: dp(50), dp(50)
+            radius: [dp(10)]
+            elevation: 0
             md_bg_color: app.theme_tokens['card_alt']
-            hint_text: "Ver detalhes do produto"
-            on_release: root.on_view_details_click()
 
-        TooltipIconButton:
-            id: add_unit_btn
-            icon: "plus"
-            icon_size: sp(18)
-            theme_text_color: "Custom"
-            text_color: app.theme_tokens['on_primary']
-            md_bg_color: app.theme_tokens['primary']
-            hint_text: "Adicionar unidade | Enter na pesquisa"
-            on_release: root.on_add_unit_click()
+            AnchorLayout:
+                anchor_x: "center"
+                anchor_y: "center"
 
-        TooltipIconButton:
-            id: add_pack_btn
-            icon: "package-variant-closed-plus"
-            icon_size: sp(18)
+                MDIcon:
+                    id: product_icon
+                    icon: "package-variant-closed"
+                    size_hint: None, None
+                    size: dp(26), dp(26)
+                    text_size: self.size
+                    halign: "center"
+                    valign: "middle"
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['info']
+                    font_size: dp(26)
+
+        MDBoxLayout:
+            id: product_info_box
+            orientation: "vertical"
+            spacing: dp(2)
+
+            MDLabel:
+                id: product_name_label
+                text: ""
+                bold: True
+                font_size: dp(16)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_primary']
+                shorten: True
+                shorten_from: "right"
+
+            MDLabel:
+                id: product_meta_label
+                text: ""
+                font_size: dp(15)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['manager_ink']
+                shorten: True
+                shorten_from: "right"
+
+        MDLabel:
+            id: compact_stock_label
+            text: ""
+            bold: True
+            font_size: dp(15)
+            valign: "middle"
             theme_text_color: "Custom"
-            text_color: app.theme_tokens['on_primary']
-            md_bg_color: app.theme_tokens['success']
-            hint_text: "Adicionar embalagem"
-            on_release: root.on_add_pack_click()
+            text_color: app.theme_tokens['manager_ink']
+            opacity: 1
+            disabled: True
+
+        MDBoxLayout:
+            id: product_price_box
+            orientation: "vertical"
+            size_hint_x: None
+            width: dp(104)
+            spacing: dp(1)
+
+            MDLabel:
+                id: product_price_label
+                text: ""
+                halign: "right"
+                bold: True
+                font_size: dp(18)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['success']
+
+            MDLabel:
+                id: product_mode_label
+                text: ""
+                halign: "right"
+                font_size: dp(15)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['manager_ink']
+
+        MDBoxLayout:
+            id: product_actions_row
+            orientation: "horizontal"
+            size_hint_x: None
+            width: dp(144)
+            spacing: dp(6)
+
+            TooltipIconButton:
+                id: view_product_btn
+                icon: "eye-outline"
+                icon_size: sp(22)
+                size_hint: None, None
+                size: dp(42), dp(42)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_primary']
+                md_bg_color: app.theme_tokens['card_alt']
+                hint_text: "Ver detalhes do produto"
+                on_release: root.on_view_details_click()
+
+            TooltipIconButton:
+                id: add_unit_btn
+                icon: "plus"
+                icon_size: sp(22)
+                size_hint: None, None
+                size: dp(42), dp(42)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['on_primary']
+                md_bg_color: app.theme_tokens['primary']
+                hint_text: "Adicionar unidade | Enter na pesquisa"
+                on_release: root.on_add_unit_click()
+
+            TooltipIconButton:
+                id: add_pack_btn
+                icon: "package-variant-closed-plus"
+                icon_size: sp(22)
+                size_hint: None, None
+                size: dp(42), dp(42)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['on_primary']
+                md_bg_color: app.theme_tokens['success']
+                hint_text: "Adicionar embalagem"
+                on_release: root.on_add_pack_click()
 
 
 <FloatingScannerPanel>:
@@ -166,7 +224,7 @@
         shorten: True
         shorten_from: "right"
         theme_text_color: "Custom"
-        text_color: app.theme_tokens['text_secondary']
+        text_color: app.theme_tokens['manager_ink']
 
     MDBoxLayout:
         size_hint_y: None
@@ -198,9 +256,9 @@
             size_hint_y: None
             height: dp(72)
             radius: [dp(12)]
-            elevation: 2
+            elevation: 1
             md_bg_color: app.theme_tokens['card']
-            padding: [dp(16), dp(10), dp(16), dp(10)]
+            padding: [dp(16), dp(8), dp(16), dp(8)]
 
             MDBoxLayout:
                 id: header_content
@@ -208,12 +266,12 @@
 
                 MDBoxLayout:
                     id: brand_group
-                    size_hint_x: 0.40
+                    size_hint_x: 0.43
                     spacing: dp(12)
 
                     MDCard:
                         size_hint: None, None
-                        size: dp(48), dp(48)
+                        size: dp(50), dp(50)
                         radius: [dp(10)]
                         elevation: 0
                         md_bg_color: app.theme_tokens['primary']
@@ -238,21 +296,15 @@
                         spacing: dp(2)
 
                         MDLabel:
-                            text: "{} - POS".format(app.system_name)
+                            text: app.system_name
                             bold: True
                             font_style: "H6"
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
 
-                        MDLabel:
-                            text: "Caixa de vendas profissional"
-                            font_size: dp(14)
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-
                 MDBoxLayout:
                     id: header_meta_group
-                    size_hint_x: 0.30
+                    size_hint_x: 0.23
                     spacing: dp(12)
 
                     MDBoxLayout:
@@ -260,16 +312,16 @@
                         spacing: dp(2)
 
                         MDLabel:
-                            text: "Operador"
+                            text: "Atendente"
                             font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_muted']
+                            text_color: app.theme_tokens['manager_ink']
 
                         MDLabel:
                             id: operator_label
                             text: root.operator_name
                             bold: True
-                            font_style: "Subtitle1"
+                            font_size: dp(16)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
 
@@ -278,22 +330,22 @@
                         spacing: dp(2)
 
                         MDLabel:
-                            text: "Atualizado"
+                            text: "Ultima alteracao"
                             font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_muted']
+                            text_color: app.theme_tokens['manager_ink']
 
                         MDLabel:
                             id: datetime_label
                             text: root.header_datetime_text
                             bold: True
-                            font_style: "Subtitle2"
+                            font_size: dp(15)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
 
                 MDBoxLayout:
                     id: header_actions
-                    size_hint_x: 0.30
+                    size_hint_x: 0.34
                     spacing: dp(8)
 
                     Widget:
@@ -301,7 +353,7 @@
                     MDCard:
                         id: connection_card
                         size_hint: None, None
-                        size: dp(126), dp(42)
+                        size: dp(112), dp(38)
                         radius: [dp(16)]
                         elevation: 0
                         md_bg_color: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.16
@@ -328,7 +380,7 @@
                                 text: "Online"
                                 bold: True
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['success']
+                                text_color: app.theme_tokens['text_primary']
 
                     TooltipIconButton:
                         icon: "history"
@@ -376,7 +428,7 @@
                 id: notice_one_card
                 orientation: "vertical"
                 size_hint_y: None
-                height: dp(50) + notice_one_details_shell.height
+                height: dp(56) + notice_one_details_shell.height
                 radius: [dp(12)]
                 elevation: 0
                 md_bg_color: app.theme_tokens['card']
@@ -387,7 +439,7 @@
                 MDBoxLayout:
                     id: notice_one_main_row
                     size_hint_y: None
-                    height: dp(50)
+                    height: dp(56)
                     spacing: dp(0)
 
                     MDBoxLayout:
@@ -429,9 +481,9 @@
 
                             MDLabel:
                                 id: notice_one_title
-                                text: "Stock sob controlo"
+                                text: "Stock"
                                 bold: True
-                                font_size: dp(14)
+                                font_size: dp(15)
                                 valign: "middle"
                                 shorten: True
                                 shorten_from: "right"
@@ -440,13 +492,13 @@
 
                             MDLabel:
                                 id: notice_one_body
-                                text: "Sem alertas criticos no momento."
-                                font_size: dp(14)
+                                text: "Sem alertas de stock."
+                                font_size: dp(15)
                                 valign: "middle"
                                 shorten: True
                                 shorten_from: "right"
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                         AnchorLayout:
                             size_hint_x: None
@@ -460,7 +512,7 @@
                                 halign: "center"
                                 font_size: dp(18)
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                 MDBoxLayout:
                     id: notice_one_details_shell
@@ -472,9 +524,9 @@
                     MDLabel:
                         id: notice_one_detail_body
                         text: ""
-                        font_size: dp(14)
+                        font_size: dp(15)
                         theme_text_color: "Custom"
-                        text_color: app.theme_tokens['text_secondary']
+                        text_color: app.theme_tokens['manager_ink']
                         valign: "top"
                         text_size: max(self.width - dp(4), dp(40)), None
                         size_hint_y: None
@@ -484,7 +536,7 @@
                 id: notice_two_card
                 orientation: "vertical"
                 size_hint_y: None
-                height: dp(50) + notice_two_details_shell.height
+                height: dp(56) + notice_two_details_shell.height
                 radius: [dp(12)]
                 elevation: 0
                 md_bg_color: app.theme_tokens['card']
@@ -495,7 +547,7 @@
                 MDBoxLayout:
                     id: notice_two_main_row
                     size_hint_y: None
-                    height: dp(50)
+                    height: dp(56)
                     spacing: dp(0)
 
                     MDBoxLayout:
@@ -537,9 +589,9 @@
 
                             MDLabel:
                                 id: notice_two_title
-                                text: "Produto do dia"
+                                text: "Mais vendido"
                                 bold: True
-                                font_size: dp(14)
+                                font_size: dp(15)
                                 valign: "middle"
                                 shorten: True
                                 shorten_from: "right"
@@ -548,13 +600,13 @@
 
                             MDLabel:
                                 id: notice_two_body
-                                text: "Ainda sem destaque hoje."
-                                font_size: dp(14)
+                                text: "Sem vendas hoje."
+                                font_size: dp(15)
                                 valign: "middle"
                                 shorten: True
                                 shorten_from: "right"
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                         AnchorLayout:
                             size_hint_x: None
@@ -568,7 +620,7 @@
                                 halign: "center"
                                 font_size: dp(18)
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                 MDBoxLayout:
                     id: notice_two_details_shell
@@ -580,9 +632,9 @@
                     MDLabel:
                         id: notice_two_detail_body
                         text: ""
-                        font_size: dp(14)
+                        font_size: dp(15)
                         theme_text_color: "Custom"
-                        text_color: app.theme_tokens['text_secondary']
+                        text_color: app.theme_tokens['manager_ink']
                         valign: "top"
                         text_size: max(self.width - dp(4), dp(40)), None
                         size_hint_y: None
@@ -592,7 +644,7 @@
                 id: notice_three_card
                 orientation: "vertical"
                 size_hint_y: None
-                height: dp(50) + notice_three_details_shell.height
+                height: dp(56) + notice_three_details_shell.height
                 radius: [dp(12)]
                 elevation: 0
                 md_bg_color: app.theme_tokens['card']
@@ -603,7 +655,7 @@
                 MDBoxLayout:
                     id: notice_three_main_row
                     size_hint_y: None
-                    height: dp(50)
+                    height: dp(56)
                     spacing: dp(0)
 
                     MDBoxLayout:
@@ -645,9 +697,9 @@
 
                             MDLabel:
                                 id: notice_three_title
-                                text: "Pico operacional"
+                                text: "Hora de maior movimento"
                                 bold: True
-                                font_size: dp(14)
+                                font_size: dp(15)
                                 valign: "middle"
                                 shorten: True
                                 shorten_from: "right"
@@ -656,13 +708,13 @@
 
                             MDLabel:
                                 id: notice_three_body
-                                text: "Sem dados suficientes ainda."
-                                font_size: dp(14)
+                                text: "Ainda sem dados."
+                                font_size: dp(15)
                                 valign: "middle"
                                 shorten: True
                                 shorten_from: "right"
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                         AnchorLayout:
                             size_hint_x: None
@@ -676,7 +728,7 @@
                                 halign: "center"
                                 font_size: dp(18)
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                 MDBoxLayout:
                     id: notice_three_details_shell
@@ -688,9 +740,9 @@
                     MDLabel:
                         id: notice_three_detail_body
                         text: ""
-                        font_size: dp(14)
+                        font_size: dp(15)
                         theme_text_color: "Custom"
-                        text_color: app.theme_tokens['text_secondary']
+                        text_color: app.theme_tokens['manager_ink']
                         valign: "top"
                         text_size: max(self.width - dp(4), dp(40)), None
                         size_hint_y: None
@@ -699,11 +751,11 @@
         MDBoxLayout:
             id: body_shell
             orientation: "horizontal"
-            spacing: dp(10)
+            spacing: dp(8)
 
             MDCard:
                 id: workspace_card
-                size_hint_x: 0.35
+                size_hint_x: 0.31
                 radius: [dp(18)]
                 elevation: 2
                 md_bg_color: app.theme_tokens['surface_alt']
@@ -711,14 +763,14 @@
 
                 MDBoxLayout:
                     orientation: "vertical"
-                    spacing: dp(10)
+                    spacing: dp(8)
 
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(28)
+                        height: dp(26)
 
                         MDLabel:
-                            text: "Pesquisa de produtos"
+                            text: "Produtos"
                             bold: True
                             font_style: "H6"
                             theme_text_color: "Custom"
@@ -730,7 +782,7 @@
                             halign: "right"
                             font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
+                            text_color: app.theme_tokens['manager_ink']
 
                     MDCard:
                         id: search_shell_card
@@ -745,49 +797,32 @@
 
                         MDBoxLayout:
                             size_hint_y: None
-                            height: dp(54)
-                            spacing: dp(8)
-
-                            MDCard:
-                                size_hint: None, None
-                                size: dp(44), dp(44)
-                                radius: [dp(14)]
-                                elevation: 0
-                                md_bg_color: app.theme_tokens['card_alt']
-
-                                AnchorLayout:
-                                    anchor_x: "center"
-                                    anchor_y: "center"
-
-                                    MDIcon:
-                                        icon: "barcode-scan"
-                                        size_hint: None, None
-                                        size: dp(24), dp(24)
-                                        text_size: self.size
-                                        halign: "center"
-                                        valign: "middle"
-                                        theme_text_color: "Custom"
-                                        text_color: app.theme_tokens['success']
-                                        font_size: dp(24)
+                            height: dp(52)
+                            spacing: dp(6)
 
                             MDTextField:
                                 id: search_input
                                 hint_text: "Pesquisar produto"
                                 mode: "rectangle"
                                 multiline: False
-                                font_size: dp(14)
+                                font_size: dp(16)
                                 line_color_normal: app.theme_tokens['divider']
                                 line_color_focus: app.theme_tokens['primary']
                                 text_color_normal: app.theme_tokens['text_primary']
                                 text_color_focus: app.theme_tokens['text_primary']
-                                hint_text_color_normal: 0.58, 0.62, 0.71, 1
+                                hint_text_color_normal: app.theme_tokens['manager_ink']
                                 on_text: root.on_search(self.text)
                                 on_text_validate: root.on_search_enter()
 
                             TooltipIconButton:
                                 id: clear_search_btn
                                 icon: "close"
-                                icon_size: sp(20)
+                                icon_size: sp(22)
+                                size_hint: None, None
+                                size: dp(42), dp(42)
+                                width: dp(42) if search_input.text else 0
+                                opacity: 1 if search_input.text else 0
+                                disabled: not bool(search_input.text)
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens['text_primary']
                                 md_bg_color: app.theme_tokens['card_alt']
@@ -797,7 +832,9 @@
                             TooltipIconButton:
                                 id: show_all_products_btn
                                 icon: "format-list-bulleted"
-                                icon_size: sp(20)
+                                icon_size: sp(22)
+                                size_hint: None, None
+                                size: dp(42), dp(42)
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens['text_primary']
                                 md_bg_color: app.theme_tokens['card_alt']
@@ -807,7 +844,9 @@
                             TooltipIconButton:
                                 id: scan_toggle_btn
                                 icon: "barcode-scan"
-                                icon_size: sp(20)
+                                icon_size: sp(22)
+                                size_hint: None, None
+                                size: dp(42), dp(42)
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens['on_primary']
                                 md_bg_color: app.theme_tokens['success']
@@ -848,22 +887,11 @@
 
                                 MDLabel:
                                     id: search_feedback_label
-                                    text: "Pronto para vender"
-                                    font_size: dp(14)
+                                    text: "Pronto"
+                                    font_size: dp(15)
                                     bold: True
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['text_primary']
-
-                        MDLabel:
-                            id: physical_scanner_status_label
-                            text: "Scanner USB pronto para leitura"
-                            size_hint_y: None
-                            height: dp(18)
-                            font_size: dp(14)
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-                            shorten: True
-                            shorten_from: "right"
 
                         MDCard:
                             id: scanner_preview_card_inline
@@ -893,7 +921,7 @@
                                 spacing: dp(6)
 
                                 MDLabel:
-                                    text: "Scanner compacto ativo"
+                                    text: "Scanner ativo"
                                     bold: True
                                     font_style: "Subtitle2"
                                     theme_text_color: "Custom"
@@ -904,7 +932,7 @@
                                     text: "A preparar a camera..."
                                     font_size: dp(14)
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['manager_ink']
 
                                 MDBoxLayout:
                                     size_hint_y: None
@@ -941,7 +969,7 @@
                             on_scroll_y: root.on_products_scroll(self.scroll_y)
 
                             RecycleBoxLayout:
-                                default_size: None, dp(78)
+                                default_size: None, dp(94)
                                 default_size_hint: 1, None
                                 size_hint_y: None
                                 height: self.minimum_height
@@ -950,7 +978,7 @@
 
                         MDBoxLayout:
                             size_hint_y: None
-                            height: dp(34)
+                            height: dp(40)
                             spacing: dp(6)
 
                             TooltipIconButton:
@@ -967,9 +995,9 @@
                                 id: product_page_label
                                 text: "Pagina 1"
                                 halign: "center"
-                                font_size: dp(12)
+                                font_size: dp(14)
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_secondary']
+                                text_color: app.theme_tokens['manager_ink']
 
                             TooltipIconButton:
                                 id: product_next_btn
@@ -983,7 +1011,7 @@
 
             MDCard:
                 id: cart_card
-                size_hint_x: 0.40
+                size_hint_x: 0.43
                 radius: [dp(18)]
                 elevation: 2
                 md_bg_color: app.theme_tokens['surface_alt']
@@ -991,15 +1019,15 @@
 
                 MDBoxLayout:
                     orientation: "vertical"
-                    spacing: dp(10)
+                    spacing: dp(8)
 
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(34)
+                        height: dp(30)
                         spacing: dp(8)
 
                         MDLabel:
-                            text: "Itens da venda"
+                            text: "Carrinho"
                             bold: True
                             font_style: "H6"
                             theme_text_color: "Custom"
@@ -1011,11 +1039,11 @@
                             halign: "right"
                             font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
+                            text_color: app.theme_tokens['manager_ink']
 
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(34)
+                        height: dp(36)
                         spacing: dp(6)
                         padding: [dp(10), 0, dp(8), 0]
 
@@ -1030,41 +1058,33 @@
                         MDLabel:
                             text: "Produto"
                             bold: True
-                            font_size: dp(14)
+                            font_size: dp(15)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-                            size_hint_x: 0.42
+                            text_color: app.theme_tokens['text_primary']
+                            size_hint_x: 0.45
 
                         MDLabel:
                             text: "Qtd"
                             halign: "center"
                             bold: True
-                            font_size: dp(14)
+                            font_size: dp(15)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-                            size_hint_x: 0.22
-
-                        MDLabel:
-                            text: "Preço"
-                            halign: "right"
-                            bold: True
-                            font_size: dp(14)
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-                            size_hint_x: 0.16
+                            text_color: app.theme_tokens['text_primary']
+                            size_hint_x: 0.28
 
                         MDLabel:
                             text: "Total"
                             halign: "right"
                             bold: True
-                            font_size: dp(14)
+                            font_size: dp(15)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-                            size_hint_x: 0.14
+                            text_color: app.theme_tokens['text_primary']
+                            size_hint_x: 0.23
 
                         MDLabel:
                             text: ""
-                            size_hint_x: 0.06
+                            size_hint_x: None
+                            width: dp(34)
 
                     MDBoxLayout:
                         orientation: "vertical"
@@ -1081,17 +1101,17 @@
 
                         MDLabel:
                             id: cart_empty_label
-                            text: "O carrinho ainda esta vazio.\nUse a pesquisa ou o scanner para adicionar produtos."
+                            text: "O carrinho está vazio."
                             halign: "center"
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_muted']
-                            font_size: dp(15)
+                            text_color: app.theme_tokens['manager_ink']
+                            font_size: dp(16)
                             size_hint_y: None
                             height: dp(60)
 
             MDCard:
                 id: summary_card
-                size_hint_x: 0.25
+                size_hint_x: 0.26
                 radius: [dp(18)]
                 elevation: 2
                 md_bg_color: app.theme_tokens['surface_alt']
@@ -1106,67 +1126,58 @@
                     MDBoxLayout:
                         id: summary_content
                         orientation: "vertical"
-                        spacing: dp(10)
+                        spacing: dp(8)
                         size_hint_y: None
                         height: self.minimum_height
 
                         MDBoxLayout:
                             size_hint_y: None
-                            height: dp(46)
-                            spacing: dp(8)
+                            height: dp(30)
 
-                            MDCard:
-                                size_hint: None, None
-                                size: dp(42), dp(42)
-                                radius: [dp(14)]
-                                elevation: 0
-                                md_bg_color: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.16
-
-                                AnchorLayout:
-                                    anchor_x: "center"
-                                    anchor_y: "center"
-
-                                    MDIcon:
-                                        icon: "receipt-text-check-outline"
-                                        size_hint: None, None
-                                        size: dp(22), dp(22)
-                                        text_size: self.size
-                                        halign: "center"
-                                        valign: "middle"
-                                        font_size: dp(22)
-                                        theme_text_color: "Custom"
-                                        text_color: app.theme_tokens['primary']
-
-                            MDBoxLayout:
-                                orientation: "vertical"
-                                spacing: dp(1)
-
-                                MDLabel:
-                                    text: "Resumo da venda"
-                                    bold: True
-                                    font_style: "Subtitle1"
-                                    shorten: True
-                                    shorten_from: "right"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-
-                                MDLabel:
-                                    text: "Totais, pagamento e troco"
-                                    font_size: dp(14)
-                                    shorten: True
-                                    shorten_from: "right"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                            MDLabel:
+                                text: "Pagamento"
+                                bold: True
+                                font_style: "H6"
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['text_primary']
 
                         MDCard:
+                            id: total_final_card
                             orientation: "vertical"
                             size_hint_y: None
-                            height: dp(104)
+                            height: dp(82)
                             radius: [dp(16)]
                             elevation: 0
+                            ripple_behavior: True
+                            md_bg_color: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.24
+                            padding: [dp(14), dp(10), dp(14), dp(10)]
+                            spacing: dp(2)
+                            on_touch_up: root.on_total_final_card_touch(self, args[1])
+
+                            MDLabel:
+                                text: "Total a pagar"
+                                font_size: dp(15)
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['manager_ink']
+
+                            MDLabel:
+                                id: total_value_label
+                                text: "0.00 MT"
+                                bold: True
+                                font_style: "H4"
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['text_primary']
+
+                        MDCard:
+                            id: totals_detail_card
+                            orientation: "vertical"
+                            size_hint_y: None
+                            height: dp(88)
+                            radius: [dp(14)]
+                            elevation: 0
                             md_bg_color: app.theme_tokens['card']
-                            padding: [dp(12), dp(10), dp(12), dp(10)]
-                            spacing: dp(8)
+                            padding: [dp(12), dp(8), dp(12), dp(8)]
+                            spacing: dp(4)
 
                             MDBoxLayout:
                                 size_hint_y: None
@@ -1174,30 +1185,30 @@
 
                                 MDLabel:
                                     text: "Subtotal"
-                                    font_size: dp(15)
+                                    font_size: dp(14)
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['manager_ink']
 
                                 MDLabel:
                                     id: subtotal_value_label
                                     text: "0.00 MT"
                                     halign: "right"
                                     bold: True
-                                    font_size: dp(15)
+                                    font_size: dp(14)
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['text_primary']
 
                             MDBoxLayout:
                                 size_hint_y: None
-                                height: dp(40)
+                                height: dp(38)
                                 spacing: dp(8)
 
                                 MDLabel:
                                     text: "Desconto"
-                                    size_hint_x: 0.32
-                                    font_size: dp(15)
+                                    size_hint_x: 0.30
+                                    font_size: dp(14)
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['manager_ink']
 
                                 TooltipTextField:
                                     id: discount_input
@@ -1206,7 +1217,7 @@
                                     multiline: False
                                     input_filter: "float"
                                     mode: "rectangle"
-                                    size_hint_x: 0.38
+                                    size_hint_x: 0.40
                                     font_size: dp(15)
                                     line_color_normal: app.theme_tokens['divider']
                                     line_color_focus: app.theme_tokens['primary']
@@ -1218,66 +1229,17 @@
                                     halign: "right"
                                     size_hint_x: 0.30
                                     bold: True
-                                    font_size: dp(15)
+                                    font_size: dp(14)
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['success']
 
-                        MDCard:
-                            id: total_final_card
-                            size_hint_y: None
-                            height: dp(64)
-                            radius: [dp(16)]
-                            elevation: 0
-                            ripple_behavior: True
-                            md_bg_color: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.24
-                            padding: [dp(14), dp(9), dp(14), dp(9)]
-                            on_touch_up: root.on_total_final_card_touch(self, args[1])
-
-                            MDBoxLayout:
-                                spacing: dp(10)
-
-                                MDBoxLayout:
-                                    orientation: "vertical"
-                                    spacing: dp(2)
-
-                                    MDLabel:
-                                        text: "Total final"
-                                        font_size: dp(14)
-                                        theme_text_color: "Custom"
-                                        text_color: app.theme_tokens['text_secondary']
-
-                                    MDLabel:
-                                        id: total_value_label
-                                        text: "0.00 MT"
-                                        bold: True
-                                        font_style: "H5"
-                                        theme_text_color: "Custom"
-                                        text_color: app.theme_tokens['text_primary']
-
-                                AnchorLayout:
-                                    size_hint_x: None
-                                    width: dp(34)
-                                    anchor_x: "center"
-                                    anchor_y: "center"
-
-                                    MDIcon:
-                                        icon: "gesture-tap-button"
-                                        size_hint: None, None
-                                        size: dp(22), dp(22)
-                                        text_size: self.size
-                                        halign: "center"
-                                        valign: "middle"
-                                        font_size: dp(22)
-                                        theme_text_color: "Custom"
-                                        text_color: app.theme_tokens['success']
-
                         MDBoxLayout:
                             size_hint_y: None
-                            height: dp(18)
+                            height: dp(24)
 
                             MDLabel:
                                 text: "Forma de pagamento"
-                                font_size: dp(14)
+                                font_size: dp(15)
                                 bold: True
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens['text_primary']
@@ -1287,7 +1249,7 @@
                                 halign: "right"
                                 font_size: dp(14)
                                 theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_muted']
+                                text_color: app.theme_tokens['manager_ink']
 
                         MDGridLayout:
                             # O painel de resumo é compacto: as quatro opções
@@ -1296,28 +1258,28 @@
                             height: self.minimum_height
                             cols: 4
                             spacing: dp(4)
-                            row_default_height: dp(38)
+                            row_default_height: dp(44)
                             row_force_default: True
 
                             TooltipRaisedButton:
                                 id: pay_cash_btn
                                 text: "Dinheiro"
                                 tooltip_text: "Pagamento em dinheiro | Alt+1"
-                                font_size: sp(12)
+                                font_size: sp(13)
                                 padding: [dp(6), 0]
                                 size_hint_y: None
-                                height: dp(36)
-                                md_bg_color: app.theme_tokens['success']
+                                height: dp(42)
+                                md_bg_color: app.theme_tokens['primary']
                                 on_release: root.set_payment_method("cash")
 
                             TooltipRaisedButton:
                                 id: pay_card_btn
                                 text: "Cartão"
                                 tooltip_text: "Pagamento com cartao | Alt+2"
-                                font_size: sp(12)
+                                font_size: sp(13)
                                 padding: [dp(6), 0]
                                 size_hint_y: None
-                                height: dp(36)
+                                height: dp(42)
                                 md_bg_color: app.theme_tokens['card_alt']
                                 on_release: root.set_payment_method("card")
 
@@ -1325,10 +1287,10 @@
                                 id: pay_mobile_btn
                                 text: "M-Pesa"
                                 tooltip_text: "Pagamento M-Pesa | Alt+3"
-                                font_size: sp(12)
+                                font_size: sp(13)
                                 padding: [dp(6), 0]
                                 size_hint_y: None
-                                height: dp(36)
+                                height: dp(42)
                                 md_bg_color: app.theme_tokens['card_alt']
                                 on_release: root.set_payment_method("mobile")
 
@@ -1336,31 +1298,43 @@
                                 id: pay_emola_btn
                                 text: "E-MOLA"
                                 tooltip_text: "Pagamento E-MOLA | Alt+4"
-                                font_size: sp(12)
+                                font_size: sp(13)
                                 padding: [dp(6), 0]
                                 size_hint_y: None
-                                height: dp(36)
+                                height: dp(42)
                                 md_bg_color: app.theme_tokens['card_alt']
                                 on_release: root.set_payment_method("emola")
 
                         MDCard:
                             orientation: "vertical"
                             size_hint_y: None
-                            height: dp(92)
+                            height: dp(96)
                             radius: [dp(16)]
                             elevation: 0
                             md_bg_color: app.theme_tokens['card']
                             padding: [dp(12), dp(10), dp(12), dp(10)]
                             spacing: dp(8)
 
-                            MDLabel:
-                                text: "Recebimento"
+                            MDBoxLayout:
                                 size_hint_y: None
                                 height: dp(18)
-                                bold: True
-                                font_size: dp(14)
-                                theme_text_color: "Custom"
-                                text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: "Valor recebido"
+                                    size_hint_x: 0.54
+                                    bold: True
+                                    font_size: dp(15)
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['text_primary']
+
+                                MDLabel:
+                                    text: "Troco"
+                                    size_hint_x: 0.46
+                                    halign: "center"
+                                    bold: True
+                                    font_size: dp(15)
+                                    theme_text_color: "Custom"
+                                    text_color: app.theme_tokens['text_primary']
 
                             MDBoxLayout:
                                 size_hint_y: None
@@ -1369,12 +1343,12 @@
 
                                 TooltipTextField:
                                     id: paid_input
-                                    hint_text: "Valor pago"
+                                    hint_text: "Valor pago (obrigatório)"
                                     tooltip_text: "Valor pago | Alt+V"
                                     multiline: False
                                     input_filter: "float"
                                     mode: "rectangle"
-                                    font_size: dp(15)
+                                    font_size: dp(16)
                                     line_color_normal: app.theme_tokens['divider']
                                     line_color_focus: app.theme_tokens['primary']
                                     on_text: root.calculate_change()
@@ -1384,25 +1358,18 @@
                                     radius: [dp(12)]
                                     elevation: 0
                                     md_bg_color: app.theme_tokens['success'][0], app.theme_tokens['success'][1], app.theme_tokens['success'][2], 0.13
-                                    padding: [dp(10), dp(5), dp(10), dp(5)]
+                                    padding: [dp(6), 0, dp(6), 0]
 
-                                    MDBoxLayout:
-                                        orientation: "vertical"
-                                        spacing: dp(1)
-
-                                        MDLabel:
-                                            text: "Troco"
-                                            font_size: dp(14)
-                                            theme_text_color: "Custom"
-                                            text_color: app.theme_tokens['text_secondary']
-
-                                        MDLabel:
-                                            id: change_value_label
-                                            text: "0.00 MT"
-                                            bold: True
-                                            font_style: "Subtitle1"
-                                            theme_text_color: "Custom"
-                                            text_color: app.theme_tokens['success']
+                                    MDLabel:
+                                        id: change_value_label
+                                        text: "0.00 MT"
+                                        halign: "center"
+                                        valign: "middle"
+                                        text_size: self.size
+                                        bold: True
+                                        font_size: dp(16)
+                                        theme_text_color: "Custom"
+                                        text_color: app.theme_tokens['success']
 
                         Widget:
 
@@ -1416,12 +1383,12 @@
             MDCard:
                 id: action_group_card
                 size_hint: None, None
-                width: bottom_actions_grid.minimum_width + dp(24)
-                height: bottom_actions_content.minimum_height + dp(20)
-                radius: [dp(18)]
-                elevation: 2
+                width: bottom_actions_grid.minimum_width + dp(16)
+                height: bottom_actions_content.minimum_height + dp(16)
+                radius: [dp(14)]
+                elevation: 1
                 md_bg_color: app.theme_tokens['card']
-                padding: [dp(12), dp(10), dp(12), dp(10)]
+                padding: [dp(8), dp(8), dp(8), dp(8)]
 
                 MDBoxLayout:
                     id: bottom_actions_content
@@ -1437,15 +1404,17 @@
                         height: self.minimum_height
 
                         TooltipRaisedButton:
-                            id: finalize_btn
-                            text: "Finalizar"
-                            tooltip_text: "Finalizar venda | Ctrl+Enter"
+                            id: cash_btn
+                            text: "Caixa"
+                            tooltip_text: "Consultar ou fechar caixa"
                             size_hint: None, None
-                            width: dp(172)
-                            height: dp(44)
-                            md_bg_color: app.theme_tokens['success']
-                            font_size: dp(15)
-                            on_release: root.finalize_sale()
+                            width: dp(150)
+                            height: dp(50)
+                            md_bg_color: app.theme_tokens['warning']
+                            font_size: dp(16)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            on_release: root.ensure_cash_session(show_if_open=True)
 
                         TooltipRaisedButton:
                             id: receipt_btn
@@ -1453,9 +1422,11 @@
                             tooltip_text: "Emitir recibo | Ctrl+P"
                             size_hint: None, None
                             width: dp(160)
-                            height: dp(44)
+                            height: dp(50)
                             md_bg_color: app.theme_tokens['primary']
-                            font_size: dp(15)
+                            font_size: dp(16)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
                             on_release: root.emit_receipt(print_now=False, preview_after=True)
 
                         TooltipRaisedButton:
@@ -1464,9 +1435,11 @@
                             tooltip_text: "Cancelar venda | Ctrl+0"
                             size_hint: None, None
                             width: dp(162)
-                            height: dp(44)
+                            height: dp(50)
                             md_bg_color: app.theme_tokens['danger']
-                            font_size: dp(15)
+                            font_size: dp(16)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
                             on_release: root.cancel_sale()
 
                         TooltipRaisedButton:
@@ -1475,30 +1448,34 @@
                             tooltip_text: root.hold_button_text + " | Ctrl+S"
                             size_hint: None, None
                             width: dp(176)
-                            height: dp(44)
+                            height: dp(50)
                             md_bg_color: app.theme_tokens['card_alt']
-                            font_size: dp(15)
+                            font_size: dp(16)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_primary']
                             on_release: root.toggle_suspend_sale()
 
                         TooltipRaisedButton:
-                            id: cash_btn
-                            text: "Caixa"
-                            tooltip_text: "Consultar ou fechar caixa"
+                            id: finalize_btn
+                            text: "Finalizar venda"
+                            tooltip_text: "Finalizar venda | Ctrl+Enter"
                             size_hint: None, None
-                            width: dp(150)
-                            height: dp(44)
-                            md_bg_color: app.theme_tokens['warning']
-                            font_size: dp(15)
-                            on_release: root.ensure_cash_session(show_if_open=True)
+                            width: dp(172)
+                            height: dp(50)
+                            md_bg_color: app.theme_tokens['success']
+                            font_size: dp(16)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            on_release: root.finalize_sale()
 
         MDCard:
             id: footer_metrics_card
             size_hint_y: None
-            height: dp(58)
-            radius: [dp(18)]
-            elevation: 1
+            height: dp(60)
+            radius: [dp(14)]
+            elevation: 0
             md_bg_color: app.theme_tokens['surface_alt']
-            padding: [dp(10), dp(8), dp(10), dp(8)]
+            padding: [dp(10), dp(4), dp(10), dp(4)]
 
             MDGridLayout:
                 id: footer_metrics_grid
@@ -1509,23 +1486,23 @@
                     radius: [dp(14)]
                     elevation: 0
                     md_bg_color: app.theme_tokens['card_alt']
-                    padding: [dp(10), dp(6), dp(10), dp(6)]
+                    padding: [dp(10), dp(2), dp(10), dp(2)]
 
                     MDBoxLayout:
                         orientation: "vertical"
-                        spacing: dp(2)
+                        spacing: dp(0)
 
                         MDLabel:
                             text: "Vendas de Hoje"
-                            font_size: dp(15)
+                            font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_muted']
+                            text_color: app.theme_tokens['manager_ink']
 
                         MDLabel:
                             id: sales_today_metric
                             text: "0"
                             bold: True
-                            font_size: dp(15)
+                            font_size: dp(16)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
 
@@ -1533,23 +1510,23 @@
                     radius: [dp(14)]
                     elevation: 0
                     md_bg_color: app.theme_tokens['card_alt']
-                    padding: [dp(10), dp(6), dp(10), dp(6)]
+                    padding: [dp(10), dp(2), dp(10), dp(2)]
 
                     MDBoxLayout:
                         orientation: "vertical"
-                        spacing: dp(2)
+                        spacing: dp(0)
 
                         MDLabel:
                             text: "Total Vendido"
-                            font_size: dp(15)
+                            font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_muted']
+                            text_color: app.theme_tokens['manager_ink']
 
                         MDLabel:
                             id: revenue_today_metric
                             text: "0.00 MT"
                             bold: True
-                            font_size: dp(15)
+                            font_size: dp(16)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
 
@@ -1557,23 +1534,23 @@
                     radius: [dp(14)]
                     elevation: 0
                     md_bg_color: app.theme_tokens['card_alt']
-                    padding: [dp(10), dp(6), dp(10), dp(6)]
+                    padding: [dp(10), dp(2), dp(10), dp(2)]
 
                     MDBoxLayout:
                         orientation: "vertical"
-                        spacing: dp(2)
+                        spacing: dp(0)
 
                         MDLabel:
-                            text: "Top Produto"
-                            font_size: dp(15)
+                            text: "Produto mais vendido"
+                            font_size: dp(14)
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_muted']
+                            text_color: app.theme_tokens['manager_ink']
 
                         MDLabel:
                             id: top_product_metric
                             text: "Sem dados"
                             bold: True
-                            font_size: dp(15)
+                            font_size: dp(16)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
                             shorten: True
@@ -1638,7 +1615,7 @@
                     font_size: dp(14)
                     line_height: 1.18
                     theme_text_color: "Custom"
-                    text_color: app.theme_tokens['text_secondary']
+                    text_color: app.theme_tokens['manager_ink']
                     valign: "top"
                     text_size: max(self.width - dp(4), dp(40)), None
                     size_hint_y: None
@@ -1646,21 +1623,54 @@
 
         DraggableTooltipFloatingActionButton:
             id: ai_button
-            icon: "assets/icon/idea.ico"
-            elevation: 2
+            icon: "assets/icon/alert.png"
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
             pos_hint: {"right": 0.972, "y": 0.03}
-            hint_text: "Banners da IA do gerente"
-            on_release: root.show_manager_ai_banners(self)
+            hint_text: "Alertas com IA"
+            on_release: root.show_manager_ai_alerts(self)
+
+        DraggableTooltipFloatingActionButton:
+            id: recommendations_button
+            icon: "assets/icon/idea.ico"
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
+            pos: ai_button.x, ai_button.top + dp(10)
+            hint_text: "Recomendações com IA"
+            on_release: root.show_manager_ai_recommendations(self)
+
+        MDCard:
+            id: recommendations_badge
+            size_hint: None, None
+            size: dp(26), dp(26)
+            md_bg_color: app.theme_tokens["badge"] if "badge" in app.theme_tokens else app.theme_tokens["danger"]
+            radius: [dp(13)]
+            elevation: 1
+            pos: recommendations_button.right - (self.width * 0.55), recommendations_button.top - (self.height * 0.45)
+            opacity: 1
+
+            MDLabel:
+                id: recommendations_badge_label
+                text: "0"
+                halign: "center"
+                valign: "middle"
+                bold: True
+                font_size: dp(12)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens["on_primary"]
+                text_size: self.size
 
         MDCard:
             id: ai_badge
             size_hint: None, None
-            size: dp(0), dp(0)
+            size: dp(26), dp(26)
             md_bg_color: app.theme_tokens["badge"] if "badge" in app.theme_tokens else app.theme_tokens["danger"]
-            radius: [dp(12)]
+            radius: [dp(13)]
             elevation: 1
             pos: ai_button.right - (self.width * 0.55), ai_button.top - (self.height * 0.45)
-            opacity: 0
+            opacity: 1
 
             MDLabel:
                 id: ai_badge_label

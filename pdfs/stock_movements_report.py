@@ -106,17 +106,25 @@ class StockMovementsReport(BasePDFReport):
         )
         elements.append(Paragraph("Resumo dos Movimentos", section_style))
 
-        total_in = sum(1 for row in rows if str(row.get("direction") or "").upper() == "IN")
-        total_out = sum(1 for row in rows if str(row.get("direction") or "").upper() == "OUT")
+        total_in = sum(
+            1
+            for row in rows
+            if str(row.get("direction_code") or row.get("direction") or "").upper() == "IN"
+        )
+        total_out = sum(
+            1
+            for row in rows
+            if str(row.get("direction_code") or row.get("direction") or "").upper() == "OUT"
+        )
         total_restock = sum(1 for row in rows if str(row.get("movement_code") or "").upper() == "RESTOCK")
         total_losses = sum(1 for row in rows if str(row.get("movement_code") or "").upper() in self.LOSS_CODES)
 
         summary_rows = [
-            ["METRICA", "VALOR"],
+            ["MÉTRICA", "VALOR"],
             ["Total de movimentos", str(len(rows))],
             ["Entradas", str(total_in)],
-            ["Saidas", str(total_out)],
-            ["Reposicoes", str(total_restock)],
+            ["Saídas", str(total_out)],
+            ["Reposições", str(total_restock)],
             ["Perdas/Ajustes", str(total_losses)],
         ]
 
@@ -157,26 +165,27 @@ class StockMovementsReport(BasePDFReport):
             splitLongWords=True,
         )
 
-        elements.append(Paragraph("Detalhamento dos Registos", section_style))
+        elements.append(Paragraph("Detalhes dos movimentos", section_style))
 
         table_rows = [[
-            "Entrada",
-            "Saida",
-            "Atual",
+            "Data de entrada",
+            "Data de saída",
+            "Atualização",
             "Tipo",
             "Produto",
-            "Qtd",
-            "Dir",
-            "Usuario",
+            "Quantidade",
+            "Direção",
+            "Utilizador",
         ]]
 
         for row in rows:
-            direction = str(row.get("direction") or "-").upper()
+            direction = str(row.get("direction") or "-")
+            direction_code = str(row.get("direction_code") or direction).upper()
             direction_style = ParagraphStyle(
                 f"Direction{direction}",
                 parent=cell_style,
                 alignment=1,
-                textColor=colors.HexColor("#2d8b57") if direction == "IN" else colors.HexColor("#d64545"),
+                textColor=colors.HexColor("#2d8b57") if direction_code == "IN" else colors.HexColor("#d64545"),
                 fontName="Helvetica-Bold",
             )
             type_style = ParagraphStyle(

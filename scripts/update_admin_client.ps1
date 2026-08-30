@@ -147,5 +147,5 @@ if ((-not $NoShortcut) -and (Test-Path $exePath)) {
     $shortcut.Save()
 }
 
-Write-Host "Admin atualizado em: $installRoot"
+Write-Host "Admin pronto em: $installRoot"
 Write-Host "Base de dados, config\\.env e configuracao da API foram preservadas."

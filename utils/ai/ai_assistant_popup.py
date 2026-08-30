@@ -272,19 +272,19 @@ class _AIScanBar(Widget):
 # ─── POPUP PRINCIPAL ─────────────────────────────────────────────────────────
 class ManagementAIAssistantPopup(Popup):
 
-    def __init__(self, db=None, ai_name="NomeDaIA", scope="management", **kwargs):
+    def __init__(self, db=None, ai_name="Loja", scope="management", **kwargs):
         super().__init__(**kwargs)
         self.db = db
-        self.ai_name = ai_name or "NomeDaIA"
+        self.ai_name = ai_name or "Loja"
         self.scope = str(scope or "management").strip().lower()
         self._busy = False
         self._quick_menu = None
         self._recent_questions = []
         self._boot_messages = [
-            "SISTEMA INICIALIZADO",
-            f"AGENTE: {self.ai_name.upper()}",
-            "MODULOS: VENDAS · STOCK · PERDAS · PRODUTIVIDADE",
-            "PRONTO PARA ANALISE",
+            "Dados carregados",
+            f"Consulta: {self.ai_name}",
+            "Dados: vendas, stock, perdas e produtividade",
+            "Pronto",
         ]
         self._default_quick_questions = [
             "Qual foi a receita total de hoje?",
@@ -293,7 +293,7 @@ class ManagementAIAssistantPopup(Popup):
             "Quais produtos estao com stock baixo agora?",
             "Quais produtos vencem nos proximos 7 dias?",
             "Qual foi o custo total das perdas nos ultimos 30 dias?",
-            "Quem teve mais atividade operacional nos ultimos 30 dias?",
+            "Quem teve mais atividade nos ultimos 30 dias?",
             "Que ação devo priorizar hoje para reduzir perdas e evitar rupturas?",
         ]
         self._setup_popup()
@@ -400,7 +400,7 @@ class ManagementAIAssistantPopup(Popup):
         input_card.bind(pos=self._sync_input_border, size=self._sync_input_border)
 
         self.question_input = MDTextField(
-            hint_text="› QUERY: Ex: produtos com risco de ruptura esta semana?",
+            hint_text="› Pergunta: Ex.: quais produtos podem acabar esta semana?",
             mode="rectangle",
             multiline=True,
             max_height=dp(110),
@@ -422,14 +422,14 @@ class ManagementAIAssistantPopup(Popup):
             spacing=dp(8),
         )
         self.ask_btn = _CyberButton(
-            text="⟳  ANALISAR",
+            text="⟳  VER RESPOSTA",
             md_bg_color=_C["primary"][:3] + [0.18],
             border_color=_C["primary"],
             text_color=_C["primary"],
             on_release=self._on_ask,
         )
         self.quick_btn = _CyberButton(
-            text="≡  QUERIES",
+            text="≡  PERGUNTAS",
             md_bg_color=_C["accent"][:3] + [0.12],
             border_color=_C["accent"],
             text_color=_C["accent"],
@@ -461,7 +461,7 @@ class ManagementAIAssistantPopup(Popup):
 
         # ── RODAPÉ ─────────────────────────────────────────────────────────
         footer = MDLabel(
-            text="DADOS LOCAIS  ·  IA API OPCIONAL  ·  ENCRIPTADO",
+            text="DADOS DA LOJA  ·  APOIO EXTERNO OPCIONAL  ·  PROTEGIDOS",
             font_size="9sp",
             theme_text_color="Custom",
             text_color=_C["text_lo"],
@@ -518,10 +518,10 @@ class ManagementAIAssistantPopup(Popup):
     def _render_ready(self, *_):
         self.response_container.clear_widgets()
         self.response_container.add_widget(
-            _TerminalLine("  › Aguardando input do operador...", color=_C["text_mid"])
+            _TerminalLine("  › Escreva uma pergunta.", color=_C["text_mid"])
         )
         self.response_container.add_widget(
-            _TerminalLine("  › Use 'ANALISAR' ou selecione uma query pré-definida.", color=_C["text_lo"])
+            _TerminalLine("  › Pode escolher uma pergunta da lista.", color=_C["text_lo"])
         )
 
     # ── STATUS ───────────────────────────────────────────────────────────────
@@ -535,7 +535,7 @@ class ManagementAIAssistantPopup(Popup):
         self.ask_btn.disabled = busy
         self.clear_btn.disabled = busy
         self.quick_btn.disabled = busy
-        self.ask_btn.btn_text = "⟳  PROCESSANDO..." if busy else "⟳  ANALISAR"
+        self.ask_btn.btn_text = "⟳  A ANALISAR..." if busy else "⟳  ANALISAR"
         if busy:
             self._scan_bar.start()
             self._set_status("● ANALISANDO...", _C["warn"])
@@ -549,7 +549,7 @@ class ManagementAIAssistantPopup(Popup):
             return
         question = (self.question_input.text or "").strip()
         if not question:
-            self._render_error("ERRO: Nenhuma query detectada.")
+            self._render_error("Escreva uma pergunta.")
             return
         if not self._question_is_in_scope(question):
             self._render_error(
@@ -562,7 +562,7 @@ class ManagementAIAssistantPopup(Popup):
         self._set_busy(True)
         self.response_container.clear_widgets()
         self.response_container.add_widget(
-            _TerminalLine("  › Processando query...", color=_C["warn"])
+            _TerminalLine("  › A analisar pergunta...", color=_C["warn"])
         )
         Thread(
             target=self._run_analysis_worker,
@@ -766,7 +766,7 @@ class _ResponseCard(MDCard):
         self.bind(pos=self._sync, size=self._sync)
 
         prefix = MDLabel(
-            text="  ▸ RESPOSTA DO SISTEMA",
+            text="  ▸ RESPOSTA",
             font_size="9sp",
             theme_text_color="Custom",
             text_color=_C["primary"],
@@ -910,7 +910,7 @@ class _CyberButton(MDCard):
 # ─── ENTRY POINT ─────────────────────────────────────────────────────────────
 def open_management_ai_assistant(db=None, ai_name=None, scope="management"):
     app = App.get_running_app()
-    resolved_name = ai_name or getattr(app, "assistant_name", "JoeIA")
+    resolved_name = ai_name or getattr(app, "assistant_name", "Loja")
     popup = ManagementAIAssistantPopup(db=db, ai_name=resolved_name, scope=scope)
     popup.open()
     return popup

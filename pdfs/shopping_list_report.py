@@ -14,14 +14,14 @@ from .base_report import BasePDFReport
 
 
 class ShoppingListReport(BasePDFReport):
-    """PDF simples da lista de compras."""
+    """PDF das sugestões de compras baseadas na procura."""
 
     def generate(self, payload, filters=None):
         payload = payload or {}
         items = payload.get("items") or []
         summary = payload.get("summary") or {}
 
-        pdf_path = self._get_timestamp_filename("lista_de_compras")
+        pdf_path = self._get_timestamp_filename("sugestoes_de_compras")
         doc = SimpleDocTemplate(
             pdf_path,
             pagesize=A4,
@@ -76,10 +76,13 @@ class ShoppingListReport(BasePDFReport):
         )
 
         total = self._money(summary.get("total_investment"))
-        elements.append(Paragraph("LISTA DE COMPRAS", title_style))
+        analysis_label = "IA e procura" if summary.get("ai_used") else "previsão de procura"
+        api_count = int(summary.get("api_product_count") or 0)
+        api_label = f" | APIs: {api_count} produtos" if api_count else ""
+        elements.append(Paragraph("SUGESTÕES DE COMPRAS", title_style))
         elements.append(
             Paragraph(
-                f"{item_count} produtos | Total estimado: {total} | Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+                f"{item_count} produtos | Total estimado: {total} | Análise: {analysis_label}{api_label} | Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}",
                 info_style,
             )
         )
@@ -119,7 +122,7 @@ class ShoppingListReport(BasePDFReport):
 
         if len(rows) == 1:
             rows.append([
-                self._cell("Nenhum produto precisa de reposição.", cell_style),
+                self._cell("Nenhuma sugestão de compra para a procura atual.", cell_style),
                 "-",
                 "-",
                 "-",

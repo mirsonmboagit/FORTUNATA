@@ -188,7 +188,7 @@ class SalesHistoryReport(BasePDFReport):
             ["Receita bruta", self._format_money(metrics["gross_total"])],
             ["Valor estornado", self._format_money(metrics["refunded_total"])],
             ["Receita liquida", self._format_money(metrics["net_total"])],
-            ["Ticket medio liquido", self._format_money(metrics["avg_ticket"])],
+            ["Valor medio por venda liquida", self._format_money(metrics["avg_ticket"])],
             ["Vendas promocionais", str(metrics["promotional_count"])],
             ["Vendas com estorno", str(metrics["refunded_count"])],
         ]
@@ -233,7 +233,7 @@ class SalesHistoryReport(BasePDFReport):
 
         elements.append(
             self._build_bar_chart(
-                "Top produtos por receita liquida",
+                "Produtos mais vendidos por receita liquida",
                 chart_items,
                 value_formatter=lambda value: f"MZN {value:,.2f}",
                 accent_color="#1f4e79",

@@ -86,6 +86,7 @@ class PDFViewer:
         self._render_token = 0
         self._page_texture = None
         self._page_texture_size = None
+        self.last_print_message = ""
     
     def view_pdf(self, pdf_path, prefer_direct=False):
         """
@@ -120,10 +121,28 @@ class PDFViewer:
     def _can_install_pymupdf(self):
         return (not getattr(sys, "frozen", False)) and bool(getattr(sys, "executable", None))
 
+    @staticmethod
+    def _windows_has_pdf_print_handler():
+        """Return whether Windows exposes a print action for PDF files."""
+        try:
+            import winreg
+
+            file_class = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ".pdf")
+            if not file_class:
+                return False
+            print_key = rf"{file_class}\shell\print\command"
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, print_key) as key:
+                command, _value_type = winreg.QueryValueEx(key, "")
+                return bool(command)
+        except (ImportError, OSError):
+            return False
+
     def print_pdf(self, pdf_path):
+        self.last_print_message = ""
         if not os.path.exists(pdf_path):
+            self.last_print_message = "O PDF ja nao esta disponivel. Gere-o novamente."
             if self.error_callback:
-                self.error_callback(f'Arquivo nÃ£o encontrado:\n{pdf_path}')
+                self.error_callback(self.last_print_message)
             return False
 
         try:
@@ -131,15 +150,27 @@ class PDFViewer:
             system = platform.system()
 
             if system == 'Windows':
+                if not self._windows_has_pdf_print_handler():
+                    self.last_print_message = (
+                        "A impressao automatica nao esta configurada neste computador."
+                    )
+                    return False
                 os.startfile(absolute_path, 'print')
             elif system == 'Darwin':
                 subprocess.Popen(['open', absolute_path])
             else:
                 subprocess.Popen(['xdg-open', absolute_path])
             return True
-        except Exception as e:
-            if self.error_callback:
-                self.error_callback(f'Erro ao imprimir PDF:\n{str(e)}')
+        except OSError as exc:
+            if system == 'Windows' and getattr(exc, 'winerror', None) == 1155:
+                self.last_print_message = (
+                    "A impressao automatica nao esta configurada neste computador."
+                )
+            else:
+                self.last_print_message = "Nao foi possivel enviar o PDF para impressao."
+            return False
+        except Exception:
+            self.last_print_message = "Nao foi possivel enviar o PDF para impressao."
             return False
     
     def _show_viewer_options(self, pdf_path):

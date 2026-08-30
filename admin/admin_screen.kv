@@ -42,7 +42,7 @@
             AdminHoverCard:
                 id: toolbar_card
                 size_hint_y: None
-                height: max(dp(70), root.height * 0.08)
+                height: max(dp(78), root.height * 0.09)
                 padding: [dp(18), dp(10)]
                 spacing: dp(10)
                 elevation: 2
@@ -61,7 +61,7 @@
                         size_hint_x: 0.29
                         icon_left: "magnify"
                         on_text: root.queue_filter(self.text)
-                        font_size: sp(14)
+                        font_size: sp(16)
 
                     # Filtro de Categorias
                     AdminActionButton:
@@ -75,7 +75,7 @@
                         hover_accent_color: app.theme_tokens['primary']
                         elevation: 1
                         on_release: root.show_category_menu(self)
-                        font_size: sp(13)
+                        font_size: sp(15)
 
                     AdminActionButton:
                         id: filter_btn
@@ -89,7 +89,7 @@
                         size_hint_x: None
                         width: dp(48)
                         on_release: root.toggle_kg_products()
-                        font_size: sp(13)
+                        font_size: sp(14)
 
                     AdminActionButton:
                         id: refresh_btn
@@ -102,7 +102,7 @@
                         hover_accent_color: [1, 1, 1, 1]
                         size_hint_x: 0.12
                         on_release: root.refresh_products_panel()
-                        font_size: sp(13)
+                        font_size: sp(15)
 
                     AdminActionButton:
                         id: add_btn
@@ -115,13 +115,13 @@
                         hover_accent_color: [1, 1, 1, 1]
                         size_hint_x: 0.13
                         on_release: root.add_product()
-                        font_size: sp(13)
+                        font_size: sp(15)
 
                     AdminActionButton:
                         id: shopping_list_btn
-                        text: "Lista de Compras"
+                        text: "Sugestões de Compras"
                         icon: "cart-outline"
-                        tooltip_text: "Ver lista de compras"
+                        tooltip_text: "Ver sugestões de compras com IA"
                         md_bg_color: app.theme_tokens['info']
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['on_primary']
@@ -129,7 +129,7 @@
                         size_hint_x: 0.18
                         disabled: root.shopping_list_busy
                         on_release: root.open_shopping_list_preview()
-                        font_size: sp(13)
+                        font_size: sp(15)
 
                     AdminActionButton:
                         id: inventory_btn
@@ -142,7 +142,7 @@
                         hover_accent_color: [1, 1, 1, 1]
                         size_hint_x: 0.14
                         on_release: root.open_physical_inventory()
-                        font_size: sp(13)
+                        font_size: sp(15)
 
                     
 
@@ -178,7 +178,7 @@
                             MDBoxLayout:
                                 id: table_header
                                 size_hint_y: None
-                                height: max(dp(44), root.height * 0.052)
+                                height: max(dp(52), root.height * 0.060)
                                 size_hint_x: None
                                 width: table_scroll_content.width
                                 md_bg_color: app.theme_tokens['surface_alt']
@@ -196,18 +196,20 @@
                                     size_hint_x: 0.06
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "PRODUTO"
                                     bold: True
-                                    size_hint_x: 0.20
+                                    size_hint_x: 0.18
                                     halign: "left"
                                     padding: [dp(10), 0]
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "ESTOQUE"
@@ -215,8 +217,9 @@
                                     size_hint_x: 0.09
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "VENDIDO"
@@ -224,8 +227,9 @@
                                     size_hint_x: 0.09
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "TIPO"
@@ -233,8 +237,9 @@
                                     size_hint_x: 0.07
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "PRECO"
@@ -242,8 +247,9 @@
                                     size_hint_x: 0.11
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "LUCRO"
@@ -251,17 +257,19 @@
                                     size_hint_x: 0.11
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "DATA DE VALIDADE"
                                     bold: True
-                                    size_hint_x: 0.13
+                                    size_hint_x: 0.15
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                                 MDLabel:
                                     text: "ACOES"
@@ -269,8 +277,9 @@
                                     size_hint_x: 0.14
                                     halign: "center"
                                     theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     font_style: "Subtitle2"
+                                    font_size: sp(16)
 
                             MDSeparator:
                                 height: dp(1)
@@ -288,7 +297,7 @@
                                 effect_cls: "ScrollEffect"
 
                                 RecycleBoxLayout:
-                                    default_size: None, dp(48)
+                                    default_size: None, dp(56)
                                     default_size_hint: 1, None
                                     size_hint_y: None
                                     height: self.minimum_height
@@ -297,7 +306,7 @@
 
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(40)
+                        height: dp(48)
                         padding: [dp(10), dp(4)]
                         spacing: dp(8)
 
@@ -311,6 +320,7 @@
                             md_bg_color: app.theme_tokens['card_alt']
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
+                            font_size: sp(15)
                             disabled: True
                             on_release: root.previous_product_page()
 
@@ -319,8 +329,8 @@
                             text: "Pagina 1/1 | 0 itens"
                             halign: "center"
                             theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_secondary']
-                            font_size: sp(12)
+                            text_color: app.theme_tokens['text_primary']
+                            font_size: sp(14)
 
                         AdminActionButton:
                             id: admin_next_btn
@@ -332,6 +342,7 @@
                             md_bg_color: app.theme_tokens['card_alt']
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens['text_primary']
+                            font_size: sp(15)
                             disabled: True
                             on_release: root.next_product_page()
         
@@ -342,22 +353,53 @@
         
         DraggableTooltipFloatingActionButton:
             id: ai_button
-            icon: "assets/icon/idea.ico"
-            elevation: 2
+            icon: "assets/icon/alert.png"
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
             pos_hint: {"right": 0.965, "y": 0.04}
-            hint_text: "Selecionar banner"
+            hint_text: "Alertas com IA"
             on_release: root.open_ai_menu(self)
 
-        # Badge com número de notificações (só aparece quando > 0)
+        DraggableTooltipFloatingActionButton:
+            id: recommendations_button
+            icon: "assets/icon/idea.ico"
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
+            pos: ai_button.x, ai_button.top + dp(10)
+            hint_text: "Recomendações com IA"
+            on_release: root.show_ai_recommendations(self)
+
+        MDCard:
+            id: recommendations_badge
+            size_hint: None, None
+            size: dp(26), dp(26)
+            md_bg_color: app.theme_tokens['badge']
+            radius: [dp(13)]
+            elevation: 1
+            pos: recommendations_button.right - (self.width * 0.55), recommendations_button.top - (self.height * 0.45)
+            opacity: 1
+
+            MDLabel:
+                id: recommendations_badge_label
+                text: "0"
+                halign: "center"
+                valign: "middle"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['on_primary']
+                font_size: dp(12)
+                bold: True
+        # Badge com número de alertas
         MDCard:
             id: ai_badge
             size_hint: None, None
-            size: dp(24), dp(24)
+            size: dp(26), dp(26)
             md_bg_color: app.theme_tokens['badge']
-            radius: [dp(12)]
+            radius: [dp(13)]
             elevation: 1
             pos: ai_button.right - (self.width * 0.55), ai_button.top - (self.height * 0.45)
-            opacity: 0
+            opacity: 1
 
             MDLabel:
                 id: ai_badge_label
@@ -368,63 +410,3 @@
                 text_color: app.theme_tokens['on_primary']
                 font_size: dp(12)
                 bold: True
-
-        # Ações rápidas ao lado da lâmpada (toggle + scroll)
-        HoverTooltipIconButton:
-            id: ai_toggle_button
-            icon: "chevron-left" if root.quick_actions_open else "chevron-right"
-            size_hint: None, None
-            size: dp(38), dp(38)
-            pos: max(dp(8), ai_button.x - self.width - dp(10)), ai_button.y
-            on_release: root.toggle_quick_actions()
-            md_bg_color: app.theme_tokens['primary']
-            theme_text_color: "Custom"
-            text_color: [1, 1, 1, 1]
-            hint_text: "Mostrar/Ocultar Ações"
-
-        ScrollView:
-            id: ai_quick_actions_scroll
-            size_hint: None, None
-            width: min(root.width * 0.35, dp(220)) if root.quick_actions_open else 0
-            height: dp(48) if root.quick_actions_open else 0
-            opacity: 1 if root.quick_actions_open else 0
-            disabled: not root.quick_actions_open
-            pos: max(dp(8), ai_toggle_button.x - self.width - dp(10)), max(dp(8), ai_button.y - dp(2))
-            do_scroll_x: True
-            do_scroll_y: False
-            bar_width: dp(4)
-            bar_color: 0.18, 0.28, 0.48, 0.6
-            bar_inactive_color: 0.18, 0.28, 0.48, 0.2
-            effect_cls: "ScrollEffect"
-
-            MDBoxLayout:
-                orientation: "horizontal"
-                size_hint_x: None
-                width: self.minimum_width
-                height: self.minimum_height
-                padding: [dp(4), 0, dp(4), 0]
-                spacing: dp(8)
-
-                HoverTooltipIconButton:
-                    icon: "alert-circle"
-                    on_release: root.show_fraud_alerts()
-                    md_bg_color: app.theme_tokens['danger']
-                    theme_text_color: "Custom"
-                    text_color: [1, 1, 1, 1]
-                    hint_text: "Alertas de Fraude"
-
-                HoverTooltipIconButton:
-                    icon: "chart-line"
-                    on_release: root.show_loss_metrics()
-                    md_bg_color: app.theme_tokens['info']
-                    theme_text_color: "Custom"
-                    text_color: [1, 1, 1, 1]
-                    hint_text: "Métricas de Perdas"
-
-                HoverTooltipIconButton:
-                    icon: "check-circle"
-                    on_release: root.show_pending_approvals()
-                    md_bg_color: app.theme_tokens['warning']
-                    theme_text_color: "Custom"
-                    text_color: [1, 1, 1, 1]
-                    hint_text: "Aprovações Pendentes"

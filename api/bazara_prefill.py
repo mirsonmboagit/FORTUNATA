@@ -490,7 +490,7 @@ def prefill_bazara_cache(
     _emit_progress(on_progress, stats, "Prefill concluido.")
     print(f"Cache Bazara salvo em {cache_file} ({len(cache)} produtos).")
     print(
-        "Processados: {processed} | Novos: {new} | Atualizados: {updated} | "
+        "Processados: {processed} | Novos: {new} | Alterados: {updated} | "
         "Sem codigo de barras: {no_sku} | Erros: {errors} | Paginas: {pages}".format(**stats)
     )
     return stats

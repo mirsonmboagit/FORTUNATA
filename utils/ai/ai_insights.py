@@ -19,6 +19,8 @@ _AI_CACHE = {"ts": 0, "data": None}
 _AI_FAILURE_CACHE = {"ts": 0}
 _QA_CACHE = {"ts": 0, "key": None, "data": None}
 _QA_API_FAILURE_CACHE = {"ts": 0, "reason": "", "until": 0, "key_sig": ""}
+_PROACTIVE_RECOMMENDATIONS_CACHE = {"ts": 0, "signature": "", "items": []}
+_PURCHASE_SUGGESTIONS_CACHE = {"ts": 0, "signature": "", "result": None}
 
 
 def _current_language_code():
@@ -45,7 +47,7 @@ def _get_ai_key_and_model():
     except Exception:
         pass
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
-    model = (os.getenv("GEMINI_MODEL") or "models/gemini-2.5-flash").strip()
+    model = (os.getenv("GEMINI_MODEL") or "models/gemini-3.6-flash").strip()
     if not api_key:
         return "", model
     lowered = api_key.lower()
@@ -155,7 +157,7 @@ def _fetch_sales_velocity(db, days=14):
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     db.cursor.execute(
         "SELECT product_id, COALESCE(SUM(quantity), 0) "
-        "FROM sales WHERE DATE(sale_date) >= ? "
+        "FROM sales_history WHERE DATE(sale_date) >= ? "
         "GROUP BY product_id",
         (start_date,),
     )
@@ -170,7 +172,7 @@ def _get_product_daily_sales(db, product_id, days=14):
     """Calcula vendas diárias médias de um produto específico"""
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     db.cursor.execute(
-        "SELECT COALESCE(SUM(quantity), 0) FROM sales "
+        "SELECT COALESCE(SUM(quantity), 0) FROM sales_history "
         "WHERE product_id = ? AND DATE(sale_date) >= ?",
         (product_id, start_date),
     )
@@ -518,6 +520,301 @@ def build_admin_insights_ai(db=None, cache_minutes=5):
     return {**base, **ai_data}
 
 
+def build_proactive_ai_recommendations(snapshot, max_items=6, cache_minutes=5):
+    """Gera recomendações acionáveis com o modelo de IA para o monitor proativo."""
+    try:
+        app = App.get_running_app()
+    except Exception:
+        app = None
+    if app and not getattr(app, "ai_enabled", True):
+        return []
+
+    client, model = _get_ai_client()
+    if not client or not model:
+        return []
+
+    source = snapshot or {}
+    insights = source.get("banner_insights") or {}
+    expiry_levels = insights.get("expiry_levels") or {}
+    low_stock = []
+    for item in list(insights.get("low_stock") or [])[:12]:
+        if isinstance(item, (list, tuple)) and len(item) >= 4:
+            low_stock.append(
+                {
+                    "produto": item[0],
+                    "stock_atual": item[1],
+                    "unidade": "kg" if item[2] else "un",
+                    "cobertura_dias": item[3],
+                }
+            )
+
+    expiry_items = []
+    for level in ("vencido", "critico", "alto"):
+        for item in list(expiry_levels.get(level) or [])[:8]:
+            if isinstance(item, (list, tuple)) and len(item) >= 5:
+                expiry_items.append(
+                    {
+                        "prioridade": level,
+                        "produto": item[0],
+                        "dias_para_validade": item[1],
+                        "data_validade": item[2],
+                        "stock": item[3],
+                        "unidade": item[4],
+                    }
+                )
+
+    payload = {
+        "vendas_hoje": source.get("vendas_hoje") or {},
+        "media_semanal": source.get("media_semanal") or {},
+        "atividade_caixa": source.get("atividade_caixa") or {},
+        "stock_baixo": low_stock,
+        "validades_prioritarias": expiry_items,
+        "previsao_stock": list(insights.get("stock_forecast") or [])[:10],
+        "risco_validades": list(insights.get("expiry_risk") or [])[:10],
+        "sugestoes_locais": list(insights.get("recommendations") or [])[:6],
+    }
+    signature = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    now = time.time()
+    cached = _PROACTIVE_RECOMMENDATIONS_CACHE
+    if (
+        cached.get("signature") == signature
+        and (now - float(cached.get("ts") or 0)) < max(1, cache_minutes) * 60
+    ):
+        return list(cached.get("items") or [])
+
+    language_name = _current_ai_response_language()
+    prompt = (
+        f"Responda em {language_name}.\n"
+        "Atue como analista de uma pequena loja. Com base apenas nos dados abaixo, "
+        "proponha ações concretas e priorizadas para o responsável executar.\n"
+        "Responda somente com JSON válido, no formato: "
+        '{"recommendations":["ação curta 1", "ação curta 2"]}.\n'
+        f"Forneça no máximo {max(1, int(max_items or 1))} recomendações. "
+        "Não invente dados, não use Markdown nem emojis e não inclua alertas sem uma ação.\n\n"
+        f"DADOS:\n{json.dumps(payload, ensure_ascii=False, default=str)}"
+    )
+    try:
+        response = client.models.generate_content(model=model, contents=prompt)
+        data = _extract_json(str(getattr(response, "text", "") or ""))
+    except Exception as exc:
+        api_key, _ = _get_ai_key_and_model()
+        _mark_api_failure(_friendly_api_error(exc), api_key=api_key)
+        return []
+
+    items = []
+    seen = set()
+    for value in list((data or {}).get("recommendations") or []):
+        line = str(value or "").strip()
+        key = line.casefold()
+        if not line or key in seen:
+            continue
+        seen.add(key)
+        items.append(line)
+        if len(items) >= max(1, int(max_items or 1)):
+            break
+
+    if items:
+        _PROACTIVE_RECOMMENDATIONS_CACHE.update(
+            {"ts": now, "signature": signature, "items": list(items)}
+        )
+    return items
+
+
+def _purchase_suggestion_quantity(value, candidate):
+    """Normaliza a quantidade devolvida pela IA sem deixar a recomendacao instavel."""
+    requested = _safe_float(value, 0.0)
+    base = max(0.0, _safe_float(candidate.get("base_needed_qty"), 0.0))
+    if requested <= 0 or base <= 0:
+        return 0.0
+
+    # A IA pode ajustar a previsao, mas nao deve multiplicar uma compra por um
+    # valor arbitrario. O intervalo permite ajuste real e mantem a seguranca.
+    minimum = base * 0.50
+    maximum = max(base + 1.0, base * 2.50)
+    quantity = min(max(requested, minimum), maximum)
+    if str(candidate.get("unit") or "").upper() == "KG":
+        return round(quantity, 2)
+    return float(max(1, int(round(quantity))))
+
+
+def _purchase_priority(value, fallback):
+    normalized = str(value or "").strip().casefold()
+    if normalized in {"urgente", "critica", "crítica", "critical", "urgent"}:
+        return "Urgente", 0
+    if normalized in {"alta", "high", "prioritaria", "prioritária"}:
+        return "Alta", 1
+    if normalized in {"media", "média", "moderada", "medium"}:
+        return "Media", 2
+    return str(fallback or "Media"), _safe_int(
+        {"Urgente": 0, "Alta": 1, "Media": 2}.get(str(fallback or ""), 2),
+        2,
+    )
+
+
+def build_ai_purchase_suggestions(candidates, max_items=30, cache_minutes=5, use_ai=True):
+    """Refina sugestoes preventivas com o modelo de IA.
+
+    Os candidatos já chegam filtrados pelas regras de negócio: risco de
+    ruptura, stock abaixo do limite ou saída rápida. A IA recebe também os
+    metadados existentes nas APIs de produtos, mas não pode inventar artigos
+    nem remover produtos que já estão esgotados ou abaixo do limite.
+    """
+    eligible = []
+    for candidate in list(candidates or []):
+        current_stock = _safe_float(candidate.get("current_stock"), 0.0)
+        avg_daily = _safe_float(candidate.get("avg_daily"), 0.0)
+        base_quantity = _safe_float(candidate.get("base_needed_qty"), 0.0)
+        product_id = candidate.get("product_id")
+        if product_id is None or base_quantity <= 0:
+            continue
+        eligible.append(dict(candidate))
+
+    if not eligible:
+        return {"items": [], "source": "demand", "ai_used": False, "api_product_count": 0}
+
+    api_product_count = sum(1 for item in eligible if item.get("api_context"))
+    signature = json.dumps(eligible, ensure_ascii=False, sort_keys=True, default=str)
+    now = time.time()
+    cached = _PURCHASE_SUGGESTIONS_CACHE
+    if (
+        cached.get("signature") == signature
+        and (now - float(cached.get("ts") or 0)) < max(1, cache_minutes) * 60
+        and isinstance(cached.get("result"), dict)
+    ):
+        return dict(cached["result"])
+
+    def local_forecast(reason="Previsao de procura e cobertura de stock"):
+        items = []
+        for candidate in eligible[: max(1, int(max_items or 1))]:
+            item = dict(candidate)
+            item["analysis_reason"] = reason
+            item["analysis_source"] = "demand"
+            items.append(item)
+        return {
+            "items": items,
+            "source": "demand",
+            "ai_used": False,
+            "api_product_count": api_product_count,
+        }
+
+    # A primeira abertura da janela deve ser instantânea. A previsão local
+    # usa as mesmas regras de procura e risco; a consulta à IA pode atualizar
+    # o resultado em segundo plano sem prender a interface.
+    if not use_ai:
+        return local_forecast("Previsão imediata baseada nas vendas e no nível de stock")
+
+    try:
+        app = App.get_running_app()
+    except Exception:
+        app = None
+    if app and not getattr(app, "ai_enabled", True):
+        return local_forecast("Previsao de procura; a IA esta desativada nas configuracoes")
+
+    client, model = _get_ai_client()
+    if not client or not model:
+        return local_forecast("Previsao de procura; configure a IA para refinar a sugestao")
+
+    payload = [
+        {
+            "product_id": item["product_id"],
+            "produto": item.get("name"),
+            "unidade": item.get("unit"),
+            "stock_atual": item.get("current_stock"),
+            "procura_media_diaria": item.get("avg_daily"),
+            "cobertura_dias": round(_safe_float(item.get("coverage_days")), 2),
+            "quantidade_base": item.get("base_needed_qty"),
+            "validade": item.get("expiry_date"),
+            "dados_apis": item.get("api_context") or {},
+        }
+        for item in eligible[: max(1, int(max_items or 1))]
+    ]
+    language_name = _current_ai_response_language()
+    prompt = (
+        f"Responda em {language_name}.\n"
+        "Atue como analista de compras de uma pequena loja. Avalie procura, rapidez de saída "
+        "(cobertura em dias), validade e os dados de catálogo das APIs. Sugira apenas artigos "
+        "presentes na lista, nunca invente produtos ou dados. Produtos com stock esgotado ou "
+        "abaixo do limite são obrigatórios e devem manter uma quantidade acima de zero.\n"
+        "Responda apenas com JSON valido neste formato: "
+        '{"suggestions":[{"product_id":1,"recommended_qty":12,"priority":"alta","reason":"motivo curto"}]}.\n'
+        "Pode omitir um artigo se a compra nao for justificavel. recommended_qty deve ser maior que zero. "
+        "Use os dados das APIs somente como contexto de produto/preco/categoria, nao como uma venda confirmada.\n\n"
+        f"CANDIDATOS:\n{json.dumps(payload, ensure_ascii=False, default=str)}"
+    )
+    try:
+        response = client.models.generate_content(model=model, contents=prompt)
+        data = _extract_json(str(getattr(response, "text", "") or "")) or {}
+    except Exception as exc:
+        api_key, _ = _get_ai_key_and_model()
+        _mark_api_failure(_friendly_api_error(exc), api_key=api_key)
+        return local_forecast("Previsao de procura; a IA ficou indisponivel nesta consulta")
+
+    candidates_by_id = {str(item["product_id"]): item for item in eligible}
+    items = []
+    seen = set()
+    for suggestion in list(data.get("suggestions") or []):
+        if not isinstance(suggestion, dict):
+            continue
+        key = str(suggestion.get("product_id") or "")
+        candidate = candidates_by_id.get(key)
+        if candidate is None or key in seen:
+            continue
+        quantity = _purchase_suggestion_quantity(suggestion.get("recommended_qty"), candidate)
+        if quantity <= 0:
+            continue
+        priority, priority_rank = _purchase_priority(
+            suggestion.get("priority"), candidate.get("priority")
+        )
+        item = dict(candidate)
+        item["needed_qty"] = quantity
+        item["purchase_cost"] = quantity * _safe_float(item.get("unit_cost"))
+        item["potential_revenue"] = quantity * _safe_float(item.get("sale_price"))
+        item["potential_profit"] = item["potential_revenue"] - item["purchase_cost"]
+        item["priority"] = priority
+        item["priority_rank"] = priority_rank
+        item["analysis_reason"] = str(suggestion.get("reason") or "Sugestao validada pela IA").strip()[:240]
+        item["analysis_source"] = "ai"
+        items.append(item)
+        seen.add(key)
+        if len(items) >= max(1, int(max_items or 1)):
+            break
+
+    # A IA pode omitir itens preventivos, mas nunca os que já estão esgotados
+    # ou abaixo do limite. Esses artigos continuam visíveis com a previsão
+    # calculada localmente.
+    for candidate in eligible:
+        key = str(candidate.get("product_id") or "")
+        if key in seen or not candidate.get("must_restock"):
+            continue
+        item = dict(candidate)
+        item["analysis_reason"] = "Reposição necessária pelo nível atual de stock"
+        item["analysis_source"] = "demand"
+        items.append(item)
+        seen.add(key)
+
+    # Uma resposta sem itens costuma indicar que o modelo respondeu num formato
+    # diferente do pedido. Os candidatos já passaram pelas regras de procura e
+    # risco, por isso mostramos a previsão local em vez de deixar a tela vazia.
+    if not items:
+        return local_forecast("Previsao de procura; a IA nao devolveu sugestoes utilizaveis")
+
+    items.sort(
+        key=lambda item: (
+            item.get("priority_rank", 9),
+            _safe_float(item.get("coverage_days"), 999999),
+            -_safe_float(item.get("avg_daily")),
+        )
+    )
+    result = {
+        "items": items,
+        "source": "ai",
+        "ai_used": True,
+        "api_product_count": api_product_count,
+    }
+    _PURCHASE_SUGGESTIONS_CACHE.update({"ts": now, "signature": signature, "result": dict(result)})
+    return result
+
+
 def can_use_ai_api():
     api_key, _ = _get_ai_key_and_model()
     _sync_api_failure_cache_key(api_key)
@@ -587,18 +884,18 @@ def _fmt_mzn(value):
 def _friendly_api_error(raw_error):
     text = str(raw_error or "").strip()
     if not text:
-        return "Falha desconhecida na API Gemini."
+        return "Falha desconhecida no apoio externo."
     lower = text.lower()
     if "reported as leaked" in lower or "api key was reported as leaked" in lower:
-        return "A chave Gemini foi bloqueada por seguranca (comprometida). Gere uma nova API key."
+        return "A chave de acesso foi bloqueada por seguranca. Defina uma nova chave."
     if "permission_denied" in lower or "403" in lower:
-        return "Acesso negado na API Gemini (403). Verifique a chave e permissoes."
+        return "Acesso negado ao apoio externo. Verifique a chave e as permissoes."
     if "429" in lower or "quota" in lower or "rate" in lower:
-        return "Limite de uso da API Gemini atingido. Tente novamente mais tarde."
+        return "O limite de uso do apoio externo foi atingido. Tente novamente mais tarde."
     if "timed out" in lower or "timeout" in lower:
-        return "Timeout ao comunicar com a API Gemini."
+        return "A comunicacao com o apoio externo demorou demasiado tempo."
     if "connection" in lower or "network" in lower:
-        return "Falha de ligacao com a API Gemini."
+        return "Falha de ligacao com o apoio externo."
     return text[:220]
 
 
@@ -814,7 +1111,7 @@ def _build_sales_answer(snapshot, route):
         if not top:
             return [f"Nao ha produtos lideres identificados nos ultimos {lookback} dias."]
         formatted = ", ".join([f"{name} ({_fmt_mzn(val)})" for name, val in top[:3]])
-        return [f"Top produtos por faturacao nos ultimos {lookback} dias: {formatted}."]
+        return [f"Produtos mais vendidos por faturacao nos ultimos {lookback} dias: {formatted}."]
 
     if route["ask_count"] and not route["ask_value"]:
         return [f"Nos ultimos {lookback} dias registamos {snapshot['sales_count']} vendas."]
@@ -888,15 +1185,15 @@ def _build_productivity_answer(snapshot, route):
     if route["ask_top"] or "quem" in q_text:
         top_user = snapshot.get("top_user")
         if top_user:
-            return [f"Maior atividade operacional nos ultimos {lookback} dias: {top_user[0]} ({top_user[1]} acoes)."]
-        return [f"Nao ha atividade operacional suficiente para ranking nos ultimos {lookback} dias."]
+            return [f"Mais atividade nos ultimos {lookback} dias: {top_user[0]} ({top_user[1]} acoes)."]
+        return [f"Sem dados de atividade suficientes nos ultimos {lookback} dias."]
 
     if route["ask_count"]:
-        return [f"Produtividade: {snapshot['active_users']} utilizadores ativos e {total_actions} acoes no periodo."]
+        return [f"{snapshot['active_users']} utilizadores ativos e {total_actions} acoes no periodo."]
 
     if snapshot.get("top_seller"):
-        return [f"Produtividade geral: {snapshot['active_users']} utilizadores ativos; maior foco em vendas: {snapshot['top_seller'][0]}."]
-    return [f"Produtividade geral: {snapshot['active_users']} utilizadores ativos e {total_actions} acoes."]
+        return [f"{snapshot['active_users']} utilizadores ativos; mais vendas por {snapshot['top_seller'][0]}."]
+    return [f"{snapshot['active_users']} utilizadores ativos e {total_actions} acoes."]
 
 
 def _build_direct_lines(question, snapshot, route):
@@ -914,8 +1211,8 @@ def _build_direct_lines(question, snapshot, route):
     exp7 = len(snapshot["insights"].get("expiring_7") or [])
     lookback = snapshot["lookback_days"]
     lines = [
-        f"Resumo rapido: {snapshot['sales_count']} vendas e {_fmt_mzn(snapshot['total_revenue'])} de receita nos ultimos {lookback} dias.",
-        f"Atenção a {low_count} itens com stock baixo e {exp7} itens a vencer nos próximos 7 dias.",
+        f"{snapshot['sales_count']} vendas e {_fmt_mzn(snapshot['total_revenue'])} de receita nos ultimos {lookback} dias.",
+        f"{low_count} itens com stock baixo e {exp7} itens a vencer nos proximos 7 dias.",
     ]
     return lines
 
@@ -1034,10 +1331,10 @@ def _build_actions(snapshot):
     if snapshot["promo_count"] > 0:
         actions.append("Comparar margem de vendas promocionais com vendas normais por categoria.")
     if snapshot["active_users"] <= 1:
-        actions.append("Redistribuir tarefas de venda e conferencias para reduzir dependencia operacional.")
+        actions.append("Distribua as tarefas de venda e conferencia entre mais utilizadores.")
 
     if not actions:
-        actions.append("Operacao estavel. Manter monitoria diaria de vendas, stock e perdas.")
+        actions.append("Sem acoes pendentes. Verifique vendas, stock e perdas diariamente.")
 
     # remover repetidos preservando ordem
     dedup = []
@@ -1058,7 +1355,7 @@ def _build_general_local_lines(question):
         return ["Estou aqui. Pode fazer qualquer pergunta e respondo de forma direta."]
 
     if any(word in q for word in ("quem es", "quem és", "seu nome", "teu nome")):
-        return ["Sou o assistente da loja e posso responder perguntas gerais e de gestao comercial."]
+        return ["Posso ajudar com perguntas gerais e de gestao da loja."]
 
     if "hora" in q:
         return [f"Agora sao {now_dt.strftime('%H:%M')} (hora local do sistema)."]
@@ -1067,11 +1364,10 @@ def _build_general_local_lines(question):
         return [f"Hoje e {now_dt.strftime('%d/%m/%Y')}."]
 
     if any(word in q for word in ("o que podes", "o que pode", "ajuda", "como funcionas")):
-        return ["Posso responder perguntas gerais e tambem analisar vendas, stock, perdas e produtividade."]
+        return ["Posso responder perguntas gerais e mostrar dados de vendas, stock, perdas e produtividade."]
 
     return [
-        "Entendi a sua pergunta.",
-        "No modo local eu respondo de forma curta; com API Gemini ativa a resposta fica mais completa.",
+        "Faca uma pergunta sobre vendas, stock, perdas ou produtividade.",
     ]
 
 
@@ -1079,8 +1375,8 @@ def _build_local_answer(question, snapshot, is_business_question=True):
     if not is_business_question:
         lines = _build_general_local_lines(question)
         return {
-            "summary": "Resposta local geral concluida.",
-            "sections": [{"title": "Resposta Direta", "lines": lines[:3]}],
+            "summary": "Resposta",
+            "sections": [{"title": "Resposta", "lines": lines[:3]}],
             "alerts": [],
             "actions": [],
             "route": {"domain": "general"},
@@ -1096,17 +1392,17 @@ def _build_local_answer(question, snapshot, is_business_question=True):
     else:
         direct_lines = _build_direct_lines(question, snapshot, route)
 
-    sections = [{"title": "Resposta Direta", "lines": direct_lines[:3]}]
+    sections = [{"title": "Resposta", "lines": direct_lines[:3]}]
 
     wants_actions = bool(route.get("ask_action"))
     if wants_actions or route.get("domain") == "general":
-        sections.append({"title": "Proximo Passo", "lines": actions[:2]})
+        sections.append({"title": "O que fazer", "lines": actions[:2]})
 
     wants_alerts = bool(route.get("ask_alert"))
     if wants_alerts and alerts:
         sections.append({"title": "Alertas", "lines": alerts[:2]})
 
-    summary = f"Analise local concluida com foco em {route.get('domain', 'geral')}."
+    summary = f"Resumo de {route.get('domain', 'geral')}."
     return {
         "summary": summary,
         "sections": sections[:3],
@@ -1132,7 +1428,7 @@ def _build_api_overlay(question, snapshot, local_answer, is_business_question=Tr
 
     client, model = _get_ai_client()
     if not client or not model:
-        return [], "API Gemini nao configurada. Defina GEMINI_API_KEY e GEMINI_MODEL."
+        return [], "Apoio externo nao configurado. Defina a chave e o modelo nas definicoes."
 
     if not is_business_question:
         language_name = _current_ai_response_language()
@@ -1218,7 +1514,7 @@ def answer_management_question(question, db=None, use_api=False, lookback_days=3
     if not clean_question:
         return {
             "mode": "local",
-            "summary": "Pergunta vazia. Escreva uma pergunta para analisar vendas, stock, perdas ou produtividade.",
+            "summary": "Pergunta vazia. Escreva uma pergunta sobre vendas, stock, perdas ou produtividade.",
             "sections": [],
             "alerts": [],
             "actions": [],

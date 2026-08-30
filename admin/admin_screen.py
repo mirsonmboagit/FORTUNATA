@@ -35,12 +35,17 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from database.provider import get_db
-from ui.components.hover_widgets import HoverCard, HoverRaisedButton, HoverTooltipIconButton
-from ui.components.loading_overlay import ScreenLoadingController
+from ui.components.hover_widgets import HoverCard, HoverRaisedButton
 from utils.core.i18n import correct_portuguese_text
 from utils.core.formatters import format_money
-from ui.components.tooltip_widgets import TooltipFloatingActionButton, TooltipIconButton
+from ui.components.tooltip_widgets import TooltipFloatingActionButton, TooltipIconButton, set_attention_shake
 from utils.business.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
+from utils.business.purchase_suggestions import (
+    build_demand_purchase_candidates,
+    load_product_api_context,
+    normalize_barcode,
+)
+from utils.ai.ai_insights import build_ai_purchase_suggestions
 
 
 _PRODUCT_FORM_CLASS = None
@@ -120,7 +125,7 @@ def _get_product_form_class():
 Builder.load_file(os.path.join(CURRENT_DIR, 'admin_screen.kv'))
 
 
-COL_HINTS = [0.06, 0.20, 0.09, 0.09, 0.07, 0.11, 0.11, 0.13, 0.14]
+COL_HINTS = [0.06, 0.18, 0.09, 0.09, 0.07, 0.11, 0.11, 0.15, 0.14]
 LOSS_LABELS = {
     "DAMAGE": "Danificado",
     "EXPIRED": "Expirado",
@@ -256,7 +261,7 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
     def __init__(self, **kwargs):
         kwargs.setdefault("orientation", "horizontal")
         kwargs.setdefault("size_hint_y", None)
-        kwargs.setdefault("height", dp(48))
+        kwargs.setdefault("height", dp(56))
         kwargs.setdefault("padding", [dp(8), 0])
         super().__init__(**kwargs)
         self.admin_screen = None
@@ -275,7 +280,8 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
             shorten=True,
             shorten_from="right",
             theme_text_color="Custom",
-            font_style="Body2",
+            font_style="Body1",
+            font_size=sp(16),
         )
         cell.add_widget(label)
         self.add_widget(cell)
@@ -285,10 +291,10 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         sequence_cell = FloatLayout(size_hint_x=COL_HINTS[0])
         self.sequence_label = MDLabel(
             halign="center", valign="middle", theme_text_color="Custom", bold=True,
-            size_hint=(1, 1), pos_hint={"x": 0, "y": 0},
+            font_size=sp(16), size_hint=(1, 1), pos_hint={"x": 0, "y": 0},
         )
         self.sequence_button = HoverRaisedButton(
-            size_hint=(1, 1), pos_hint={"x": 0, "y": 0}, font_size=sp(13),
+            size_hint=(1, 1), pos_hint={"x": 0, "y": 0}, font_size=sp(15),
         )
         self.sequence_button.bind(on_release=self._select_lot)
         sequence_cell.add_widget(self.sequence_label)
@@ -304,9 +310,9 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         self.expiry_label = self._make_cell(COL_HINTS[7])
 
         actions_cell = MDBoxLayout(size_hint_x=COL_HINTS[8], padding=[dp(4), 0], spacing=dp(4))
-        self.detail_button = TooltipIconButton(icon="information", icon_size=sp(20), hint_text="Ver detalhes")
-        self.edit_button = TooltipIconButton(icon="pencil", icon_size=sp(20), hint_text="Editar produto")
-        self.delete_button = TooltipIconButton(icon="delete", icon_size=sp(20), hint_text="Eliminar produto")
+        self.detail_button = TooltipIconButton(icon="information", icon_size=sp(23), hint_text="Ver detalhes")
+        self.edit_button = TooltipIconButton(icon="pencil", icon_size=sp(23), hint_text="Editar produto")
+        self.delete_button = TooltipIconButton(icon="delete", icon_size=sp(23), hint_text="Eliminar produto")
         self.detail_button.bind(on_release=self._show_details)
         self.edit_button.bind(on_release=self._edit_product)
         self.delete_button.bind(on_release=self._delete_product)
@@ -320,7 +326,7 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         self.product_data = data.get("product_data")
         self.row_index = data.get("row_index", index)
         self.palette = data.get("palette") or {}
-        self.height = data.get("row_height", dp(48))
+        self.height = data.get("row_height", dp(56))
         self.set_product_payload()
         return result
 
@@ -334,7 +340,6 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         tokens = palette.get("tokens", {})
         text_primary = palette.get("text_primary", [0.25, 0.30, 0.40, 1])
         text_secondary = palette.get("text_secondary", [0.2, 0.25, 0.35, 1])
-        text_muted = palette.get("text_muted", [0.45, 0.50, 0.55, 1])
         info_color = palette.get("info_color", [0.1, 0.45, 0.75, 1])
         success_color = palette.get("success_color", [0.10, 0.55, 0.25, 1])
         warning_color = palette.get("warning_color", [0.75, 0.45, 0.10, 1])
@@ -367,16 +372,17 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
             else f"{product[1]} ({lot_count} lotes)" if lot_count > 1 else str(product[1])
         )
         self.name_label.text_color = text_primary
+        self.name_label.bold = True
 
         is_weight = bool(product[15]) if len(product) > 15 else False
         unit_label = "KG" if is_weight else ""
         stock_value = _safe_float(product[2] if len(product) > 2 else 0.0)
         sold_value = _safe_float(product[3] if len(product) > 3 else 0.0)
         self.stock_label.text = f"{stock_value:.2f} {unit_label}" if is_weight else f"{int(stock_value)}"
-        self.stock_label.text_color = danger_color if stock_value < 10 else text_secondary
+        self.stock_label.text_color = danger_color if stock_value < 10 else text_primary
         self.stock_label.bold = stock_value < 10
         self.sold_label.text = f"{sold_value:.2f} {unit_label}" if is_weight else f"{int(sold_value)}"
-        self.sold_label.text_color = text_secondary
+        self.sold_label.text_color = text_primary
         self.type_label.text = "KG" if is_weight else "UN"
         self.type_label.text_color = warning_color if is_weight else info_color
         self.type_label.bold = True
@@ -395,7 +401,7 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         elif lot_count > 1:
             expiry_text = f"{expiry_text} | {lot_count} lotes"
         self.expiry_label.text = expiry_text
-        self.expiry_label.text_color = expiry_alert.get("color_rgba", text_muted) if expiry_alert.get("is_alert") else text_muted
+        self.expiry_label.text_color = expiry_alert.get("color_rgba", text_secondary) if expiry_alert.get("is_alert") else text_secondary
 
         card_color = tokens.get("card_alt", [0.92, 0.95, 1, 1])
         for button, color in (
@@ -458,7 +464,6 @@ class AdminScreen(Screen):
     search_input = ObjectProperty(None)
     category_spinner = ObjectProperty(None)
     products = ListProperty([])
-    quick_actions_open = BooleanProperty(False)
     shopping_list_busy = BooleanProperty(False)
 
     # -- Token para descartar resultados de filtros obsoletos ------------------
@@ -480,6 +485,8 @@ class AdminScreen(Screen):
 
         self.swing_event = None
         self.notification_count = 0
+        self.recommendation_count = 0
+        self.fraud_notification_count = 0
         self._products_load_token = 0
         self._products_loading = False
         self._pending_products_load = False
@@ -502,7 +509,7 @@ class AdminScreen(Screen):
         self._table_render_token = 0
         self._pending_table_rows = deque()   # deque de (idx, product) aguardando render
         self._product_row_hover_handlers = []
-        self._table_row_height = dp(48)
+        self._table_row_height = dp(56)
         self._table_palette = {}
 
         self._current_display = []
@@ -533,7 +540,6 @@ class AdminScreen(Screen):
         self._last_shortcut_signature = None
         self._last_shortcut_at = 0.0
         self._shortcut_help_dialog = None
-        self._loading_controller = getattr(self, "_loading_controller", None)
 
         # -- Snackbar reutilizável ---------------------------------------------
         self._snackbar = None
@@ -548,7 +554,7 @@ class AdminScreen(Screen):
             self._intelligence = ProactiveIntelligenceController(
                 screen=self,
                 db=self.db,
-                history_title="Historico de monitorizacao",
+                history_title="Historico de avisos",
                 banner_columns=1,
                 auto_batch_size=2,
                 auto_stagger_seconds=2.0,
@@ -561,22 +567,12 @@ class AdminScreen(Screen):
         self._update_responsive_layout()
         self._bind_recycle_product_hover()
 
-    def _ensure_loading_overlay(self):
-        if getattr(self, "_loading_controller", None) is None:
-            self._loading_controller = ScreenLoadingController(self)
-        self._loading_controller.attach()
-        return self._loading_controller
-
     def _set_loading_overlay(self, key, active, message="", detail=""):
-        controller = self._ensure_loading_overlay()
-        if active:
-            controller.show(key, message, detail)
-            return
-        controller.hide(key)
+        """Não bloqueia a tela de produtos enquanto uma tarefa é executada."""
+        return None
 
     def _clear_loading_overlay(self):
-        if getattr(self, "_loading_controller", None) is not None:
-            self._loading_controller.clear()
+        return None
 
     def _is_current_screen(self):
         return bool(self.manager and self.manager.current == self.name)
@@ -655,9 +651,6 @@ class AdminScreen(Screen):
     def _preload_product_form_class(self, *_args):
         self._product_form_preload_ev = None
         _get_product_form_class()
-
-    def toggle_quick_actions(self, *args):
-        self.quick_actions_open = not self.quick_actions_open
 
     def _bind_keyboard_shortcuts(self):
         if self._keyboard_shortcuts_bound:
@@ -748,9 +741,6 @@ class AdminScreen(Screen):
             except Exception:
                 pass
             self.category_menu = None
-            return True
-        if self.quick_actions_open:
-            self.quick_actions_open = False
             return True
         for attr_name in (
             "_lot_selector_dialog",
@@ -863,7 +853,7 @@ class AdminScreen(Screen):
             action_key or "admin_task",
             True,
             busy_message or "A processar operacao do admin...",
-            "Aguarde enquanto os dados sao preparados nesta tela.",
+            "A preparar dados.",
         )
 
         def worker():
@@ -984,8 +974,17 @@ class AdminScreen(Screen):
     def _init_badge(self, dt):
         if not self._is_current_screen():
             return
-        if hasattr(self.ids, 'ai_badge'):
-            self.ids.ai_badge.opacity = 0
+        for badge_id in (
+            'ai_badge',
+            'recommendations_badge',
+            'fraud_alerts_badge',
+            'loss_metrics_badge',
+        ):
+            badge = self.ids.get(badge_id)
+            if badge is not None:
+                badge.opacity = 1
+                badge_size = dp(22) if badge_id in ('fraud_alerts_badge', 'loss_metrics_badge') else dp(26)
+                badge.size = (badge_size, badge_size)
 
     def add_notification(self):
         self.notification_count += 1
@@ -996,19 +995,67 @@ class AdminScreen(Screen):
         self.update_notification_badge(0)
 
     def update_notification_badge(self, count):
-        self.notification_count = count
+        self.notification_count = max(0, int(count or 0))
 
         if not hasattr(self.ids, 'ai_badge') or not hasattr(self.ids, 'ai_badge_label'):
             return
 
-        self.ids.ai_badge_label.text = str(count)
+        self.ids.ai_badge_label.text = str(self.notification_count)
 
-        if count > 0:
+        if self.notification_count > 0:
             self._show_badge()
-            self._start_swing_animation()
+            set_attention_shake(self.ids.get('ai_button'), True)
         else:
-            self._hide_badge()
-            self._stop_swing_animation()
+            self.ids.ai_badge.opacity = 1
+            self.ids.ai_badge.size = (dp(26), dp(26))
+            set_attention_shake(self.ids.get('ai_button'), False)
+
+    def update_recommendation_badge(self, count):
+        self.recommendation_count = max(0, int(count or 0))
+        badge = self.ids.get('recommendations_badge') if hasattr(self, 'ids') else None
+        label = self.ids.get('recommendations_badge_label') if hasattr(self, 'ids') else None
+        if badge is None or label is None:
+            return
+        label.text = str(self.recommendation_count)
+        Animation.cancel_all(badge)
+        if self.recommendation_count > 0:
+            badge.opacity = 1
+            badge.size = (dp(0), dp(0))
+            Animation(size=(dp(26), dp(26)), duration=0.25, transition='out_back').start(badge)
+            set_attention_shake(self.ids.get('recommendations_button'), True)
+            return
+        badge.opacity = 1
+        badge.size = (dp(26), dp(26))
+        set_attention_shake(self.ids.get('recommendations_button'), False)
+
+    def update_loss_alert_badges(self, count):
+        """Mostra o total atual de alertas de fraude nos dois atalhos de perdas."""
+        self.fraud_notification_count = max(0, int(count or 0))
+        if not hasattr(self, 'ids'):
+            return
+
+        for badge_id, label_id, button_id in (
+            ('fraud_alerts_badge', 'fraud_alerts_badge_label', 'fraud_alerts_button'),
+            ('loss_metrics_badge', 'loss_metrics_badge_label', 'loss_metrics_button'),
+        ):
+            badge = self.ids.get(badge_id)
+            label = self.ids.get(label_id)
+            if badge is None or label is None:
+                continue
+            label.text = str(self.fraud_notification_count)
+            Animation.cancel_all(badge)
+            badge.opacity = 1
+            if self.fraud_notification_count > 0:
+                badge.size = (dp(0), dp(0))
+                Animation(
+                    size=(dp(22), dp(22)),
+                    duration=0.25,
+                    transition='out_back',
+                ).start(badge)
+                set_attention_shake(self.ids.get(button_id), True)
+            else:
+                badge.size = (dp(22), dp(22))
+                set_attention_shake(self.ids.get(button_id), False)
 
     def _show_badge(self):
         if not hasattr(self.ids, 'ai_badge'):
@@ -1018,7 +1065,7 @@ class AdminScreen(Screen):
         self.ids.ai_badge.opacity = 1
 
         anim = Animation(
-            size=(dp(24), dp(24)),
+            size=(dp(26), dp(26)),
             duration=0.3,
             transition='out_back'
         )
@@ -1055,7 +1102,7 @@ class AdminScreen(Screen):
                 Animation(pos=(bx - d,     by - d*0.75),duration=0.30, transition='in_out_sine') +
                 Animation(pos=(bx + d*0.75,by + d*0.5), duration=0.25, transition='in_out_sine') +
                 Animation(pos=(bx - d*0.75,by - d*0.5), duration=0.25, transition='in_out_sine') +
-                Animation(pos=(bx + d*0.5, by + d*0.25),duration=0.20, transition='in_out_sine') +
+                Animation(pos=(bx + d*0.5, by + d*0.25),duration=0.20, transition='out_sine') +
                 Animation(pos=(bx - d*0.5, by - d*0.25),duration=0.20, transition='in_out_sine') +
                 Animation(pos=(bx, by),                  duration=0.15, transition='out_sine')
             )
@@ -1176,13 +1223,13 @@ class AdminScreen(Screen):
                 "title": "Sem alertas de fraude",
                 "messages": [
                     f"Nenhum padrao suspeito encontrado nos ultimos {int(days_lookback)} dias.",
-                    "As perdas aprovadas continuam dentro dos limites de monitorizacao.",
+                    "Sem perdas acima do limite definido.",
                 ],
                 "all_messages": [],
                 "count": 0,
                 "urgency": 999,
                 "details_sections": [
-                    ("Estado atual", ["Nao ha alertas operacionais para rever neste periodo."]),
+                    ("Estado atual", ["Nao ha alertas para rever neste periodo."]),
                 ],
             }
 
@@ -1202,7 +1249,7 @@ class AdminScreen(Screen):
         detail_lines = []
         for alert in sorted_alerts[:10]:
             label = self._severity_label(alert.get("severity"))
-            title = str(alert.get("title") or alert.get("alert_type") or "Alerta operacional")
+            title = str(alert.get("title") or alert.get("alert_type") or "Alerta")
             description = str(alert.get("description") or "").strip()
             user = str(alert.get("related_user") or "").strip()
             messages.append(f"{label}: {title}")
@@ -1420,7 +1467,7 @@ class AdminScreen(Screen):
         )
         card.add_widget(header)
 
-        section_lines = list(lines or []) or ["Sem dados suficientes para apresentar nesta secao."]
+        section_lines = list(lines or []) or ["Sem dados nesta secao."]
         for line in section_lines:
             item = MDLabel(
                 text=str(line),
@@ -1598,7 +1645,7 @@ class AdminScreen(Screen):
                     "Leitura rapida",
                     [
                         "Use o botao PDF para guardar uma versao imprimivel deste painel.",
-                        "A secao por utilizador ajuda a identificar concentracao de perdas por operador.",
+                        "A secao por utilizador ajuda a identificar concentracao de perdas por atendente.",
                         "A secao por produto ajuda a decidir reposicao, promocao ou revisao de manuseio.",
                     ],
                     icon_name="lightbulb-on-outline",
@@ -2787,8 +2834,8 @@ class AdminScreen(Screen):
     # Responsive sizing
     # ------------------------------------------------------------------
     def _row_height(self):
-        base_height = max(dp(46), Window.height * 0.054)
-        return min(base_height, dp(62))
+        base_height = max(dp(56), Window.height * 0.062)
+        return min(base_height, dp(72))
 
     def _theme_tokens(self):
         app = App.get_running_app()
@@ -2868,6 +2915,7 @@ class AdminScreen(Screen):
         row_h = self._row_height()
         tokens = self._theme_tokens()
         self._table_row_height = row_h
+        dark_table = sum(tokens.get("card", [1, 1, 1, 1])[:3]) < 0.60
         self._table_palette = {
             "tokens": tokens,
             "row_even": tokens.get("surface_alt", [0.97, 0.98, 0.99, 1]),
@@ -2876,10 +2924,10 @@ class AdminScreen(Screen):
             "text_primary": tokens.get("text_primary", [0.25, 0.30, 0.40, 1]),
             "text_secondary": tokens.get("text_secondary", [0.2, 0.25, 0.35, 1]),
             "text_muted": tokens.get("text_muted", [0.45, 0.50, 0.55, 1]),
-            "info_color": tokens.get("info", [0.1, 0.45, 0.75, 1]),
-            "success_color": tokens.get("success", [0.10, 0.55, 0.25, 1]),
-            "warning_color": tokens.get("warning", [0.75, 0.45, 0.10, 1]),
-            "danger_color": tokens.get("danger", [0.8, 0.2, 0.2, 1]),
+            "info_color": [0.40, 0.74, 1.00, 1] if dark_table else tokens.get("info", [0.1, 0.45, 0.75, 1]),
+            "success_color": [0.34, 0.90, 0.58, 1] if dark_table else tokens.get("success", [0.10, 0.55, 0.25, 1]),
+            "warning_color": [1.00, 0.78, 0.35, 1] if dark_table else tokens.get("warning", [0.75, 0.45, 0.10, 1]),
+            "danger_color": [1.00, 0.50, 0.52, 1] if dark_table else tokens.get("danger", [0.8, 0.2, 0.2, 1]),
         }
 
         page_offset = max(0, int(getattr(self, "_products_page_offset", 0) or 0))
@@ -3284,7 +3332,10 @@ class AdminScreen(Screen):
 
         self.dialog = MDDialog(
             title="Confirmar Eliminação",
-            text="Tem certeza que deseja eliminar este produto?",
+            text=(
+                "Produtos com vendas ou movimentos serão arquivados e removidos do catálogo. "
+                "Produtos sem histórico serão eliminados definitivamente."
+            ),
             buttons=[
                 MDFlatButton(
                     text="NAO",
@@ -3470,7 +3521,7 @@ class AdminScreen(Screen):
             ok = self.db.delete_product(product_id, username=username)
             if ok and username:
                 try:
-                    self.db.log_action(username, role, "DELETE_PRODUCT", f"Produto eliminado ID {product_id}")
+                    self.db.log_action(username, role, "DELETE_PRODUCT", f"Produto removido do catálogo ID {product_id}")
                 except Exception:
                     pass
             return ok
@@ -3478,7 +3529,7 @@ class AdminScreen(Screen):
         def on_success(ok):
             if ok:
                 self.load_products(force=True)
-                self.show_snackbar("Produto eliminado com sucesso!")
+                self.show_snackbar("Produto removido do catálogo com sucesso!")
                 return
             self.show_snackbar("Erro ao eliminar produto!")
 
@@ -3539,6 +3590,28 @@ class AdminScreen(Screen):
             parts.append("em:" + ",".join(exp_medio))
         if exp_leve:
             parts.append("el:" + ",".join(exp_leve))
+        fraud_alerts = [
+            item for item in list(insights.get("fraud_alerts") or [])
+            if isinstance(item, dict)
+        ]
+        if fraud_alerts:
+            fraud_key_parts = []
+            for item in fraud_alerts:
+                fraud_key_parts.append(
+                    ":".join(
+                        str(item.get(field) or "").strip()
+                        for field in (
+                            "alert_type",
+                            "severity",
+                            "title",
+                            "description",
+                            "related_user",
+                            "related_product_id",
+                            "related_movement_id",
+                        )
+                    )
+                )
+            parts.append("fr:" + ",".join(sorted(fraud_key_parts)))
         return "|".join(parts)
 
     def mark_notifications_seen(self, insights=None):
@@ -3630,18 +3703,23 @@ class AdminScreen(Screen):
 
     def show_ai_insights(self, *args):
         caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
-        self._get_intelligence().open_history(caller=caller)
+        self._get_intelligence().open_alerts(caller=caller)
 
     def open_ai_menu(self, caller):
         if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
             caller = self.ids.ai_button
-        self._get_intelligence().open_history(caller=caller)
+        self._get_intelligence().open_alerts(caller=caller)
+
+    def show_ai_recommendations(self, caller=None):
+        if caller is None and hasattr(self, "ids") and "recommendations_button" in self.ids:
+            caller = self.ids.recommendations_button
+        self._get_intelligence().open_recommendations(caller=caller)
 
     def _open_ai_from_menu(self, key):
         if hasattr(self, "_ai_menu") and self._ai_menu:
             self._ai_menu.dismiss()
         caller = self.ids.ai_button if hasattr(self, "ids") and "ai_button" in self.ids else None
-        self._get_intelligence().open_history(caller=caller)
+        self._get_intelligence().open_alerts(caller=caller)
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
         return None
@@ -3656,10 +3734,12 @@ class AdminScreen(Screen):
         insights = insights or self._cached_admin_insights or {}
         if not insights:
             self.update_notification_badge(0)
+            self.update_loss_alert_badges(0)
             return
         key = self._get_alert_key(insights)
         badge_counts = insights.get("badge_counts") or {}
         count = badge_counts.get("total", 0)
+        fraud_count = badge_counts.get("fraud", len(insights.get("fraud_alerts") or []))
 
         if not key:
             count = 0
@@ -3669,13 +3749,14 @@ class AdminScreen(Screen):
             count = 0
 
         self.update_notification_badge(count)
+        self.update_loss_alert_badges(fraud_count)
 
     def _stop_ai_polling(self):
         if self._intelligence is not None:
             self._intelligence.stop()
 
     # ------------------------------------------------------------------
-    # Lista de compras
+    # Sugestoes de compras
     # ------------------------------------------------------------------
     @staticmethod
     def _shopping_text_key(value):
@@ -3719,6 +3800,9 @@ class AdminScreen(Screen):
             "avg_daily": _safe_float(get(avg_index), 0.0),
             "days_left": None if get(days_index) is None else _safe_float(get(days_index), None),
             "last_update": get(last_update_index) if last_update_index is not None else None,
+            # A consulta enriquecida acrescenta as saídas acumuladas no fim da
+            # linha. Este valor é usado para o mesmo limite crítico do painel.
+            "sold_stock": _safe_float(get(12), 0.0),
         }
 
     def _shopping_group_key(self, item):
@@ -3748,6 +3832,7 @@ class AdminScreen(Screen):
                     "is_weight": item["is_weight"],
                     "stock": 0.0,
                     "avg_daily": 0.0,
+                    "sold_stock": 0.0,
                     "lot_count": 0,
                     "cost_weight_total": 0.0,
                     "cost_weight_qty": 0.0,
@@ -3771,6 +3856,7 @@ class AdminScreen(Screen):
             sale_price = _safe_float(item.get("sale_price"), 0.0)
             bucket["stock"] += stock_value
             bucket["avg_daily"] += max(0.0, _safe_float(item.get("avg_daily"), 0.0))
+            bucket["sold_stock"] += max(0.0, _safe_float(item.get("sold_stock"), 0.0))
             bucket["lot_count"] += 1
 
             if stock_value > 0:
@@ -3823,6 +3909,7 @@ class AdminScreen(Screen):
                 "is_weight": bucket["is_weight"],
                 "stock": stock_value,
                 "avg_daily": avg_daily,
+                "sold_stock": _safe_float(bucket["sold_stock"], 0.0),
                 "days_left": days_left,
                 "unit_cost": unit_cost,
                 "sale_price": sale_price,
@@ -3834,139 +3921,27 @@ class AdminScreen(Screen):
 
         return grouped
 
-    def _build_shopping_item(self, product, velocity_days, target_days, warning_days, min_stock):
-        stock_value = max(0.0, _safe_float(product.get("stock"), 0.0))
-        avg_daily = max(0.0, _safe_float(product.get("avg_daily"), 0.0))
-        unit_cost = _safe_float(product.get("unit_cost"), 0.0)
-        sale_price = _safe_float(product.get("sale_price"), 0.0)
-        is_weight = bool(product.get("is_weight"))
-        unit = "KG" if is_weight else "UN"
-        today = datetime.now().date()
-        expiry_date = product.get("expiry_date")
-        days_to_expiry = None
-        usable_stock = stock_value
-        notes = []
-
-        if expiry_date is not None:
-            days_to_expiry = (expiry_date - today).days
-            if days_to_expiry < 0:
-                usable_stock = 0.0
-                notes.append("stock vencido")
-            elif days_to_expiry <= target_days:
-                notes.append(f"validade em {days_to_expiry} dias")
-                if avg_daily > 0:
-                    usable_stock = min(stock_value, avg_daily * max(days_to_expiry, 0))
-                elif days_to_expiry <= warning_days:
-                    usable_stock = 0.0
-
-        days_left = (usable_stock / avg_daily) if avg_daily > 0 else None
-        include = False
-        reason = "Reposicao preventiva"
-
-        if stock_value <= 0:
-            include = True
-            reason = "Esgotado"
-        elif usable_stock <= 0:
-            include = True
-            reason = "Stock sem cobertura util"
-        elif usable_stock <= min_stock:
-            include = True
-            reason = "Stock baixo"
-        elif days_left is not None and days_left <= warning_days:
-            include = True
-            reason = "Cobertura curta"
-
-        if not include:
-            return None
-
-        if avg_daily > 0:
-            target_stock = max(min_stock, avg_daily * target_days)
-        else:
-            target_stock = min_stock * 2 if usable_stock <= min_stock else min_stock
-
-        needed_qty = max(0.0, target_stock - usable_stock)
-        if needed_qty <= 0:
-            needed_qty = min_stock
-
-        if is_weight:
-            needed_qty = round(needed_qty, 2)
-        else:
-            needed_qty = float(max(1, int(math.ceil(needed_qty - 1e-9))))
-
-        if needed_qty <= 0:
-            return None
-
-        if stock_value <= 0:
-            priority = "Esgotado"
-            priority_rank = 0
-        elif days_left is not None and days_left <= 3:
-            priority = "Critico"
-            priority_rank = 1
-        elif usable_stock <= (min_stock / 2.0):
-            priority = "Critico"
-            priority_rank = 1
-        else:
-            priority = "Baixo"
-            priority_rank = 2
-
-        if not notes:
-            notes.append(reason.lower())
-
-        purchase_cost = needed_qty * unit_cost
-        potential_revenue = needed_qty * sale_price
-        potential_profit = needed_qty * (sale_price - unit_cost)
-
-        return {
-            "product_ids": product.get("product_ids") or (),
-            "name": product.get("name") or "Produto sem nome",
-            "barcode": product.get("barcode") or "",
-            "unit": unit,
-            "current_stock": stock_value,
-            "usable_stock": usable_stock,
-            "avg_daily": avg_daily,
-            "days_left": days_left,
-            "needed_qty": needed_qty,
-            "target_stock": target_stock,
-            "unit_cost": unit_cost,
-            "sale_price": sale_price,
-            "purchase_cost": purchase_cost,
-            "potential_revenue": potential_revenue,
-            "potential_profit": potential_profit,
-            "priority": priority,
-            "priority_rank": priority_rank,
-            "reason": reason,
-            "notes": "; ".join(notes),
-            "expiry_date": expiry_date.isoformat() if expiry_date else "",
-            "days_to_expiry": days_to_expiry,
-            "lot_count": int(product.get("lot_count") or 1),
-            "velocity_days": velocity_days,
-        }
-
-    def _build_shopping_list_payload(self, rows, source="stock_control"):
-        velocity_days = 14
-        target_days = 14
-        warning_days = 7
-        min_stock = 5.0
+    def _build_shopping_list_payload(self, rows, source="stock_control", *, use_ai=False):
+        # Compras sao preventivas: avaliamos se o stock cobre as proximas tres
+        # semanas e calculamos uma reposicao para cerca de um mes de procura.
+        # Assim a lista reflete a rapidez de saida, sem esperar pelo esgotamento.
+        target_days = 30
+        warning_days = 21
 
         grouped_products = self._group_shopping_products(rows, source=source)
-        items = []
-        for product in grouped_products:
-            item = self._build_shopping_item(
-                product,
-                velocity_days=velocity_days,
-                target_days=target_days,
-                warning_days=warning_days,
-                min_stock=min_stock,
-            )
-            if item:
-                items.append(item)
+        candidates = build_demand_purchase_candidates(
+            grouped_products,
+            target_days=target_days,
+            warning_days=warning_days,
+        )
+        api_context_by_barcode = load_product_api_context(grouped_products)
+        for item in candidates:
+            api_context = api_context_by_barcode.get(normalize_barcode(item.get("barcode")))
+            if api_context:
+                item["api_context"] = api_context
 
-        items.sort(key=lambda item: (
-            item.get("priority_rank", 9),
-            item.get("days_left") is None,
-            item.get("days_left") if item.get("days_left") is not None else 999999,
-            str(item.get("name") or "").lower(),
-        ))
+        analysis = build_ai_purchase_suggestions(candidates, use_ai=use_ai)
+        items = list(analysis.get("items") or [])
 
         total_investment = sum(_safe_float(item.get("purchase_cost")) for item in items)
         total_revenue = sum(_safe_float(item.get("potential_revenue")) for item in items)
@@ -3984,23 +3959,32 @@ class AdminScreen(Screen):
 
         summary = {
             "total_items": len(items),
-            "out_of_stock_count": sum(1 for item in items if item.get("priority") == "Esgotado"),
-            "critical_count": sum(1 for item in items if item.get("priority") == "Critico"),
-            "low_count": sum(1 for item in items if item.get("priority") == "Baixo"),
+            "out_of_stock_count": sum(
+                1 for item in items if _safe_float(item.get("current_stock"), 0.0) <= 0
+            ),
+            "critical_count": sum(1 for item in items if item.get("priority") in {"Urgente", "Alta"}),
+            "low_count": sum(1 for item in items if item.get("priority") == "Media"),
             "total_investment": total_investment,
             "total_potential_revenue": total_revenue,
             "total_potential_profit": total_profit,
             "unit_qty": unit_qty,
             "kg_qty": kg_qty,
-            "velocity_days": velocity_days,
+            "velocity_days": 14,
             "target_days": target_days,
             "warning_days": warning_days,
-            "min_stock": min_stock,
             "source": source,
+            "analysis_source": analysis.get("source") or "demand",
+            "ai_used": bool(analysis.get("ai_used")),
+            "api_product_count": int(analysis.get("api_product_count") or 0),
+            "empty_reason": (
+                "Não há produtos esgotados, abaixo do limite crítico ou com saída rápida "
+                "que precisem de reposição agora."
+                if not items else ""
+            ),
         }
         return {"items": items, "summary": summary}
 
-    def _load_shopping_list_payload(self):
+    def _load_shopping_list_payload(self, *, use_ai=False):
         source = "stock_control"
         rows = self.db.get_products_for_stock_control(
             include_velocity=True,
@@ -4012,7 +3996,7 @@ class AdminScreen(Screen):
                 include_velocity=True,
                 velocity_days=14,
             ) or []
-        return self._build_shopping_list_payload(rows, source=source)
+        return self._build_shopping_list_payload(rows, source=source, use_ai=use_ai)
 
     def _format_shopping_qty(self, value, unit):
         amount = _safe_float(value, 0.0)
@@ -4091,9 +4075,13 @@ class AdminScreen(Screen):
         )
         content.bind(minimum_height=content.setter("height"))
 
+        source_label = "IA + procura" if summary.get("ai_used") else "Procura analisada"
+        api_count = int(summary.get("api_product_count") or 0)
+        api_label = f" | APIs: {api_count} produtos" if api_count else ""
         total_text = (
             f"{len(items)} produtos | Total estimado: "
-            f"{self._format_shopping_money(summary.get('total_investment'))}"
+            f"{self._format_shopping_money(summary.get('total_investment'))} | "
+            f"{source_label}{api_label}"
         )
         content.add_widget(
             MDLabel(
@@ -4106,6 +4094,40 @@ class AdminScreen(Screen):
                 text_color=self._theme_tokens().get("text_primary", [0.15, 0.18, 0.24, 1]),
             )
         )
+        if not items:
+            empty_label = MDLabel(
+                text=(
+                    summary.get("empty_reason")
+                    or "Nao ha sugestoes de compras para a procura atual."
+                ),
+                size_hint_y=None,
+                height=dp(78),
+                halign="left",
+                valign="middle",
+                theme_text_color="Custom",
+                text_color=self._theme_tokens().get("text_secondary", [0.35, 0.39, 0.46, 1]),
+            )
+            empty_label.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+            content.add_widget(empty_label)
+            close_btn = MDFlatButton(text="FECHAR")
+            dialog = MDDialog(
+                title="Sugestoes de Compras",
+                type="custom",
+                content_cls=content,
+                size_hint=(None, None),
+                size=(min(dp(680), Window.width * 0.9), min(dp(340), Window.height * 0.55)),
+                buttons=[close_btn],
+            )
+            close_btn.bind(on_release=lambda _btn: dialog.dismiss())
+            dialog.bind(
+                on_dismiss=lambda *_args: (
+                    setattr(self, "_shopping_list_dialog", None)
+                    if self._shopping_list_dialog is dialog else None
+                )
+            )
+            self._shopping_list_dialog = dialog
+            dialog.open()
+            return
         content.add_widget(self._build_shopping_preview_row(header=True))
 
         scroll = ScrollView(
@@ -4127,7 +4149,7 @@ class AdminScreen(Screen):
         content.add_widget(scroll)
 
         dialog = MDDialog(
-            title="Lista de Compras",
+            title="Sugestoes de Compras",
             type="custom",
             content_cls=content,
             size_hint=(None, None),
@@ -4160,9 +4182,10 @@ class AdminScreen(Screen):
 
         def task():
             try:
-                payload = self._load_shopping_list_payload()
-                if not payload.get("items"):
-                    return {"status": "empty"}
+                # A previsão local é imediata e já considera a procura, o
+                # nível crítico e os produtos esgotados. A IA é atualizada
+                # depois, sem segurar esta janela.
+                payload = self._load_shopping_list_payload(use_ai=False)
                 return {"status": "ok", "payload": payload}
             except Exception as exc:
                 return {"status": "error", "message": str(exc)}
@@ -4174,22 +4197,45 @@ class AdminScreen(Screen):
                 payload = (result or {}).get("payload") or {}
                 self._shopping_list_payload = payload
                 self._show_shopping_list_preview(payload)
+                self._warm_shopping_list_ai()
                 return
-            if status == "empty":
-                self.show_snackbar("Nenhum produto precisa de reposicao neste momento.")
-                return
-            message = (result or {}).get("message") or "Erro ao preparar lista de compras."
-            self.show_snackbar(f"Erro ao preparar lista de compras: {message}")
+            message = (result or {}).get("message") or "Erro ao preparar sugestoes de compras."
+            self.show_snackbar(f"Erro ao preparar sugestoes de compras: {message}")
 
         started = self._run_async_action(
             "shopping-list-preview",
             task,
             on_success=on_success,
-            busy_message="A preparar lista de compras...",
-            error_message="Erro ao preparar lista de compras",
+            busy_message=None,
+            error_message="Erro ao preparar sugestoes de compras",
         )
         if not started:
             self.shopping_list_busy = False
+
+    def _warm_shopping_list_ai(self):
+        """Atualiza o cache de IA sem atrasar a abertura das sugestões."""
+        if "shopping-list-ai-warmup" in self._async_actions:
+            return
+
+        def task():
+            try:
+                return self._load_shopping_list_payload(use_ai=True)
+            except Exception:
+                return None
+
+        def on_success(payload):
+            # A janela já aberta continua estável; a próxima abertura e o PDF
+            # usam a análise já refinada e devolvida do cache.
+            if payload and payload.get("summary", {}).get("ai_used"):
+                self._shopping_list_payload = payload
+
+        self._run_async_action(
+            "shopping-list-ai-warmup",
+            task,
+            on_success=on_success,
+            busy_message=None,
+            error_message=None,
+        )
 
     def generate_shopping_list_pdf(self, *args, payload=None, dialog=None):
         if self.shopping_list_busy or "shopping-list-pdf" in self._async_actions:
@@ -4208,8 +4254,9 @@ class AdminScreen(Screen):
                     "velocity_days": export_payload["summary"].get("velocity_days", 14),
                     "target_days": export_payload["summary"].get("target_days", 14),
                     "warning_days": export_payload["summary"].get("warning_days", 7),
-                    "min_stock": export_payload["summary"].get("min_stock", 5),
-                    "source_label": "Tela de produtos",
+                    "source_label": "Sugestoes de compras",
+                    "analysis_source": export_payload["summary"].get("analysis_source", "demand"),
+                    "api_product_count": export_payload["summary"].get("api_product_count", 0),
                 }
                 pdf_path = self._ensure_shopping_list_report().generate(export_payload, filters)
                 return {
@@ -4232,17 +4279,17 @@ class AdminScreen(Screen):
                 self._show_pdf_success((result or {}).get("pdf_path"))
                 return
             if status == "empty":
-                self.show_snackbar("Nenhum produto precisa de reposicao neste momento.")
+                self.show_snackbar("Nenhuma sugestao de compra para a procura atual.")
                 return
-            message = (result or {}).get("message") or "Erro ao gerar lista de compras."
-            self.show_snackbar(f"Erro ao gerar lista de compras: {message}")
+            message = (result or {}).get("message") or "Erro ao gerar sugestoes de compras."
+            self.show_snackbar(f"Erro ao gerar sugestoes de compras: {message}")
 
         started = self._run_async_action(
             "shopping-list-pdf",
             task,
             on_success=on_success,
-            busy_message="A gerar lista de compras...",
-            error_message="Erro ao gerar lista de compras",
+            busy_message="A gerar sugestoes de compras...",
+            error_message="Erro ao gerar sugestoes de compras",
         )
         if not started:
             self.shopping_list_busy = False
@@ -4665,6 +4712,7 @@ class AdminScreen(Screen):
 
         def on_success(alerts):
             alerts = list(alerts or [])
+            self.update_loss_alert_badges(len(alerts))
             banner = self._build_fraud_alerts_banner(alerts, days_lookback=days_lookback)
             if self._render_status_banners([banner], auto_dismiss_seconds=None):
                 return
@@ -4919,6 +4967,15 @@ class AdminScreen(Screen):
                 size_hint=(None, None),
                 size=(min(dp(860), Window.width * 0.9), min(dp(620), Window.height * 0.78)),
                 buttons=[
+                    MDRaisedButton(
+                        text=f"APROVAR TODAS ({len(pending_list)})",
+                        md_bg_color=tokens.get("success", [0.2, 0.7, 0.3, 1]),
+                        on_release=lambda _x: self._confirm_approve_all_losses(
+                            dialog_ref.get("dialog"),
+                            current_user,
+                            len(pending_list),
+                        ),
+                    ),
                     MDFlatButton(
                         text="FECHAR",
                         on_release=lambda _x: dialog.dismiss(),
@@ -4930,6 +4987,78 @@ class AdminScreen(Screen):
 
         except Exception as e:
             print(f"Erro: {e}")
+
+    def _confirm_approve_all_losses(self, approvals_dialog, approved_by, pending_count):
+        """Pede confirmação antes de aplicar todas as perdas pendentes."""
+        actor = approved_by or getattr(App.get_running_app(), "current_user", None) or "admin"
+        dialog_ref = {"dialog": None}
+
+        def confirm(_instance):
+            confirmation = dialog_ref.get("dialog")
+            if confirmation:
+                confirmation.dismiss()
+            if approvals_dialog:
+                approvals_dialog.dismiss()
+            self.approve_all_losses(actor)
+
+        dialog = MDDialog(
+            title="Aprovar todas as perdas?",
+            text=(
+                f"Serão aprovadas {pending_count} perdas pendentes. "
+                "O stock será atualizado para cada perda aprovada."
+            ),
+            buttons=[
+                MDFlatButton(
+                    text="CANCELAR",
+                    on_release=lambda _x: dialog_ref["dialog"].dismiss(),
+                ),
+                MDRaisedButton(
+                    text="APROVAR TODAS",
+                    on_release=confirm,
+                ),
+            ],
+        )
+        dialog_ref["dialog"] = dialog
+        dialog.open()
+
+    def approve_all_losses(self, approved_by):
+        """Aprova em lote as perdas que continuam pendentes no momento da ação."""
+        actor = approved_by or getattr(App.get_running_app(), "current_user", None) or "admin"
+
+        def task():
+            return self.db.approve_all_pending_stock_movements(actor)
+
+        def on_success(result):
+            summary = result if isinstance(result, dict) else {}
+            approved_count = int(summary.get("approved_count") or 0)
+            failed_count = int(summary.get("failed_count") or 0)
+            if approved_count:
+                try:
+                    self.db.log_action(
+                        actor,
+                        "admin",
+                        "APPROVE_ALL_LOSSES",
+                        f"Aprovadas {approved_count} perdas pendentes",
+                    )
+                except Exception:
+                    pass
+            if failed_count:
+                self.show_snackbar(
+                    f"{approved_count} perdas aprovadas; {failed_count} permanecem pendentes"
+                )
+            elif approved_count:
+                self.show_snackbar(f"{approved_count} perdas aprovadas")
+            else:
+                self.show_snackbar("Nenhuma perda pendente para aprovar")
+            self.show_pending_approvals()
+
+        self._run_async_action(
+            "approve-all-pending-losses",
+            task,
+            on_success=on_success,
+            busy_message="A aprovar todas as perdas pendentes...",
+            error_message="Erro ao aprovar todas as perdas",
+        )
 
     def approve_loss(self, movement_id, approved_by):
         try:
@@ -4976,15 +5105,11 @@ class AdminScreen(Screen):
         self._get_intelligence().start()
         self._update_responsive_layout()
         self._init_badge(0)
-        self._schedule_product_form_preload(delay=8.0)
         if not self._aggregated_products_cache and not self._products_loading:
-            Clock.schedule_once(lambda dt: self.load_products(), 0)
+            self.load_products()
         elif self._products_table_dirty or not self._current_display:
-            Clock.schedule_once(
-                lambda dt: self.filter_products(
-                    self.search_input.text if self.search_input else self._pending_search
-                ),
-                0,
+            self.filter_products(
+                self.search_input.text if self.search_input else self._pending_search
             )
 
     def on_leave(self):
@@ -5040,13 +5165,13 @@ class AdminScreen(Screen):
                     "title": "Alertas criticos de fraude",
                     "messages": [
                         f"Detectados {count} alerta(s) de alta prioridade.",
-                        "Revisao imediata recomendada.",
+                        "Verifique estes alertas agora.",
                     ],
                     "all_messages": [],
                     "count": count,
                     "urgency": 0,
                     "details_sections": [
-                        ("Acao recomendada", ["Priorize a revisao dos movimentos suspeitos antes de novas validacoes."]),
+                        ("O que fazer", ["Verifique os movimentos suspeitos antes de novas validacoes."]),
                     ],
                 }
             ],
@@ -5056,7 +5181,7 @@ class AdminScreen(Screen):
 
         dialog = MDDialog(
             title="ALERTAS CRITICOS",
-            text=f"Detectados {alert_count} alertas de seguranca de alta prioridade!\n\nRecomenda-se revisao imediata.",
+            text=f"Foram encontrados {alert_count} alertas de seguranca de alta prioridade.\n\nVerifique-os antes de continuar.",
             buttons=[
                 MDRaisedButton(
                     text="VER AGORA",

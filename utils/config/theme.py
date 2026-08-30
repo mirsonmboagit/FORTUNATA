@@ -7,6 +7,8 @@ LIGHT_TOKENS = {
     "text_primary": [0.060, 0.075, 0.105, 1],
     "text_secondary": [0.205, 0.245, 0.305, 1],
     "text_muted": [0.285, 0.335, 0.405, 1],
+    # Texto de alta legibilidade reservado para a operacao do gerente.
+    "manager_ink": [0.000, 0.000, 0.000, 1],
     "primary": [0.055, 0.245, 0.430, 1],
     "on_primary": [1, 1, 1, 1],
     "success": [0.055, 0.445, 0.275, 1],
@@ -26,6 +28,7 @@ DARK_TOKENS = {
     "text_primary": [0.965, 0.972, 0.982, 1],
     "text_secondary": [0.825, 0.850, 0.890, 1],
     "text_muted": [0.690, 0.735, 0.795, 1],
+    "manager_ink": [1.000, 1.000, 1.000, 1],
     "primary": [0.155, 0.405, 0.640, 1],
     "on_primary": [1, 1, 1, 1],
     "success": [0.105, 0.515, 0.335, 1],

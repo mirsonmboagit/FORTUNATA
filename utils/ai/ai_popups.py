@@ -1,3 +1,5 @@
+import re
+
 from kivy.animation import Animation
 from kivy.app import App
 from kivy.clock import Clock
@@ -9,6 +11,7 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
+from kivy.utils import escape_markup
 from kivymd.icon_definitions import md_icons
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDIconButton
@@ -28,6 +31,12 @@ from utils.config.theme import get_theme_tokens
 
 
 class _BannerIconButton(ButtonBehavior, MDLabel):
+    pass
+
+
+class _BannerPillButton(ButtonBehavior, MDLabel):
+    """A fixed-width banner action that never grows beyond its container."""
+
     pass
 
 
@@ -98,6 +107,13 @@ def _clean_messages(messages):
     return cleaned
 
 
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _format_banner_quantity(value, unit):
     """Return quantities in full words so banner text is easy to read."""
     try:
@@ -108,10 +124,10 @@ def _format_banner_quantity(value, unit):
     unit_text = str(unit or "").strip().lower()
     is_weight = unit_text in {"kg", "quilo", "quilos", "quilograma", "quilogramas"}
     if is_weight:
-        number = f"{amount:.1f}"
+        number = f"{amount:.1f}".replace(".", ",")
         label = "quilograma" if abs(amount - 1) < 0.001 else "quilogramas"
     else:
-        number = str(int(amount)) if amount.is_integer() else f"{amount:.1f}"
+        number = str(int(amount)) if amount.is_integer() else f"{amount:.1f}".replace(".", ",")
         label = "unidade" if abs(amount - 1) < 0.001 else "unidades"
     return f"{number} {label}"
 
@@ -348,12 +364,12 @@ def _expiry_level_meta(level):
     if level == ALERT_LEVEL_VENCIDO:
         return "alert-octagon", "Produtos Vencidos", color
     if level == ALERT_LEVEL_CRITICO:
-        return "alert-circle", "Produtos que Vencem em Breve", color
+        return "alert-circle", "Vencem em breve", color
     if level == ALERT_LEVEL_ALTO:
-        return "alert", "Produtos Próximos da Validade", color
+        return "alert", "Validade próxima", color
     if level == ALERT_LEVEL_MEDIO:
-        return "calendar-alert", "Produtos para Acompanhar", color
-    return "calendar-clock", "Produtos com Validade a Acompanhar", color
+        return "calendar-alert", "Validades a acompanhar", color
+    return "calendar-clock", "Validades a acompanhar", color
 
 
 def _get_stock_message_variant(item_name, stock, unit, days_left):
@@ -364,29 +380,47 @@ def _get_stock_message_variant(item_name, stock, unit, days_left):
         is_out_of_stock = False
 
     if is_out_of_stock or float(days_left or 0) < 0:
-        return f"{item_name} está sem estoque. Faça a reposição o mais cedo possível."
-    return f"{item_name} está com estoque baixo. Restam {quantity}. Faça a reposição."
+        return f"{item_name}: stock esgotado. Reponha assim que possível."
+    return f"{item_name}: restam {quantity}. Planeie a reposição."
+
+
+def _get_stock_action(item_name, stock, days_left):
+    """Devolve uma ação operacional sem repetir o diagnóstico do banner."""
+    try:
+        stock_value = float(stock or 0)
+    except (TypeError, ValueError):
+        stock_value = 0.0
+    try:
+        coverage_days = float(days_left)
+    except (TypeError, ValueError):
+        coverage_days = None
+
+    if stock_value <= 0 or (coverage_days is not None and coverage_days < 0):
+        return f"Registe a encomenda de {item_name} e confirme a data de entrega."
+    if coverage_days is not None and coverage_days <= 2:
+        return f"Priorize a encomenda de {item_name} hoje e confirme o prazo com o fornecedor."
+    return f"Programe a compra de {item_name} e confirme preço e disponibilidade com o fornecedor."
 
 
 def _get_expiry_message_variant(item_name, days_left, date_str):
     if days_left <= 2:
         return (
-            f"{item_name} vence em {_format_banner_days(days_left)}, no dia {date_str}. "
+            f"{item_name}: vence em {_format_banner_days(days_left)} ({date_str}). "
             "Dê prioridade à venda."
         )
     if days_left <= 7:
         return (
-            f"{item_name} vence em {_format_banner_days(days_left)}, no dia {date_str}. "
-            "Acompanhe a venda deste produto."
+            f"{item_name}: vence em {_format_banner_days(days_left)} ({date_str}). "
+            "Acompanhe a venda."
         )
-    return f"{item_name} vence em {_format_banner_days(days_left)}, no dia {date_str}."
+    return f"{item_name}: vence em {_format_banner_days(days_left)} ({date_str})."
 
 
 def _get_expiry_level_message(level, item_name, days_left, date_str):
     if level == ALERT_LEVEL_VENCIDO:
         overdue = abs(int(days_left))
         day_text = "1 dia" if overdue == 1 else f"{overdue} dias"
-        return f"{item_name} está vencido há {day_text}, desde {date_str}. Retire-o da venda."
+        return f"{item_name}: vencido há {day_text} ({date_str}). Retire da venda."
     return _get_expiry_message_variant(item_name, days_left, date_str)
 
 
@@ -411,6 +445,41 @@ def build_auto_banner_data(insights):
     banners = []
     low_stock = insights.get("low_stock", [])
     expiry_levels = _collect_expiry_levels(insights)
+    fraud_alerts = [
+        dict(item)
+        for item in list(insights.get("fraud_alerts") or [])
+        if isinstance(item, dict)
+    ]
+
+    if fraud_alerts:
+        def _fraud_severity(item):
+            try:
+                return int(item.get("severity") or 0)
+            except (AttributeError, TypeError, ValueError):
+                return 0
+
+        fraud_alerts.sort(key=_fraud_severity, reverse=True)
+        max_severity = _fraud_severity(fraud_alerts[0])
+        severity_label = {3: "ALTO", 2: "MEDIO", 1: "BAIXO"}
+        messages = []
+        for item in fraud_alerts:
+            label = severity_label.get(_fraud_severity(item), "INFO")
+            title = str(item.get("title") or item.get("alert_type") or "Alerta")
+            messages.append(f"{label}: {title}")
+        banners.append(
+            {
+                "kind": "fraud",
+                "variant": "danger" if max_severity >= 3 else "warning" if max_severity == 2 else "info",
+                "icon": "shield-alert-outline" if max_severity >= 3 else "shield-search-outline",
+                "bg_color": (0.93, 0.34, 0.34, 1) if max_severity >= 3 else (0.98, 0.76, 0.34, 1),
+                "title": "Alertas de fraude",
+                "messages": messages[:5],
+                "all_messages": messages,
+                "count": len(fraud_alerts),
+                "urgency": 0 if max_severity >= 3 else 10 if max_severity == 2 else 30,
+                "notification_key": _stable_banner_source_key("fraud", fraud_alerts),
+            }
+        )
 
     if low_stock:
         messages = []
@@ -481,7 +550,7 @@ def build_auto_banner_data(insights):
             }
         )
 
-    if not low_stock and not any(bool(expiry_levels.get(level)) for level in expiry_order):
+    if not low_stock and not fraud_alerts and not any(bool(expiry_levels.get(level)) for level in expiry_order):
         banners.append(build_positive_banner("all"))
 
     banners.sort(key=lambda item: item.get("urgency", 999))
@@ -495,10 +564,9 @@ def build_positive_banner(kind="all"):
             "variant": "success",
             "icon": "check-circle",
             "bg_color": (0.74, 0.92, 0.78, 1),
-            "title": "Estoque em ordem",
+            "title": "Stock",
             "messages": [
-                "Não há produtos com estoque baixo neste momento.",
-                "A reposição está em dia.",
+                "Sem produtos com stock baixo.",
             ],
             "count": 0,
             "urgency": 999,
@@ -510,10 +578,9 @@ def build_positive_banner(kind="all"):
             "variant": "success",
             "icon": "check-circle",
             "bg_color": (0.74, 0.92, 0.78, 1),
-            "title": "Validades em ordem",
+            "title": "Validades",
             "messages": [
-                "Sem alertas relevantes de vencimento.",
-                "Nenhum risco imediato identificado.",
+                "Sem produtos com validade proxima.",
             ],
             "count": 0,
             "urgency": 999,
@@ -524,10 +591,10 @@ def build_positive_banner(kind="all"):
         "variant": "success",
         "icon": "check-circle",
         "bg_color": (0.74, 0.92, 0.78, 1),
-        "title": "Tudo em ordem",
+        "title": "Sem alertas",
         "messages": [
-            "Não há alertas críticos de estoque.",
-            "Sem riscos imediatos de validade.",
+            "Sem alertas de stock.",
+            "Sem alertas de validade.",
         ],
         "count": 0,
         "urgency": 999,
@@ -544,51 +611,76 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
 
     def _add_recommendations(lines):
         if lines:
-            sections.append(("Recomendações", list(lines[:5])))
+            sections.append(("O que fazer", list(lines[:5])))
 
     if kind == "stock":
-        _add_recommendations(recommendations_stock or recommendations_all)
-
         low_stock = insights.get("low_stock") or []
         if low_stock:
-            lines = []
+            action_lines = []
+            indicator_lines = []
             for item in low_stock:
                 if isinstance(item, (list, tuple)) and len(item) >= 4:
                     name, stock, is_weight, days_left = item[:4]
                     unit = "quilogramas" if is_weight else "unidades"
                     quantity = _format_banner_quantity(stock, unit)
+                    action_lines.append(_get_stock_action(name, stock, days_left))
                     if float(stock or 0) <= 0 or float(days_left or 0) < 0:
-                        lines.append(f"{name}: o estoque está esgotado. Faça a reposição.")
+                        indicator_lines.append(f"{name}: stock esgotado.")
                     else:
-                        lines.append(
-                            f"{name}: restam {quantity}. "
-                            f"O estoque deve durar cerca de {_format_banner_days(days_left)}."
+                        indicator_lines.append(
+                            f"{name}: stock atual de {quantity}; "
+                            f"cobertura estimada de {_format_banner_days(days_left)}."
                         )
-            if lines:
-                sections.append(("Produtos com Estoque Baixo", lines))
+            if action_lines:
+                sections.append(("O que fazer", action_lines))
+            if indicator_lines:
+                sections.append(("Indicadores de procura", indicator_lines))
+        else:
+            _add_recommendations(recommendations_stock or recommendations_all)
 
         forecast = insights.get("stock_forecast") or []
         if forecast:
             lines = []
+            out_of_stock_lines = []
+            low_stock_names = {
+                str(item[0] or "").strip().casefold()
+                for item in low_stock
+                if isinstance(item, (list, tuple)) and item
+            }
             for item in forecast:
                 if item.get("days_left") is None:
                     continue
+                if str(item.get("name") or "").strip().casefold() in low_stock_names:
+                    continue
+                raw_stock = item.get("stock")
+                stock_value = _safe_float(raw_stock, 0.0)
+                coverage_days = _safe_float(item.get("days_left"), 0.0)
+                # Alguns snapshots antigos nao incluem ``stock`` no forecast.
+                # Neles, a cobertura positiva continua sendo um indicador valido.
+                if (raw_stock is not None and stock_value <= 0) or coverage_days <= 0:
+                    out_of_stock_lines.append(
+                        f"{item.get('name')}: stock esgotado. "
+                        "Registe a encomenda e confirme a data de entrega."
+                    )
+                    continue
                 lines.append(
-                    f"{item.get('name')}: poderá ficar sem estoque em cerca de "
+                    f"{item.get('name')}: pode esgotar em "
                     f"{_format_banner_days(item.get('days_left'))}."
                 )
+            if out_of_stock_lines:
+                sections.append(("Produtos esgotados", out_of_stock_lines))
             if lines:
-                sections.append(("Previsão de Reposição", lines))
+                sections.append(("Outros produtos a acompanhar", lines))
 
     elif kind == "expiry":
         _add_recommendations(recommendations_expiry or recommendations_all)
         expiry_levels = _collect_expiry_levels(insights)
         level_titles = {
             ALERT_LEVEL_VENCIDO: "Produtos Vencidos",
-            ALERT_LEVEL_CRITICO: "Produtos que Vencem em Breve",
-            ALERT_LEVEL_ALTO: "Produtos Próximos da Validade",
-            ALERT_LEVEL_MEDIO: "Produtos para Acompanhar",
-            ALERT_LEVEL_LEVE: "Produtos com Validade a Acompanhar",
+            ALERT_LEVEL_CRITICO: "Vencem em breve",
+            ALERT_LEVEL_ALTO: "Validade próxima",
+            ALERT_LEVEL_MEDIO: "Validades a acompanhar",
+            ALERT_LEVEL_LEVE: "Validades a acompanhar",
         }
         level_order = [
             ALERT_LEVEL_VENCIDO,
@@ -609,13 +701,13 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
                 quantity = _format_banner_quantity(stock, unit)
                 if int(days_left) <= 0:
                     lines.append(
-                        f"{name}: está vencido desde {date_str}. Restam {quantity}. "
-                        "Retire-o da venda."
+                        f"{name}: vencido desde {date_str}. Stock: {quantity}. "
+                        "Retire da venda."
                     )
                 else:
                     lines.append(
-                        f"{name}: vence em {_format_banner_days(days_left)}, no dia {date_str}. "
-                        f"Restam {quantity}."
+                        f"{name}: vence em {_format_banner_days(days_left)} ({date_str}). "
+                        f"Stock: {quantity}."
                     )
             if lines:
                 sections.append((level_titles[level], lines))
@@ -630,11 +722,41 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
                     continue
                 lines.append(
                     f"{item.get('name')}: vence em {_format_banner_days(days_to_expiry)}. "
-                    f"O estoque atual poderá durar cerca de {_format_banner_days(days_to_sell)}. "
-                    f"A perda possível de lucro é de {float(item.get('loss_profit') or 0):.0f} meticais."
+                    f"O stock pode durar {_format_banner_days(days_to_sell)}. "
+                    f"Possível perda: {float(item.get('loss_profit') or 0):.0f} meticais."
                 )
             if lines:
                 sections.append(("Risco de Perda", lines))
+
+    elif kind == "fraud":
+        fraud_alerts = [
+            dict(item)
+            for item in list(insights.get("fraud_alerts") or [])
+            if isinstance(item, dict)
+        ]
+        if fraud_alerts:
+            def _fraud_severity(item):
+                try:
+                    return int(item.get("severity") or 0)
+                except (AttributeError, TypeError, ValueError):
+                    return 0
+
+            fraud_alerts.sort(key=_fraud_severity, reverse=True)
+            severity_label = {3: "ALTO", 2: "MEDIO", 1: "BAIXO"}
+            lines = []
+            for item in fraud_alerts:
+                label = severity_label.get(_fraud_severity(item), "INFO")
+                title = str(item.get("title") or item.get("alert_type") or "Alerta")
+                description = str(item.get("description") or "").strip()
+                user = str(item.get("related_user") or "").strip()
+                line = f"{label} - {title}"
+                if description:
+                    line += f": {description}"
+                if user:
+                    line += f" | Utilizador: {user}"
+                lines.append(line)
+            sections.append(("Alertas a verificar", lines))
+            sections.append(("Acao recomendada", ["Verifique os registos do gerente antes de aprovar novas perdas."]))
 
     return sections
 
@@ -657,14 +779,20 @@ class ModernBannerCard(MDCard):
         self._preview_truncated = False
         self._has_extra_content = False
         self._window_bound = False
-        self._wrapper = None
+        # ModernBannerCard is mounted directly in the banner overlay.  Keeping
+        # itself as the host lets the height updates from "Ver mais" request a
+        # new centred position while the details panel is animating.
+        self._wrapper = self
         self._progress = None
+        self._recenter_event = None
 
         super().__init__(
             orientation="vertical",
             padding=0,
             spacing=0,
-            size_hint=(1, None),
+            # A largura e definida pelo posicionador central de banners. Sem
+            # size_hint, o limite de leitura e preservado em ecras largos.
+            size_hint=(None, None),
             size_hint_y=None,
             radius=[dp(18), dp(18), dp(18), dp(18)],
             elevation=self.palette["elevation"],
@@ -700,10 +828,46 @@ class ModernBannerCard(MDCard):
         if not self.all_messages:
             count = int(self.banner_data.get("count") or 0)
             return f"{count} itens foram agrupados neste aviso." if count > 0 else "Sem detalhes adicionais."
-        parts = []
-        for item in self.all_messages[:4]:
-            parts.append(item if item.endswith((".", "!", "?")) else f"{item}.")
-        return " ".join(parts)
+        first = self.all_messages[0]
+        first = first if first.endswith((".", "!", "?")) else f"{first}."
+        count = int(self.banner_data.get("count") or 0)
+        remaining = max(count - 1, len(self.all_messages) - 1)
+        if remaining > 0:
+            noun = "ocorrencia" if remaining == 1 else "ocorrencias"
+            return f"{first} Existem mais {remaining} {noun} neste aviso."
+        # Os banners positivos podem ter dois pontos curtos e complementares.
+        if len(self.all_messages) > 1:
+            second = self.all_messages[1]
+            second = second if second.endswith((".", "!", "?")) else f"{second}."
+            return f"{first} {second}"
+        return first
+
+    @staticmethod
+    def _emphasize_banner_text(text):
+        """Emphasise product names and operational facts in banner messages."""
+        raw_text = str(text or "").strip()
+        if not raw_text:
+            return ""
+
+        rendered = escape_markup(raw_text)
+        product_match = re.match(r"^([^:\n]{1,100}):\s*", rendered)
+        if product_match:
+            product_name = product_match.group(1).strip()
+            rendered = f"[b]{product_name}[/b]{rendered[product_match.end(1):]}"
+
+        important_patterns = (
+            r"\b(?:stock(?:\s+(?:atual|baixo|esgotado))?|restam|cobertura estimada|"
+            r"validade|vence em|vencido(?:\s+(?:h[aá]|desde))?|poss[ií]vel perda)\b[^.;]*",
+            r"\bexistem mais\s+\d+\s+ocorr[eê]ncias?\b",
+        )
+        for pattern in important_patterns:
+            rendered = re.sub(
+                pattern,
+                lambda match: f"[b]{match.group(0)}[/b]",
+                rendered,
+                flags=re.IGNORECASE,
+            )
+        return rendered
 
     def _build_ui(self, show_timer):
         self._content = MDBoxLayout(
@@ -760,7 +924,7 @@ class ModernBannerCard(MDCard):
         self._text_box.add_widget(self._title_row)
 
         self._title_label = MDLabel(
-            text=str(self.banner_data.get("title") or "Banner inteligente"),
+            text=str(self.banner_data.get("title") or "Aviso"),
             theme_text_color="Custom",
             text_color=self.palette["title"],
             font_size=dp(15.5),
@@ -779,6 +943,7 @@ class ModernBannerCard(MDCard):
 
         self._description_label = MDLabel(
             text="",
+            markup=True,
             theme_text_color="Custom",
             text_color=self.palette["text"],
             font_size=dp(12.8),
@@ -834,6 +999,9 @@ class ModernBannerCard(MDCard):
             do_scroll_y=False,
             bar_width=0,
         )
+        # The details panel changes height over several animation frames.  Keep
+        # the card height and its centre in sync in every one of them.
+        self._details_scroll.bind(height=self._sync_card_height)
         _apply_scroll_style(self._details_scroll)
         self._details_content = MDBoxLayout(
             orientation="vertical",
@@ -850,11 +1018,15 @@ class ModernBannerCard(MDCard):
             self._progress = MDProgressBar(
                 value=100,
                 max=100,
+                size_hint_x=1,
                 size_hint_y=None,
                 height=dp(3),
                 color=self.palette["progress"],
             )
-            self.add_widget(self._progress)
+            # Keep the timer in the content layout.  A direct child of the
+            # card can be laid out below the card by KivyMD when the banner
+            # height changes, leaving the line visibly outside the banner.
+            self._content.add_widget(self._progress)
 
         self._rebuild_details_content()
         self._refresh_expandable_state()
@@ -872,6 +1044,7 @@ class ModernBannerCard(MDCard):
         row = MDBoxLayout(
             orientation="horizontal",
             spacing=dp(8),
+            padding=[dp(2), 0, dp(2), 0],
             size_hint_y=None,
             height=dp(38),
         )
@@ -880,14 +1053,20 @@ class ModernBannerCard(MDCard):
             label = str(spec.get("text") or "").strip()
             callback = spec.get("callback") or spec.get("on_release")
             dismiss_after = bool(spec.get("dismiss_after", True))
-            button = MDFlatButton(
+            button = _BannerPillButton(
                 text=label.upper(),
                 theme_text_color="Custom",
                 text_color=self.palette["button_text"],
+                halign="center",
+                valign="middle",
+                shorten=True,
+                shorten_from="right",
+                font_size=dp(12),
                 size_hint=(None, None),
                 size=(max(dp(104), dp(7.4 * len(label) + 30)), dp(36)),
             )
             button._preferred_banner_width = button.width
+            self._bind_pill_text(button)
             _decorate_pill(button, self.palette["button_bg"], self.palette["border"])
             button.bind(
                 on_release=lambda btn, cb=callback, close=dismiss_after: self._run_quick_action(
@@ -897,6 +1076,7 @@ class ModernBannerCard(MDCard):
             row.add_widget(button)
             self._quick_action_buttons.append(button)
         row.add_widget(Widget())
+        row.bind(width=lambda *_args: self._sync_quick_action_widths())
         return row
 
     def _run_quick_action(self, button, callback, dismiss_after):
@@ -912,20 +1092,37 @@ class ModernBannerCard(MDCard):
         buttons = getattr(self, "_quick_action_buttons", [])
         if not buttons:
             return
-        available = max(self.width - dp(44) - dp(8) * max(len(buttons) - 1, 0), dp(88))
-        maximum = max(dp(88), available / len(buttons))
+        actions_row = getattr(self, "_quick_actions", None)
+        row_width = float(actions_row.width or 0) if actions_row is not None else 0
+        if row_width <= 0:
+            row_width = max(float(self.width or 0) - dp(44), 0)
+        available = max(row_width - dp(4) - dp(8) * max(len(buttons) - 1, 0), 1)
+        maximum = available / len(buttons)
         for button in buttons:
-            button.width = min(float(button._preferred_banner_width), maximum)
+            button.width = max(1, min(float(button._preferred_banner_width), maximum))
+
+    @staticmethod
+    def _bind_pill_text(button):
+        def _sync_text_area(instance, size):
+            instance.text_size = (max(float(size[0]) - dp(16), 1), float(size[1]))
+
+        button.bind(size=_sync_text_area)
+        Clock.schedule_once(lambda _dt: _sync_text_area(button, button.size), 0)
 
     def _build_action_button(self):
-        button = MDFlatButton(
+        button = _BannerPillButton(
             text="Ver mais",
             theme_text_color="Custom",
             text_color=self.palette["button_text"],
+            halign="center",
+            valign="middle",
+            shorten=True,
+            font_size=dp(12),
             size_hint=(None, None),
             size=(dp(104), dp(36)),
             on_release=lambda *_args: self._toggle_details(),
         )
+        self._bind_pill_text(button)
         _decorate_pill(button, self.palette["button_bg"], self.palette["border"])
         button.bind(on_press=lambda instance: self._animate_button(instance, pressed=True))
         button.bind(on_release=lambda instance: self._animate_button(instance, pressed=False))
@@ -949,7 +1146,8 @@ class ModernBannerCard(MDCard):
 
     def _build_text_block(self, text):
         label = MDLabel(
-            text=str(text or ""),
+            text=self._emphasize_banner_text(text),
+            markup=True,
             theme_text_color="Custom",
             text_color=self.palette["text"],
             font_size=dp(12.6),
@@ -961,7 +1159,8 @@ class ModernBannerCard(MDCard):
 
     def _build_bullet_text(self, text):
         label = MDLabel(
-            text=f"• {str(text or '').strip()}",
+            text=f"• {self._emphasize_banner_text(text)}",
+            markup=True,
             theme_text_color="Custom",
             text_color=self.palette["text"],
             font_size=dp(12.2),
@@ -975,8 +1174,8 @@ class ModernBannerCard(MDCard):
         preview_limit = 230 if self.width >= dp(860) else 180 if self.width >= dp(620) else 130
         preview_text, truncated = _truncate_text(self.full_description, preview_limit)
         self._preview_truncated = truncated
-        self._has_extra_content = bool(truncated or self.details_sections or len(self.all_messages) > 2)
-        self._description_label.text = preview_text
+        self._has_extra_content = bool(truncated or self.details_sections or len(self.all_messages) > 1)
+        self._description_label.text = self._emphasize_banner_text(preview_text)
         self._apply_action_button_state()
 
     def _apply_action_button_state(self):
@@ -1004,7 +1203,9 @@ class ModernBannerCard(MDCard):
             self._details_content.add_widget(self._build_section_title("Descrição completa"))
             self._details_content.add_widget(self._build_text_block(self.full_description))
 
-        if len(self.all_messages) > 1:
+        # Quando há secções estruturadas, repetir as mensagens volta a mostrar
+        # o mesmo diagnóstico já visível no cabeçalho do aviso.
+        if len(self.all_messages) > 1 and not self.details_sections:
             self._details_content.add_widget(self._build_section_title("Pontos observados"))
             for message in self.all_messages:
                 self._details_content.add_widget(self._build_bullet_text(message))
@@ -1098,13 +1299,14 @@ class ModernBannerCard(MDCard):
         hovered = self.collide_point(*local)
         if hovered and not getattr(self, "_hovered", False):
             self._hovered = True
-            Animation.cancel_all(self)
-            Animation(y=dp(4), d=0.18, t="out_quad").start(self)
+            # The card is positioned by the central banner layout.  Moving its
+            # ``y`` on hover placed an expanded banner at the bottom of the
+            # overlay, so the hover feedback must not change its position.
+            Animation.cancel_all(self, "elevation")
             Animation(elevation=self.palette["hover_elevation"], d=0.18, t="out_quad").start(self)
         elif not hovered and getattr(self, "_hovered", False):
             self._hovered = False
-            Animation.cancel_all(self)
-            Animation(y=0, d=0.18, t="out_quad").start(self)
+            Animation.cancel_all(self, "elevation")
             Animation(elevation=self.palette["elevation"], d=0.18, t="out_quad").start(self)
 
     def _handle_size_change(self, *_args):
@@ -1158,18 +1360,22 @@ class ModernBannerCard(MDCard):
 
     def _sync_card_height(self, *_args):
         self._content.height = self._content.minimum_height
-        extra = self._progress.height if self._progress is not None else 0
-        self.height = self._content.height + extra
-        if self._wrapper is not None:
-            self._wrapper.height = self.height + dp(6)
-            container = getattr(self._wrapper, "_banner_container", None)
-            if container is not None:
-                Clock.schedule_once(
-                    lambda _dt, current=container: position_banners_center(
-                        current, _visible_widgets(current), reset_x=False
-                    ),
-                    0,
-                )
+        self.height = self._content.height
+        self._schedule_recenter()
+
+    def _schedule_recenter(self):
+        wrapper = self._wrapper or self
+        container = getattr(wrapper, "_banner_container", None)
+        if container is None or self._recenter_event is not None:
+            return
+
+        def _recenter(_dt, current=container, widget=wrapper):
+            self._recenter_event = None
+            visible = _visible_widgets(current)
+            if widget in visible:
+                position_banners_center(current, visible, reset_x=False)
+
+        self._recenter_event = Clock.schedule_once(_recenter, 0)
 
 
 def _visible_widgets(container):
@@ -1953,8 +2159,8 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
 
 
 def create_auto_banner(banner_data, show_timer=True, insights=None):
-    """Create the compact banner from the original project version."""
-    return _create_auto_banner_original(
+    """Create the standard, structured banner used by every alert source."""
+    return ModernBannerCard(
         banner_data,
         show_timer=show_timer,
         insights=insights,

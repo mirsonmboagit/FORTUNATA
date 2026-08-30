@@ -671,7 +671,7 @@ class LoginScreen(MDScreen):
                 if not updated:
                     return {"status": "update_failed"}
                 try:
-                    self.db.log_action(username, 'admin', 'UPDATE_ADMIN', f"Admin atualizado: {original} -> {username}")
+                    self.db.log_action(username, 'admin', 'UPDATE_ADMIN', f"Administrador alterado: {original} -> {username}")
                 except Exception:
                     pass
             else:
@@ -800,7 +800,7 @@ class LoginScreen(MDScreen):
             if not updated:
                 return {"status": "update_failed"}
             try:
-                self.db.log_action(username, role or 'admin', 'UPDATE_ADMIN', 'Senha do admin atualizada')
+                self.db.log_action(username, role or 'admin', 'UPDATE_ADMIN', 'Senha do administrador alterada')
             except Exception:
                 pass
             return {"status": "ok"}

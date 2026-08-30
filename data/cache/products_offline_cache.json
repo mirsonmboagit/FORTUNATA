@@ -71,5 +71,28 @@
       ]
     },
     "timestamp": "2026-07-31T12:56:43.538609"
+  },
+  "6009522301262": {
+    "source": "Agregado",
+    "data": {
+      "barcode": "6009522301262",
+      "name": "Mayonaise",
+      "brand": "Cross and Blackwell",
+      "category": "Mayonnaises",
+      "sold_by_weight": true,
+      "quantity": "750g",
+      "image": "https://images.openfoodfacts.org/images/products/600/952/230/1262/front_en.34.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009522301262",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009522301262",
+      "sku": "Vns-6009522301262",
+      "url_key": "vns-6009522301262-maionese-crosse-&-blackwell-750-g",
+      "price": "220",
+      "source": "Bazara",
+      "source_chain": [
+        "Open Food Facts",
+        "Bazara"
+      ]
+    },
+    "timestamp": "2026-08-23T18:29:21.065445"
   }
 }

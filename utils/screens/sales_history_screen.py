@@ -16,7 +16,7 @@ Regras de comportamento
 • _show_loading_state nunca bloqueia a UI thread (sem clear_widgets()
   síncrono ao pressionar um botão).
 
-• Cache de cores atualizado uma vez por lote, nunca por linha.
+• Cache de cores renovado uma vez por lote, nunca por linha.
 
 • Todos os filtros (hoje, semana, mês, ano, promo, data, texto)
   funcionam sobre o conjunto já carregado sem nova consulta ao DB
@@ -563,7 +563,7 @@ class SalesHistoryScreen(MDScreen):
     ENTER_CACHE_SECONDS = 30   # cache válido por 30 s antes de precisar re-fetch
     compact_mode = BooleanProperty(False)
 
-    # Cache de cores — atualizado uma vez em _display_rows, nunca por linha
+    # Cache de cores — renovado uma vez em _display_rows, nunca por linha
     _C = {
         "divider":    [0, 0, 0, 0.08],
         "bg_even":    [0.97, 0.98, 1,    1],
@@ -1312,7 +1312,7 @@ class SalesHistoryScreen(MDScreen):
         seller = str((transaction or {}).get("created_by") or "").strip() or "Sistema"
         header = MDLabel(
             text=(
-                f"{len(items)} produto(s) · Operador: {seller}\n"
+                f"{len(items)} produto(s) · Atendente: {seller}\n"
                 f"Total: {self._fmt_cur((transaction or {}).get('net_total'))} MT\n"
                 f"{self._refund_window_text(seconds_left, can_refund)} "
                 f"(limite: {REFUND_WINDOW_MINUTES} min)"

@@ -18,18 +18,23 @@ class LogsReport(BasePDFReport):
         "LOGOUT": "Logout realizado",
         "CREATE_USER": "Usuário criado",
         "DELETE_USER": "Usuário removido",
-        "UPDATE_ADMIN": "Dados do admin atualizados",
+        "UPDATE_ADMIN": "Dados do administrador alterados",
         "ACCESS_ATTEMPT": "Tentativa de acesso",
         "ACCESS_DENIED": "Acesso negado",
         "SECURITY_ALERT": "Alerta de seguranca",
         "FRAUD_ALERT": "Alerta de fraude",
         "RUPTURE_ATTEMPT": "Tentativa com stock insuficiente",
+        "OPEN_CASH": "Caixa aberto",
+        "CLOSE_CASH": "Caixa fechado",
+        "START_INVENTORY": "Inventário iniciado",
+        "COMPLETE_INVENTORY": "Inventário concluído",
+        "CANCEL_INVENTORY": "Inventário cancelado",
         "UPDATE_SECURITY_QUESTIONS": "Perguntas de recuperacao atualizadas",
         "RESET_PASSWORD_QA": "Senha redefinida por perguntas",
         "VERIFY_EMAIL": "E-mail confirmado",
         "RESET_PASSWORD_EMAIL": "Senha redefinida por e-mail",
         "ADD_PRODUCT": "Produto adicionado",
-        "UPDATE_PRODUCT": "Produto atualizado",
+        "UPDATE_PRODUCT": "Produto alterado",
         "DELETE_PRODUCT": "Produto removido",
         "SALE": "Venda registrada",
         "CANCEL_SALE": "Venda cancelada",
@@ -37,7 +42,12 @@ class LogsReport(BasePDFReport):
         "SAVE_RECEIPT": "Recibo salvo",
         "REGISTER_LOSS": "Perda registrada",
         "APPROVE_LOSS": "Perda aprovada",
+        "APPROVE_ALL_LOSSES": "Todas as perdas aprovadas",
         "REJECT_LOSS": "Perda rejeitada",
+        "EXPORT_SALES": "Relatório de vendas exportado",
+        "EXPORT_SALES_PDF": "Relatório de vendas em PDF exportado",
+        "PRINT_RECEIPT": "Recibo impresso",
+        "REMOVE_SALE_ITEM": "Item removido da venda",
     }
 
     def _action_to_label(self, action):
@@ -46,7 +56,7 @@ class LogsReport(BasePDFReport):
         label = self.ACTION_LABELS.get(action)
         if label:
             return label
-        return f"Ação: {action}"
+        return str(action).replace("_", " ").lower().capitalize()
 
     def generate(self, logs, filters):
         pdf_path = self._get_timestamp_filename("relatorio_logs")

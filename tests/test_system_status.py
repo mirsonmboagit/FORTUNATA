@@ -96,5 +96,5 @@ class SystemStatusTests(TemporaryDatabaseTestCase):
         self.assertEqual(alerts, [{
             "level": "ok",
             "code": "system_ok",
-            "message": "Nenhum alerta operacional encontrado.",
+            "message": "Sem alertas.",
         }])

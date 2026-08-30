@@ -89,6 +89,194 @@ class AlertAndEngineTests(ProjectTestCase):
         self.assertIn("Stock critico", messages)
         self.assertGreaterEqual(len(alerts), 5)
 
+    def test_recommendation_cards_are_separate_from_alert_cards(self):
+        from AI.controller import _get_recommendation_total
+        from ui.components.intelligent_banner import build_recommendation_banner_data
+
+        insights = {
+            "recommendations_stock": ["Arroz: reponha 10 unidades."],
+            "recommendations_expiry": ["Leite: priorize a venda antes da validade."],
+            "recommendations": [
+                "Arroz: reponha 10 unidades.",
+                "Reveja a margem das promoções.",
+            ],
+        }
+        banners = build_recommendation_banner_data(insights)
+
+        self.assertEqual([item["title"] for item in banners], [
+            "Reposição sugerida",
+            "Validades a priorizar",
+            "Sugestões automáticas",
+        ])
+        self.assertEqual(banners[0]["details_sections"][0][0], "Ações recomendadas")
+        self.assertNotIn("Arroz: reponha 10 unidades.", banners[2]["all_messages"])
+        self.assertEqual(_get_recommendation_total(insights), 3)
+
+    def test_fraud_alerts_are_included_in_insights_and_notification_total(self):
+        from AI.controller import _get_banner_notification_total
+        from ui.components.intelligent_banner import _insights_to_banner_data
+        from utils.ai.ai_popups import build_auto_banner_data, build_banner_details_sections
+
+        insights = {
+            "fraud_alerts": [
+                {
+                    "alert_type": "REPEATED_PRODUCT_LOSS",
+                    "severity": 3,
+                    "title": "Perdas repetidas: Arroz",
+                    "description": "O gerente registou 4 perdas no periodo.",
+                    "related_user": "maria",
+                },
+                {
+                    "alert_type": "OFF_HOURS_LOSS",
+                    "severity": 2,
+                    "title": "Perda fora do horario",
+                    "description": "Registo fora do turno.",
+                },
+            ]
+        }
+
+        banners = build_auto_banner_data(insights)
+        fraud_banner = next(item for item in banners if item["kind"] == "fraud")
+        self.assertEqual(fraud_banner["count"], 2)
+        self.assertEqual(fraud_banner["variant"], "danger")
+        self.assertTrue(_insights_to_banner_data(insights, include_positive=False))
+        self.assertEqual(_get_banner_notification_total(banners), 2)
+
+        sections = dict(build_banner_details_sections(insights, "fraud"))
+        self.assertIn("Alertas a verificar", sections)
+        self.assertIn("maria", " ".join(sections["Alertas a verificar"]))
+
+    def test_stock_banner_details_separate_actions_from_demand_indicators(self):
+        from utils.ai.ai_popups import build_banner_details_sections
+
+        sections = build_banner_details_sections(
+            {
+                "low_stock": [
+                    ("Agua Namacacha", 7, False, 3),
+                    ("Maizena", 10, False, 5),
+                ],
+                "recommendations_stock": [
+                    "Agua Namacacha: o estoque esta baixo. Restam 7 unidades.",
+                ],
+                "stock_forecast": [
+                    {"name": "Agua Namacacha", "days_left": 3},
+                    {"name": "Leite", "days_left": 6},
+                ],
+            },
+            "stock",
+        )
+
+        by_title = dict(sections)
+        self.assertEqual(list(by_title), [
+            "O que fazer",
+            "Indicadores de procura",
+            "Outros produtos a acompanhar",
+        ])
+        self.assertIn("fornecedor", by_title["O que fazer"][0].lower())
+        self.assertNotIn("restam", " ".join(by_title["O que fazer"]).lower())
+        self.assertIn("cobertura estimada", by_title["Indicadores de procura"][0].lower())
+        self.assertEqual(by_title["Outros produtos a acompanhar"], ["Leite: pode esgotar em 6 dias."])
+
+    def test_stock_forecast_calls_zero_stock_out_of_stock_not_zero_days(self):
+        from utils.ai.ai_popups import build_banner_details_sections
+
+        sections = build_banner_details_sections(
+            {
+                "stock_forecast": [
+                    {"name": "Lava Loica", "stock": 0, "days_left": 0},
+                    {"name": "Agua", "stock": 7, "days_left": 4},
+                ]
+            },
+            "stock",
+        )
+
+        by_title = dict(sections)
+        self.assertEqual(
+            by_title["Produtos esgotados"],
+            ["Lava Loica: stock esgotado. Registe a encomenda e confirme a data de entrega."],
+        )
+        self.assertEqual(by_title["Outros produtos a acompanhar"], ["Agua: pode esgotar em 4 dias."])
+        self.assertNotIn("pode esgotar em 0 dias", " ".join(by_title["Produtos esgotados"]).lower())
+
+    def test_proactive_recommendations_use_ai_response(self):
+        from utils.ai import ai_insights
+
+        class FakeResponse:
+            text = '{"recommendations":["Priorize a reposição do arroz.", "Promova os produtos próximos da validade."]}'
+
+        class FakeModels:
+            def generate_content(self, **_kwargs):
+                return FakeResponse()
+
+        class FakeClient:
+            models = FakeModels()
+
+        snapshot = {
+            "vendas_hoje": {"total": 1200},
+            "media_semanal": {"media_total": 900},
+            "atividade_caixa": {},
+            "banner_insights": {
+                "low_stock": [("Arroz", 2, False, 1)],
+                "expiry_levels": {},
+                "stock_forecast": [],
+                "expiry_risk": [],
+                "recommendations": ["Arroz: faça a reposição."],
+            },
+        }
+        ai_insights._PROACTIVE_RECOMMENDATIONS_CACHE.update(
+            {"ts": 0, "signature": "", "items": []}
+        )
+        with mock.patch.object(ai_insights, "_get_ai_client", return_value=(FakeClient(), "test-model")):
+            recommendations = ai_insights.build_proactive_ai_recommendations(snapshot)
+
+        self.assertEqual(
+            recommendations,
+            ["Priorize a reposição do arroz.", "Promova os produtos próximos da validade."],
+        )
+
+    def test_monitor_exposes_ai_recommendations_to_the_ui_payload(self):
+        from AI.monitor import IntelligenceMonitor
+
+        snapshot = {
+            "vendas_hoje": {},
+            "media_semanal": {},
+            "stock_produtos": [],
+            "atividade_caixa": {"terminais": []},
+            "vendas_por_produto": [],
+            "banner_insights": {"recommendations": ["Sugestão local."]},
+        }
+
+        class FakeCollector:
+            def collect_snapshot(self):
+                return snapshot
+
+        captured_payloads = []
+        monitor = IntelligenceMonitor(db=None)
+        monitor.collector = FakeCollector()
+        monitor._callback = captured_payloads.append
+        monitor._busy_lock.acquire()
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), daemon=None):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        with mock.patch("AI.monitor.build_proactive_ai_recommendations", return_value=["Recomendação criada pela IA."]), \
+             mock.patch("AI.monitor.Thread", ImmediateThread), \
+             mock.patch("AI.monitor.Clock.schedule_once", side_effect=lambda callback, _delay: callback(0)):
+            monitor._run_cycle()
+
+        self.assertEqual(captured_payloads[0]["banner_insights"]["recommendations_source"], "local")
+        captured = captured_payloads[-1]
+        self.assertEqual(
+            captured["banner_insights"]["recommendations_ai"],
+            ["Recomendação criada pela IA."],
+        )
+        self.assertEqual(captured["banner_insights"]["recommendations_source"], "ai")
+
 
 class ServiceTests(ProjectTestCase):
     class LocalDb:
@@ -215,4 +403,3 @@ class ApiParserTests(ProjectTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -42,6 +42,7 @@ from kivy.properties import ObjectProperty, StringProperty
 from database.provider import get_db
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton
 from ui.components.loading_overlay import ScreenLoadingController
+from ui.components.tooltip_widgets import set_attention_shake
 from utils.business.expiry_alerts import evaluate_expiry_alert
 from utils.core.focus_navigation import FormKeyboardController
 from utils.core.perf_utils import perf_start, perf_log
@@ -247,7 +248,7 @@ class ReportsScreen(MDScreen):
     • Geradores de PDF carregados sob demanda, não no on_kv_post.
     • Produtividade nunca carregada automaticamente na abertura.
     • Layout responsivo continua funcional mas mais leve (altura fixa no .kv).
-    • ai_banner_container mantido no .kv para o historico inteligente.
+    • ai_banner_container mantido no .kv para o historico de avisos.
     """
 
     FILTERS_CACHE_SECONDS = 60
@@ -260,7 +261,7 @@ class ReportsScreen(MDScreen):
         "etiquetas_codigos_barras": "Etiquetas de Codigos de Barras",
         "graficos_produtividade": "Graficos de Produtividade",
         "historico_vendas": "Historico de Vendas",
-        "lista_de_compras": "Listas de Compras",
+        "lista_de_compras": "Sugestões de Compras",
         "movimentos_stock": "Movimentos de Stock",
         "relatorio_caixa_usuarios": "Relatorio de Caixa por Utilizador",
         "relatorio_completo": "Relatorio Completo",
@@ -308,6 +309,7 @@ class ReportsScreen(MDScreen):
         self.db = db or get_db()
         self.back_target = "admin_home"
         self.notification_count = 0
+        self.recommendation_count = 0
         self.start_date = None
         self.end_date = None
         self.selected_product = None
@@ -385,7 +387,7 @@ class ReportsScreen(MDScreen):
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
             db=self.db,
-            history_title="Historico de monitorizacao dos relatorios",
+            history_title="Historico de avisos dos relatorios",
             auto_present_enabled=False,
         )
 
@@ -486,7 +488,7 @@ class ReportsScreen(MDScreen):
             self._set_loading_overlay(
                 "report_generation", True,
                 f"A gerar {report_label.lower()}...",
-                "Estamos a compilar os dados e a preparar o PDF do periodo selecionado.",
+                "A preparar o PDF do periodo selecionado.",
             )
         else:
             self._set_loading_overlay("report_generation", False)
@@ -508,7 +510,7 @@ class ReportsScreen(MDScreen):
             self._set_loading_overlay(
                 "print_charts", True,
                 "A preparar os graficos para impressao...",
-                "Os graficos estao a ser organizados para gerar o PDF final.",
+                "A preparar o PDF.",
             )
         else:
             self._set_loading_overlay("print_charts", False)
@@ -1103,7 +1105,7 @@ class ReportsScreen(MDScreen):
             return
         if matched_ids:
             self.search_status_text = (
-                f"{len(matched_ids)} relatorio(s) em destaque, "
+                f"{len(matched_ids)} relatorio(s) encontrados, "
                 f"{total_products} produto(s), {total_categories} categoria(s) e "
                 f"{total_sellers} vendedor(es) relacionados."
             )
@@ -1218,7 +1220,7 @@ class ReportsScreen(MDScreen):
         self._set_loading_overlay(
             "productivity", True,
             "A carregar produtividade...",
-            "Estamos a montar os graficos, caixas lideres e destaques do periodo.",
+            "A preparar os graficos e o resumo do periodo.",
         )
         self._render_productivity_dashboard()
         start_dt = self.start_date.strftime("%Y-%m-%d %H:%M:%S")
@@ -1329,7 +1331,7 @@ class ReportsScreen(MDScreen):
                         f"Caixa {weakest.get('terminal_id')} fechou com margem abaixo da média."
                     )
         if len(insights) <= 2:
-            insights.append("Operação estável no período, sem desvios fortes entre os caixas.")
+            insights.append("Sem variacoes relevantes entre os caixas neste periodo.")
         return insights[:4]
 
     # ------------------------------------------------------------------
@@ -1337,8 +1339,11 @@ class ReportsScreen(MDScreen):
     # ------------------------------------------------------------------
 
     def _init_badge(self, dt):
-        if hasattr(self.ids, 'ai_badge'):
-            self.ids.ai_badge.opacity = 0
+        for badge_id in ('ai_badge', 'recommendations_badge'):
+            badge = self.ids.get(badge_id)
+            if badge is not None:
+                badge.opacity = 1
+                badge.size = (dp(26), dp(26))
 
     def add_notification(self):
         self.notification_count += 1
@@ -1349,23 +1354,42 @@ class ReportsScreen(MDScreen):
         self.update_notification_badge(0)
 
     def update_notification_badge(self, count):
-        self.notification_count = count
+        self.notification_count = max(0, int(count or 0))
         if not hasattr(self.ids, 'ai_badge') or not hasattr(self.ids, 'ai_badge_label'):
             return
-        self.ids.ai_badge_label.text = str(count)
-        if count > 0:
+        self.ids.ai_badge_label.text = str(self.notification_count)
+        if self.notification_count > 0:
             self._show_badge()
-            self._start_swing_animation()
+            set_attention_shake(self.ids.get('ai_button'), True)
         else:
-            self._hide_badge()
-            self._stop_swing_animation()
+            self.ids.ai_badge.opacity = 1
+            self.ids.ai_badge.size = (dp(26), dp(26))
+            set_attention_shake(self.ids.get('ai_button'), False)
+
+    def update_recommendation_badge(self, count):
+        self.recommendation_count = max(0, int(count or 0))
+        badge = self.ids.get('recommendations_badge') if hasattr(self, 'ids') else None
+        label = self.ids.get('recommendations_badge_label') if hasattr(self, 'ids') else None
+        if badge is None or label is None:
+            return
+        label.text = str(self.recommendation_count)
+        Animation.cancel_all(badge)
+        if self.recommendation_count > 0:
+            badge.opacity = 1
+            badge.size = (dp(0), dp(0))
+            Animation(size=(dp(26), dp(26)), duration=0.25, transition='out_back').start(badge)
+            set_attention_shake(self.ids.get('recommendations_button'), True)
+            return
+        badge.opacity = 1
+        badge.size = (dp(26), dp(26))
+        set_attention_shake(self.ids.get('recommendations_button'), False)
 
     def _show_badge(self):
         if not hasattr(self.ids, 'ai_badge'):
             return
         self.ids.ai_badge.size = (dp(0), dp(0))
         self.ids.ai_badge.opacity = 1
-        Animation(size=(dp(24), dp(24)), duration=0.3, transition='out_back').start(self.ids.ai_badge)
+        Animation(size=(dp(26), dp(26)), duration=0.3, transition='out_back').start(self.ids.ai_badge)
 
     def _hide_badge(self):
         if not hasattr(self.ids, 'ai_badge'):
@@ -1565,7 +1589,7 @@ class ReportsScreen(MDScreen):
         self._ensure_report_generators()
         self._set_report_generation_busy(True, button_id="cash_user_report_card", status_text="A gerar...")
         self.search_status_text  = "Relatorio de caixa por utilizador em preparacao..."
-        self.search_summary_text = "A consolidar abertura, fechamento e vendas por operador."
+        self.search_summary_text = "A consolidar abertura, fechamento e vendas por atendente."
 
         def worker():
             try:
@@ -1632,8 +1656,14 @@ class ReportsScreen(MDScreen):
             status = (result or {}).get("status")
             if status == "ok":
                 pdf_path = result.get("pdf_path")
-                printed = self._ensure_pdf_viewer().print_pdf(pdf_path)
-                self.show_chart_print_success_popup(pdf_path) if printed else self.show_success_popup(pdf_path)
+                viewer = self._ensure_pdf_viewer()
+                if viewer.print_pdf(pdf_path):
+                    self.show_chart_print_success_popup(pdf_path)
+                else:
+                    self.show_pdf_print_ready_popup(
+                        pdf_path,
+                        getattr(viewer, "last_print_message", ""),
+                    )
             elif status == "empty":
                 self.show_error_popup("Nao ha graficos com vendas no periodo selecionado.")
             else:
@@ -2178,8 +2208,14 @@ class ReportsScreen(MDScreen):
         return item
 
     def _print_pdf_from_list(self, pdf_path):
-        if self._ensure_pdf_viewer().print_pdf(pdf_path):
+        viewer = self._ensure_pdf_viewer()
+        if viewer.print_pdf(pdf_path):
             self.show_pdf_print_success_popup(pdf_path)
+        else:
+            self.show_pdf_print_ready_popup(
+                pdf_path,
+                getattr(viewer, "last_print_message", ""),
+            )
 
     def _dismiss_delete_pdf_dialog(self):
         dlg = getattr(self, 'delete_pdf_dialog', None)
@@ -2334,8 +2370,38 @@ class ReportsScreen(MDScreen):
     def _print_pdf_after_generation(self, pdf_path):
         if self.success_dialog:
             self.success_dialog.dismiss()
-        if self._ensure_pdf_viewer().print_pdf(pdf_path):
+        viewer = self._ensure_pdf_viewer()
+        if viewer.print_pdf(pdf_path):
             self.show_pdf_print_success_popup(pdf_path)
+        else:
+            self.show_pdf_print_ready_popup(
+                pdf_path,
+                getattr(viewer, "last_print_message", ""),
+            )
+
+    def show_pdf_print_ready_popup(self, pdf_path, message=""):
+        filename = os.path.basename(pdf_path)
+        if self.success_dialog:
+            self.success_dialog.dismiss()
+        guidance = str(message or "").strip() or (
+            "Abra o PDF para concluir a impressao pelo leitor disponivel."
+        )
+        self.success_dialog = MDDialog(
+            title="PDF pronto para imprimir",
+            text=(
+                f"O PDF foi preparado:\n{filename}\n\n"
+                f"{guidance}\nAbra-o para imprimir manualmente."
+            ),
+            buttons=[
+                MDFlatButton(text="FECHAR", on_release=lambda x: self.success_dialog.dismiss()),
+                MDRaisedButton(
+                    text="VISUALIZAR PDF",
+                    md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
+                    on_release=lambda x: self._view_pdf_and_close(pdf_path),
+                ),
+            ],
+        )
+        self.success_dialog.open()
 
     def show_chart_print_success_popup(self, pdf_path):
         filename = os.path.basename(pdf_path)
@@ -2386,7 +2452,12 @@ class ReportsScreen(MDScreen):
     def open_ai_menu(self, caller=None):
         if caller is None and hasattr(self, "ids") and "ai_button" in self.ids:
             caller = self.ids.ai_button
-        self._intelligence.open_history(caller=caller)
+        self._intelligence.open_alerts(caller=caller)
+
+    def show_ai_recommendations(self, caller=None):
+        if caller is None and hasattr(self, "ids") and "recommendations_button" in self.ids:
+            caller = self.ids.recommendations_button
+        self._intelligence.open_recommendations(caller=caller)
 
     def show_ai_stock_popup(self, *args, insights=None, on_close=None):
         self._intelligence.refresh()

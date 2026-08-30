@@ -867,6 +867,85 @@ class DatabaseClient:
     def record_stock_movement(self, *args, **kwargs):
         return self._rpc("record_stock_movement", *args, **kwargs)
 
+    def request_stock_movement(self, *args, **kwargs):
+        return self._rpc("request_stock_movement", *args, **kwargs)
+
+    def get_stock_movement_approval_status(self, movement_id):
+        return self._rpc("get_stock_movement_approval_status", movement_id)
+
+    # ---------- Foto obrigatoria de dano ----------
+    def upload_damage_evidence(self, source_path):
+        """Envia a foto ao endpoint protegido e devolve a evidencia anexada."""
+        session = self._ensure_session()
+        if session is None:
+            return None
+        try:
+            from pathlib import Path
+
+            path = Path(source_path)
+            if not path.is_file():
+                raise ValueError("image_not_found")
+            headers = self._build_headers()
+            headers["X-USER"] = str(self.current_user or "")
+            headers["X-ROLE"] = str(self.current_role or "")
+            with path.open("rb") as handle:
+                response = session.post(
+                    f"{self.base_url.rstrip('/')}/loss-evidence/upload",
+                    files={"file": (path.name, handle, "application/octet-stream")},
+                    headers=headers,
+                    timeout=max(float(self.timeout or 10), 45.0),
+                )
+            payload = response.json() if response.content else {}
+            if response.status_code >= 400 or not payload.get("ok"):
+                message = payload.get("message") or payload.get("error") or f"HTTP {response.status_code}"
+                raise RuntimeError(str(message))
+            self._last_error = None
+            self._mark_available()
+            return self._normalize_result(payload.get("result"))
+        except Exception as exc:
+            self._last_error = str(exc)
+            LOGGER.warning("Damage evidence upload error: %s", exc)
+            return None
+
+    def analyze_damage_evidence(self, source_path):
+        """Compatibilidade com clientes anteriores; agora apenas anexa a foto."""
+        return self.upload_damage_evidence(source_path)
+
+    def download_damage_evidence(self, evidence_id):
+        """Descarrega os bytes da imagem com a mesma sessao autenticada do RPC."""
+        session = self._ensure_session()
+        if session is None or not evidence_id:
+            return None
+        try:
+            headers = self._build_headers()
+            headers["X-USER"] = str(self.current_user or "")
+            headers["X-ROLE"] = str(self.current_role or "")
+            response = session.get(
+                f"{self.base_url.rstrip('/')}/loss-evidence/{evidence_id}",
+                headers=headers,
+                timeout=max(float(self.timeout or 10), 30.0),
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            self._last_error = None
+            return {
+                "data": bytes(response.content or b""),
+                "mime_type": response.headers.get("Content-Type", "").split(";", 1)[0],
+            }
+        except Exception as exc:
+            self._last_error = str(exc)
+            LOGGER.warning("Damage evidence download error: %s", exc)
+            return None
+
+    def get_damage_evidence(self, evidence_id):
+        return self._rpc("get_damage_evidence", evidence_id)
+
+    def delete_damage_evidence(self, evidence_id):
+        return self._rpc("delete_damage_evidence", evidence_id)
+
+    def get_loss_history_items(self, start_dt, end_dt, limit=300):
+        return self._rpc("get_loss_history_items", start_dt, end_dt, limit=limit) or []
+
     def restock_product(self, *args, **kwargs):
         return self._rpc("restock_product", *args, **kwargs)
 
@@ -1045,6 +1124,14 @@ class DatabaseClient:
     def approve_stock_movement(self, movement_id, approved_by):
         return self._rpc("approve_stock_movement", movement_id, approved_by)
 
+    def approve_all_pending_stock_movements(self, approved_by):
+        return self._rpc("approve_all_pending_stock_movements", approved_by) or {
+            "approved_ids": [],
+            "failed_ids": [],
+            "approved_count": 0,
+            "failed_count": 0,
+        }
+
     def reject_stock_movement(self, movement_id, rejected_by=None):
         return self._rpc("reject_stock_movement", movement_id, rejected_by=rejected_by)
 
@@ -1070,6 +1157,7 @@ class DatabaseClient:
         offset=0,
         exclude_actions=None,
         details_limit=None,
+        date_filter=None,
     ):
         kwargs = {
             "limit": limit,
@@ -1079,6 +1167,8 @@ class DatabaseClient:
             kwargs["exclude_actions"] = list(exclude_actions)
         if details_limit:
             kwargs["details_limit"] = int(details_limit)
+        if date_filter:
+            kwargs["date_filter"] = str(date_filter)
 
         offset_applied = True
         result = self._rpc(
@@ -1089,13 +1179,18 @@ class DatabaseClient:
             **kwargs,
         )
         if result is None and (exclude_actions or details_limit):
+            fallback_kwargs = {
+                "limit": limit,
+                "offset": offset,
+            }
+            if date_filter:
+                fallback_kwargs["date_filter"] = str(date_filter)
             result = self._rpc(
                 "get_user_logs",
                 user_filter,
                 action_filter,
                 role_filter,
-                limit=limit,
-                offset=offset,
+                **fallback_kwargs,
             )
         if result is None:
             offset_applied = False
@@ -1115,6 +1210,9 @@ class DatabaseClient:
             }
             if ignored:
                 rows = [row for row in rows if str(row[3] or "").upper() not in ignored]
+        if date_filter:
+            date_prefix = str(date_filter).strip()
+            rows = [row for row in rows if str(row[5] or "").startswith(date_prefix)]
         if offset_applied:
             return rows
         off = max(0, int(offset or 0))

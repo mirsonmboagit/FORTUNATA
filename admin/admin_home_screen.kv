@@ -147,7 +147,7 @@
                             md_bg_color: app.theme_tokens["card"]
 
                             MDLabel:
-                                text: "Visao Geral"
+                                text: "Resumo"
                                 font_style: "Subtitle1"
                                 bold: True
                                 theme_text_color: "Custom"
@@ -286,7 +286,7 @@
                                 height: dp(22)
 
                                 MDLabel:
-                                    text: "Insights"
+                                    text: "Resumo"
                                     font_style: "Subtitle1"
                                     bold: True
                                     theme_text_color: "Custom"
@@ -313,21 +313,53 @@
 
         DraggableTooltipFloatingActionButton:
             id: ai_button
-            icon: "assets/icon/idea.ico"
-            elevation: 2
+            icon: "assets/icon/alert.png"
+            icon_size: dp(38)
+            elevation: 3
+            md_bg_color: app.theme_tokens["primary"]
             pos_hint: {"right": 0.972, "y": 0.03}
-            hint_text: "Assistente IA"
+            hint_text: "Alertas com IA"
             on_release: root.open_ai_menu(self)
+
+        DraggableTooltipFloatingActionButton:
+            id: recommendations_button
+            icon: "assets/icon/idea.ico"
+            icon_size: dp(38)
+            elevation: 3
+            md_bg_color: app.theme_tokens["primary"]
+            pos: ai_button.x, ai_button.top + dp(10)
+            hint_text: "Recomendações com IA"
+            on_release: root.show_ai_recommendations(self)
+
+        MDCard:
+            id: recommendations_badge
+            size_hint: None, None
+            size: dp(26), dp(26)
+            md_bg_color: app.theme_tokens["badge"]
+            radius: [dp(13)]
+            elevation: 1
+            pos: recommendations_button.right - (self.width * 0.55), recommendations_button.top - (self.height * 0.45)
+            opacity: 1
+
+            MDLabel:
+                id: recommendations_badge_label
+                text: "0"
+                halign: "center"
+                valign: "middle"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens["on_primary"]
+                font_size: dp(12)
+                bold: True
 
         MDCard:
             id: ai_badge
             size_hint: None, None
-            size: dp(24), dp(24)
+            size: dp(26), dp(26)
             md_bg_color: app.theme_tokens["badge"]
-            radius: [dp(12)]
+            radius: [dp(13)]
             elevation: 1
             pos: ai_button.right - (self.width * 0.55), ai_button.top - (self.height * 0.45)
-            opacity: 0
+            opacity: 1
 
             MDLabel:
                 id: ai_badge_label
@@ -338,3 +370,63 @@
                 text_color: app.theme_tokens["on_primary"]
                 font_size: dp(12)
                 bold: True
+
+        # Atalhos operacionais: ficam na Home, junto ao controlo por IA.
+        HoverTooltipIconButton:
+            id: ai_toggle_button
+            icon: "chevron-left" if root.quick_actions_open else "chevron-right"
+            size_hint: None, None
+            size: dp(38), dp(38)
+            pos: max(dp(8), ai_button.x - self.width - dp(10)), ai_button.y
+            on_release: root.toggle_quick_actions()
+            md_bg_color: app.theme_tokens["primary"]
+            theme_text_color: "Custom"
+            text_color: app.theme_tokens["on_primary"]
+            hint_text: "Mostrar/ocultar atalhos operacionais"
+
+        ScrollView:
+            id: ai_quick_actions_scroll
+            size_hint: None, None
+            width: min(root.width * 0.35, dp(220)) if root.quick_actions_open else 0
+            height: dp(48) if root.quick_actions_open else 0
+            opacity: 1 if root.quick_actions_open else 0
+            disabled: not root.quick_actions_open
+            pos: max(dp(8), ai_toggle_button.x - self.width - dp(10)), max(dp(8), ai_button.y - dp(2))
+            do_scroll_x: True
+            do_scroll_y: False
+            bar_width: dp(4)
+            bar_color: 0.18, 0.28, 0.48, 0.6
+            bar_inactive_color: 0.18, 0.28, 0.48, 0.2
+            effect_cls: "ScrollEffect"
+
+            MDBoxLayout:
+                orientation: "horizontal"
+                size_hint_x: None
+                width: self.minimum_width
+                height: self.minimum_height
+                padding: [dp(4), 0, dp(4), 0]
+                spacing: dp(8)
+
+                HoverTooltipIconButton:
+                    icon: "alert-circle"
+                    on_release: root.open_operational_alerts()
+                    md_bg_color: app.theme_tokens["danger"]
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens["on_primary"]
+                    hint_text: "Alertas de perdas"
+
+                HoverTooltipIconButton:
+                    icon: "chart-line"
+                    on_release: root.open_loss_metrics()
+                    md_bg_color: app.theme_tokens["info"]
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens["on_primary"]
+                    hint_text: "Métricas de perdas"
+
+                HoverTooltipIconButton:
+                    icon: "check-circle"
+                    on_release: root.open_pending_approvals()
+                    md_bg_color: app.theme_tokens["warning"]
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens["on_primary"]
+                    hint_text: "Aprovações pendentes"

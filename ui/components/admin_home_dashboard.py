@@ -144,7 +144,7 @@ class _BaseChartCard(HoverCard):
 class SalesTrendChart(_BaseChartCard):
     def __init__(self, **kwargs):
         super().__init__(
-            title="Grafico Operacional",
+            title="Grafico de vendas",
             subtitle="Escolha a metrica e o periodo na HOME",
             height=dp(322),
             **kwargs,
@@ -202,7 +202,7 @@ class SalesTrendChart(_BaseChartCard):
         if not series or not any(float(item.get(value_key) or 0.0) > 0 for item in series):
             self.title_label.text = title
             self.subtitle_label.text = str(period_label or "")
-            self.set_state_text("Sem dados suficientes para este periodo.")
+            self.set_state_text("Sem dados neste periodo.")
             return
 
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
@@ -377,7 +377,7 @@ class SalesTrendChart(_BaseChartCard):
             self.set_state_text("Graficos indisponiveis no momento.")
             return
         if not rows:
-            self.title_label.text = "Top Produtos"
+            self.title_label.text = "Produtos mais vendidos"
             self.subtitle_label.text = str(period_label or "")
             self.set_state_text("Sem produtos vendidos neste periodo.")
             return
@@ -435,8 +435,8 @@ class SalesTrendChart(_BaseChartCard):
                     ),
                 }
             )
-        self.title_label.text = "Top Produtos"
-        self.subtitle_label.text = f"{period_label} | Top {len(items)} por faturacao"
+        self.title_label.text = "Produtos mais vendidos"
+        self.subtitle_label.text = f"{period_label} | {len(items)} produtos com mais faturacao"
         figure.subplots_adjust(left=0.28, right=0.96, top=0.9, bottom=0.18)
         self.set_figure(figure, hover_items=hover_items)
 

@@ -40,19 +40,29 @@ class RestockScreen(MDScreen):
     MOVEMENTS_RENDER_BATCH_SIZE = 60
     LOW_STOCK_THRESHOLD = 5
     PRODUCT_COL_HINTS = [0.08, 0.24, 0.11, 0.09, 0.09, 0.13, 0.14, 0.12]
-    MOVEMENT_COL_HINTS = [0.12, 0.12, 0.09, 0.10, 0.18, 0.09, 0.09, 0.11, 0.10]  # last=DEL
+    MOVEMENT_COL_HINTS = [0.12, 0.12, 0.10, 0.10, 0.16, 0.10, 0.10, 0.10, 0.10]  # última coluna: ações
     OUT_TYPES = [
         ("AJUSTE", "ADJUSTMENT"),
         ("DANIFICADO", "DAMAGE"),
         ("EXPIRADO", "EXPIRED"),
         ("ROUBO", "THEFT"),
     ]
+    MOVEMENT_TYPE_LABELS = {
+        "ADJUSTMENT": "Ajuste",
+        "DAMAGE": "Danificado",
+        "EXPIRED": "Expirado",
+        "RESTOCK": "Reposição",
+        "RETURN": "Devolução",
+        "SALE": "Venda",
+        "THEFT": "Roubo",
+    }
+    DIRECTION_LABELS = {"IN": "Entrada", "OUT": "Saída"}
     # Filter options for movement modal — rendered as buttons
     MOVEMENT_FILTERS = [
         ("TODOS", "ALL"),
         ("ENTRADAS", "IN"),
-        ("SAIDAS", "OUT"),
-        ("REPOSICAO", "RESTOCK"),
+        ("SAÍDAS", "OUT"),
+        ("REPOSIÇÃO", "RESTOCK"),
         ("PERDAS", "LOSS"),
     ]
 
@@ -131,9 +141,41 @@ class RestockScreen(MDScreen):
         self._out_type_btns = {}
         Clock.schedule_once(self.init_screen, 0.1)
 
+    @classmethod
+    def _movement_type_label(cls, movement_type):
+        code = str(movement_type or "").strip().upper()
+        if not code:
+            return "-"
+        return cls.MOVEMENT_TYPE_LABELS.get(code, code.replace("_", " ").capitalize())
+
+    @classmethod
+    def _direction_label(cls, direction):
+        code = str(direction or "").strip().upper()
+        return cls.DIRECTION_LABELS.get(code, code.capitalize() if code else "-")
+
+    @staticmethod
+    def _format_movement_quantity(qty, unit):
+        quantity = RestockScreen._to_float(qty)
+        quantity_text = (
+            str(int(quantity))
+            if float(quantity).is_integer()
+            else f"{quantity:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+        )
+        unit_code = str(unit or "UN").strip().upper()
+        if unit_code in {"UN", "UND", "UNIDADE", "UNIDADES"}:
+            unit_label = "unidade" if abs(quantity) == 1 else "unidades"
+        else:
+            unit_label = {
+                "KG": "kg",
+                "G": "g",
+                "L": "litro" if abs(quantity) == 1 else "litros",
+                "ML": "ml",
+                "CX": "caixa" if abs(quantity) == 1 else "caixas",
+            }.get(unit_code, str(unit or "unidade").strip().lower())
+        return f"{quantity_text} {unit_label}"
+
     def init_screen(self, _dt):
         self._apply_mode_ui()
-        self._set_now_markers()
 
     def on_kv_post(self, base_widget):
         self._ensure_loading_overlay()
@@ -358,7 +400,7 @@ class RestockScreen(MDScreen):
                 "movements_print",
                 True,
                 "A preparar PDF dos movimentos...",
-                "Estamos a organizar o historico filtrado para impressao.",
+                "A preparar o historico filtrado para impressao.",
             )
         else:
             self._set_loading_overlay("movements_print", False)
@@ -416,6 +458,7 @@ class RestockScreen(MDScreen):
             target_height=dp(52),
             field_ids=("movement_type_field",),
         )
+        self._set_now_markers(sync_modal=False)
         self._sync_stock_form_modal_from_hidden()
 
     def _set_movement_busy(self, busy):
@@ -426,7 +469,7 @@ class RestockScreen(MDScreen):
                 "movement_submit",
                 True,
                 f"A registar {action_label} de stock...",
-                "Estamos a validar os dados e a guardar o movimento no sistema.",
+                "A guardar o movimento.",
             )
         else:
             self._set_loading_overlay("movement_submit", False)
@@ -512,9 +555,7 @@ class RestockScreen(MDScreen):
         self.ids.supplier_input.text = ""
         self.ids.invoice_input.text = ""
         self.ids.movement_type_field.text = "AJUSTE"
-        self.ids.entry_date_field.text = "--"
-        self.ids.exit_date_field.text = "--"
-        self.ids.update_day_field.text = "--" if blank_inputs else datetime.now().strftime("%d/%m/%Y")
+        self._set_now_markers(sync_modal=False)
         if refresh_list:
             self._apply_search_now()
         self._sync_stock_form_modal_from_hidden()
@@ -572,9 +613,7 @@ class RestockScreen(MDScreen):
                 self.ids.unit_cost_input.text = ""
                 self.ids.supplier_input.text = ""
                 self.ids.invoice_input.text = ""
-                self.ids.entry_date_field.text = "--"
-                self.ids.exit_date_field.text = "--"
-                self.ids.update_day_field.text = "--"
+                self._set_now_markers(sync_modal=False)
                 self._sync_stock_form_modal_from_hidden()
 
         content = MDBoxLayout(
@@ -719,19 +758,19 @@ class RestockScreen(MDScreen):
         )
         dates_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(8))
         self._modal_entry_date_field = MDTextField(
-            hint_text="Data de Entrada",
+            hint_text="Data de Entrada (automatica)",
             mode="rectangle",
             readonly=True,
             text="--",
         )
         self._modal_exit_date_field = MDTextField(
-            hint_text="Data de Saida",
+            hint_text="Data de Saida (automatica)",
             mode="rectangle",
             readonly=True,
             text="--",
         )
         self._modal_update_day_field = MDTextField(
-            hint_text="Dia de Atualizacao",
+            hint_text="Data do Registo (automatica)",
             mode="rectangle",
             readonly=True,
             text="--",
@@ -810,10 +849,13 @@ class RestockScreen(MDScreen):
             self._modal_movement_type_field.text = self.ids.movement_type_field.text
         if "entry_date_field" in self.ids and self._modal_entry_date_field:
             self._modal_entry_date_field.text = self.ids.entry_date_field.text
+            self._modal_entry_date_field.hint_text = self.ids.entry_date_field.hint_text
         if "exit_date_field" in self.ids and self._modal_exit_date_field:
             self._modal_exit_date_field.text = self.ids.exit_date_field.text
+            self._modal_exit_date_field.hint_text = self.ids.exit_date_field.hint_text
         if "update_day_field" in self.ids and self._modal_update_day_field:
             self._modal_update_day_field.text = self.ids.update_day_field.text
+            self._modal_update_day_field.hint_text = self.ids.update_day_field.hint_text
 
         is_in = self.current_mode == "IN"
         if self._modal_title_label:
@@ -1200,7 +1242,7 @@ class RestockScreen(MDScreen):
 
     def select_product(self, product):
         self.selected_product = self._normalize_product_row(product)
-        pid, name, stock, _price, _cost, _barcode, is_weight, _exp, _status, _avg, _days, last_update = (
+        pid, name, stock, _price, _cost, _barcode, is_weight, _exp, _status, _avg, _days, _last_update = (
             self._unpack_product(self.selected_product)
         )
         unit = "KG" if is_weight else "UN"
@@ -1214,10 +1256,7 @@ class RestockScreen(MDScreen):
         self.ids.unit_cost_input.text = f"{current_price:.2f}" if current_price > 0 else ""
         if "expiry_input" in self.ids:
             self.ids.expiry_input.text = self._format_expiry_input(_exp)
-        if last_update:
-            self.ids.update_day_field.text = self._format_update_day(last_update)
-        else:
-            self.ids.update_day_field.text = "--"
+        self._set_now_markers(sync_modal=False)
         self._sync_stock_form_modal_from_hidden()
         self.show_feedback(f"{name} pronto para {('entrada' if self.current_mode == 'IN' else 'saida')}.", "info")
         Clock.schedule_once(lambda dt: self._focus_field("qty_input", select_all=True), 0)
@@ -1296,14 +1335,10 @@ class RestockScreen(MDScreen):
                 md_bg_color=bg,
             )
 
-            qty_val = self._to_float(qty)
-            if str(unit or "UN").upper() == "UN" and float(qty_val).is_integer():
-                qty_text = f"{int(qty_val)} UN"
-            else:
-                qty_text = f"{qty_val:.2f} {unit or 'UN'}"
-
-            direction_color = success if direction == "IN" else danger
-            movement_label = self._out_code_to_label.get(movement_type, movement_type or "-")
+            qty_text = self._format_movement_quantity(qty, unit)
+            direction_code = str(direction or "").upper()
+            direction_color = success if direction_code == "IN" else danger
+            movement_label = self._movement_type_label(movement_type)
 
             self._add_cell(row, self._format_dt(entry_date, with_time=True), self.MOVEMENT_COL_HINTS[0], "center", text_secondary)
             self._add_cell(row, self._format_dt(exit_date, with_time=True), self.MOVEMENT_COL_HINTS[1], "center", text_secondary)
@@ -1311,7 +1346,7 @@ class RestockScreen(MDScreen):
             self._add_cell(row, movement_label, self.MOVEMENT_COL_HINTS[3], "center", direction_color, bold=True)
             self._add_cell(row, product_name or "-", self.MOVEMENT_COL_HINTS[4], "left", text_primary, shorten=True)
             self._add_cell(row, qty_text, self.MOVEMENT_COL_HINTS[5], "center", text_secondary)
-            self._add_cell(row, direction or "-", self.MOVEMENT_COL_HINTS[6], "center", direction_color, bold=True)
+            self._add_cell(row, self._direction_label(direction), self.MOVEMENT_COL_HINTS[6], "center", direction_color, bold=True)
             self._add_cell(row, created_by or "-", self.MOVEMENT_COL_HINTS[7], "right", text_secondary, shorten=True)
 
             table.add_widget(row)
@@ -1384,7 +1419,7 @@ class RestockScreen(MDScreen):
         )
         action_row.add_widget(
             MDLabel(
-                text="As acoes aplicam-se apenas aos movimentos visiveis no filtro actual.",
+                text="As ações aplicam-se apenas aos movimentos visíveis no filtro atual.",
                 theme_text_color="Secondary",
                 font_style="Caption",
                 valign="middle",
@@ -1392,7 +1427,7 @@ class RestockScreen(MDScreen):
         )
 
         self._movements_delete_btn = MDRaisedButton(
-            text="ELIMINAR VISIVEIS",
+            text="ELIMINAR VISÍVEIS",
             size_hint=(None, None),
             size=(dp(166), dp(34)),
             disabled=True,
@@ -1416,21 +1451,21 @@ class RestockScreen(MDScreen):
         header = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(28),
+            height=dp(38),
             md_bg_color=tokens.get("primary", [0.15, 0.35, 0.65, 1]),
             padding=[dp(6), 0],
             spacing=dp(4),
         )
         header_titles = [
-            ("ENTRADA", self.MOVEMENT_COL_HINTS[0], "center"),
-            ("SAIDA", self.MOVEMENT_COL_HINTS[1], "center"),
-            ("ATUAL", self.MOVEMENT_COL_HINTS[2], "center"),
+            ("DATA DE\nENTRADA", self.MOVEMENT_COL_HINTS[0], "center"),
+            ("DATA DE\nSAÍDA", self.MOVEMENT_COL_HINTS[1], "center"),
+            ("ATUALIZAÇÃO", self.MOVEMENT_COL_HINTS[2], "center"),
             ("TIPO", self.MOVEMENT_COL_HINTS[3], "center"),
             ("PRODUTO", self.MOVEMENT_COL_HINTS[4], "left"),
-            ("QTD", self.MOVEMENT_COL_HINTS[5], "center"),
-            ("DIR", self.MOVEMENT_COL_HINTS[6], "center"),
-            ("USUARIO", self.MOVEMENT_COL_HINTS[7], "right"),
-            ("DEL", self.MOVEMENT_COL_HINTS[8], "center"),
+            ("QUANTIDADE", self.MOVEMENT_COL_HINTS[5], "center"),
+            ("DIREÇÃO", self.MOVEMENT_COL_HINTS[6], "center"),
+            ("UTILIZADOR", self.MOVEMENT_COL_HINTS[7], "right"),
+            ("AÇÕES", self.MOVEMENT_COL_HINTS[8], "center"),
         ]
         on_primary = tokens.get("on_primary", [1, 1, 1, 1])
         for lbl, hint, align in header_titles:
@@ -1621,7 +1656,7 @@ class RestockScreen(MDScreen):
             direction = getattr(row, "_movement_direction", "")
             movement_type = getattr(row, "_movement_type", "")
             show = self._movement_matches_filter(direction, movement_type)
-            row.height = dp(34) if show else 0
+            row.height = dp(40) if show else 0
             row.opacity = 1 if show else 0
             row.disabled = not show
             if show:
@@ -1676,23 +1711,17 @@ class RestockScreen(MDScreen):
                 _stock_after, _reason, _note, created_by, _supplier, _invoice,
             ) = self._normalize_movement_row(raw)
 
-            qty_val = self._to_float(qty)
-            unit_label = unit or "UN"
-            if str(unit_label).upper() == "UN" and float(qty_val).is_integer():
-                qty_text = f"{int(qty_val)} UN"
-            else:
-                qty_text = f"{qty_val:.2f} {unit_label}"
-
             prepared.append(
                 {
                     "entry_date": self._format_dt(entry_date, with_time=True),
                     "exit_date": self._format_dt(exit_date, with_time=True),
                     "update_day": self._format_update_day(update_day),
-                    "movement_label": self._out_code_to_label.get(movement_type, movement_type or "-"),
+                    "movement_label": self._movement_type_label(movement_type),
                     "movement_code": str(movement_type or "").upper(),
                     "product_name": product_name or "-",
-                    "qty_text": qty_text,
-                    "direction": str(direction or "-").upper(),
+                    "qty_text": self._format_movement_quantity(qty, unit),
+                    "direction": self._direction_label(direction),
+                    "direction_code": str(direction or "").upper(),
                     "created_by": created_by or "-",
                 }
             )
@@ -1721,7 +1750,7 @@ class RestockScreen(MDScreen):
                     "title": title,
                     "filter_label": filter_label,
                     "record_count": len(prepared_rows),
-                    "source_label": "Tela de reposicao de stock",
+                    "source_label": "Ecrã de reposição de stock",
                 },
             )
             self._set_movements_print_busy(False)
@@ -1775,20 +1804,16 @@ class RestockScreen(MDScreen):
             row = MDBoxLayout(
                 orientation="horizontal",
                 size_hint_y=None,
-                height=dp(34),
+                height=dp(40),
                 padding=[dp(6), 0],
                 spacing=dp(4),
                 md_bg_color=bg,
             )
 
-            qty_val = self._to_float(qty)
-            if str(unit or "UN").upper() == "UN" and float(qty_val).is_integer():
-                qty_text = f"{int(qty_val)} UN"
-            else:
-                qty_text = f"{qty_val:.2f} {unit or 'UN'}"
-
-            direction_color = success if direction == "IN" else danger
-            movement_label = self._out_code_to_label.get(movement_type, movement_type or "-")
+            qty_text = self._format_movement_quantity(qty, unit)
+            direction_code = str(direction or "").upper()
+            direction_color = success if direction_code == "IN" else danger
+            movement_label = self._movement_type_label(movement_type)
 
             self._add_cell(row, self._format_dt(entry_date, with_time=True), self.MOVEMENT_COL_HINTS[0], "center", text_secondary)
             self._add_cell(row, self._format_dt(exit_date, with_time=True), self.MOVEMENT_COL_HINTS[1], "center", text_secondary)
@@ -1796,22 +1821,22 @@ class RestockScreen(MDScreen):
             self._add_cell(row, movement_label, self.MOVEMENT_COL_HINTS[3], "center", direction_color, bold=True)
             self._add_cell(row, product_name or "-", self.MOVEMENT_COL_HINTS[4], "left", text_primary, shorten=True)
             self._add_cell(row, qty_text, self.MOVEMENT_COL_HINTS[5], "center", text_secondary)
-            self._add_cell(row, direction or "-", self.MOVEMENT_COL_HINTS[6], "center", direction_color, bold=True)
+            self._add_cell(row, self._direction_label(direction), self.MOVEMENT_COL_HINTS[6], "center", direction_color, bold=True)
             self._add_cell(row, created_by or "-", self.MOVEMENT_COL_HINTS[7], "right", text_secondary, shorten=True)
 
             # ── Delete button ───────────────────────────────────────────
             del_cell = MDBoxLayout(
                 size_hint_x=self.MOVEMENT_COL_HINTS[8],
                 size_hint_y=None,
-                height=dp(34),
-                padding=[dp(2), dp(3)],
+                height=dp(40),
+                padding=[dp(2), dp(5)],
             )
             del_btn = MDRaisedButton(
-                text="X",
+                text="ELIMINAR",
                 md_bg_color=[0.75, 0.1, 0.1, 1],
                 text_color=[1, 1, 1, 1],
                 size_hint=(1, None),
-                height=dp(26),
+                height=dp(30),
                 on_release=lambda _b, r=row, m=mid, pn=product_name: self.confirm_delete_movement(m, pn, r),
             )
             del_cell.add_widget(del_btn)
@@ -2041,6 +2066,33 @@ class RestockScreen(MDScreen):
             self._show_dialog("Erro", f"Quantidade maior que stock disponivel ({stock_val:.2f}).")
             return
 
+        # Perdas devem usar o fluxo proprio: ele exige motivo e, para dano,
+        # evidencia inteligente. A saida manual nunca pode contornar essas regras.
+        if not is_in and movement_code in {"DAMAGE", "EXPIRED", "THEFT", "ADJUSTMENT"}:
+            if not self.manager:
+                self._show_dialog("Erro", "Modulo de perdas indisponivel.")
+                return
+            ensure_screen = getattr(app, "ensure_screen", None)
+            if "losses" not in self.manager.screen_names and callable(ensure_screen):
+                ensure_screen("losses")
+            if "losses" not in self.manager.screen_names:
+                self._show_dialog("Erro", "Modulo de perdas indisponivel.")
+                return
+            screen = self.manager.get_screen("losses")
+            screen.back_target = self.name
+            self.manager.current = "losses"
+            if hasattr(screen, "open_loss_for_product"):
+                Clock.schedule_once(
+                    lambda _dt: screen.open_loss_for_product(
+                        product_id=pid,
+                        query=name,
+                        loss_type_label=movement_label,
+                        loss_type_code=movement_code,
+                    ),
+                    0,
+                )
+            return
+
         self._set_movement_busy(True)
         try:
             if is_in:
@@ -2075,16 +2127,12 @@ class RestockScreen(MDScreen):
             self._show_dialog("Erro", result.get("message") or "Falha ao registar movimento.")
             return
 
+        self._set_now_markers(now, sync_modal=False)
         if result.get("direction") == "IN":
-            self.ids.entry_date_field.text = now.strftime("%d/%m/%Y %H:%M")
-            self.ids.exit_date_field.text = "--"
             self.show_feedback(f"Entrada registada para {name}.", "success")
         else:
-            self.ids.entry_date_field.text = "--"
-            self.ids.exit_date_field.text = now.strftime("%d/%m/%Y %H:%M")
             self.show_feedback(f"Saida registada para {name}.", "success")
 
-        self.ids.update_day_field.text = now.strftime("%d/%m/%Y")
         self.ids.qty_input.text = "1"
         self.ids.note_input.text = ""
         self.force_refresh()
@@ -2097,13 +2145,32 @@ class RestockScreen(MDScreen):
             focus_search=True,
         )
 
-    def _set_now_markers(self):
+    def _set_now_markers(self, timestamp=None, sync_modal=True):
+        """Mostra a data do movimento sem permitir edicao manual.
+
+        A data definitiva continua a ser registada pelo servidor no momento em
+        que o movimento e guardado. Este marcador apenas deixa a automatizacao
+        explicita no formulario antes e depois da confirmacao.
+        """
         if not self.ids:
             return
-        self.ids.entry_date_field.text = "--"
-        self.ids.exit_date_field.text = "--"
-        self.ids.update_day_field.text = datetime.now().strftime("%d/%m/%Y")
-        self._sync_stock_form_modal_from_hidden()
+        now = timestamp if isinstance(timestamp, datetime) else datetime.now()
+        timestamp_text = now.strftime("%d/%m/%Y %H:%M")
+        date_text = now.strftime("%d/%m/%Y")
+        is_in = self.current_mode == "IN"
+
+        entry_field = self.ids.entry_date_field
+        exit_field = self.ids.exit_date_field
+        update_field = self.ids.update_day_field
+        entry_field.hint_text = "Data de Entrada (automatica)"
+        exit_field.hint_text = "Data de Saida (automatica)"
+        update_field.hint_text = "Data do Registo (automatica)"
+        entry_field.text = timestamp_text if is_in else "--"
+        exit_field.text = "--" if is_in else timestamp_text
+        update_field.text = date_text
+
+        if sync_modal:
+            self._sync_stock_form_modal_from_hidden()
 
     def _focus_field(self, field_id, select_all=False):
         if not hasattr(self, "ids"):

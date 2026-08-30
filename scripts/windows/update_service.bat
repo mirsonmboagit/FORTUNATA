@@ -38,7 +38,7 @@ if not exist "%NSSM_EXE%" (
 sc.exe config "%SERVICE_NAME%" obj= LocalSystem
 "%NSSM_EXE%" restart "%SERVICE_NAME%"
 
-echo Servico "%SERVICE_NAME%" atualizado.
+echo Servico "%SERVICE_NAME%" pronto.
 exit /b 0
 
 :dryrun

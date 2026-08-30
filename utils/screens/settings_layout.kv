@@ -294,14 +294,14 @@
                                 spacing: dp(10)
 
                                 MDLabel:
-                                    text: 'Central de definicoes'
+                                    text: 'Definicoes'
                                     font_style: 'H6'
                                     bold: True
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['on_primary']
 
                                 MDLabel:
-                                    text: 'Ajuste acessos, aparencia e tarefas tecnicas num painel mais claro e direto.'
+                                    text: 'Acessos, aparencia e ferramentas do sistema.'
                                     font_style: 'Caption'
                                     theme_text_color: 'Custom'
                                     text_color: 1, 1, 1, 0.92
@@ -326,13 +326,13 @@
                                         accent_color: (1, 1, 1, 0.18) if root.notification_count else (1, 1, 1, 0.10)
 
                                     SettingsSignalCard:
-                                        icon_name: 'robot'
-                                        label_text: 'Monitor ativo' if root.monitor_enabled else 'Monitor pausado'
+                                        icon_name: 'bell-ring-outline'
+                                        label_text: 'Avisos ativos' if root.monitor_enabled else 'Avisos pausados'
                                         accent_color: (1, 1, 1, 0.16) if root.monitor_enabled else (1, 1, 1, 0.09)
 
                                     SettingsSignalCard:
                                         icon_name: 'api'
-                                        label_text: 'IA externa ligada' if root.api_ai_enabled else 'Leitura local apenas'
+                                        label_text: 'Apoio externo ativo' if root.api_ai_enabled else 'So dados locais'
                                         accent_color: (1, 1, 1, 0.16) if root.api_ai_enabled else (1, 1, 1, 0.09)
 
                                     SettingsSignalCard:
@@ -392,7 +392,7 @@
                                     text_color: app.theme_tokens['text_primary']
 
                                 MDLabel:
-                                    text: 'Tudo o que muda o comportamento da app no dia a dia.'
+                                    text: 'Ajustes usados no dia a dia.'
                                     font_style: 'Caption'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
@@ -457,7 +457,7 @@
                                                 on_active: root.toggle_theme(self.active)
 
                                 MDLabel:
-                                    text: 'Escuro ativo' if theme_toggle.active else 'Claro e limpo'
+                                    text: 'Modo escuro' if theme_toggle.active else 'Modo claro'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -465,7 +465,7 @@
                                     text_color: app.theme_tokens['text_primary']
 
                                 MDLabel:
-                                    text: 'Troque a aparencia sem sair da sessao.'
+                                    text: 'Altere o tema sem sair da conta.'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -489,7 +489,7 @@
                                     spacing: dp(12)
 
                                     SettingsIconBadge:
-                                        icon_name: 'robot'
+                                        icon_name: 'bell-ring-outline'
                                         accent_color: app.theme_tokens['success']
                                         icon_color: app.theme_tokens['on_primary']
 
@@ -499,7 +499,7 @@
                                         size_hint_x: 1
 
                                         MDLabel:
-                                            text: 'Monitor inteligente'
+                                            text: 'Avisos da loja'
                                             font_style: 'Subtitle1'
                                             bold: True
                                             theme_text_color: 'Custom'
@@ -508,7 +508,7 @@
                                             shorten_from: 'right'
 
                                         MDLabel:
-                                            text: 'Assistente'
+                                            text: 'Acompanhamento'
                                             font_style: 'Caption'
                                             theme_text_color: 'Custom'
                                             text_color: app.theme_tokens['text_secondary']
@@ -527,7 +527,7 @@
                                                 on_active: root.toggle_smart_monitor(self.active)
 
                                 MDLabel:
-                                    text: 'Monitor inteligente ativo' if smart_monitor_toggle.active else 'Monitor inteligente pausado'
+                                    text: 'Alertas ativos' if smart_monitor_toggle.active else 'Alertas pausados'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -535,7 +535,7 @@
                                     text_color: app.theme_tokens['text_primary']
 
                                 MDLabel:
-                                    text: 'Controla a leitura inteligente, o historico e os avisos do assistente.'
+                                    text: 'Verifica vendas, stock e avisos.'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -569,7 +569,7 @@
                                         size_hint_x: 1
 
                                         MDLabel:
-                                            text: 'Banners automaticos'
+                                            text: 'Avisos da loja'
                                             font_style: 'Subtitle1'
                                             bold: True
                                             theme_text_color: 'Custom'
@@ -597,7 +597,7 @@
                                                 on_active: root.toggle_auto_banners(self.active)
 
                                 MDLabel:
-                                    text: 'Entrada automatica ligada' if auto_banners_toggle.active else 'Entrada automatica pausada'
+                                    text: 'Avisos automaticos ativos' if auto_banners_toggle.active else 'Avisos automaticos pausados'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -605,7 +605,7 @@
                                     text_color: app.theme_tokens['text_primary']
 
                                 MDLabel:
-                                    text: 'Mostra os banners sozinho quando houver novidades, sem desligar o historico manual.'
+                                    text: 'Mostra avisos quando houver novidades.'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -639,7 +639,7 @@
                                         size_hint_x: 1
 
                                         MDLabel:
-                                            text: 'IA externa'
+                                            text: 'Apoio externo'
                                             font_style: 'Subtitle1'
                                             bold: True
                                             theme_text_color: 'Custom'
@@ -667,7 +667,7 @@
                                                 on_active: root.toggle_ai(self.active)
 
                                 MDLabel:
-                                    text: 'APIs ativas para analise opcional' if api_ai_toggle.active else 'Leitura apenas com dados locais'
+                                    text: 'Apoio externo ativo' if api_ai_toggle.active else 'So dados locais'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -675,7 +675,7 @@
                                     text_color: app.theme_tokens['text_primary']
 
                                 MDLabel:
-                                    text: 'Ative quando quiser apoio externo nas leituras e sugestoes.'
+                                    text: 'Ative apenas se precisar de apoio externo.'
                                     font_style: 'Caption'
                                     size_hint_y: None
                                     height: self.texture_size[1]
@@ -703,20 +703,20 @@
 
                         SettingsStatusCard:
                             icon_name: 'robot'
-                            title_text: 'Monitor'
-                            subtitle_text: 'Monitor inteligente ligado' if root.monitor_enabled else 'Monitor inteligente pausado'
+                            title_text: 'Avisos'
+                            subtitle_text: 'Alertas ativos' if root.monitor_enabled else 'Alertas pausados'
                             accent_color: app.theme_tokens['success'] if root.monitor_enabled else app.theme_tokens['warning']
 
                         SettingsStatusCard:
                             icon_name: 'api'
-                            title_text: 'Analise externa'
-                            subtitle_text: 'APIs auxiliares ligadas' if root.api_ai_enabled else 'Somente analise local'
+                            title_text: 'Apoio externo'
+                            subtitle_text: 'Apoio externo ativo' if root.api_ai_enabled else 'So dados locais'
                             accent_color: app.theme_tokens['primary'] if root.api_ai_enabled else app.theme_tokens['danger']
 
                         SettingsStatusCard:
                             icon_name: 'bell-ring-outline'
                             title_text: 'Alertas'
-                            subtitle_text: '{} alerta(s) pendente(s)'.format(root.notification_count) if root.notification_count else 'Nada pendente agora'
+                            subtitle_text: '{} alerta(s) pendente(s)'.format(root.notification_count) if root.notification_count else 'Sem avisos pendentes'
                             accent_color: app.theme_tokens['danger'] if root.notification_count else app.theme_tokens['success']
 
                     SettingsPanelCard:
@@ -1153,7 +1153,7 @@
                                     box_size: dp(20)
 
                                 MDLabel:
-                                    text: 'Os banners e o historico inteligente continuam disponiveis no botao flutuante.'
+                                    text: 'Os avisos continuam disponiveis no botao de notificacoes.'
                                     font_style: 'Caption'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
@@ -1185,7 +1185,7 @@
                                     text_color: app.theme_tokens['text_primary']
 
                                 MDLabel:
-                                    text: 'Operacoes tecnicas agrupadas numa zona propria para evitar confusao.'
+                                    text: 'Ferramentas de integracao e cache.'
                                     font_style: 'Caption'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
@@ -1216,7 +1216,7 @@
                                         box_size: dp(20)
 
                                     MDLabel:
-                                        text: 'Use estas tarefas apenas quando precisar reconstruir cache, preencher codigos ou forcar sincronizacao.'
+                                        text: 'Use para atualizar cache, codigos de barras ou sincronizacao.'
                                         font_style: 'Caption'
                                         theme_text_color: 'Custom'
                                         text_color: app.theme_tokens['text_secondary']
@@ -1230,8 +1230,8 @@
 
                             SettingsActionCard:
                                 icon_name: 'key-variant'
-                                title_text: 'Configurar Gemini'
-                                subtitle_text: 'Atualize a chave GEMINI_API_KEY e o modelo da analise externa.'
+                                title_text: 'Apoio externo'
+                                subtitle_text: 'Gerir a chave e o modelo da integracao externa.'
                                 accent_color: app.theme_tokens['primary']
                                 on_press: root.open_gemini_settings()
 
@@ -1272,21 +1272,51 @@
 
         MDFloatingActionButton:
             id: ai_button
-            icon: 'assets/icon/idea.ico'
-            elevation: 6
-            md_bg_color: app.theme_tokens['primary']
+            icon: 'assets/icon/alert.png'
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
             pos_hint: {'right': 0.965, 'y': 0.04}
             on_release: root.open_ai_menu(self)
+
+        MDFloatingActionButton:
+            id: recommendations_button
+            icon: 'assets/icon/idea.ico'
+            icon_size: dp(38)
+            elevation: 0
+            md_bg_color: 0, 0, 0, 0
+            pos: ai_button.x, ai_button.top + dp(10)
+            on_release: root.show_ai_recommendations(self)
+
+        MDCard:
+            id: recommendations_badge
+            size_hint: None, None
+            size: dp(26), dp(26)
+            md_bg_color: app.theme_tokens['badge']
+            radius: [dp(13)]
+            elevation: 8
+            pos: recommendations_button.right - (self.width * 0.55), recommendations_button.top - (self.height * 0.45)
+            opacity: 1
+
+            MDLabel:
+                id: recommendations_badge_label
+                text: '0'
+                halign: 'center'
+                valign: 'middle'
+                theme_text_color: 'Custom'
+                text_color: app.theme_tokens['on_primary']
+                font_size: dp(12)
+                bold: True
 
         MDCard:
             id: ai_badge
             size_hint: None, None
-            size: dp(24), dp(24)
+            size: dp(26), dp(26)
             md_bg_color: app.theme_tokens['badge']
-            radius: [dp(12)]
+            radius: [dp(13)]
             elevation: 8
             pos_hint: {'right': 0.978, 'y': 0.098}
-            opacity: 0
+            opacity: 1
 
             MDLabel:
                 id: ai_badge_label

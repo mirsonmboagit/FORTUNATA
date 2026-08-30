@@ -62,6 +62,46 @@ class DatabaseSetupAndUserTests(TemporaryDatabaseTestCase):
 
 
 class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
+    def test_delete_product_with_history_archives_it_and_keeps_history(self):
+        product_id = self.add_sample_product(description="Produto com histórico", stock=4)
+        sale_id = self.quiet(
+            self.db.add_sale,
+            product_id,
+            1,
+            116,
+            username="maria",
+            role="manager",
+        )
+        self.assertIsNotNone(sale_id)
+
+        self.assertTrue(self.quiet(self.db.delete_product, product_id, username="admin"))
+        self.assertEqual(
+            self.fetch_scalar("SELECT status FROM products WHERE id = ?", (product_id,)),
+            "ARQUIVADO",
+        )
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales WHERE product_id = ?", (product_id,)), 1)
+        self.assertEqual(
+            self.fetch_scalar(
+                "SELECT new_status FROM product_status_history "
+                "WHERE product_id = ? ORDER BY id DESC LIMIT 1",
+                (product_id,),
+            ),
+            "ARQUIVADO",
+        )
+        self.assertNotIn(product_id, [row[0] for row in self.db.get_all_products_page()])
+        self.assertNotIn(product_id, [row[0] for row in self.db.get_products_for_sale()])
+        self.assertIsNone(
+            self.quiet(
+                self.db.add_sale,
+                product_id,
+                1,
+                116,
+                username="maria",
+                role="manager",
+            )
+        )
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales WHERE product_id = ?", (product_id,)), 1)
+
     def test_admin_catalog_page_aggregates_lots_and_keeps_selection(self):
         first = self.add_sample_product(
             description="Arroz Premium",
@@ -240,7 +280,13 @@ class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
         self.assertIsNone(self.db.get_open_cash_session("maria", "POS-1"))
 
     def test_cash_summary_separates_payment_methods_and_subtracts_cash_refunds(self):
-        first = self.add_sample_product(description="A", barcode="cash-a", stock=5, sale_price=100)
+        first = self.add_sample_product(
+            description="A",
+            barcode="cash-a",
+            stock=5,
+            sale_price=100,
+            is_sold_by_weight=True,
+        )
         second = self.add_sample_product(description="B", barcode="card-b", stock=5, sale_price=200)
         session = self.db.open_cash_session("maria", "POS-2", 100, role="manager")["session"]
         cash_sale = self.quiet(
@@ -284,6 +330,62 @@ class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
         self.assertIn("10 minutos", result["message"])
         self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id = ?", (product_id,)), 9.0)
         self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales_returns WHERE sale_id = ?", (sale_id,)), 0)
+
+    def test_refunded_sale_is_excluded_from_all_sales_history_and_metrics(self):
+        product_id = self.add_sample_product(stock=10, sale_price=100)
+        sale_id = self.quiet(
+            self.db.add_sale,
+            product_id,
+            2,
+            100,
+            username="maria",
+            role="manager",
+            terminal_id="POS-1",
+            transaction_code="ESTORNO-1",
+        )
+        refund = self.db.refund_sale_item(
+            sale_id,
+            2,
+            "Cliente desistiu",
+            "maria",
+            "manager",
+            "POS-1",
+        )
+        self.assertTrue(refund["ok"])
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales WHERE id = ?", (sale_id,)), 1)
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales_returns WHERE sale_id = ?", (sale_id,)), 1)
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales_history WHERE id = ?", (sale_id,)), 0)
+        self.assertEqual(self.db.get_all_sales(), [])
+        self.assertEqual(self.db.get_today_sales(), [])
+
+        stats = self.db.get_sales_statistics_by_date(datetime.now().strftime("%d/%m/%Y"))
+        monthly = self.db.get_monthly_sales_summary(datetime.now().month, datetime.now().year)
+        snapshot = self.db.get_admin_home_snapshot(lookback_days=7)
+        productivity = self.db.get_productivity_report_data(today, today)
+        cash_report = self.db.get_cash_user_report_data(today, today)
+        admin_insights = self.db.get_admin_insights()
+        from AI.data_collector import IntelligenceDataCollector
+        intelligence_snapshot = IntelligenceDataCollector(db=self.db, default_ttl=5).collect_snapshot()
+
+        self.assertEqual(stats, (0, 0, 0, 0, 0, 0))
+        self.assertEqual(monthly, [])
+        self.assertEqual(snapshot["summary"]["sales_today_count"], 0)
+        self.assertEqual(snapshot["summary"]["revenue_today"], 0.0)
+        self.assertEqual(snapshot["top_products"], [])
+        self.assertEqual(productivity["summary"]["total_sales"], 0)
+        self.assertEqual(cash_report["summary"]["total_sales"], 0)
+        self.assertEqual(admin_insights["summary"][0], "Total vendido hoje: 0.00 MZN")
+        self.assertEqual(admin_insights["summary"][1], "Total de vendas hoje: 0")
+        self.assertEqual(intelligence_snapshot["vendas_hoje"]["vendas"], 0)
+        self.assertEqual(intelligence_snapshot["vendas_hoje"]["total"], 0.0)
+        self.assertEqual(intelligence_snapshot["vendas_por_produto"], [])
+        self.assertEqual(intelligence_snapshot["atividade_caixa"]["total_vendas_hoje"], 0)
+        from utils.ai.ai_insights import _fetch_sales_velocity, _get_product_daily_sales
+        self.assertEqual(_fetch_sales_velocity(self.db), {})
+        self.assertEqual(_get_product_daily_sales(self.db, product_id), 0.0)
+        self.assertEqual(self.fetch_scalar("SELECT existing_stock FROM products WHERE id = ?", (product_id,)), 10.0)
 
     def test_sales_metrics_count_transactions_instead_of_product_rows(self):
         first = self.add_sample_product(description="Arroz", barcode="tx-a", stock=10, sale_price=100)
@@ -468,6 +570,40 @@ class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
         self.assertEqual(parsed.hour, 23)
         self.assertEqual(parsed.minute, 59)
         self.assertEqual(parsed.second, 59)
+
+    def test_user_logs_can_be_filtered_by_a_single_date(self):
+        self.db.cursor.executemany(
+            """
+            INSERT INTO user_logs (username, role, action, details, timestamp, owner_username)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                ("maria", "manager", "SALE", "Venda do primeiro dia", "2026-08-10 09:15:00", ""),
+                ("maria", "manager", "REGISTER_LOSS", "Perda do segundo dia", "2026-08-11 11:30:00", ""),
+                ("ana", "manager", "SALE", "Venda do segundo dia", "2026-08-11 18:45:00", ""),
+            ],
+        )
+        self.db.conn.commit()
+
+        rows = self.db.get_user_logs(date_filter="2026-08-11", limit=60)
+        maria_rows = self.db.get_user_logs(
+            user_filter="maria",
+            role_filter="manager",
+            date_filter="2026-08-11",
+            limit=60,
+        )
+        admin_rows = self.db.get_user_logs(
+            role_filter="admin",
+            date_filter="2026-08-11",
+            limit=60,
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row[5].startswith("2026-08-11") for row in rows))
+        self.assertEqual([row[3] for row in rows], ["SALE", "REGISTER_LOSS"])
+        self.assertEqual(len(maria_rows), 1)
+        self.assertEqual(maria_rows[0][1], "maria")
+        self.assertEqual(admin_rows, [])
 
     def test_expired_status_refreshes_automatically(self):
         product_id = self.add_sample_product(expiry_date=(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"))
