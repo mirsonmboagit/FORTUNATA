@@ -97,29 +97,43 @@ Confirme a ligação à base central/API e, quando aplicável, o scanner, a impr
 
 **Dizer, antes de abrir o Manager:**
 
-> A área administrativa prepara, controla e supervisiona. Agora vamos ver o outro lado: o gerente usa estes mesmos dados para atender o cliente com rapidez. Cada venda registada aqui atualiza a informação central que o administrador acabou de consultar.
+> A área administrativa prepara, controla e supervisiona. Agora vamos ver como o gerente começa o turno com esta informação à mão: primeiro confirma o estado da operação, depois organiza o caixa e só então atende o cliente. Cada venda registada aqui atualiza a informação central que o administrador acabou de consultar.
 
 ---
 
-## 3. Gerente/Caixa — atendimento e fecho da venda (2 a 3 minutos)
+## 3. Gerente/Caixa — preparação do turno, atendimento e controlo (2 a 3 minutos)
 
-### 3.1 Abertura de caixa — 25 segundos
+### 3.1 Painel operacional — 35 segundos
+
+**Mostrar:** ecrã inicial do Manager, antes de abrir uma venda.
+
+**Dizer:**
+
+> O gerente não começa simplesmente a vender. Ao entrar, confirma quem está no turno, se o sistema está ligado e quais são os avisos que podem afetar o atendimento.
+>
+> Nesta mesma vista, vê os produtos com stock baixo, o produto mais vendido, a hora de maior movimento e os indicadores do dia. Assim, pode antecipar uma reposição, preparar-se para o período de maior procura e acompanhar o ritmo da loja sem interromper o trabalho.
+>
+> Também tem acesso imediato ao histórico de vendas e ao registo de perdas, para que uma ocorrência seja tratada e registada no momento em que acontece.
+
+**Apontar:** atendente, estado de ligação, avisos de stock, produto mais vendido, hora de maior movimento, vendas do dia, total vendido, histórico e perdas.
+
+### 3.2 Abertura de caixa — 25 segundos
 
 **Mostrar:** Manager; botão de caixa e abertura de caixa, se necessário.
 
 **Dizer:**
 
-> O gerente começa o turno abrindo o caixa com o fundo inicial. A sessão fica identificada pelo utilizador e pelo terminal, criando uma base clara para o controlo do caixa no fim do dia.
+> Depois desta verificação inicial, o gerente abre o caixa com o fundo inicial. A sessão fica identificada pelo utilizador e pelo terminal, criando uma base clara para o controlo do caixa no fim do dia.
 
 **Apontar:** valor inicial, utilizador e terminal.
 
-### 3.2 Venda prática — 80 segundos
+### 3.3 Venda prática — 70 segundos
 
 **Mostrar:** pesquisa de produto ou leitura de código de barras; carrinho; venda por peso ou embalagem; pagamento.
 
 **Dizer:**
 
-> No atendimento, o gerente pode localizar o produto por pesquisa ou ler o código de barras. O sistema confirma a disponibilidade em stock e adiciona o produto ao carrinho.
+> Com o turno e o caixa preparados, passamos ao atendimento. O gerente pode localizar o produto por pesquisa ou ler o código de barras. O sistema confirma a disponibilidade em stock e adiciona o produto ao carrinho.
 >
 > Para produtos a granel, o gerente informa o peso; para produtos configurados em embalagem, seleciona a quantidade adequada. O total é calculado com os preços e regras de IVA já definidos pelo administrador.
 >
@@ -127,7 +141,7 @@ Confirme a ligação à base central/API e, quando aplicável, o scanner, a impr
 
 **Apontar:** pesquisa/scanner, carrinho, quantidade/peso, desconto, formas de pagamento, total e troco.
 
-### 3.3 Finalização, recibo e controlo — 55 segundos
+### 3.4 Finalização, recibo e controlo — 45 segundos
 
 **Mostrar:** Finalizar venda; recibo; histórico de vendas; botão de caixa.
 
@@ -141,14 +155,14 @@ Confirme a ligação à base central/API e, quando aplicável, o scanner, a impr
 
 **Encerramento final:**
 
-> O gerente atende com rapidez; o dono acompanha tudo com controlo.
+> O gerente começa o turno informado, atende com rapidez e fecha o caixa com controlo; o dono acompanha tudo a partir dos mesmos registos.
 
 ---
 
 ## Percurso de telas recomendado
 
 1. **Admin:** Painel inicial → Produtos → Reposição/Movimentos → Sugestões de compra ou Inventário → Perdas → Relatórios → Definições/Utilizadores.
-2. **Manager:** Caixa → Pesquisa ou scanner → Carrinho → Pagamento → Finalizar → Recibo/Histórico → Fecho de caixa.
+2. **Manager:** Painel operacional (avisos e indicadores) → Caixa → Pesquisa ou scanner → Carrinho → Pagamento → Finalizar → Recibo/Histórico → Fecho de caixa.
 
 ## Regras para uma apresentação convincente
 
