@@ -89,10 +89,95 @@
       "price": "220",
       "source": "Bazara",
       "source_chain": [
-        "Open Food Facts",
-        "Bazara"
+        "Agregado"
       ]
     },
-    "timestamp": "2026-08-23T18:29:21.065445"
+    "timestamp": "2026-09-01T08:08:28.527353"
+  },
+  "6009832820576": {
+    "source": "Ranxo",
+    "data": {
+      "barcode": "6009832820576",
+      "name": "Agua Aquaplus - 1.75L",
+      "price": "35.00",
+      "image": "https://www.ranxo.co.mz/wp-content/uploads/2021/10/agua-aquaplus-15L-100x100.jpg",
+      "source_chain": [
+        "Ranxo"
+      ]
+    },
+    "timestamp": "2026-09-01T06:59:42.965496"
+  },
+  "6001250065034": {
+    "source": "Agregado",
+    "data": {
+      "barcode": "6001250065034",
+      "name": "Sunshine d lite",
+      "expiry_date": "2025-06-06",
+      "sold_by_weight": false,
+      "image": "https://images.openfoodfacts.org/images/products/600/125/006/5034/front_en.3.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6001250065034",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001250065034",
+      "source_chain": [
+        "Open Food Facts",
+        "Ranxo"
+      ]
+    },
+    "timestamp": "2026-09-01T08:01:35.513207"
+  },
+  "6009679340428": {
+    "source": "Ranxo",
+    "data": {
+      "barcode": "6009679340428",
+      "name": "Nenhum produto encontrado.",
+      "source_chain": [
+        "Ranxo"
+      ]
+    },
+    "timestamp": "2026-09-01T08:04:11.622211"
+  },
+  "9506000125053": {
+    "source": "Ranxo",
+    "data": {
+      "barcode": "9506000125053",
+      "name": "Nenhum produto encontrado.",
+      "source_chain": [
+        "Ranxo"
+      ]
+    },
+    "timestamp": "2026-09-01T08:04:53.636799"
+  },
+  "6001645418629": {
+    "source": "Ranxo",
+    "data": {
+      "barcode": "6001645418629",
+      "name": "Nenhum produto encontrado.",
+      "source_chain": [
+        "Ranxo"
+      ]
+    },
+    "timestamp": "2026-09-01T08:05:33.135362"
+  },
+  "6001068705504": {
+    "source": "Agregado",
+    "data": {
+      "barcode": "6001068705504",
+      "name": "MEDIUM CREAM DAIRY POWDER BLEND",
+      "brand": "Nestlé NIDO FortiGrow",
+      "sold_by_weight": false,
+      "source_url": "https://world.openfoodfacts.org/product/6001068705504",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6001068705504",
+      "sku": "Vns-6001068705504",
+      "url_key": "vns-6001068705504-leite-em-pó-nestlé-nido-fortigrow-400-g",
+      "price": "400",
+      "image": "https://bazara.co.mz/media/catalog/product/cache/74c1057f7991b4edb2bc7bdaa94de933/s/m/sm-6001068705504_1.jpg",
+      "category": "Bebé e Criança",
+      "source": "Bazara",
+      "source_chain": [
+        "Open Food Facts",
+        "Bazara",
+        "Ranxo"
+      ]
+    },
+    "timestamp": "2026-09-01T08:06:13.601260"
   }
 }

@@ -3,7 +3,7 @@
   "display_name": "LojaAPI",
   "description": "API local Flask/Waitress para o SIGE MPE.",
   "nssm_path": "nssm.exe",
-  "python_executable": "loja/Scripts/python.exe",
+  "python_executable": ".venv/Scripts/python.exe",
   "entrypoint": "-m server.run_api",
   "working_directory": ".",
   "stdout_log": "logs/lojaapi-stdout.log",

@@ -177,6 +177,7 @@ class ProductForm(Popup):
         self._barcode_context         = None
         self._barcode_request_id      = 0
         self._queued_barcode_request  = None
+        self._barcode_lookup_status   = None
 
         self._calculating                = False
         self._discount_base_price        = None
@@ -904,6 +905,7 @@ class ProductForm(Popup):
         self._barcode_context = barcode
         if self.product is None:
             self._clear_fields(preserve_barcode=True, barcode_value=barcode)
+            self._barcode_lookup_status = "pending"
         else:
             self.barcode_input.text = barcode
 
@@ -948,6 +950,9 @@ class ProductForm(Popup):
     def _on_api_success(self, source, data, request_id=None, barcode=None):
         if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
             return
+        if not self._has_usable_product_payload(data):
+            self._on_api_failure(request_id=request_id, barcode=barcode)
+            return
         self._set_status(f"OK: {source}", self.COLOR_PRIMARY)
         self._fill_fields(data)
         self._show_snackbar(f"Dados de {source}", self.COLOR_SUCCESS)
@@ -955,19 +960,22 @@ class ProductForm(Popup):
     def _on_api_partial(self, source, data, request_id=None, barcode=None):
         if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
             return
+        if not self._has_usable_product_payload(data):
+            return
         self._set_status(f"{source}...", self.COLOR_PRIMARY)
-        if data: self._fill_fields(data)
+        self._fill_fields(data)
 
     def _on_api_complete(self, data, request_id=None, barcode=None):
         try:
             if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
                 return
-            if not data or not data.get("source_chain"):
+            if not self._has_usable_product_payload(data):
                 self._on_api_failure(request_id=request_id, barcode=barcode)
                 return
             self._fill_fields(data)
+            self._barcode_lookup_status = "found"
             self._set_status("OK", self.COLOR_SUCCESS)
-            self._show_snackbar("Alteracoes guardadas", self.COLOR_SUCCESS)
+            self._show_snackbar("Produto encontrado", self.COLOR_SUCCESS)
         finally:
             if request_id is not None:
                 Clock.schedule_once(self._start_pending_barcode_search, 0)
@@ -976,8 +984,31 @@ class ProductForm(Popup):
         if request_id is not None and not self._barcode_request_is_current(request_id, barcode):
             return
         target_barcode = self._sanitize_barcode(barcode or self.barcode_input.text)
-        self._set_status("Nao encontrado", self.COLOR_ERROR)
-        self._show_snackbar(f"'{target_barcode}' nao encontrado", self.COLOR_ERROR)
+        if self.product is None:
+            self._clear_fields(preserve_barcode=True, barcode_value=target_barcode)
+        self._barcode_lookup_status = "not_found"
+        self._set_status("Produto nao encontrado", self.COLOR_ERROR)
+        self._show_snackbar("Produto nao encontrado", self.COLOR_ERROR)
+
+    @staticmethod
+    def _has_usable_product_payload(data):
+        if not isinstance(data, dict):
+            return False
+        name = str(data.get("name") or "").strip().casefold()
+        invalid_names = {
+            "",
+            "novo produto",
+            "new product",
+            "produto",
+            "produto nao encontrado",
+            "produto não encontrado",
+            "nenhum produto encontrado",
+            "nenhum produto encontrado.",
+            "not found",
+        }
+        if name in invalid_names:
+            return False
+        return bool(name or str(data.get("brand") or "").strip())
 
     def _on_api_status(self, message):
         if self._queued_barcode_request:
@@ -1543,11 +1574,21 @@ class ProductForm(Popup):
 
     # -- Save ---------------------------------------------------------------
     def _save_product(self, instance):
+        raw = self.barcode_input.text.strip()
+        barcode = "".join(c for c in raw if c.isprintable()).strip() if raw else None
+        if (
+            self.product is None
+            and barcode
+            and barcode == self._barcode_context
+            and self._barcode_lookup_status in {"pending", "not_found"}
+        ):
+            message = "Produto nao encontrado" if self._barcode_lookup_status == "not_found" else "A procurar o produto..."
+            self._set_status(message, self.COLOR_ERROR if self._barcode_lookup_status == "not_found" else self.COLOR_WARNING)
+            self._show_snackbar(message, self.COLOR_ERROR if self._barcode_lookup_status == "not_found" else self.COLOR_WARNING)
+            return
         if not self._validate_fields(): return
         expiry = self._process_expiry_date()
         if expiry is False: return
-        raw = self.barcode_input.text.strip()
-        barcode = "".join(c for c in raw if c.isprintable()).strip() if raw else None
         self._save_to_database(barcode, expiry, self.is_sold_by_weight_switch.active)
 
     def _validate_fields(self):
@@ -1707,6 +1748,7 @@ class ProductForm(Popup):
                 self.barcode_input.text = ""
                 self._barcode_context = None
                 self._queued_barcode_request = None
+                self._barcode_lookup_status = None
             self.sold_stock.text = "0"
         finally:
             self._calculating = False

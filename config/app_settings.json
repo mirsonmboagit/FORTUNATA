@@ -3,7 +3,7 @@
   "ai_enabled": true,
   "auto_banners_enabled": true,
   "smart_monitor_enabled": true,
-  "theme_style": "Light",
+  "theme_style": "Dark",
   "manager_theme_style": "Light",
   "language": "pt",
   "physical_scanner_enabled": false,

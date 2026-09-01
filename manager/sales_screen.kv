@@ -177,69 +177,237 @@
 <FloatingScannerPanel>:
     orientation: "vertical"
     size_hint: None, None
-    size: dp(296), dp(320)
-    radius: [dp(12)]
-    elevation: 4
+    size: dp(380), dp(450)
+    radius: [dp(18)]
+    elevation: 6
     md_bg_color: app.theme_tokens['surface'][0], app.theme_tokens['surface'][1], app.theme_tokens['surface'][2], 0.98
-    padding: [dp(10), dp(10), dp(10), dp(10)]
+    padding: [dp(14), dp(14), dp(14), dp(14)]
     spacing: dp(8)
     opacity: 0
     disabled: True
 
     MDBoxLayout:
         size_hint_y: None
-        height: dp(28)
-        spacing: dp(8)
-
-        MDLabel:
-            text: "Scanner flutuante"
-            bold: True
-            font_size: dp(15)
-            theme_text_color: "Custom"
-            text_color: app.theme_tokens['text_primary']
-
-        Widget:
-
-    AnchorLayout:
-        anchor_x: "center"
-        anchor_y: "center"
+        height: dp(44)
+        spacing: dp(9)
 
         MDCard:
             size_hint: None, None
-            size: max(dp(128), min(root.width - dp(20), root.height - dp(116))), max(dp(128), min(root.width - dp(20), root.height - dp(116)))
-            radius: [dp(16)]
+            size: dp(42), dp(42)
+            radius: [dp(12)]
             elevation: 0
+            md_bg_color: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.12
+
+            MDIcon:
+                icon: "barcode-scan"
+                halign: "center"
+                valign: "middle"
+                text_size: self.size
+                font_size: dp(24)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['primary']
+
+        MDBoxLayout:
+            orientation: "vertical"
+            spacing: dp(1)
+
+            MDLabel:
+                text: "Leitor de código de barras"
+                bold: True
+                size_hint_y: None
+                height: dp(22)
+                font_size: dp(15)
+                shorten: True
+                shorten_from: "right"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_primary']
+
+            MDLabel:
+                text: "Aponte a câmara para o código de barras"
+                size_hint_y: None
+                height: dp(17)
+                font_size: dp(12)
+                shorten: True
+                shorten_from: "right"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['manager_ink']
+
+        Widget:
+
+        TooltipIconButton:
+            icon: "close"
+            icon_size: sp(24)
+            size_hint: None, None
+            size: dp(40), dp(40)
+            theme_text_color: "Custom"
+            text_color: app.theme_tokens['manager_ink']
             md_bg_color: app.theme_tokens['card_alt']
+            hint_text: "Fechar leitor"
+            on_release: app.root.get_screen("manager").stop_scanner() if app.root and "manager" in app.root.screen_names else None
+
+    MDCard:
+        size_hint_y: None
+        height: dp(174)
+        radius: [dp(15)]
+        elevation: 0
+        md_bg_color: 0.08, 0.10, 0.15, 1
+
+        FloatLayout:
+            id: scanner_camera_view
+
+            # A pre-visualizacao ocupa rigorosamente o card. Sem este
+            # enquadramento explicito, a textura da camara pode manter uma
+            # geometria anterior e aparecer fora do painel.
+            canvas.after:
+                Color:
+                    rgba: 1, 1, 1, 0.92
+                Line:
+                    width: dp(3)
+                    points: [self.x + dp(18), self.top - dp(18), self.x + dp(42), self.top - dp(18), self.x + dp(42), self.top - dp(42)]
+                Line:
+                    width: dp(3)
+                    points: [self.right - dp(18), self.top - dp(18), self.right - dp(42), self.top - dp(18), self.right - dp(42), self.top - dp(42)]
+                Line:
+                    width: dp(3)
+                    points: [self.x + dp(18), self.y + dp(18), self.x + dp(42), self.y + dp(18), self.x + dp(42), self.y + dp(42)]
+                Line:
+                    width: dp(3)
+                    points: [self.right - dp(18), self.y + dp(18), self.right - dp(42), self.y + dp(18), self.right - dp(42), self.y + dp(42)]
+                Color:
+                    rgba: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.95
+                Line:
+                    width: dp(2)
+                    points: [self.x + dp(30), self.center_y, self.right - dp(30), self.center_y]
 
             Image:
                 id: camera_image
+                size_hint: None, None
+                size: self.parent.size
+                pos: self.parent.pos
                 fit_mode: "fill"
 
-    MDLabel:
-        id: scanner_status_label
+            MDBoxLayout:
+                orientation: "vertical"
+                size_hint: None, None
+                size: dp(205), dp(82)
+                pos_hint: {"center_x": 0.5, "center_y": 0.5}
+                spacing: dp(8)
+
+                MDIcon:
+                    icon: "barcode"
+                    halign: "center"
+                    font_size: dp(38)
+                    theme_text_color: "Custom"
+                    text_color: 1, 1, 1, 0.68
+
+                MDLabel:
+                    text: "Posicione o código de barras\nna área indicada"
+                    halign: "center"
+                    font_size: dp(14)
+                    theme_text_color: "Custom"
+                    text_color: 1, 1, 1, 0.80
+
+    MDCard:
         size_hint_y: None
-        height: dp(18)
-        text: "A preparar a camera..."
-        font_size: dp(14)
-        shorten: True
-        shorten_from: "right"
-        theme_text_color: "Custom"
-        text_color: app.theme_tokens['manager_ink']
+        height: dp(62)
+        radius: [dp(14)]
+        elevation: 0
+        md_bg_color: app.theme_tokens['card_alt']
+        padding: [dp(12), dp(7), dp(12), dp(6)]
+
+        MDBoxLayout:
+            orientation: "vertical"
+            spacing: dp(1)
+
+            MDLabel:
+                text: "Lido:"
+                bold: True
+                font_size: dp(12)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['manager_ink']
+
+            MDLabel:
+                id: scanner_last_value
+                text: "A aguardar leitura"
+                bold: True
+                font_size: dp(17)
+                shorten: True
+                shorten_from: "right"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['text_primary']
+
+            MDLabel:
+                id: scanner_status_label
+                text: "Prepare a câmara para começar"
+                font_size: dp(11)
+                shorten: True
+                shorten_from: "right"
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['manager_ink']
 
     MDBoxLayout:
         size_hint_y: None
-        height: dp(36)
+        height: dp(40)
         spacing: dp(8)
 
-        MDRaisedButton:
+        TooltipRaisedButton:
             text: "Parar"
+            tooltip_text: "Parar leitor | Ctrl+B"
+            size_hint_x: 0.9
             md_bg_color: app.theme_tokens['danger']
             on_release: app.root.get_screen("manager").toggle_scanner() if app.root and "manager" in app.root.screen_names else None
 
-        MDRaisedButton:
-            text: "Trocar Cam"
+        TooltipRaisedButton:
+            text: "Trocar câmara"
+            tooltip_text: "Trocar câmara | Ctrl+K"
+            size_hint_x: 1.1
             md_bg_color: app.theme_tokens['primary']
             on_release: app.root.get_screen("manager").switch_camera() if app.root and "manager" in app.root.screen_names else None
+
+    MDCard:
+        size_hint_y: None
+        height: dp(66)
+        radius: [dp(14)]
+        elevation: 0
+        md_bg_color: app.theme_tokens['primary'][0], app.theme_tokens['primary'][1], app.theme_tokens['primary'][2], 0.10
+        padding: [dp(10), dp(7), dp(10), dp(7)]
+
+        MDBoxLayout:
+            spacing: dp(10)
+
+            MDIcon:
+                icon: "lightbulb-on-outline"
+                size_hint_x: None
+                width: dp(24)
+                halign: "center"
+                valign: "middle"
+                text_size: self.size
+                font_size: dp(22)
+                theme_text_color: "Custom"
+                text_color: app.theme_tokens['primary']
+
+            MDBoxLayout:
+                orientation: "vertical"
+                spacing: dp(1)
+
+                MDLabel:
+                    text: "Dica"
+                    bold: True
+                    size_hint_y: None
+                    height: dp(17)
+                    font_size: dp(12)
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['primary']
+
+                MDLabel:
+                    text: "Mantenha a câmara focada, estável e com boa iluminação para uma leitura rápida."
+                    size_hint_y: None
+                    height: self.texture_size[1]
+                    font_size: dp(11)
+                    theme_text_color: "Custom"
+                    text_color: app.theme_tokens['manager_ink']
+                    text_size: self.width, None
+                    valign: "middle"
 
 
 <SalesScreen>:

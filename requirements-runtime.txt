@@ -1,5 +1,6 @@
 bcrypt==4.3.0
 certifi==2025.1.31
+chardet==5.2.0
 charset-normalizer==3.4.1
 click==8.2.1
 colorama==0.4.6
@@ -17,6 +18,7 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 Kivy==2.3.1
 Kivy-Garden==0.1.5
+KivyMD==1.2.0
 kivy_deps.angle==0.4.0
 kivy_deps.glew==0.3.1
 kivy_deps.sdl2==0.8.0

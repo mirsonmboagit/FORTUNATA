@@ -331,6 +331,19 @@ class BaseApp(MDApp):
             self._ignored_early_close = True
             print(f"[BaseApp] Ignored early close request at {elapsed:.2f}s")
             return True
+        # O gerente nao pode terminar a sessao sem prestar contas do caixa.
+        # Mantemos esta verificacao na aplicacao, pois este evento recebe o
+        # clique no X da janela antes de a tela ativa ser destruida.
+        try:
+            manager = getattr(self, "root", None)
+            if manager and "manager" in getattr(manager, "screen_names", []):
+                sales_screen = manager.get_screen("manager")
+                guard_close = getattr(sales_screen, "block_app_close_if_cash_open", None)
+                if callable(guard_close) and guard_close():
+                    return True
+        except Exception as exc:
+            print(f"[BaseApp] Falha ao validar caixa antes de fechar: {exc}")
+            return True
         return False
 
     def _run_automation_tasks(self, *args):

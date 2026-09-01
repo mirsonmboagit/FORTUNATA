@@ -443,8 +443,8 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
 
 
 class FloatingScannerPanel(MDCard):
-    min_panel_width = NumericProperty(dp(220))
-    min_panel_height = NumericProperty(dp(220))
+    min_panel_width = NumericProperty(dp(320))
+    min_panel_height = NumericProperty(dp(400))
     drag_bar_height = NumericProperty(dp(34))
     resize_handle_size = NumericProperty(dp(24))
 
@@ -805,6 +805,24 @@ class SalesScreen(MDScreen):
         self.open_cash_dialog(force_open=True)
         return None
 
+    def block_app_close_if_cash_open(self):
+        """Impede encerrar o gerente enquanto este terminal tiver caixa aberto."""
+        username, _role, terminal_id = self._cash_identity()
+        if not username:
+            return False
+        try:
+            self._cash_session = self.db.get_open_cash_session(username, terminal_id)
+        except Exception:
+            # Se o estado do caixa nao puder ser confirmado, nao permitir que
+            # a aplicacao feche e deixe uma sessao possivelmente aberta.
+            self.show_message("Nao foi possivel confirmar o estado do caixa. Feche o caixa antes de sair.")
+            return True
+        if not self._cash_session:
+            return False
+        self.show_message("Feche o caixa antes de sair da aplicacao.")
+        self.open_cash_dialog()
+        return True
+
     def open_cash_dialog(self, force_open=False):
         if self._cash_dialog is not None:
             try:
@@ -849,15 +867,18 @@ class SalesScreen(MDScreen):
             ))
         content.add_widget(amount_input)
         content.add_widget(note_input)
-        cancel_btn = MDFlatButton(text="CONTINUAR ABERTO" if session else "CANCELAR")
+        cancel_btn = MDFlatButton(text="CONTINUAR ABERTO") if session else None
         action_btn = MDRaisedButton(text="FECHAR CAIXA" if session else "ABRIR CAIXA")
         dialog = MDDialog(
             title=f"Caixa #{session['id']}" if session else "Abertura de caixa obrigatoria",
-            type="custom", content_cls=content, buttons=[cancel_btn, action_btn],
+            type="custom",
+            content_cls=content,
+            buttons=([cancel_btn, action_btn] if cancel_btn else [action_btn]),
             auto_dismiss=not force_open,
         )
         self._cash_dialog = dialog
-        cancel_btn.bind(on_release=lambda _b: dialog.dismiss())
+        if cancel_btn is not None:
+            cancel_btn.bind(on_release=lambda _b: dialog.dismiss())
 
         def apply_action(_button):
             value = _safe_float(amount_input.text, -1)
@@ -1646,18 +1667,17 @@ class SalesScreen(MDScreen):
         if reset or not self._scanner_panel_initialized:
             max_width = max(dp(180), self.width - dp(36))
             max_height = max(dp(190), self.height - dp(96))
-            available_width = min(max_width, max(panel.min_panel_width, dp(280)))
-            available_height = min(max_height, max(panel.min_panel_height, dp(300)))
+            available_width = min(max_width, max(panel.min_panel_width, dp(380)))
+            available_height = min(max_height, max(panel.min_panel_height, dp(450)))
             panel.size = (available_width, available_height)
 
-            workspace_card = self.ids.get("workspace_card")
-            if workspace_card is not None and workspace_card.width > dp(120):
-                default_x = workspace_card.x + max(dp(12), workspace_card.width - panel.width - dp(12))
-                default_y = workspace_card.y + dp(18)
-            else:
-                default_x = self.width - panel.width - dp(18)
-                default_y = dp(108)
-            panel.pos = (default_x, default_y)
+            parent = panel.parent
+            parent_width = parent.width if parent is not None else self.width
+            parent_height = parent.height if parent is not None else self.height
+            panel.pos = (
+                max(dp(8), (parent_width - panel.width) / 2),
+                max(dp(8), (parent_height - panel.height) / 2),
+            )
             self._scanner_panel_initialized = True
 
         if hasattr(panel, "clamp_to_parent"):
@@ -1756,7 +1776,7 @@ class SalesScreen(MDScreen):
         panel = self._get_scanner_panel()
         if panel is None or not hasattr(panel, "ids"):
             return
-        for widget_id in ("scanner_status_label", "camera_image"):
+        for widget_id in ("scanner_status_label", "scanner_last_value", "camera_image"):
             widget = panel.ids.get(widget_id)
             if widget is not None:
                 self.ids[widget_id] = widget
@@ -4437,6 +4457,9 @@ class SalesScreen(MDScreen):
             self.ids.scan_toggle_btn.icon = "barcode-off"
             self.ids.scan_toggle_btn.md_bg_color = [0.84, 0.24, 0.26, 1]
             self.ids.scanner_status_label.text = "A iniciar a câmara..."
+            last_value = self.ids.get("scanner_last_value")
+            if last_value is not None:
+                last_value.text = "A aguardar leitura"
         Clock.schedule_once(self.init_camera, 0.1)
 
     def stop_scanner(self):
@@ -4450,6 +4473,9 @@ class SalesScreen(MDScreen):
         if self.ids:
             self.ids.scan_toggle_btn.icon = "barcode-scan"
             self.ids.scan_toggle_btn.md_bg_color = [0.16, 0.72, 0.46, 1]
+            status_label = self.ids.get("scanner_status_label")
+            if status_label is not None:
+                status_label.text = "Leitor parado"
 
     def release_camera(self):
         if self.camera_capture is not None:
@@ -4505,7 +4531,10 @@ class SalesScreen(MDScreen):
                     self.last_barcode = barcode_value
                     self.last_barcode_time = current_time
                     if self.ids:
-                        self.ids.scanner_status_label.text = f"Lido: {barcode_value}"
+                        self.ids.scanner_status_label.text = "Código reconhecido com sucesso"
+                        last_value = self.ids.get("scanner_last_value")
+                        if last_value is not None:
+                            last_value.text = barcode_value
                     self._lookup_barcode_async(barcode_value, source="scanner")
 
                 pts = code.polygon

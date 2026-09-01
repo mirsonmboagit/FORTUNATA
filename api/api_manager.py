@@ -592,7 +592,7 @@ class APIManager:
             return None
 
         payload = dict(result)
-        if payload.get("is_new") and self._is_placeholder_result(payload):
+        if self._is_placeholder_result(payload):
             return None
 
         has_real_value = any(
@@ -613,7 +613,16 @@ class APIManager:
     @staticmethod
     def _is_placeholder_result(payload: dict) -> bool:
         name = str(payload.get("name") or "").strip().lower()
-        return name in {"novo produto", "new product", "produto"}
+        return name in {
+            "novo produto",
+            "new product",
+            "produto",
+            "produto nao encontrado",
+            "produto não encontrado",
+            "nenhum produto encontrado",
+            "nenhum produto encontrado.",
+            "not found",
+        }
 
     def _fetch_bazara_first(self, barcode: str):
         """Busca primeiro no Bazara."""
