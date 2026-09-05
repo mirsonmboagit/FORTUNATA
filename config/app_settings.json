@@ -1,14 +1,14 @@
 {
   "system_name": "MIRSON MBOA",
   "ai_enabled": true,
-  "auto_banners_enabled": true,
+  "auto_banners_enabled": false,
   "smart_monitor_enabled": true,
-  "theme_style": "Dark",
+  "theme_style": "Light",
   "manager_theme_style": "Light",
   "language": "pt",
   "physical_scanner_enabled": false,
   "physical_scanner_min_length": 6,
-  "receipt_auto_print": false,
+  "receipt_auto_print": true,
   "receipt_printer_name": "Microsoft Edge",
   "receipt_paper_width_mm": 80,
   "manager_mobile_terminal_id": "MOBILE-D92EA557"

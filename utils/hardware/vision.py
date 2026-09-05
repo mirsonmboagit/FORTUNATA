@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from contextlib import contextmanager
 
 
 _CACHE = None
@@ -32,12 +33,18 @@ def get_vision_dependencies():
         raw_decode = pyzbar_module.decode
         zbar_symbol = wrapper_module.ZBarSymbol
 
-        # Exclui PDF417 para evitar asserts nativos do zbar sem perder
-        # leitura dos formatos comuns usados pela aplicacao.
+        # PDF417 e DataBar acionam asserts internos em algumas builds do zbar
+        # quando recebem frames incompletos/ruidosos. O SIGE MPE trabalha com
+        # os formatos comerciais abaixo, portanto nao ha motivo para ativar
+        # todos os decodificadores nativos em cada frame.
+        supported_names = {
+            "EAN13", "EAN8", "UPCA", "UPCE",
+            "CODE128", "CODE39", "CODE93", "I25", "QRCODE",
+        }
         default_symbols = tuple(
             symbol
             for symbol in zbar_symbol
-            if symbol.name not in {"NONE", "PARTIAL", "PDF417"}
+            if symbol.name in supported_names
         )
 
         def decode(image, symbols=None):
@@ -54,6 +61,30 @@ def get_vision_dependencies():
         raise RuntimeError(_ERROR) from exc
 
 
+@contextmanager
+def _quiet_opencv_probe(cv2):
+    """Oculta apenas warnings nativos emitidos enquanto uma camera e sondada."""
+    get_level = getattr(cv2, "getLogLevel", None)
+    set_level = getattr(cv2, "setLogLevel", None)
+    if not callable(set_level):
+        yield
+        return
+
+    previous_level = None
+    try:
+        if callable(get_level):
+            previous_level = get_level()
+        silent_level = getattr(cv2, "LOG_LEVEL_SILENT", 0)
+        set_level(silent_level)
+        yield
+    finally:
+        if previous_level is not None:
+            try:
+                set_level(previous_level)
+            except Exception:
+                pass
+
+
 def open_optimized_camera_capture(cv2, camera_index, *, width=480, height=360, preview_fps=20):
     """Abre a camera com backend e buffer mais estaveis para preview em tempo real."""
     backend_candidates = []
@@ -64,17 +95,24 @@ def open_optimized_camera_capture(cv2, camera_index, *, width=480, height=360, p
         media_foundation_backend = getattr(cv2, "CAP_MSMF", None)
         if media_foundation_backend is not None:
             backend_candidates.append(media_foundation_backend)
-    backend_candidates.append(getattr(cv2, "CAP_ANY", 0))
+    # No Windows, CAP_ANY tambem tenta o backend OBSENSOR. Quando o indice nao
+    # existe, o OpenCV escreve repetidamente "Camera index out of range" no
+    # terminal. DirectShow e Media Foundation cobrem as cameras UVC/virtuais
+    # usadas pela aplicacao sem esse fallback ruidoso.
+    if os.name != "nt":
+        backend_candidates.append(getattr(cv2, "CAP_ANY", 0))
 
     tried_default_open = False
     for backend in backend_candidates:
         capture = None
         try:
-            capture = cv2.VideoCapture(camera_index, backend)
+            with _quiet_opencv_probe(cv2):
+                capture = cv2.VideoCapture(camera_index, backend)
         except TypeError:
             if tried_default_open:
                 continue
-            capture = cv2.VideoCapture(camera_index)
+            with _quiet_opencv_probe(cv2):
+                capture = cv2.VideoCapture(camera_index)
             tried_default_open = True
         except Exception:
             capture = None

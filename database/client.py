@@ -366,6 +366,13 @@ class DatabaseClient:
     def get_user(self, username):
         return self._rpc("get_user", username)
 
+    def get_user_full_name(self, username):
+        return self._rpc("get_user_full_name", username) or ""
+
+    def set_user_full_name(self, username, full_name):
+        result = self._rpc("set_user_full_name", username, full_name)
+        return bool(result) if result is not None else False
+
     def get_user_data_owner(self, username):
         return self._rpc("get_user_data_owner", username)
 

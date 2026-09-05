@@ -1539,7 +1539,72 @@
                                         theme_text_color: "Custom"
                                         text_color: app.theme_tokens['success']
 
-                        Widget:
+                        MDCard:
+                            orientation: "vertical"
+                            size_hint_y: None
+                            height: dp(86)
+                            radius: [dp(16)]
+                            elevation: 0
+                            md_bg_color: app.theme_tokens['card']
+                            padding: [dp(12), dp(8), dp(12), dp(10)]
+                            spacing: dp(6)
+
+                            MDLabel:
+                                text: "Notas rápidas (MT)"
+                                size_hint_y: None
+                                height: dp(18)
+                                bold: True
+                                font_size: dp(14)
+                                theme_text_color: "Custom"
+                                text_color: app.theme_tokens['text_primary']
+
+                            MDGridLayout:
+                                cols: 5
+                                spacing: dp(5)
+                                size_hint_y: None
+                                height: dp(42)
+                                row_default_height: dp(42)
+                                row_force_default: True
+
+                                TooltipRaisedButton:
+                                    text: "50"
+                                    tooltip_text: "Adicionar nota de 50 MT"
+                                    font_size: sp(14)
+                                    padding: [dp(4), 0]
+                                    md_bg_color: app.theme_tokens['primary']
+                                    on_release: root.add_quick_paid_amount(50)
+
+                                TooltipRaisedButton:
+                                    text: "100"
+                                    tooltip_text: "Adicionar nota de 100 MT"
+                                    font_size: sp(14)
+                                    padding: [dp(4), 0]
+                                    md_bg_color: app.theme_tokens['primary']
+                                    on_release: root.add_quick_paid_amount(100)
+
+                                TooltipRaisedButton:
+                                    text: "200"
+                                    tooltip_text: "Adicionar nota de 200 MT"
+                                    font_size: sp(14)
+                                    padding: [dp(4), 0]
+                                    md_bg_color: app.theme_tokens['primary']
+                                    on_release: root.add_quick_paid_amount(200)
+
+                                TooltipRaisedButton:
+                                    text: "500"
+                                    tooltip_text: "Adicionar nota de 500 MT"
+                                    font_size: sp(14)
+                                    padding: [dp(4), 0]
+                                    md_bg_color: app.theme_tokens['primary']
+                                    on_release: root.add_quick_paid_amount(500)
+
+                                TooltipRaisedButton:
+                                    text: "1000"
+                                    tooltip_text: "Adicionar nota de 1000 MT"
+                                    font_size: sp(14)
+                                    padding: [dp(2), 0]
+                                    md_bg_color: app.theme_tokens['primary']
+                                    on_release: root.add_quick_paid_amount(1000)
 
         AnchorLayout:
             id: action_group_anchor

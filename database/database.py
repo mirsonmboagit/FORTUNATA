@@ -544,6 +544,8 @@ class Database(DatabaseAutomationMixin):
                     self.cursor.execute("ALTER TABLE users ADD COLUMN email TEXT")
                 if "phone" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+                if "full_name" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
                 if "data_owner" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN data_owner TEXT")
                 if "email_verified" not in cols:
@@ -1547,6 +1549,43 @@ class Database(DatabaseAutomationMixin):
         except sqlite3.Error as e:
             print(f"Erro ao obter usuario: {e}")
             return None
+
+    def get_user_full_name(self, username):
+        """Devolve o nome de apresentacao do utilizador, nunca o login."""
+        username = str(username or "").strip()
+        if not username:
+            return ""
+        try:
+            self.cursor.execute(
+                "SELECT COALESCE(NULLIF(TRIM(full_name), ''), '') FROM users WHERE username = ?",
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            return str(row[0] or "").strip() if row else ""
+        except sqlite3.Error as e:
+            print(f"Erro ao obter nome completo: {e}")
+            return ""
+
+    def set_user_full_name(self, username, full_name):
+        """Guarda o nome que deve aparecer em documentos de venda."""
+        username = str(username or "").strip()
+        full_name = " ".join(str(full_name or "").split())
+        if not username or len(full_name) < 3:
+            return False
+        try:
+            self.cursor.execute(
+                "UPDATE users SET full_name = ? WHERE username = ?",
+                (full_name, username),
+            )
+            if self.cursor.rowcount != 1:
+                self.conn.rollback()
+                return False
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao guardar nome completo: {e}")
+            self.conn.rollback()
+            return False
 
     def get_user_data_owner(self, username):
         """Obter o espaco de dados associado ao usuario."""

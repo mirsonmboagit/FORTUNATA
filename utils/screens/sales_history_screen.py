@@ -759,10 +759,6 @@ class SalesHistoryScreen(MDScreen):
     def _fmt_cur(value):
         try:
             v = float(value)
-            if v >= 1_000_000:
-                return f"{v/1_000_000:.2f}M"
-            if v >= 1_000:
-                return f"{v/1_000:.1f}K"
             return f"{v:,.2f}".replace(",", " ")
         except Exception:
             return "0.00"

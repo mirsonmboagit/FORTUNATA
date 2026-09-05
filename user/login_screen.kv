@@ -327,6 +327,33 @@
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['text_secondary']
 
+                    # Identidade da loja: ocupa o espaco livre do lado
+                    # informativo em ambos os acessos (admin e gerente).
+                    MDBoxLayout:
+                        id: system_name_showcase
+                        size_hint_y: None
+                        height: dp(250)
+                        orientation: "vertical"
+                        padding: [dp(18), dp(22), dp(18), dp(22)]
+
+                        Widget:
+
+                        MDLabel:
+                            text: app.system_name
+                            halign: "center"
+                            valign: "middle"
+                            bold: True
+                            font_name: "BrandDisplayFont"
+                            font_size: sp(58) if len(app.system_name) <= 16 else sp(48) if len(app.system_name) <= 30 else sp(38)
+                            opacity: 0.75
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
+                            text_size: self.width, None
+                            size_hint_y: None
+                            height: self.texture_size[1]
+
+                        Widget:
+
             MDSeparator:
                 id: divider
                 orientation: "vertical"
@@ -422,17 +449,17 @@
                                 height: self.minimum_height
 
                                 MDLabel:
-                                    text: app.system_name
-                                    font_size: sp(22) if len(app.system_name) <= 16 else sp(19) if len(app.system_name) <= 30 else sp(16)
-                                    bold: True
+                                    text: ""
+                                    font_size: 0
                                     theme_text_color: "Custom"
                                     text_color: app.theme_tokens['primary'] if root.login_variant == "admin" else app.theme_tokens['success']
                                     text_size: self.width, None
                                     shorten: True
                                     shorten_from: "right"
-                                    max_lines: 3
+                                    opacity: 0
+                                    disabled: True
                                     size_hint_y: None
-                                    height: self.texture_size[1]
+                                    height: 0
 
                                 MDLabel:
                                     text: root.profile_name

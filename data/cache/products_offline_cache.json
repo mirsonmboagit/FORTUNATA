@@ -179,5 +179,52 @@
       ]
     },
     "timestamp": "2026-09-01T08:06:13.601260"
+  },
+  "6009510805864": {
+    "source": "Agregado",
+    "data": {
+      "barcode": "6009510805864",
+      "name": "Potato Chips Spring Onion & Cheese Flavour",
+      "brand": "Lay's",
+      "category": "Potato Crisps",
+      "sold_by_weight": true,
+      "quantity": "23 g",
+      "image": "https://images.openfoodfacts.org/images/products/600/951/080/5864/front_en.6.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/6009510805864",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/6009510805864",
+      "source_chain": [
+        "Open Food Facts",
+        "Banco Local"
+      ],
+      "price": 19.5,
+      "cost": 15.0,
+      "stock": 24.0,
+      "is_weight": 1,
+      "expiry_date": "2030-09-10",
+      "status": "ATIVO",
+      "product_id": 6,
+      "source": "local"
+    },
+    "timestamp": "2026-09-01T20:16:43.881977"
+  },
+  "40822426": {
+    "source": "Agregado",
+    "data": {
+      "barcode": "40822426",
+      "name": "Bon aqua",
+      "brand": "БонакваThe Coca-Cola Company",
+      "category": "Mineral Waters",
+      "expiry_date": "2015-03-06",
+      "sold_by_weight": false,
+      "quantity": "0.5 l",
+      "image": "https://images.openfoodfacts.org/images/products/000/004/082/2426/front_en.21.400.jpg",
+      "source_url": "https://world.openfoodfacts.org/product/40822426",
+      "source_api_url": "https://world.openfoodfacts.org/api/v2/product/40822426",
+      "source_chain": [
+        "Open Food Facts",
+        "UPCitemdb"
+      ]
+    },
+    "timestamp": "2026-09-01T20:49:11.394514"
   }
 }

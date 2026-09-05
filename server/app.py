@@ -34,6 +34,8 @@ ALLOWLIST = {
     "user_exists",
     "get_user_role",
     "get_user",
+    "get_user_full_name",
+    "set_user_full_name",
     "get_user_data_owner",
     "validate_user",
     "create_admin",

@@ -79,6 +79,8 @@ except Exception:
 logo_font_path = asset_path('fonts', 'h2.ttf')
 main_font_path = asset_path('fonts', 'yahoo.ttf')
 joe_font_path = asset_path('fonts', 'joe.ttf')
+brand_font_path = asset_path('fonts', 'DMSans.ttf')
+brand_display_font_path = asset_path('fonts', 'DMSerifDisplay-Regular.ttf')
 
 if os.path.exists(logo_font_path):
     LabelBase.register(name='LogoFont', fn_regular=str(logo_font_path))
@@ -86,6 +88,10 @@ if os.path.exists(main_font_path):
     LabelBase.register(name='MainFont', fn_regular=str(main_font_path))
 if os.path.exists(joe_font_path):
     LabelBase.register(name='JoeFont', fn_regular=str(joe_font_path))
+if os.path.exists(brand_font_path):
+    LabelBase.register(name='BrandFont', fn_regular=str(brand_font_path))
+if os.path.exists(brand_display_font_path):
+    LabelBase.register(name='BrandDisplayFont', fn_regular=str(brand_display_font_path))
 
 
 # Limites usados para abrir a janela em tamanho seguro.

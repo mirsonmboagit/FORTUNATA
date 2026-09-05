@@ -624,9 +624,15 @@ class LossesScreen(MDScreen):
         try:
             cv2, _np, _decode = self._load_vision_modules()
             self.close_camera()
-            self.camera = cv2.VideoCapture(self.current_camera_index)
+            self.camera = open_optimized_camera_capture(
+                cv2,
+                self.current_camera_index,
+                width=640,
+                height=480,
+                preview_fps=20,
+            )
             
-            if self.camera.isOpened():
+            if self.camera and self.camera.isOpened():
                 self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                 self.set_scanner_status("✓ Escaneando...", _theme_color("success", [0.2, 0.7, 0.3, 1]))

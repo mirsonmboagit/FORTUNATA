@@ -25,6 +25,7 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.modalview import ModalView
 from kivy.uix.scrollview import ScrollView as KivyScrollView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.textinput import TextInput
 
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton
@@ -57,12 +58,18 @@ from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data
 from utils.config.system_identity import get_system_name
 from utils.hardware.thermal_printer import print_pdf_with_system, print_thermal_receipt
 from utils.business.vat import compute_vat_breakdown
-from utils.hardware.vision import get_vision_dependencies
+from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture
 from utils.core.formatters import format_date_dmy, format_money, format_quantity, safe_float
 
 
 def _safe_float(value, default=0.0):
     return safe_float(value, default)
+
+
+def _parse_decimal_input(value, default=0.0):
+    """Aceita decimais digitados com ponto ou virgula na interface de venda."""
+    text = str(value or "").strip().replace(" ", "").replace(",", ".")
+    return _safe_float(text, default)
 
 
 def _format_money(value):
@@ -725,6 +732,7 @@ class SalesScreen(MDScreen):
         self._recent_sales_dialog = None
         self._cash_session = None
         self._cash_dialog = None
+        self._seller_name_dialog = None
         self._discount_authorized_by = None
         self._discount_reason = ""
         self._responsive_layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
@@ -2339,13 +2347,14 @@ class SalesScreen(MDScreen):
             theme_text_color="Custom",
             text_color=colors["text"],
         ))
-        header.add_widget(MDLabel(
+        product_count_label = MDLabel(
             text=f"{len(products)} produtos",
             halign="right",
             font_size=dp(15),
             theme_text_color="Custom",
             text_color=colors["muted"],
-        ))
+        )
+        header.add_widget(product_count_label)
         header.add_widget(MDIconButton(
             icon="close",
             theme_text_color="Custom",
@@ -2354,7 +2363,23 @@ class SalesScreen(MDScreen):
         ))
         root.add_widget(header)
 
-        col_widths = [dp(72), dp(300), dp(116), dp(116), dp(78), dp(136), dp(136), dp(250), dp(72)]
+        search_input = MDTextField(
+            hint_text="Pesquisar no catalogo",
+            mode="rectangle",
+            multiline=False,
+            font_size=dp(16),
+            size_hint_y=None,
+            height=dp(52),
+        )
+        search_shell = MDBoxLayout(
+            size_hint_y=None,
+            height=dp(64),
+            padding=[dp(16), dp(4), dp(16), dp(8)],
+        )
+        search_shell.add_widget(search_input)
+        root.add_widget(search_shell)
+
+        col_widths = [dp(72), dp(300), dp(116), dp(116), dp(78), dp(136), dp(136), dp(250), dp(112)]
         table_width = sum(col_widths)
         cols = [
             ("SEQ.", col_widths[0], "center"),
@@ -2365,7 +2390,7 @@ class SalesScreen(MDScreen):
             ("PRECO", col_widths[5], "center"),
             ("LUCRO", col_widths[6], "center"),
             ("DATA DE VALIDADE", col_widths[7], "center"),
-            ("", col_widths[8], "center"),
+            ("ACOES", col_widths[8], "center"),
         ]
 
         scroll_x = KivyScrollView(do_scroll_x=True, do_scroll_y=False, bar_width=dp(6))
@@ -2388,40 +2413,56 @@ class SalesScreen(MDScreen):
         body_grid = GridLayout(cols=len(cols), size_hint_y=None, size_hint_x=None, width=table_width)
         body_grid.bind(minimum_height=lambda inst, value: setattr(inst, "height", value))
         row_h = dp(46)
-        for idx, product in enumerate(products, start=1):
-            bg = colors["surface"] if idx % 2 else colors["card"]
-            stock_color = colors["danger"] if product["stock"] <= 0 else colors["muted"]
-            values = [
-                (str(idx), colors["text"], True, "center"),
-                (product["name"], colors["text"], False, "left"),
-                (product["stock_text"], stock_color, product["stock"] <= 0, "center"),
-                (product["sold_text"], colors["muted"], False, "center"),
-                (product["sale_type"], colors["info"], True, "center"),
-                (_format_money(product["price"]), colors["success"], True, "center"),
-                (_format_money(product["profit"]), colors["info"], True, "center"),
-                (product["expiry_text"], colors["muted"], False, "center"),
+
+        def render_rows(query=""):
+            body_grid.clear_widgets()
+            needle = str(query or "").strip().lower()
+            visible = [
+                product for product in products
+                if not needle or needle in product["search_text"]
             ]
-            for col_index, (text, color, bold, align) in enumerate(values):
-                body_grid.add_widget(self._build_catalog_cell(
-                    text,
-                    row_h,
-                    bg,
-                    colors["divider"],
-                    cols[col_index][1],
-                    halign=align,
-                    bold=bold,
-                    text_color=color,
-                    shorten=(col_index != 7),
-                    font_size=dp(14) if col_index == 7 else dp(15),
+            product_count_label.text = f"{len(visible)} de {len(products)} produtos" if needle else f"{len(products)} produtos"
+            for idx, product in enumerate(visible, start=1):
+                bg = colors["surface"] if idx % 2 else colors["card"]
+                stock_color = colors["danger"] if product["stock"] <= 0 else colors["muted"]
+                values = [
+                    (str(idx), colors["text"], True, "center"),
+                    (product["name"], colors["text"], False, "left"),
+                    (product["stock_text"], stock_color, product["stock"] <= 0, "center"),
+                    (product["sold_text"], colors["muted"], False, "center"),
+                    (product["sale_type"], colors["text"], True, "center"),
+                    (_format_money(product["price"]), colors["success"], True, "center"),
+                    (_format_money(product["profit"]), colors["info"], True, "center"),
+                    (product["expiry_text"], colors["muted"], False, "center"),
+                ]
+                for col_index, (text, color, bold, align) in enumerate(values):
+                    body_grid.add_widget(self._build_catalog_cell(
+                        text, row_h, bg, colors["divider"], cols[col_index][1],
+                        halign=align, bold=bold, text_color=color,
+                        shorten=(col_index != 7),
+                        font_size=dp(14) if col_index == 7 else dp(15),
+                    ))
+                action_cell = self._build_catalog_cell("", row_h, bg, colors["divider"], cols[-1][1])
+                actions = MDBoxLayout(orientation="horizontal", spacing=dp(2))
+                actions.add_widget(MDIconButton(
+                    icon="information-outline",
+                    theme_text_color="Custom",
+                    text_color=colors["info"],
+                    on_release=lambda _btn, data=product["source"]: self.show_product_details(data),
                 ))
-            action_cell = self._build_catalog_cell("", row_h, bg, colors["divider"], cols[-1][1])
-            action_cell.add_widget(MDIconButton(
-                icon="information",
-                theme_text_color="Custom",
-                text_color=colors["info"],
-                on_release=lambda _btn, data=product["source"]: self.show_product_details(data),
-            ))
-            body_grid.add_widget(action_cell)
+                add_button = MDIconButton(
+                    icon="cart-plus",
+                    theme_text_color="Custom",
+                    text_color=colors["success"],
+                    disabled=product["stock"] <= 0,
+                    on_release=lambda _btn, data=product["source"]: self.add_to_cart(data, source="catalog"),
+                )
+                actions.add_widget(add_button)
+                action_cell.add_widget(actions)
+                body_grid.add_widget(action_cell)
+
+        search_input.bind(text=lambda _field, value: render_rows(value))
+        render_rows()
 
         body_scroll.add_widget(body_grid)
         content.add_widget(body_scroll)
@@ -2511,6 +2552,12 @@ class SalesScreen(MDScreen):
                 "price": price,
                 "profit": profit,
                 "expiry_text": self._format_catalog_expiry(expiry),
+                "search_text": " ".join((
+                    str(row[0] if len(row) > 0 else ""),
+                    str(row[1] if len(row) > 1 else ""),
+                    str(row[12] if len(row) > 12 else ""),
+                    "kg" if is_weight else "un",
+                )).lower(),
             })
         return products
 
@@ -2693,8 +2740,14 @@ class SalesScreen(MDScreen):
                     if _unpack_sale_product(row)["catalog_key"] == catalog_key
                 ]
             else:
-                product_id = item.get("id")
-                rows = self.db.get_products_for_sale_ids([product_id]) or []
+                rows = []
+
+        # Produtos vindos da tabela completa sao reconstruidos a partir da
+        # linha administrativa. Uma diferenca antiga de chave agregada ou de
+        # normalizacao do codigo de barras nao deve transformar stock real em
+        # zero. O ID do lote continua sendo a referencia definitiva.
+        if not rows and item.get("id") is not None:
+            rows = self.db.get_products_for_sale_ids([item.get("id")]) or []
         valid_rows = []
         today = datetime.now().date()
         for row in rows:
@@ -2937,7 +2990,6 @@ class SalesScreen(MDScreen):
         weight_input = MDTextField(
             hint_text="Peso em kg",
             multiline=False,
-            input_filter="float",
             mode="rectangle",
             font_size=dp(16),
             size_hint_y=None,
@@ -2946,7 +2998,6 @@ class SalesScreen(MDScreen):
         total_input = MDTextField(
             hint_text="Ou valor total em MT",
             multiline=False,
-            input_filter="float",
             mode="rectangle",
             font_size=dp(16),
             size_hint_y=None,
@@ -2977,7 +3028,7 @@ class SalesScreen(MDScreen):
                     total_input.text = ""
                     preview.text = ""
                     return
-                weight = _safe_float(text)
+                weight = _parse_decimal_input(text)
                 total_price = weight * base_price
                 total_input.text = f"{total_price:.2f}"
                 preview.text = f"Total calculado: {_format_money(total_price)}"
@@ -2994,7 +3045,7 @@ class SalesScreen(MDScreen):
                     weight_input.text = ""
                     preview.text = ""
                     return
-                total_price = _safe_float(text)
+                total_price = _parse_decimal_input(text)
                 if base_price <= 0:
                     return
                 weight = total_price / base_price
@@ -3022,7 +3073,7 @@ class SalesScreen(MDScreen):
         )
 
         def confirm_add(_btn):
-            weight = _safe_float(weight_input.text)
+            weight = _parse_decimal_input(weight_input.text)
             if weight <= 0:
                 self.show_message("Informe o peso.")
                 return
@@ -3187,13 +3238,24 @@ class SalesScreen(MDScreen):
                 )
                 dec_btn.bind(on_release=lambda _b, idx=index: self.decrease_qty(idx))
 
-                qty_label = MDLabel(
+                qty_input = TextInput(
                     text=_format_qty(item.get("qty")),
+                    multiline=False,
+                    input_filter="int",
                     halign="center",
-                    bold=True,
-                    theme_text_color="Custom",
-                    text_color=palette["text_primary"],
-                    font_size=dp(16),
+                    foreground_color=palette["text_primary"],
+                    cursor_color=palette["success"],
+                    background_normal="",
+                    background_active="",
+                    background_color=palette["row"],
+                    padding=[dp(4), dp(5), dp(4), dp(4)],
+                    font_size=sp(15),
+                    size_hint=(None, None),
+                    width=dp(46),
+                    height=dp(32),
+                )
+                qty_input.bind(
+                    text=lambda _field, value, idx=index: self.schedule_qty_update(idx, value)
                 )
 
                 inc_btn = CompactActionButton(
@@ -3216,7 +3278,7 @@ class SalesScreen(MDScreen):
                 inc_anchor.add_widget(inc_btn)
 
                 qty_box.add_widget(dec_anchor)
-                qty_box.add_widget(qty_label)
+                qty_box.add_widget(qty_input)
                 qty_box.add_widget(inc_anchor)
 
             # ── Coluna: preço unitário ─────────────────────────────────
@@ -3313,6 +3375,20 @@ class SalesScreen(MDScreen):
         if paid_input is None:
             return
         paid_input.text = f"{self.final_amount:.2f}"
+        paid_input.focus = True
+        Clock.schedule_once(lambda _dt: paid_input.select_all(), 0)
+        self.calculate_change()
+
+    def add_quick_paid_amount(self, amount):
+        """Soma uma nota ao valor recebido sem exigir digitacao manual."""
+        if not self.ids or self._sale_submitting:
+            return
+        paid_input = self.ids.get("paid_input")
+        if paid_input is None:
+            return
+        current = _parse_decimal_input(paid_input.text)
+        note_value = max(0.0, _safe_float(amount))
+        paid_input.text = f"{current + note_value:.2f}"
         paid_input.focus = True
         Clock.schedule_once(lambda _dt: paid_input.select_all(), 0)
         self.calculate_change()
@@ -3953,6 +4029,9 @@ class SalesScreen(MDScreen):
         if not self.ensure_cash_session():
             self.show_message("Abra o caixa antes de finalizar a venda.")
             return
+        if not self._get_operator_full_name():
+            self._prompt_operator_full_name(lambda: self.finalize_sale(confirmed=confirmed))
+            return
         paid_text = str(self.ids.paid_input.text or "").strip() if self.ids else ""
         if not paid_text:
             self.show_message("Informe o valor pago antes de finalizar a venda.")
@@ -4226,11 +4305,13 @@ class SalesScreen(MDScreen):
     def _build_receipt_data(self, cart_snapshot, discount_amount, paid_amount, change_amount):
         app = App.get_running_app()
         operator = getattr(app, "current_user", None) if app else None
+        seller_full_name = self._get_operator_full_name()
         allocations = self._allocate_discount(cart_snapshot, discount_amount)
         items = []
         subtotal_net = 0.0
         vat_total = 0.0
         vat_tags = []
+        vat_summary = {}
 
         for item in allocations:
             qty_units = _safe_float(item.get("qty_units"))
@@ -4243,7 +4324,14 @@ class SalesScreen(MDScreen):
             )
             subtotal_net += _safe_float(breakdown.get("net_total"))
             vat_total += _safe_float(breakdown.get("vat_amount"))
-            vat_tags.append(str(breakdown.get("short_label") or "").strip())
+            vat_label = str(breakdown.get("short_label") or "IVA").strip()
+            vat_tags.append(vat_label)
+            vat_bucket = vat_summary.setdefault(
+                vat_label,
+                {"label": vat_label, "vat_amount": 0.0, "gross_total": 0.0},
+            )
+            vat_bucket["vat_amount"] += _safe_float(breakdown.get("vat_amount"))
+            vat_bucket["gross_total"] += _safe_float(breakdown.get("gross_total"))
             sale_mode = item.get("sale_mode")
             if sale_mode == "weight":
                 qty_text = _format_qty(item.get("weight_kg"), True)
@@ -4277,7 +4365,8 @@ class SalesScreen(MDScreen):
             "store_name": get_system_name(force_reload=True),
             "receipt_code": datetime.now().strftime("%Y%m%d%H%M%S"),
             "issued_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "operator": operator or "Atendente",
+            "operator": seller_full_name or "Atendente",
+            "seller_full_name": seller_full_name,
             "items_count": len(items),
             "items": items,
             "subtotal": round(subtotal_net, 2),
@@ -4285,8 +4374,72 @@ class SalesScreen(MDScreen):
             "total": total,
             "paid_amount": round(_safe_float(paid_amount), 2),
             "change_amount": round(_safe_float(change_amount), 2),
+            "payment_method_label": self._payment_method_label(),
+            "vat_summary": [
+                {
+                    "label": key,
+                    "vat_amount": round(_safe_float(value.get("vat_amount")), 2),
+                    "gross_total": round(_safe_float(value.get("gross_total")), 2),
+                }
+                for key, value in vat_summary.items()
+            ],
             "vat_note": " ".join(note_parts),
         }
+
+    def _get_operator_full_name(self):
+        app = App.get_running_app()
+        username = getattr(app, "current_user", None) if app else None
+        if not username:
+            return ""
+        try:
+            return str(self.db.get_user_full_name(username) or "").strip()
+        except Exception:
+            return ""
+
+    def _prompt_operator_full_name(self, on_ready):
+        if self._seller_name_dialog is not None:
+            return
+        name_input = MDTextField(
+            hint_text="Nome completo do vendedor",
+            multiline=False,
+        )
+        content = MDBoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(92))
+        content.add_widget(MDLabel(
+            text="Este nome sera impresso nos recibos, em vez do nome de utilizador.",
+            theme_text_color="Custom",
+            text_color=_sales_accessibility_palette()["text_secondary"],
+        ))
+        content.add_widget(name_input)
+        save_btn = MDRaisedButton(text="GUARDAR NOME")
+        dialog = MDDialog(
+            title="Identificacao do vendedor",
+            type="custom",
+            content_cls=content,
+            buttons=[save_btn],
+            auto_dismiss=False,
+        )
+        self._seller_name_dialog = dialog
+
+        def save_name(_button):
+            full_name = " ".join(str(name_input.text or "").split())
+            app = App.get_running_app()
+            username = getattr(app, "current_user", None) if app else None
+            if len(full_name) < 3:
+                self.show_message("Informe o nome completo do vendedor.")
+                return
+            try:
+                saved = self.db.set_user_full_name(username, full_name)
+            except Exception:
+                saved = False
+            if not saved:
+                self.show_message("Nao foi possivel guardar o nome completo.")
+                return
+            dialog.dismiss()
+            self._seller_name_dialog = None
+            on_ready()
+
+        save_btn.bind(on_release=save_name)
+        dialog.open()
 
     def _payment_method_label(self):
         if self.payment_method == "emola":
@@ -4493,7 +4646,13 @@ class SalesScreen(MDScreen):
         try:
             cv2, _np, _decode = self._load_vision_modules()
             self.release_camera()
-            self.camera_capture = cv2.VideoCapture(self.current_camera)
+            self.camera_capture = open_optimized_camera_capture(
+                cv2,
+                self.current_camera,
+                width=640,
+                height=480,
+                preview_fps=18,
+            )
             if not self.camera_capture or not self.camera_capture.isOpened():
                 self.stop_scanner()
                 self.set_search_feedback("Câmara não encontrada", "warning", "camera-off")

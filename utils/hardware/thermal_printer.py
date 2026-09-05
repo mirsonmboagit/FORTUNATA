@@ -111,7 +111,8 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
         lines.append(_center(f"Ref. {receipt_code}", width))
     lines.append(_line(width))
     lines.append(_left_right("Data", receipt_data.get("issued_at") or "", width))
-    lines.append(_left_right("Atendente", receipt_data.get("operator") or "Sistema", width))
+    payment_label = _plain_text(receipt_data.get("payment_method_label") or "Venda a dinheiro")
+    lines.append(_center(payment_label.upper(), width))
     lines.append(_line(width))
 
     for item in receipt_data.get("items") or []:
@@ -120,15 +121,7 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
         qty_text = _plain_text(item.get("qty_text") or "-")
         unit_price = _money(item.get("unit_price"))
         line_total = _money(item.get("line_total"))
-        lines.append(_left_right(f"Qtd: {qty_text}", line_total, width))
-        detail_parts = [
-            f"Preco unit.: {unit_price}",
-            _plain_text(item.get("sale_mode_label") or ""),
-            _plain_text(item.get("vat_tag") or ""),
-        ]
-        detail = " | ".join(part for part in detail_parts if part)
-        if detail:
-            lines.append(detail[:width])
+        lines.append(_left_right(f"{qty_text} x {unit_price}", line_total, width))
 
     lines.append(_line(width))
     lines.append(_left_right("Subtotal", _money(receipt_data.get("subtotal")), width))
@@ -141,9 +134,30 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
     lines.append(_left_right("TOTAL", _money(receipt_data.get("total")), width))
     lines.append(_line(width, "="))
 
+    vat_rows = receipt_data.get("vat_summary") or []
+    if vat_rows:
+        lines.append(_left_right("TAXA", "IVA / TOTAL", width))
+        for row in vat_rows:
+            rate = _plain_text(row.get("label") or "IVA")
+            vat_value = _money(row.get("vat_amount"))
+            gross_value = _money(row.get("gross_total"))
+            lines.append(_left_right(rate, f"{vat_value} / {gross_value}", width))
+        lines.append(_line(width))
+
+    if receipt_code:
+        lines.append(_center("CODIGO DO RECIBO", width))
+        lines.append(_center(receipt_code, width))
+        lines.append(_line(width))
+
     vat_note = _plain_text(receipt_data.get("vat_note") or "")
     if vat_note:
         lines.extend(_wrap_text(vat_note, width)[:4])
+        lines.append("")
+
+    seller_name = _plain_text(receipt_data.get("seller_full_name") or "")
+    if seller_name:
+        lines.append(_center("Foste ajudado por:", width))
+        lines.extend(_center(line, width) for line in _wrap_text(seller_name, width)[:2])
         lines.append("")
 
     lines.append(_center("Obrigado pela preferencia.", width))

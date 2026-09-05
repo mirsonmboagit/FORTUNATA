@@ -395,6 +395,22 @@ class IntelligentBannerCenter(FloatLayout):
         self._history_picker_caller: Any = None
         self._manual_view_active = False
 
+    def on_touch_down(self, touch: Any) -> bool:
+        """Fecha toda a pilha quando o utilizador toca fora dos banners."""
+        visible = [
+            widget
+            for widget in list(getattr(self, "_ai_banner_widgets", []) or [])
+            if widget is not None
+            and widget.parent is not None
+            and not getattr(widget, "_is_hidden", False)
+        ]
+        if visible and not any(widget.collide_point(*touch.pos) for widget in visible):
+            self.clear_visible()
+            # Consome o primeiro clique para nao acionar involuntariamente um
+            # controlo do painel que estava coberto pela camada de banners.
+            return True
+        return super().on_touch_down(touch)
+
     def set_history(self, history_items: list[dict[str, Any]]) -> None:
         self.history_items = list(history_items)
 
