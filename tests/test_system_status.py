@@ -6,15 +6,15 @@ from tests.helpers import TemporaryDatabaseTestCase
 
 
 class SystemStatusTests(TemporaryDatabaseTestCase):
-    def test_collect_system_status_reports_database_without_api_probe(self):
+    def test_collect_system_status_reports_local_database(self):
         from utils.config.system_status import collect_system_status
 
-        status = collect_system_status(self.db, include_api_health=False)
+        status = collect_system_status(self.db)
 
         self.assertEqual(status["database"]["exists"], True)
         self.assertEqual(status["database"]["integrity"]["ok"], True)
-        self.assertEqual(status["api"]["health"]["reason"], "not_checked")
-        self.assertIn(status["db_mode"], {"local", "remote", "hybrid"})
+        self.assertEqual(status["db_mode"], "local")
+        self.assertNotIn("api", status)
 
     def test_collect_system_status_reads_automation_state(self):
         from utils.config.system_status import collect_system_status
@@ -28,7 +28,7 @@ class SystemStatusTests(TemporaryDatabaseTestCase):
         )
         self.db.conn.commit()
 
-        status = collect_system_status(self.db, include_api_health=False)
+        status = collect_system_status(self.db)
 
         self.assertEqual(status["automation"]["last_backup_status"], "ok")
 
@@ -36,7 +36,7 @@ class SystemStatusTests(TemporaryDatabaseTestCase):
         from utils.config.system_status import collect_system_status
 
         result = self.db.create_verified_backup()
-        status = collect_system_status(self.db, include_api_health=False)
+        status = collect_system_status(self.db)
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["path"])
@@ -59,7 +59,7 @@ class SystemStatusTests(TemporaryDatabaseTestCase):
 
         self.assertIn("backup_missing", {item["code"] for item in alerts})
 
-    def test_assess_system_alerts_warns_for_hybrid_api_offline_and_prod_key(self):
+    def test_assess_system_alerts_ignores_removed_api_settings(self):
         from utils.config.system_status import assess_system_alerts
 
         alerts = assess_system_alerts(
@@ -75,8 +75,8 @@ class SystemStatusTests(TemporaryDatabaseTestCase):
         )
 
         codes = {item["code"] for item in alerts}
-        self.assertIn("api_offline", codes)
-        self.assertIn("api_key_missing", codes)
+        self.assertNotIn("api_offline", codes)
+        self.assertNotIn("api_key_missing", codes)
 
     def test_assess_system_alerts_reports_ok_when_no_issue_exists(self):
         from utils.config.system_status import assess_system_alerts

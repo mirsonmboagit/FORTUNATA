@@ -1,0 +1,58 @@
+{
+  "products": 1000,
+  "sales": 30000,
+  "repeats": 3,
+  "sku_before": {
+    "median_ms": 12.869,
+    "sql_statements": 1002,
+    "changed_rows": 1000
+  },
+  "insights_before": {
+    "median_ms": 103.708,
+    "sql_statements": 1008,
+    "changed_rows": 0
+  },
+  "sku_after": {
+    "median_ms": 8.444,
+    "sql_statements": 2,
+    "changed_rows": 0
+  },
+  "insights_after": {
+    "median_ms": 96.658,
+    "sql_statements": 9,
+    "changed_rows": 0
+  },
+  "identical_insights": true,
+  "history_query_plan": [
+    [
+      3,
+      0,
+      0,
+      "MATERIALIZE sr"
+    ],
+    [
+      11,
+      3,
+      0,
+      "SCAN sales_returns USING INDEX idx_sales_returns_sale"
+    ],
+    [
+      50,
+      0,
+      0,
+      "SEARCH s USING INDEX idx_sales_owner_day (<expr>=? AND <expr>=?)"
+    ],
+    [
+      62,
+      0,
+      0,
+      "BLOOM FILTER ON sr (sale_id=?)"
+    ],
+    [
+      72,
+      0,
+      0,
+      "SEARCH sr USING AUTOMATIC COVERING INDEX (sale_id=?) LEFT-JOIN"
+    ]
+  ]
+}

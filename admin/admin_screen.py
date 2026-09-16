@@ -459,7 +459,7 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
 
 class AdminScreen(Screen):
     LOSS_METRICS_LOOKBACK_DAYS = 365
-    PRODUCTS_PAGE_SIZE = 18
+    PRODUCTS_PAGE_SIZE = 15
     product_table = ObjectProperty(None)
     search_input = ObjectProperty(None)
     category_spinner = ObjectProperty(None)
@@ -923,6 +923,7 @@ class AdminScreen(Screen):
         filter_btn = self.ids.get("filter_btn")
         refresh_btn = self.ids.get("refresh_btn")
         add_btn = self.ids.get("add_btn")
+        archived_btn = self.ids.get("archived_btn")
         shopping_list_btn = self.ids.get("shopping_list_btn")
 
         if not toolbar_card or not toolbar_row:
@@ -943,6 +944,8 @@ class AdminScreen(Screen):
                 refresh_btn.size_hint_x = 1
             if add_btn:
                 add_btn.size_hint_x = 1
+            if archived_btn:
+                archived_btn.size_hint_x = 1
             if shopping_list_btn:
                 shopping_list_btn.size_hint_x = 1
 
@@ -963,6 +966,8 @@ class AdminScreen(Screen):
                 refresh_btn.size_hint_x = 0.12
             if add_btn:
                 add_btn.size_hint_x = 0.13
+            if archived_btn:
+                archived_btn.size_hint_x = 0.13
             if shopping_list_btn:
                 shopping_list_btn.size_hint_x = 0.18
 
@@ -1743,6 +1748,12 @@ class AdminScreen(Screen):
 
     def logout(self):
         app = App.get_running_app()
+        setter = getattr(self.db, "set_active_user", None)
+        if callable(setter):
+            try:
+                setter(None, None)
+            except Exception:
+                pass
         if app and app.current_user:
             app.current_user = None
             app.current_role = None
@@ -2425,10 +2436,15 @@ class AdminScreen(Screen):
                 rows,
                 dict(self._selected_lot_ids_by_catalog_key),
             )
-            page_size = self.PRODUCTS_PAGE_SIZE
-            aggregated = aggregated_all[offset:offset + page_size]
-            total = len(aggregated_all)
-            has_more = offset + len(aggregated) < total
+            # O backend moderno já limita no SQL. Fatiar novamente com o
+            # offset global fazia a segunda página parecer vazia.
+            if isinstance(payload, dict):
+                aggregated = aggregated_all
+            else:
+                page_size = self.PRODUCTS_PAGE_SIZE
+                aggregated = aggregated_all[offset:offset + page_size]
+                total = len(aggregated_all)
+                has_more = offset + len(aggregated) < total
 
         if not aggregated and offset > 0:
             self._request_products_page(reset=False, search_text=search_text, offset=max(0, offset - self.PRODUCTS_PAGE_SIZE))
@@ -3509,6 +3525,144 @@ class AdminScreen(Screen):
             self._open_group_lot_selector(product, caller=instance, requested_action="delete")
             return
         self._prompt_delete_product(product[0] if product else None)
+
+    def open_archived_products(self, *args):
+        self._run_async_action(
+            "load_archived_products", self.db.get_archived_products,
+            on_success=self._show_archived_products,
+            busy_message="A consultar produtos arquivados...",
+            error_message="Nao foi possivel consultar o arquivo.",
+        )
+
+    def _show_archived_products(self, products):
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.12, 0.46, 0.78, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+        muted = tokens.get("text_secondary", [0.62, 0.67, 0.73, 1])
+        surface = tokens.get("surface", [0.12, 0.14, 0.17, 1])
+        danger = tokens.get("danger", [0.95, 0.36, 0.32, 1])
+        search = MDTextField(hint_text="Pesquisar nome, codigo de barras ou ID", multiline=False,
+                             mode="rectangle", icon_right="magnify", size_hint_y=None, height=dp(56))
+        rows = MDBoxLayout(orientation="vertical", spacing=dp(10), padding=[0, dp(4), dp(10), dp(4)], size_hint_y=None)
+        rows.bind(minimum_height=rows.setter("height"))
+        list_height = max(dp(150), min(dp(380), Window.height - dp(370)))
+        scroll = ScrollView(size_hint_y=None, height=list_height, do_scroll_x=False, bar_width=dp(4))
+        scroll.add_widget(rows)
+        content = MDBoxLayout(orientation="vertical", spacing=dp(14), size_hint_y=None, height=list_height + dp(190))
+        summary = MDLabel(text="Recupere produtos com o stock e o historico preservados.",
+                          theme_text_color="Custom", text_color=muted, font_style="Body2",
+                          size_hint_y=None, height=dp(38))
+        content.add_widget(summary)
+        content.add_widget(search)
+        content.add_widget(scroll)
+        navigation = MDBoxLayout(size_hint_y=None, height=dp(42))
+        previous = MDFlatButton(text="ANTERIOR")
+        counter = MDLabel(halign="center", font_style="Caption", theme_text_color="Custom", text_color=muted)
+        following = MDFlatButton(text="SEGUINTE")
+        for widget in (previous, counter, following):
+            navigation.add_widget(widget)
+        content.add_widget(navigation)
+        close = MDFlatButton(text="FECHAR")
+        dialog = MDDialog(title="Produtos arquivados", type="custom", content_cls=content,
+                          size_hint=(None, None), width=min(dp(920), Window.width - dp(48)),
+                          radius=[dp(18)] * 4, buttons=[close])
+        def resize_archive_dialog(*_):
+            dialog.width = min(dp(920), Window.width - dp(48))
+            scroll.height = max(dp(150), min(dp(380), Window.height - dp(370)))
+            content.height = scroll.height + dp(190)
+            dialog.update_height()
+        Window.unbind(on_resize=dialog.update_width)
+        Window.bind(on_resize=resize_archive_dialog)
+        dialog.bind(on_dismiss=lambda *_: Window.unbind(on_resize=resize_archive_dialog))
+        close.bind(on_release=lambda *_: dialog.dismiss())
+        page = {"index": 0}
+
+        def restore(item):
+            cancel = MDFlatButton(text="CANCELAR")
+            confirm = MDRaisedButton(text="RESTAURAR")
+            confirmation = MDDialog(title="Restaurar produto?",
+                text=f"{item['description']} (#{item['id']}) voltara ao catalogo com o stock guardado. A validade sera verificada.",
+                buttons=[cancel, confirm], auto_dismiss=False)
+            cancel.bind(on_release=lambda *_: confirmation.dismiss())
+            def execute(*_):
+                confirmation.dismiss()
+                app = App.get_running_app()
+                username = getattr(app, "current_user", None)
+                def on_success(result):
+                    if result["ok"]:
+                        products.remove(item)
+                        render()
+                        self.load_products(force=True)
+                    self.show_snackbar(result["message"])
+                self._run_async_action(
+                    f"restore:{item['archive_source']}:{item['id']}",
+                    lambda: self.db.restore_archived_product(item["id"], item["archive_source"], username=username),
+                    on_success=on_success, busy_message="A restaurar produto...",
+                    error_message="Nao foi possivel restaurar o produto.",
+                )
+            confirm.bind(on_release=execute)
+            confirmation.open()
+
+        def render(*_):
+            query = search.text.strip().casefold()
+            filtered = [item for item in products if query in
+                        f"{item['id']} {item['description']} {item.get('barcode') or ''}".casefold()]
+            pages = max(1, (len(filtered) + 19) // 20)
+            page["index"] = min(page["index"], pages - 1)
+            rows.clear_widgets()
+            for item in filtered[page["index"] * 20:(page["index"] + 1) * 20]:
+                row = MDCard(orientation="horizontal", size_hint_y=None, spacing=dp(20),
+                             padding=dp(16), radius=[dp(12)] * 4, elevation=0, md_bg_color=surface)
+                details = MDBoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
+                details.bind(minimum_height=details.setter("height"))
+                def add_line(text, color, style="Body2", bold=False, box=details):
+                    label = MDLabel(text=text, theme_text_color="Custom", text_color=color,
+                                    font_style=style, bold=bold, size_hint_y=None, shorten=False)
+                    label.bind(texture_size=lambda widget, value: setattr(widget, "height", value[1]))
+                    box.add_widget(label)
+                add_line(str(item['description']), foreground, "Subtitle1", True)
+                unit = "kg" if item.get("is_sold_by_weight") else "un."
+                quantity = f"{float(item['existing_stock']):g}"
+                add_line(f"ID #{item['id']}   |   Stock: {quantity} {unit}", muted)
+                expiry = item.get("expiry_date")
+                try:
+                    expired = bool(expiry and datetime.fromisoformat(str(expiry)).date() < datetime.now().date())
+                except ValueError:
+                    expired = False
+                expiry_text = self.format_date(str(expiry)) if expiry else "Sem validade"
+                add_line(f"Validade: {expiry_text}" + ("   •   Expirado" if expired else ""), danger if expired else muted)
+                add_line(f"Codigo de barras: {item.get('barcode') or 'Nao informado'}", muted, "Caption")
+                if expired:
+                    add_line("Ao restaurar, permanece bloqueado para venda por validade.", danger, "Caption")
+                row.add_widget(details)
+                details.bind(height=lambda widget, height, card=row: setattr(card, "height", max(dp(130), height + dp(32))))
+                row.height = max(dp(130), details.height + dp(32))
+                button = MDRaisedButton(text="RESTAURAR", pos_hint={"center_y": 0.5},
+                                        md_bg_color=primary, theme_text_color="Custom",
+                                        text_color=tokens.get("on_primary", [1, 1, 1, 1]))
+                button.bind(on_release=lambda _, selected=item: restore(selected))
+                row.add_widget(button)
+                rows.add_widget(row)
+            if not filtered:
+                rows.add_widget(MDLabel(text="Nenhum produto arquivado encontrado.\nExperimente pesquisar por outro nome ou codigo." if query else "O arquivo esta vazio.\nOs produtos arquivados aparecerao aqui.",
+                                       halign="center", theme_text_color="Custom", text_color=muted,
+                                       size_hint_y=None, height=dp(110)))
+            previous.disabled = page["index"] == 0
+            following.disabled = page["index"] >= pages - 1
+            counter.text = f"Pagina {page['index'] + 1} de {pages}  •  {len(filtered)} produtos"
+
+        def change_page(delta):
+            page["index"] += delta
+            render()
+            scroll.scroll_y = 1
+        def search_changed(*_):
+            page["index"] = 0
+            render()
+        previous.bind(on_release=lambda *_: change_page(-1))
+        following.bind(on_release=lambda *_: change_page(1))
+        search.bind(text=search_changed)
+        render()
+        dialog.open()
 
     def confirm_delete(self, product_id):
         app = App.get_running_app()

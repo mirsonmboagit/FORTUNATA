@@ -4,7 +4,7 @@ import unicodedata
 from datetime import datetime
 from threading import Lock, Thread
 
-from kivy.uix.popup import Popup
+from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.image import Image
@@ -44,7 +44,7 @@ from utils.business.vat import (
 from utils.hardware.vision import get_vision_dependencies
 
 
-def _row(*widgets, spacing=dp(10), height=dp(44)):
+def _row(*widgets, spacing=dp(8), height=dp(60)):
     """Linha horizontal de campos com altura fixa e tamanho igual entre widgets."""
     row = BoxLayout(
         orientation="horizontal",
@@ -131,7 +131,7 @@ def _build_category_sources():
     return sources
 
 
-class ProductForm(Popup):
+class ProductForm(Screen):
     COLOR_PRIMARY    = (0.2,  0.6,  0.86, 1)
     COLOR_SUCCESS    = (0.27, 0.7,  0.42, 1)
     COLOR_ERROR      = (0.85, 0.35, 0.35, 1)
@@ -141,12 +141,17 @@ class ProductForm(Popup):
     COLOR_CARD       = (0.88, 0.88, 0.88, 1)
     COLOR_CARD_ALT   = (0.92, 0.92, 0.92, 1)
 
-    FIELD_H      = dp(44)
-    BUTTON_H     = dp(42)
-    FONT_SIZE    = sp(14)
-    FONT_SIZE_SM = sp(13)
+    # MDTextField necessita de espaco vertical proprio para o texto de ajuda
+    # e a linha de contorno. A linha do formulario e deliberadamente maior
+    # que o input, criando uma separacao visual sem aumentar o campo.
+    FIELD_H      = dp(48)
+    ROW_H        = dp(60)
+    BUTTON_H     = dp(40)
+    FONT_SIZE    = sp(13)
+    FONT_SIZE_SM = sp(12)
 
     def __init__(self, admin_screen, product=None, **kwargs):
+        kwargs.setdefault("name", "product_form")
         super().__init__(**kwargs)
 
         self.admin_screen = admin_screen
@@ -186,6 +191,11 @@ class ProductForm(Popup):
         self._auto_total_purchase_price  = False
         self._auto_sale_price            = False
         self._cost_source_field          = None
+        self._business_rules             = self._load_business_rules()
+        self._business_rules_dialog      = None
+        self._custom_field_widgets       = {}
+        self._custom_field_definitions   = self._load_custom_field_definitions()
+        self._custom_field_rows          = []
 
         self._price_discount_buttons = []
         self._price_revert_btn       = None
@@ -201,7 +211,7 @@ class ProductForm(Popup):
         self._shortcut_help_dialog   = None
         self._field_navigation       = None
 
-        self._setup_popup()
+        self._setup_page()
         self._build_ui()
         self._setup_keyboard_navigation()
 
@@ -210,23 +220,13 @@ class ProductForm(Popup):
 
         Window.bind(on_resize=self._on_window_resize)
 
-    # -- Popup --------------------------------------------------------------
-    def _setup_popup(self):
-        self.title            = ""
-        self.size_hint        = (None, None)
-        self.auto_dismiss     = False
-        self.background       = "data/images/defaulttheme/transparent.png"
-        self.background_color = (0, 0, 0, 0)
-        self.separator_height = 0
-        self.title_size       = 0
-        self._apply_popup_size()
+    # -- Pagina -------------------------------------------------------------
+    def _setup_page(self):
+        """O formulario ocupa uma tela completa, sem limite de popup."""
+        self.size_hint = (1, 1)
+        self._apply_page_layout()
 
-    def _apply_popup_size(self):
-        w, h = Window.size
-        if w < dp(980):
-            self.size = (w * 0.98, h * 0.965)
-        else:
-            self.size = (min(dp(1060), w * 0.9), min(dp(780), h * 0.94))
+    def _apply_page_layout(self):
         self._update_responsive_layout()
 
     # -- Theme --------------------------------------------------------------
@@ -274,32 +274,27 @@ class ProductForm(Popup):
             orientation = "vertical",
             padding     = 0,
             spacing     = 0,
-            radius      = [dp(16)],
+            radius      = [0],
             md_bg_color = self.COLOR_CARD,
             elevation   = 0,
         )
         main_card.add_widget(self._build_header())
 
-        self._content_scroll = ScrollView(
-            do_scroll_x=False,
-            do_scroll_y=True,
-            bar_width=dp(8),
-            scroll_type=["bars", "content"],
-        )
         self._content_layout = BoxLayout(
             orientation = "horizontal",
-            size_hint_y = None,
-            spacing     = dp(14),
-            padding     = [dp(16), dp(16), dp(16), dp(16)],
+            size_hint_y = 1,
+            spacing     = dp(10),
+            padding     = [dp(10), dp(10), dp(10), dp(10)],
         )
         self._camera_section = self._build_camera_section()
         self._form_section = self._build_form_section()
         self._content_layout.add_widget(self._camera_section)
         self._content_layout.add_widget(self._form_section)
-        self._content_scroll.add_widget(self._content_layout)
         self._content_scroll.bind(size=lambda *_: self._update_responsive_layout())
-        main_card.add_widget(self._content_scroll)
-        self.content = main_card
+        self.bind(size=lambda *_: self._update_responsive_layout())
+        main_card.add_widget(self._content_layout)
+        self._page_content = main_card
+        self.add_widget(main_card)
         self._update_responsive_layout()
 
     # -- Header -------------------------------------------------------------
@@ -307,31 +302,40 @@ class ProductForm(Popup):
         header = MDCard(
             orientation = "horizontal",
             size_hint_y = None,
-            height      = dp(56),
-            padding     = [dp(18), dp(8), dp(10), dp(8)],
-            radius      = [dp(16), dp(16), 0, 0],
+            height      = dp(50),
+            padding     = [dp(14), dp(6), dp(8), dp(6)],
+            radius      = [0],
             md_bg_color = self.COLOR_CARD,
             elevation   = 0,
         )
         title_label = Label(
             text        = "Adicionar Produto" if not self.product else "Editar Produto",
             color       = self.COLOR_TEXT,
-            font_size   = sp(18),
+            font_size   = sp(16),
             bold        = True,
             halign      = "left",
             valign      = "middle",
             size_hint_x = 0.9,
         )
         title_label.bind(size=title_label.setter("text_size"))
+        rules_btn = TooltipIconButton(
+            icon="tune-variant",
+            theme_text_color="Custom",
+            text_color=self.COLOR_PRIMARY,
+            hint_text="Definir regras comerciais e margem de lucro",
+            on_release=lambda *_: self._open_business_rules_dialog(),
+            pos_hint={"center_y": 0.5},
+        )
         close_btn = TooltipIconButton(
-            icon             = "close",
+            icon             = "arrow-left",
             theme_text_color = "Custom",
             text_color       = self.COLOR_TEXT,
-            hint_text        = "Fechar (Esc)",
+            hint_text        = "Voltar ao catalogo (Esc)",
             on_release       = self.dismiss,
             pos_hint         = {"center_y": 0.5},
         )
         header.add_widget(title_label)
+        header.add_widget(rules_btn)
         header.add_widget(close_btn)
         return header
 
@@ -423,8 +427,8 @@ class ProductForm(Popup):
         sec = MDCard(
             orientation="vertical",
             size_hint_x=1,
-            padding=dp(14),
-            spacing=dp(10),
+            padding=dp(10),
+            spacing=dp(8),
             radius=[dp(12)],
             md_bg_color=self.COLOR_CARD_ALT,
             elevation=0,
@@ -440,11 +444,29 @@ class ProductForm(Popup):
             _row(self.existing_stock, self.sold_stock),
             _row(self.unit_purchase_price, self.total_purchase_price),
             _row(self.sale_price, self.weight_switch_layout),
+            _row(self.produce_mode_btn, self.sack_weight_input),
         ]
+        # Somente esta area rola. Cabecalho, scanner e botoes de acao ficam
+        # fixos, evitando que a roda do rato desloque a pagina inteira.
+        self._content_scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width=dp(6),
+            scroll_type=["bars", "content"],
+        )
+        self._form_content = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(8),
+            padding=[0, 0, dp(4), 0],
+        )
         for form_row in self._form_rows:
-            sec.add_widget(form_row)
-        sec.add_widget(self._price_actions_layout)
-        sec.add_widget(BoxLayout(size_hint_y=1))
+            self._form_content.add_widget(form_row)
+        self._form_content.add_widget(self._price_actions_layout)
+        self._custom_fields_section = self._build_custom_fields_section()
+        self._form_content.add_widget(self._custom_fields_section)
+        self._content_scroll.add_widget(self._form_content)
+        sec.add_widget(self._content_scroll)
         sec.add_widget(self._build_action_buttons())
 
         return sec
@@ -650,6 +672,13 @@ class ProductForm(Popup):
         self.sale_price = _f("Preco de venda *", inp_filter="float", shortcut="Ctrl+P")
         self.sale_price.bind(text=self._on_sale_price_text_change)
 
+        self.produce_mode_btn = TooltipRaisedButton(
+            text="Stock exato", tooltip_text="Alternar para sacos com venda avulsa, sem peso obrigatorio",
+            on_release=lambda *_: self._set_produce_mode(not self._produce_mode),
+        )
+        self._produce_mode = False
+        self.sack_weight_input = _f("Peso do saco em kg (opcional)", inp_filter="float")
+        self.sack_weight_input.disabled = True
         self._price_actions_layout = self._build_price_actions()
 
     # -- Price actions ------------------------------------------------------
@@ -795,40 +824,56 @@ class ProductForm(Popup):
         if not self._content_layout or not self._content_scroll:
             return
 
-        compact = self.size[0] < dp(980) or Window.width < dp(1120)
-        narrow = self.size[0] < dp(760) or Window.width < dp(800)
+        # A largura do Screen e a referencia correta. Window.width pode ser
+        # grande enquanto o formulario e apresentado numa area menor.
+        viewport_width = self.width or self._content_scroll.width or Window.width
+        compact = viewport_width < dp(980)
+        narrow = viewport_width < dp(760)
         self._compact_layout = compact
 
         # Em janelas estreitas cada par vira uma pilha. Em larguras normais,
         # os campos regressam automaticamente a duas colunas.
         for form_row in self._form_rows:
             form_row.orientation = "vertical" if narrow else "horizontal"
-            form_row.height = dp(98) if narrow else self.FIELD_H
-            form_row.spacing = dp(6) if narrow else dp(10)
+            form_row.height = dp(104) if narrow else self.ROW_H
+            form_row.spacing = dp(6) if narrow else dp(8)
 
-        form_height = dp(1050) if narrow else dp(620)
+        for custom_row in self._custom_field_rows:
+            custom_row.orientation = "vertical" if narrow else "horizontal"
+            custom_row.height = dp(104) if narrow else self.ROW_H
+            custom_row.spacing = dp(6) if narrow else dp(8)
+
+        custom_row_count = (len(self._custom_field_definitions) + 1) // 2
+        custom_row_height = dp(104) if narrow else self.ROW_H
+        custom_fields_height = custom_row_count * custom_row_height + max(0, custom_row_count - 1) * dp(7)
+        if hasattr(self, "_custom_fields_container"):
+            self._custom_fields_container.height = custom_fields_height
+        if getattr(self, "_custom_fields_section", None) is not None:
+            self._custom_fields_section.height = dp(64) + custom_fields_height
+        # Altura do conteudo rolavel (sem titulo nem botoes fixos).
+        form_height = (dp(1116) if narrow else dp(720)) + custom_fields_height
+        if getattr(self, "_form_content", None) is not None:
+            self._form_content.height = form_height
 
         if compact:
             self._content_layout.orientation = "vertical"
-            self._content_layout.spacing = dp(10)
-            self._content_layout.padding = [dp(12), dp(12), dp(12), dp(12)]
+            self._content_layout.spacing = dp(8)
+            self._content_layout.padding = [dp(8), dp(8), dp(8), dp(8)]
             if self._camera_section:
-                cam_w = max(dp(280), min(self.size[0] - dp(52), dp(420)))
+                cam_w = max(dp(260), min(viewport_width - dp(32), dp(360)))
                 self._camera_section.size_hint = (None, None)
                 self._camera_section.width = cam_w
-                self._camera_section.height = cam_w + dp(165)
+                self._camera_section.height = dp(250)
                 self._camera_section.pos_hint = {"center_x": 0.5}
             if self._form_section:
-                self._form_section.size_hint = (1, None)
-                self._form_section.height = form_height
-            camera_height = self._camera_section.height if self._camera_section else 0
-            self._content_layout.height = camera_height + form_height + dp(34)
+                self._form_section.size_hint = (1, 1)
+                self._form_section.height = 0
         else:
             self._content_layout.orientation = "horizontal"
-            self._content_layout.spacing = dp(14)
-            self._content_layout.padding = [dp(16), dp(16), dp(16), dp(16)]
+            self._content_layout.spacing = dp(10)
+            self._content_layout.padding = [dp(10), dp(10), dp(10), dp(10)]
             if self._camera_section:
-                cam_w = max(dp(304), min(self.size[0] * 0.34, dp(360)))
+                cam_w = max(dp(280), min(viewport_width * 0.32, dp(330)))
                 self._camera_section.size_hint = (None, 1)
                 self._camera_section.width = cam_w
                 self._camera_section.height = 0
@@ -836,17 +881,13 @@ class ProductForm(Popup):
             if self._form_section:
                 self._form_section.size_hint = (1, 1)
                 self._form_section.height = 0
-            self._content_layout.height = max(
-                dp(560),
-                self._content_scroll.height,
-            )
 
         if self._camera_card and self._camera_section:
             preview_size = self._camera_section.width - dp(24)
             self._camera_card.height = max(dp(220), min(preview_size, dp(360)))
 
     def _on_window_resize(self, instance, width, height):
-        self._apply_popup_size()
+        self._apply_page_layout()
 
     def _warm_lazy_dependencies(self, *_args):
         if self._lazy_dependencies_started:
@@ -1272,13 +1313,314 @@ class ProductForm(Popup):
             self._sync_costs_from_total()
 
     def _suggest_sale_price(self, unit_cost):
+        if getattr(self, "_produce_mode", False):
+            return
         current_sale_price = self._parse_price_value(self.sale_price.text)
         if current_sale_price is not None and not self._auto_sale_price:
             return
         try:
-            self._set_sale_price_value(unit_cost * 1.30, auto=True)
+            margin = float(self._business_rules.get("default_profit_margin_percent", 30.0))
+            self._set_sale_price_value(unit_cost * (1 + margin / 100), auto=True)
         except Exception:
             pass
+
+    # -- Campos personalizados --------------------------------------------
+    def _load_custom_field_definitions(self):
+        from database.provider import get_db
+        db = get_db()
+        try:
+            fields = db.list_product_custom_fields()
+            return fields if isinstance(fields, list) else []
+        except Exception:
+            return []
+        finally:
+            db.close()
+
+    def _build_custom_fields_section(self):
+        section = MDCard(
+            orientation="vertical", size_hint_y=None, padding=dp(12), spacing=dp(8),
+            radius=[dp(10)], md_bg_color=self.COLOR_CARD_ALT, elevation=0,
+        )
+        title_row = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(8))
+        title = Label(
+            text="Informações adicionais", color=self.COLOR_TEXT, bold=True,
+            font_size=sp(14), halign="left", valign="middle", size_hint_x=1,
+        )
+        title.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
+        title_row.add_widget(title)
+        manage = TooltipIconButton(
+            icon="tune-variant", theme_text_color="Custom", text_color=self.COLOR_PRIMARY,
+            hint_text="Gerir campos adicionais do formulario",
+            size_hint=(None, None), size=(dp(32), dp(32)),
+            on_release=lambda *_: self._open_custom_fields_manager(),
+        )
+        title_row.add_widget(manage)
+        section.add_widget(title_row)
+        self._custom_fields_container = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(7))
+        section.add_widget(self._custom_fields_container)
+        self._refresh_custom_fields_widgets()
+        section.height = dp(64) + self._custom_fields_container.height
+        return section
+
+    def _refresh_custom_fields_widgets(self, values=None):
+        if not hasattr(self, "_custom_fields_container"):
+            return
+        values = values or {}
+        self._custom_fields_container.clear_widgets()
+        self._custom_field_widgets = {}
+        self._custom_field_rows = []
+        fields = []
+        for definition in self._custom_field_definitions:
+            field_id = str(definition["id"])
+            label = definition["label"] + (" *" if definition.get("required") else "")
+            field = TooltipTextField(
+                hint_text=label, tooltip_text=label, mode="rectangle", size_hint_y=None,
+                height=self.FIELD_H, input_filter="float" if definition.get("type") == "NUMBER" else None,
+            )
+            self._style_field(field)
+            field.text = str(values.get(field_id, values.get(definition["id"], "")) or "")
+            fields.append(field)
+            self._custom_field_widgets[field_id] = field
+
+        # Repete exatamente a organizacao dos campos nativos: duas colunas
+        # em ecras largos e uma coluna por vez quando a janela fica estreita.
+        for index in range(0, len(fields), 2):
+            pair = fields[index:index + 2]
+            if len(pair) == 1:
+                pair.append(BoxLayout())
+            row = _row(*pair)
+            self._custom_fields_container.add_widget(row)
+            self._custom_field_rows.append(row)
+        row_count = len(self._custom_field_rows)
+        self._custom_fields_container.height = (
+            sum(row.height for row in self._custom_field_rows)
+            + max(0, row_count - 1) * dp(7)
+        )
+        # Durante a construcao inicial a secao ainda esta a ser devolvida por
+        # _build_custom_fields_section, logo o atributo ainda nao existe.
+        section = getattr(self, "_custom_fields_section", None)
+        if section is not None:
+            section.height = dp(64) + self._custom_fields_container.height
+        self._update_responsive_layout()
+
+    def _custom_field_values(self):
+        return {field_id: widget.text.strip() for field_id, widget in self._custom_field_widgets.items()}
+
+    @staticmethod
+    def _make_switch(active=False):
+        """Evita um defeito do KivyMD ao receber ``active`` no construtor.
+
+        Em algumas versoes, a propriedade e despachada antes de o KV criar o
+        id interno ``thumb``. Definir o estado depois do construtor mantem a
+        mesma funcionalidade sem disparar essa animacao prematuramente.
+        """
+        switch = MDSwitch(size_hint=(None, None), size=(dp(48), dp(36)))
+        switch.active = bool(active)
+        return switch
+
+    def _open_custom_fields_manager(self):
+        content = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(330))
+        rows = BoxLayout(orientation="vertical", spacing=dp(5), size_hint_y=None)
+
+        def render_rows():
+            rows.clear_widgets()
+            definitions = self._load_all_custom_field_definitions()
+            rows.height = max(dp(36), len(definitions) * dp(42))
+            for definition in definitions:
+                row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(5))
+                status = "ativo" if definition.get("active") else "inativo"
+                row.add_widget(Label(
+                    text=f"{definition['label']} ({'numero' if definition['type'] == 'NUMBER' else 'texto'}, {status})",
+                    color=self.COLOR_TEXT, halign="left", valign="middle",
+                ))
+                edit = MDFlatButton(text="Editar")
+                edit.bind(on_release=lambda _b, item=definition: self._edit_custom_field(item, render_rows))
+                toggle = MDFlatButton(text="Remover" if definition.get("active") else "Ativar")
+                toggle.bind(on_release=lambda _b, item=definition: self._toggle_custom_field(item, render_rows))
+                row.add_widget(edit)
+                row.add_widget(toggle)
+                rows.add_widget(row)
+
+        add_label = TooltipTextField(hint_text="Novo campo (ex.: Marca)", mode="rectangle", size_hint_y=None, height=self.FIELD_H)
+        kind = self._make_switch(False)
+        required = self._make_switch(False)
+        switches = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
+        switches.add_widget(Label(text="Campo numerico", color=self.COLOR_TEXT, halign="left"))
+        switches.add_widget(kind)
+        switches.add_widget(Label(text="Obrigatorio", color=self.COLOR_TEXT, halign="left"))
+        switches.add_widget(required)
+        add_button = MDRaisedButton(text="Adicionar campo", md_bg_color=self.COLOR_SUCCESS, size_hint_y=None, height=dp(38))
+
+        def add_field(*_args):
+            try:
+                from database.provider import get_db
+                db = get_db()
+                try:
+                    db.create_product_custom_field(add_label.text, "NUMBER" if kind.active else "TEXT", required.active)
+                finally:
+                    db.close()
+                add_label.text = ""
+                self._custom_field_definitions = self._load_custom_field_definitions()
+                self._refresh_custom_fields_widgets(self._custom_field_values())
+                render_rows()
+            except Exception as exc:
+                self._show_snackbar(f"Nao foi possivel criar o campo: {exc}", self.COLOR_ERROR)
+
+        add_button.bind(on_release=add_field)
+        content.add_widget(rows)
+        content.add_widget(add_label)
+        content.add_widget(switches)
+        content.add_widget(add_button)
+        dialog = MDDialog(title="Campos personalizados", type="custom", content_cls=content,
+                          buttons=[MDFlatButton(text="Fechar")])
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        render_rows()
+        dialog.open()
+
+    def _load_all_custom_field_definitions(self):
+        from database.provider import get_db
+        db = get_db()
+        try:
+            fields = db.list_product_custom_fields(active_only=False)
+            return fields if isinstance(fields, list) else []
+        finally:
+            db.close()
+
+    def _toggle_custom_field(self, definition, on_done):
+        try:
+            from database.provider import get_db
+            db = get_db()
+            try:
+                db.update_product_custom_field(
+                    definition["id"], definition["label"], definition["type"],
+                    definition.get("required", False), not definition.get("active", False),
+                )
+            finally:
+                db.close()
+            self._custom_field_definitions = self._load_custom_field_definitions()
+            self._refresh_custom_fields_widgets(self._custom_field_values())
+            on_done()
+        except Exception as exc:
+            self._show_snackbar(f"Nao foi possivel atualizar o campo: {exc}", self.COLOR_ERROR)
+
+    def _edit_custom_field(self, definition, on_done):
+        content = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(130))
+        label = TooltipTextField(text=definition["label"], hint_text="Nome do campo", mode="rectangle",
+                                 size_hint_y=None, height=self.FIELD_H)
+        numeric = self._make_switch(definition["type"] == "NUMBER")
+        required = self._make_switch(bool(definition.get("required")))
+        row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
+        row.add_widget(Label(text="Numerico", color=self.COLOR_TEXT))
+        row.add_widget(numeric)
+        row.add_widget(Label(text="Obrigatorio", color=self.COLOR_TEXT))
+        row.add_widget(required)
+        content.add_widget(label)
+        content.add_widget(row)
+        dialog = MDDialog(title="Editar campo", type="custom", content_cls=content,
+                          auto_dismiss=False, buttons=[MDFlatButton(text="Cancelar"), MDRaisedButton(text="Guardar", md_bg_color=self.COLOR_SUCCESS)])
+
+        def save(*_args):
+            try:
+                from database.provider import get_db
+                db = get_db()
+                try:
+                    db.update_product_custom_field(definition["id"], label.text,
+                                                   "NUMBER" if numeric.active else "TEXT", required.active,
+                                                   definition.get("active", True))
+                finally:
+                    db.close()
+                self._custom_field_definitions = self._load_custom_field_definitions()
+                self._refresh_custom_fields_widgets(self._custom_field_values())
+                dialog.dismiss()
+                on_done()
+            except Exception as exc:
+                self._show_snackbar(f"Nao foi possivel editar o campo: {exc}", self.COLOR_ERROR)
+
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.buttons[1].bind(on_release=save)
+        dialog.open()
+
+    # -- Regras comerciais -------------------------------------------------
+    def _load_business_rules(self):
+        from database.provider import get_db
+        db = get_db()
+        try:
+            rules = db.get_product_business_rules()
+            return rules if isinstance(rules, dict) else {}
+        except Exception:
+            # O formulario continua utilizavel se uma versao antiga do
+            # servidor ainda nao tiver este recurso.
+            return {}
+        finally:
+            db.close()
+
+    def _open_business_rules_dialog(self):
+        if self._business_rules_dialog is not None:
+            self._business_rules_dialog.open()
+            return
+        rules = self._business_rules or {}
+        content = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(238))
+        content.add_widget(Label(
+            text="Estas regras protegem o preco tanto no formulario como na base de dados.",
+            color=self.COLOR_GRAY, font_size=sp(12), halign="left", valign="middle",
+            size_hint_y=None, height=dp(38),
+        ))
+        default_margin = TooltipTextField(
+            hint_text="Margem sugerida (%)", input_filter="float", mode="rectangle",
+            text=str(rules.get("default_profit_margin_percent", 30)), size_hint_y=None, height=self.FIELD_H,
+        )
+        minimum_margin = TooltipTextField(
+            hint_text="Margem minima (%)", input_filter="float", mode="rectangle",
+            text=str(rules.get("minimum_profit_margin_percent", 0)), size_hint_y=None, height=self.FIELD_H,
+        )
+        enforce = self._make_switch(bool(rules.get("enforce_minimum_margin", False)))
+        negative = self._make_switch(bool(rules.get("allow_negative_margin", False)))
+        for label_text, switch in (
+            ("Bloquear preco abaixo da margem minima", enforce),
+            ("Permitir prejuizo (preco menor que custo)", negative),
+        ):
+            row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
+            row.add_widget(Label(text=label_text, color=self.COLOR_TEXT, halign="left", valign="middle"))
+            row.add_widget(switch)
+            content.add_widget(row)
+        content.add_widget(default_margin)
+        content.add_widget(minimum_margin)
+
+        dialog = MDDialog(
+            title="Regras comerciais do produto", type="custom", content_cls=content,
+            auto_dismiss=False,
+            buttons=[MDFlatButton(text="Cancelar"), MDRaisedButton(text="Guardar", md_bg_color=self.COLOR_SUCCESS)],
+        )
+
+        def close_dialog(*_args):
+            dialog.dismiss()
+
+        def save_rules(*_args):
+            try:
+                payload = {
+                    "default_profit_margin_percent": float(default_margin.text.replace(",", ".")),
+                    "minimum_profit_margin_percent": float(minimum_margin.text.replace(",", ".")),
+                    "enforce_minimum_margin": bool(enforce.active),
+                    "allow_negative_margin": bool(negative.active),
+                }
+                from database.provider import get_db
+                db = get_db()
+                try:
+                    self._business_rules = db.update_product_business_rules(payload)
+                finally:
+                    db.close()
+                dialog.dismiss()
+                self._show_snackbar("Regras comerciais guardadas.", self.COLOR_SUCCESS)
+            except (TypeError, ValueError) as exc:
+                self._show_snackbar(f"Regra invalida: {exc}", self.COLOR_ERROR)
+            except Exception as exc:
+                self._show_snackbar(f"Nao foi possivel guardar as regras: {exc}", self.COLOR_ERROR)
+
+        dialog.buttons[0].bind(on_release=close_dialog)
+        dialog.buttons[1].bind(on_release=save_rules)
+        dialog.bind(on_dismiss=lambda *_: setattr(self, "_business_rules_dialog", None))
+        self._business_rules_dialog = dialog
+        dialog.open()
 
     # -- Price actions ------------------------------------------------------
     @staticmethod
@@ -1591,7 +1933,28 @@ class ProductForm(Popup):
         if expiry is False: return
         self._save_to_database(barcode, expiry, self.is_sold_by_weight_switch.active)
 
+    def _set_produce_mode(self, enabled):
+        self._produce_mode = bool(enabled)
+        self.produce_mode_btn.text = "Venda avulsa - sacos" if enabled else "Stock exato"
+        self.sack_weight_input.disabled = not enabled
+        if enabled:
+            self._set_weight_state(False)
+            self._set_pack_sale_state(False)
+        self.weight_state_btn.disabled = enabled
+        self.pack_sale_state_btn.disabled = enabled
+        self.units_per_package_input.disabled = enabled
+        self.existing_stock.hint_text = "Sacos disponiveis *" if enabled else "Estoque atual *"
+        self.sold_stock.hint_text = "Sacos vendidos inteiros" if enabled else "Vendido"
+        self.unit_purchase_price.hint_text = "Custo por saco *" if enabled else "Preco unit. compra *"
+        self.sale_price.hint_text = "Preco por unidade *" if enabled else "Preco de venda *"
+
     def _validate_fields(self):
+        if self._produce_mode and self.sack_weight_input.text.strip():
+            import math
+            weight = self._parse_numeric_input(self.sack_weight_input.text)
+            if weight is None or not math.isfinite(weight) or weight <= 0:
+                self._show_snackbar("Informe um peso positivo ou deixe vazio.", self.COLOR_ERROR)
+                return False
         checks = [
             (self.description.text.strip(),                                              "Descricao obrigatoria!"),
             (self.category_field.text.strip() and self.category_field.text != "Categoria *", "Selecione uma categoria!"),
@@ -1646,6 +2009,10 @@ class ProductForm(Popup):
         package_quantity = self.package_quantity.text.strip() or None
         allow_pack_sale = bool(getattr(self.allow_pack_sale_switch, "active", False))
         vat_rule_code = self._selected_vat_rule_code or DEFAULT_VAT_RULE_CODE
+        produce_options = {
+            "stock_mode": "SACKS" if self._produce_mode else "EXACT",
+            "sack_weight_kg": self.sack_weight_input.text.strip() or None,
+        }
         units_raw = self.units_per_package_input.text.strip()
         units_per_package = int(units_raw) if units_raw.isdigit() else None
         if not allow_pack_sale:
@@ -1670,7 +2037,8 @@ class ProductForm(Popup):
             )
 
         def _do_update(include_pack_fields=True):
-            kwargs = {"package_quantity": package_quantity, "vat_rule_code": vat_rule_code}
+            kwargs = {"package_quantity": package_quantity, "vat_rule_code": vat_rule_code,
+                      "produce_options": produce_options, "custom_fields": self._custom_field_values()}
             if include_pack_fields:
                 kwargs["units_per_package"] = units_per_package
                 kwargs["allow_pack_sale"] = allow_pack_sale
@@ -1682,7 +2050,8 @@ class ProductForm(Popup):
             )
 
         def _do_add(include_pack_fields=True):
-            kwargs = {"package_quantity": package_quantity, "vat_rule_code": vat_rule_code}
+            kwargs = {"package_quantity": package_quantity, "vat_rule_code": vat_rule_code,
+                      "produce_options": produce_options, "custom_fields": self._custom_field_values()}
             if include_pack_fields:
                 kwargs["units_per_package"] = units_per_package
                 kwargs["allow_pack_sale"] = allow_pack_sale
@@ -1696,7 +2065,8 @@ class ProductForm(Popup):
         try:
             sold = float(self.sold_stock.text.strip() or "0")
             if self.product:
-                _do_update(include_pack_fields=True)
+                if _do_update(include_pack_fields=True) is False:
+                    raise RuntimeError("Nao foi possivel guardar o produto")
                 err = _last_error()
                 if _needs_legacy_retry(err):
                     _do_update(include_pack_fields=False)
@@ -1734,7 +2104,7 @@ class ProductForm(Popup):
         fields = [self.sku_input, self.expiry_date, self.description,
                   self.existing_stock, self.sale_price, self.total_purchase_price,
                   self.unit_purchase_price, self.category_field, self.package_quantity,
-                  self.units_per_package_input]
+                  self.units_per_package_input, self.sack_weight_input]
         if not preserve_barcode:
             fields.insert(0, self.barcode_input)
         self._calculating = True
@@ -1752,6 +2122,7 @@ class ProductForm(Popup):
             self.sold_stock.text = "0"
         finally:
             self._calculating = False
+        self._set_produce_mode(False)
         self._set_weight_state(False)
         self._set_pack_sale_state(False)
         self._category_lookup_inflight = False
@@ -1768,6 +2139,15 @@ class ProductForm(Popup):
 
     def _populate_fields(self):
         p = self.product
+        from database.provider import get_db
+        db = get_db()
+        try:
+            settings = db.get_produce_settings(p[0]) or {}
+            custom_values = db.get_product_custom_field_values(p[0]) or {}
+        finally:
+            db.close()
+        self._set_produce_mode(settings.get("stock_mode") == "SACKS")
+        self.sack_weight_input.text = str(settings.get("sack_weight_kg") or "")
         self._calculating = True
         try:
             self.description.text          = p[1]
@@ -1802,6 +2182,7 @@ class ProductForm(Popup):
         self._set_weight_state(is_weight)
         self._set_pack_sale_state(bool(p[24]) if (len(p) > 24 and not is_weight) else False)
         self._set_vat_rule(str(p[25]) if len(p) > 25 and p[25] else DEFAULT_VAT_RULE_CODE)
+        self._refresh_custom_fields_widgets(custom_values)
         self._update_price_actions_state()
 
     # -- Beep ---------------------------------------------------------------
@@ -1832,13 +2213,14 @@ class ProductForm(Popup):
         lbl = Label(text=message, color=(1,1,1,1), font_size=sp(13), halign="center", valign="middle")
         lbl.bind(size=lbl.setter("text_size"))
         toast.add_widget(lbl)
-        if hasattr(self, "content") and self.content:
-            toast.pos = (self.content.center_x - toast.width/2, self.content.y + dp(16))
-            self.content.add_widget(toast)
+        if getattr(self, "_page_content", None) is not None:
+            content = self._page_content
+            toast.pos = (content.center_x - toast.width/2, content.y + dp(16))
+            content.add_widget(toast)
             Animation(opacity=1, duration=0.25).start(toast)
             def _rm(dt):
                 a = Animation(opacity=0, duration=0.25)
-                a.bind(on_complete=lambda *_: self.content.remove_widget(toast))
+                a.bind(on_complete=lambda *_: content.remove_widget(toast))
                 a.start(toast)
             Clock.schedule_once(_rm, 2.2)
 
@@ -1848,6 +2230,35 @@ class ProductForm(Popup):
         self.scanner_status.color = color
 
     # -- Lifecycle ----------------------------------------------------------
+    def open(self):
+        """Compatibilidade com os chamadores antigos, abrindo uma pagina."""
+        manager = getattr(self.admin_screen, "manager", None)
+        if manager is None:
+            return self
+        if self.name in manager.screen_names:
+            existing = manager.get_screen(self.name)
+            if existing is not self:
+                manager.remove_widget(existing)
+        if self.manager is None:
+            manager.add_widget(self)
+        manager.current = self.name
+        self.on_open()
+        return self
+
+    def dismiss(self, *_args):
+        """Fecha a pagina e regressa ao catalogo de produtos."""
+        manager = self.manager or getattr(self.admin_screen, "manager", None)
+        self.on_dismiss()
+        if manager is None:
+            return
+        target = getattr(self.admin_screen, "name", "admin")
+        if target in manager.screen_names:
+            manager.current = target
+        Clock.schedule_once(
+            lambda _dt: manager.remove_widget(self) if self.parent is manager else None,
+            0.15,
+        )
+
     def on_open(self):
         # -- ALTERAÇÃO 3: auto-start removido — scanner só arranca quando
         #    o utilizador clicar no botao. --

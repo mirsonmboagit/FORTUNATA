@@ -39,7 +39,9 @@ from utils.config.paths import (
 APP_DEFAULTS = {
     # Valores padrao usados quando os arquivos de config ainda nao existem.
     "app_env": "development",
-    "db_mode": "hybrid",
+    # O aplicativo desktop usa uma base SQLite unica e local. A configuracao
+    # remota continua reservada exclusivamente ao cliente movel.
+    "db_mode": "local",
     "db_path": "database/inventory.db",
     "api_base_url": "http://127.0.0.1:8080",
     "api_key": "",
@@ -166,7 +168,12 @@ def _ensure_runtime_api_key(app_payload: dict[str, Any]) -> None:
     # Um cliente remoto (incluindo o Manager Mobile) nunca deve inventar uma
     # chave. A chave pertence a API instalada no servidor e e configurada pelo
     # utilizador no onboarding seguro.
-    if is_mobile_runtime() or str(app_payload.get("db_mode") or "").strip().lower() == "remote_strict":
+    mode = str(app_payload.get("db_mode") or "").strip().lower()
+    if is_mobile_runtime() or mode == "remote_strict":
+        return
+
+    # A sessao unificada desktop nao usa API nem precisa de uma chave local.
+    if mode not in {"remote", "hybrid", "auto"}:
         return
 
     # Gera uma chave local quando a configuracao ainda esta insegura.

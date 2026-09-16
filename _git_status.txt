@@ -1,0 +1,141 @@
+﻿ M MERCEARIA.py
+ M README.md
+ M admin/admin_home_screen.py
+ M admin/admin_screen.kv
+ M admin/admin_screen.py
+ M admin/product_form.py
+ M admin_app.py
+ M buildozer-manager-mobile.spec
+ M config/app.json
+ M config/app_settings.json
+ M database/client.py
+ M database/database.py
+ M database/provider.py
+ M locales/de.json
+ M locales/en.json
+ M locales/es.json
+ M locales/fr.json
+ M locales/pt.json
+ M losses_log.py
+ M manager/manager_screen.py
+ M manager/services/__init__.py
+ M manager_app.py
+ M manager_mobile_app.py
+ M requirements-runtime.txt
+ M scripts/packaging/admin_app.spec
+ M scripts/packaging/manager_app.spec
+ M server/app.py
+ M tests/test_database_client_provider.py
+ M tests/test_receipt_seller_name.py
+ M tests/test_system_status.py
+ M tests/test_utils.py
+ M user/login.py
+ M user/login_screen.kv
+ D user/profile_selector.kv
+ D user/profile_selector.py
+ M utils/business/email_service.py
+ M utils/config/app_config.py
+ M utils/config/system_status.py
+ M utils/hardware/thermal_printer.py
+ M utils/screens/losses_history_screen.py
+ M utils/screens/losses_screen.kv
+ M utils/screens/losses_screen.py
+ M utils/screens/reports_screen.py
+ M utils/screens/restock_history_screen.py
+ M utils/screens/restock_screen.kv
+ M utils/screens/restock_screen.py
+ M utils/screens/settings.py
+?? _git_status.txt
+?? config/license.json
+?? database/produce.py
+?? docs/PERFORMANCE_OPTIMIZATION_REPORT.md
+?? docs/SUPERADMIN_OFFLINE.md
+?? docs/performance-audit.json
+?? docs/performance-benchmark.json
+?? docs/performance-logs.png
+?? licensing/
+?? manager/produce_sales.py
+?? manager/services/barcode_pipeline.py
+?? mobile/license_required_screen.py
+?? scripts/abrir_superadmin_local.cmd
+?? scripts/benchmark_performance.py
+?? scripts/emissor_licencas_automatico.py
+?? scripts/generate_stress_dataset.py
+?? scripts/iniciar_emissor_automatico.cmd
+?? scripts/rebuild_stress_product_indexes.py
+?? scripts/superadmin_terminal.py
+?? tests/test_account_provisioning_database.py
+?? tests/test_automatic_license_email.py
+?? tests/test_barcode_pipeline.py
+?? tests/test_cart_quantity_editing.py
+?? tests/test_license_request_flow.py
+?? tests/test_offline_licensing.py
+?? tests/test_performance_regressions.py
+?? tests/test_produce_inventory.py
+?? tests/test_produce_ui.py
+?? tests/test_product_restoration.py
+?? tests/test_superadmin_user_directory.py
+?? tests/test_unified_desktop_login.py
+5e079466 Changes made in other pc
+e441d97b last day
+c053fc16 Almost there!
+42675609 Almost there!
+787f6f55 Almost there, Joe!
+6b9f69de 18 de agosto
+a6ca398e mir
+a8650492 Remove sensitive environment variables and delete obsolete database files
+7b1be117 26 de junho, 2026, noite de sexta
+97e11f5b up 25
+caecbe95 Joe. 25-june-2026, thursday, morning
+a7ffacea Actualizacoes recentes, grandes modificacoes
+e2503827 Revisao de banners inteligentes
+cdd3e6eb Atualiza├º├úo: melhorias no sistema, corre├º├Áes de bugs e performance
+d9b144e0 HERE WE GOAT AGAIN
+ MERCEARIA.py                            |  548 +---------
+ README.md                               |   86 +-
+ admin/admin_home_screen.py              |  115 +-
+ admin/admin_screen.kv                   |   12 +
+ admin/admin_screen.py                   |  164 ++-
+ admin/product_form.py                   |   55 +-
+ admin_app.py                            |   30 +-
+ buildozer-manager-mobile.spec           |    1 +
+ config/app.json                         |   11 +-
+ config/app_settings.json                |    2 +-
+ database/client.py                      |    8 +
+ database/database.py                    | 1016 +++++++++++++++---
+ database/provider.py                    |  260 +----
+ locales/de.json                         |   12 +
+ locales/en.json                         |   12 +
+ locales/es.json                         |   12 +
+ locales/fr.json                         |   12 +
+ locales/pt.json                         |   12 +
+ losses_log.py                           |    1 +
+ manager/manager_screen.py               |  417 +++++---
+ manager/services/__init__.py            |    3 +
+ manager_app.py                          |  112 +-
+ manager_mobile_app.py                   |   46 +-
+ requirements-runtime.txt                |    1 +
+ scripts/packaging/admin_app.spec        |    9 +-
+ scripts/packaging/manager_app.spec      |   12 +-
+ server/app.py                           |    2 +
+ tests/test_database_client_provider.py  |  109 +-
+ tests/test_receipt_seller_name.py       |   17 +
+ tests/test_system_status.py             |   18 +-
+ tests/test_utils.py                     |    4 +-
+ user/login.py                           | 1741 ++++++++++++++++++++++++++++++-
+ user/login_screen.kv                    |   16 +-
+ user/profile_selector.kv                |  228 ----
+ user/profile_selector.py                |  130 ---
+ utils/business/email_service.py         |   16 +
+ utils/config/app_config.py              |   11 +-
+ utils/config/system_status.py           |  135 +--
+ utils/hardware/thermal_printer.py       |   25 +-
+ utils/screens/losses_history_screen.py  |   28 +-
+ utils/screens/losses_screen.kv          |   25 +-
+ utils/screens/losses_screen.py          |  161 +--
+ utils/screens/reports_screen.py         |    4 +-
+ utils/screens/restock_history_screen.py |   11 +-
+ utils/screens/restock_screen.kv         |   26 +-
+ utils/screens/restock_screen.py         |  145 ++-
+ utils/screens/settings.py               |   86 +-
+ 47 files changed, 3793 insertions(+), 2114 deletions(-)

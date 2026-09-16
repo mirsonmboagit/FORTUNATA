@@ -25,3 +25,20 @@ class ReceiptSellerNameTests(TemporaryDatabaseTestCase):
 
         self.assertIn("Foste ajudado por:", receipt)
         self.assertIn("Maria Fernanda Mboa", receipt)
+
+
+    def test_receipt_has_one_reference_and_one_tax_breakdown(self):
+        for width in (58, 80):
+            text = format_receipt_text({
+                "receipt_code": "20260914100000", "total": 116,
+                "subtotal": 100, "vat_total": 16,
+                "vat_summary": [{"label": "IVA 16%", "vat_amount": 16, "gross_total": 116}],
+                "paid_amount": 120, "change_amount": 4,
+            }, paper_width_mm=width)
+            self.assertEqual(text.count("20260914100000"), 1)
+            self.assertIn("VD 20260914100000", text)
+            self.assertEqual(text.count("IVA"), 1)
+            self.assertNotIn("Ref.", text)
+            self.assertNotIn("CODIGO DO RECIBO", text)
+            self.assertIn("Troco", text)
+            self.assertLessEqual(max(map(len, text.splitlines())), 32 if width == 58 else 42)

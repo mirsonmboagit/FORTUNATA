@@ -108,7 +108,7 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
     lines.append(_center("RECIBO DE VENDA", width))
     receipt_code = _plain_text(receipt_data.get("receipt_code") or "")
     if receipt_code:
-        lines.append(_center(f"Ref. {receipt_code}", width))
+        lines.append(_center(f"VD {receipt_code}", width))
     lines.append(_line(width))
     lines.append(_left_right("Data", receipt_data.get("issued_at") or "", width))
     payment_label = _plain_text(receipt_data.get("payment_method_label") or "Venda a dinheiro")
@@ -125,28 +125,25 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
 
     lines.append(_line(width))
     lines.append(_left_right("Subtotal", _money(receipt_data.get("subtotal")), width))
-    lines.append(_left_right("IVA", _money(receipt_data.get("vat_total")), width))
-    if receipt_data.get("paid_amount") is not None:
-        lines.append(_left_right("Pago", _money(receipt_data.get("paid_amount")), width))
-    if receipt_data.get("change_amount") is not None:
-        lines.append(_left_right("Valor devolvido", _money(receipt_data.get("change_amount")), width))
+    vat_rows = receipt_data.get("vat_summary") or []
+    if not vat_rows:
+        lines.append(_left_right("IVA", _money(receipt_data.get("vat_total")), width))
     lines.append(_line(width, "="))
     lines.append(_left_right("TOTAL", _money(receipt_data.get("total")), width))
     lines.append(_line(width, "="))
 
+    if receipt_data.get("paid_amount") is not None:
+        lines.append(_left_right("Pago", _money(receipt_data.get("paid_amount")), width))
+    if receipt_data.get("change_amount") is not None:
+        lines.append(_left_right("Troco", _money(receipt_data.get("change_amount")), width))
+
     vat_rows = receipt_data.get("vat_summary") or []
     if vat_rows:
-        lines.append(_left_right("TAXA", "IVA / TOTAL", width))
+        lines.append(_left_right("TAXA", "IMPOSTO", width))
         for row in vat_rows:
             rate = _plain_text(row.get("label") or "IVA")
             vat_value = _money(row.get("vat_amount"))
-            gross_value = _money(row.get("gross_total"))
-            lines.append(_left_right(rate, f"{vat_value} / {gross_value}", width))
-        lines.append(_line(width))
-
-    if receipt_code:
-        lines.append(_center("CODIGO DO RECIBO", width))
-        lines.append(_center(receipt_code, width))
+            lines.append(_left_right(rate, vat_value, width))
         lines.append(_line(width))
 
     vat_note = _plain_text(receipt_data.get("vat_note") or "")

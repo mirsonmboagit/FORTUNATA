@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import os
 import sys
+from contextlib import nullcontext
 from threading import Thread
 from time import perf_counter
 
@@ -12,6 +13,9 @@ from kivy.factory import Factory
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.recycleview import RecycleView
+from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.recycleboxlayout import RecycleBoxLayout
 from kivy.uix.modalview import ModalView
 from kivy.properties import BooleanProperty, StringProperty
 from kivymd.uix.boxlayout import MDBoxLayout
@@ -281,16 +285,10 @@ class AdminLogsDialog:
         )
         content.add_widget(self.status_label)
 
-        scroll = ScrollView(do_scroll_x=False, bar_width=dp(4))
         self.logs_list = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(6),
-            size_hint_y=None,
-            padding=[0, 0, dp(4), dp(4)],
         )
-        self.logs_list.bind(minimum_height=self.logs_list.setter("height"))
-        scroll.add_widget(self.logs_list)
-        content.add_widget(scroll)
+        content.add_widget(self.logs_list)
 
         self.dialog = MDDialog(
             title="Logs recentes",
@@ -408,28 +406,20 @@ class AdminLogsDialog:
         self._render_logs_in_batches(list(logs), request_token)
 
     def _render_logs_in_batches(self, logs, request_token):
+        if request_token != self._request_token or self.dialog is None:
+            return
         tokens = self._tokens()
-        render_token = self._render_token
-        next_index = 0
-
-        def append_batch(_dt=0):
-            nonlocal next_index
-            if (
-                request_token != self._request_token
-                or render_token != self._render_token
-                or self.dialog is None
-            ):
-                return
-            end_index = min(next_index + 10, len(logs))
-            for row in logs[next_index:end_index]:
-                self.logs_list.add_widget(self._build_log_card(row, tokens))
-            next_index = end_index
-            if next_index < len(logs):
-                self._render_event = Clock.schedule_once(append_batch, 0)
-            else:
-                self._render_event = None
-
-        append_batch()
+        view = RecycleView(do_scroll_x=False, bar_width=dp(4))
+        layout = RecycleBoxLayout(
+            default_size=(None, dp(62)), default_size_hint=(1, None),
+            size_hint_y=None, orientation="vertical", spacing=dp(6),
+            padding=[0, 0, dp(4), dp(4)],
+        )
+        layout.bind(minimum_height=layout.setter("height"))
+        view.add_widget(layout)
+        view.viewclass = RecycledLogCard
+        view.data = [{"row": row, "tokens": tokens, "controller": self} for row in logs]
+        self.logs_list.add_widget(view)
 
     def _build_log_card(self, row, tokens):
         _log_id, username, role, action, details, timestamp = row
@@ -476,6 +466,31 @@ class AdminLogsDialog:
             shorten_from="right",
         ))
         return card
+
+
+class RecycledLogCard(RecycleDataViewBehavior, MDBoxLayout):
+    """Reutiliza o cartao e os tres labels ao percorrer o historico."""
+
+    def refresh_view_attrs(self, rv, index, data):
+        # Os dados sao aplicados explicitamente: nao sao propriedades Kivy.
+        row, tokens, controller = data["row"], data["tokens"], data["controller"]
+        if not self.children:
+            self.add_widget(controller._build_log_card(row, tokens))
+        else:
+            card = self.children[0]
+            header = card.children[1]
+            username, role, action, details, timestamp = row[1:]
+            action_text = controller._ACTION_LABELS.get(
+                str(action or "").upper(),
+                str(action or "Ação do sistema").replace("_", " ").capitalize(),
+            )
+            header.children[1].text = f"{username or 'Sistema'} ({controller._role_label(role)}) · {action_text}"
+            header.children[0].text = controller._format_timestamp(timestamp)
+            card.children[0].text = " ".join(controller._translate_details(details or role or "").split())[:180] or "Sem detalhes adicionais."
+            card.md_bg_color = tokens.get("card_alt", [0.95, 0.96, 0.98, 1])
+            header.children[1].text_color = tokens.get("text_primary", [0.15, 0.20, 0.30, 1])
+            for label in (header.children[0], card.children[0]):
+                label.text_color = tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])
 
 
 class AdminHomeScreen(MDScreen):
@@ -527,6 +542,7 @@ class AdminHomeScreen(MDScreen):
         self._last_shortcut_signature = None
         self._last_shortcut_at = 0.0
         self._intelligence = None
+        self._layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
         super().__init__(**kwargs)
 
     def _get_intelligence(self):
@@ -572,7 +588,7 @@ class AdminHomeScreen(MDScreen):
             self._chart_render_ev = None
 
     def on_size(self, *args):
-        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+        self._layout_trigger()
 
     def _chart_metric_options(self):
         return [
@@ -885,7 +901,7 @@ class AdminHomeScreen(MDScreen):
                 button.size_hint_x = None
                 button.width = default_width
 
-    def _update_responsive_layout(self):
+    def _update_responsive_layout(self, *_args):
         if not self.ids:
             return
         width = self.width or dp(1200)
@@ -1019,6 +1035,9 @@ class AdminHomeScreen(MDScreen):
     def _load_snapshot_async(self):
         token = self._snapshot_token + 1
         self._snapshot_token = token
+        period_days = self._chart_period_days
+        connection_factory = getattr(self.db, "background_connection", None)
+        connection = connection_factory() if callable(connection_factory) else nullcontext(self.db)
         self._snapshot_loading = True
         self._snapshot_error = None
         self._render_dashboard()
@@ -1027,7 +1046,8 @@ class AdminHomeScreen(MDScreen):
             payload = None
             error = None
             try:
-                payload = self.db.get_admin_home_snapshot(lookback_days=self._chart_period_days) or {}
+                with connection as db:
+                    payload = db.get_admin_home_snapshot(lookback_days=period_days) or {}
             except Exception as exc:
                 error = str(exc)
             if (payload is None or payload == {}) and error is None:
@@ -1035,18 +1055,22 @@ class AdminHomeScreen(MDScreen):
                 if callable(last_error_fn):
                     error = last_error_fn()
             Clock.schedule_once(
-                lambda dt, data=payload, err=error, tok=token: self._apply_snapshot(data, err, tok),
+                lambda dt, data=payload, err=error, tok=token: self._apply_snapshot(data, err, tok, period_days),
                 0,
             )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_snapshot(self, payload, error=None, token=None):
+    def _apply_snapshot(self, payload, error=None, token=None, period_days=None):
         if token is not None and token != self._snapshot_token:
             return
         self._snapshot_loading = False
+        if period_days is not None and period_days != self._chart_period_days:
+            if self.manager and self.manager.current == self.name:
+                self._ensure_snapshot_loaded(force=True)
+            return
         self._snapshot_loaded_at = perf_counter()
-        self._snapshot_period_days = self._chart_period_days
+        self._snapshot_period_days = period_days if period_days is not None else self._chart_period_days
         self._snapshot_error = str(error).strip() if error else None
         self._snapshot = payload or {}
         self._render_dashboard()
@@ -1113,11 +1137,6 @@ class AdminHomeScreen(MDScreen):
         self.home_title = f"{greeting}, {first_name}"
         self.home_subtitle = self._build_header_subtitle(snapshot)
 
-        backend_status = self._get_backend_status()
-        backend_notice = ""
-        if backend_status.get("label") == "Local":
-            backend_notice = "API offline, modo local"
-
         if self._snapshot_error:
             self.status_text = "Resumo indisponivel no momento."
         elif self._snapshot_loading and not snapshot:
@@ -1127,18 +1146,6 @@ class AdminHomeScreen(MDScreen):
             alerts = snapshot.get("alerts") or {}
             total_alerts = sum(int(value or 0) for value in (alerts.get("counts") or {}).values())
             self.status_text = f"Hoje: {_format_mzn(summary.get('revenue_today'))} | Alertas ativos: {total_alerts}"
-        if backend_notice:
-            self.status_text = f"{self.status_text} | {backend_notice}"
-
-    def _get_backend_status(self):
-        getter = getattr(self.db, "get_connection_status", None)
-        if not callable(getter):
-            return {}
-        try:
-            return getter(force=False) or {}
-        except Exception as exc:
-            return {"label": "Local", "message": str(exc)}
-
     def _build_header_subtitle(self, snapshot):
         if self._snapshot_error:
             return "Nao foi possivel atualizar os dados agora."
@@ -3007,6 +3014,12 @@ class AdminHomeScreen(MDScreen):
 
     def logout(self, *args):
         app = App.get_running_app()
+        setter = getattr(self.db, "set_active_user", None)
+        if callable(setter):
+            try:
+                setter(None, None)
+            except Exception:
+                pass
         if app:
             username = getattr(app, "current_user", None)
             app.current_user = None

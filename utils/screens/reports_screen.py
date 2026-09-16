@@ -24,7 +24,6 @@ from kivymd.uix.list import OneLineListItem
 from kivymd.uix.card import MDSeparator
 from kivymd.uix.pickers import MDDatePicker
 from AI.controller import ProactiveIntelligenceController
-import pandas as pd
 
 from datetime import datetime, timedelta
 from threading import Thread
@@ -1456,6 +1455,9 @@ class ReportsScreen(MDScreen):
             )
             if not rows:
                 return None
+            # Importar pandas apenas quando ha dados para o relatorio.
+            import pandas as pd
+
             df = pd.DataFrame(rows)
             if df.empty:
                 return None

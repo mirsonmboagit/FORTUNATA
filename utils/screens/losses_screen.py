@@ -14,7 +14,7 @@ from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
 from kivymd.uix.menu import MDDropdownMenu
 from kivy.properties import NumericProperty, ObjectProperty, StringProperty
-from database.provider import get_db, uses_remote_backend
+from database.provider import get_db
 from datetime import date, datetime
 from threading import Thread
 from time import perf_counter
@@ -184,6 +184,7 @@ class LossesScreen(MDScreen):
     PRODUCTS_CACHE_SECONDS = 5
     ENTER_REFRESH_DELAY_SECONDS = 0.08
     PRODUCT_RENDER_BATCH_SIZE = 20
+    PRODUCTS_PAGE_SIZE = 10
     SCANNER_AUTO_START_DELAY_SECONDS = 0.18
     DAMAGE_CAMERA_MAX_INDEX = 8
     
@@ -193,6 +194,8 @@ class LossesScreen(MDScreen):
         self.db = db or get_db()
         self.back_target = "admin_home"
         self.products = []
+        self._products_page_offset = 0
+        self._products_has_more = False
         self.selected_product = None
         self.loss_menu = None
         self.reason_menu = None
@@ -299,9 +302,13 @@ class LossesScreen(MDScreen):
             "loss_type_label": loss_type_label,
             "loss_type_code": loss_type_code,
         }
-        if self.products and not self._products_loading:
-            Clock.schedule_once(lambda dt: self._consume_pending_product_focus(), 0)
-            return
+        # Uma página pode não conter o produto do alerta. A pesquisa abaixo
+        # força uma consulta SQL por ID/código em vez de procurar apenas os 10
+        # itens visíveis.
+        search_text = str(query or product_id or "").strip()
+        self._pending_search = search_text
+        if "search_input" in self.ids:
+            self.ids.search_input.text = search_text
         self.load_products()
 
     def _cancel_scanner_auto_start(self):
@@ -762,20 +769,23 @@ class LossesScreen(MDScreen):
         self._products_load_token = token
         self._products_loading = True
 
+        offset = 0
+        query = str(self._pending_search or "").strip()
         def worker():
             try:
-                rows = self.db.get_products_for_losses() or []
+                getter = getattr(self.db, "get_products_for_losses_page", None)
+                payload = getter(query, self.PRODUCTS_PAGE_SIZE, offset) if callable(getter) else {"rows": [], "has_more": False}
             except Exception as e:
                 print(f"Erro ao carregar produtos: {e}")
-                rows = []
+                payload = {"rows": [], "has_more": False}
             Clock.schedule_once(
-                lambda dt, data=rows, tok=token: self._apply_loaded_products(data, tok),
+                lambda dt, data=payload, tok=token: self._apply_loaded_products(data, tok),
                 0,
             )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_loaded_products(self, rows, token):
+    def _apply_loaded_products(self, payload, token):
         if token != self._products_load_token:
             return
 
@@ -783,15 +793,14 @@ class LossesScreen(MDScreen):
         self._last_products_load_at = perf_counter()
         self.products = [
             normalized
-            for normalized in (self._normalize_product_row(row) for row in (rows or []))
+            for normalized in (self._normalize_product_row(row) for row in (payload or {}).get("rows", []))
             if normalized is not None
         ]
 
-        query = (self.ids.search_input.text if "search_input" in self.ids else self._pending_search).strip().lower()
-        if query:
-            self.show_products(self._filter_products(query))
-        else:
-            self.show_products(self.products)
+        self._products_page_offset = 0
+        self._products_has_more = bool((payload or {}).get("has_more"))
+        self.show_products(self.products)
+        self._sync_products_page_controls()
 
         self._consume_pending_product_focus()
 
@@ -838,7 +847,9 @@ class LossesScreen(MDScreen):
             if search_text and "search_input" in self.ids:
                 self._pending_search = search_text
                 self.ids.search_input.text = search_text
-                self.show_products(self._filter_products(search_text.lower()))
+                # A lista é paginada; recarrega do SQLite e mantém o pedido
+                # pendente para selecionar a linha quando chegar.
+                self.load_products()
             return False
 
         self._pending_product_focus = None
@@ -975,12 +986,41 @@ class LossesScreen(MDScreen):
 
     def _apply_search(self, dt):
         self._search_ev = None
-        query = (self._pending_search or "").strip().lower()
-        if not query:
-            self.show_products(self.products)
+        self.load_products()
+
+    def _load_products_page(self, offset):
+        if self._products_loading:
             return
-        filtered = self._filter_products(query)
-        self.show_products(filtered)
+        self._products_page_offset = max(0, int(offset))
+        token = self._products_load_token + 1
+        self._products_load_token = token
+        self._products_loading = True
+        query = str(self._pending_search or "").strip()
+        def worker():
+            payload = self.db.get_products_for_losses_page(query, self.PRODUCTS_PAGE_SIZE, self._products_page_offset)
+            Clock.schedule_once(lambda _dt: self._apply_products_page(payload, token), 0)
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_products_page(self, payload, token):
+        if token != self._products_load_token: return
+        self._products_loading = False
+        self.products = [p for p in (self._normalize_product_row(row) for row in payload.get("rows", [])) if p]
+        self._products_has_more = bool(payload.get("has_more"))
+        self.show_products(self.products)
+        self._sync_products_page_controls()
+
+    def previous_products_page(self):
+        self._load_products_page(self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
+
+    def next_products_page(self):
+        if self._products_has_more: self._load_products_page(self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
+
+    def _sync_products_page_controls(self):
+        if not self.ids: return
+        label = self.ids.get("losses_page_label")
+        if label: label.text = f"{self._products_page_offset + 1}-{self._products_page_offset + len(self.products)}"
+        if self.ids.get("losses_prev_btn"): self.ids.losses_prev_btn.disabled = self._products_page_offset <= 0
+        if self.ids.get("losses_next_btn"): self.ids.losses_next_btn.disabled = not self._products_has_more
 
     def _filter_products(self, query):
         filtered = []
@@ -997,50 +1037,12 @@ class LossesScreen(MDScreen):
         return filtered
 
     def on_search_enter(self):
-        """Quando usuário pressiona Enter na busca"""
-        query = self.ids.search_input.text.strip().lower()
-        if not query:
-            return
-
+        """Executa a pesquisa no banco, sem filtrar apenas a p?gina atual."""
         if self._search_ev:
             Clock.unschedule(self._search_ev)
             self._search_ev = None
-
-        filtered = self._filter_products(query)
-        self.show_products(filtered)
-        if len(filtered) == 1:
-            self.select_product(filtered[0])
-        elif len(filtered) > 1:
-            self.show_dialog("?? Busca", f"Encontrados {len(filtered)} produtos. Clique em um ou refine a busca.")
-        else:
-            self.show_dialog("?? Busca", "Nenhum produto encontrado.")
-        return
-        
-        # Buscar produtos filtrados
-        filtered = []
-        for p in self.products:
-            product = self._normalize_product_row(p)
-            if product is None:
-                continue
-            
-            pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = product
-            search_in_id = str(pid).lower()
-            search_in_name = (name or "").lower()
-            search_in_barcode = str(barcode).lower() if barcode else ""
-            
-            if (query in search_in_id or 
-                query in search_in_name or 
-                query in search_in_barcode):
-                filtered.append(product)
-        
-        # Se encontrou exatamente 1, selecionar automaticamente
-        if len(filtered) == 1:
-            self.select_product(filtered[0])
-        elif len(filtered) > 1:
-            # Se encontrou vários, mostrar mensagem
-            self.show_dialog("🔍 Busca", f"Encontrados {len(filtered)} produtos. Clique em um ou refine a busca.")
-        else:
-            self.show_dialog("🔍 Busca", "Nenhum produto encontrado.")
+        self._pending_search = self.ids.search_input.text.strip()
+        self.load_products()
 
     def find_product_by_barcode(self, barcode):
         """Busca produto pelo código de barras"""
@@ -1065,7 +1067,9 @@ class LossesScreen(MDScreen):
         self.ids.selected_unit.text = f"Unidade: {unit}"
         self.ids.selected_price.text = f"Preço: {price:.2f} MZN"
         
-        # Configurar input de quantidade
+        # Configurar input de quantidade. Uma perda por validade remove todo o
+        # stock: o valor definitivo e aplicado por set_loss_type abaixo.
+        self.ids.qty_input.disabled = False
         self.ids.qty_input.text = "1"
         self.ids.qty_input.input_filter = "float" if is_weight else "int"
         
@@ -1116,6 +1120,15 @@ class LossesScreen(MDScreen):
         """Define o tipo e preenche automaticamente o motivo de validade."""
         self.selected_loss_type = code
         self.ids.loss_type_btn.text = label
+        qty_input = self.ids.qty_input
+        if code == "EXPIRED" and self.selected_product:
+            stock = max(0.0, float(self.selected_product[2] or 0))
+            is_weight = bool(self.selected_product[6])
+            qty_input.input_filter = "float" if is_weight else "int"
+            qty_input.text = str(stock) if is_weight else str(int(stock))
+            qty_input.disabled = True
+        else:
+            qty_input.disabled = False
         self.selected_loss_reason = EXPIRY_LOSS_REASON if code == "EXPIRED" else ""
         self.ids.reason_spinner_btn.text = (
             f"Motivo: {EXPIRY_LOSS_REASON} (automatico)"
@@ -1123,6 +1136,7 @@ class LossesScreen(MDScreen):
             else "Selecionar motivo"
         )
         self._update_damage_evidence_visibility()
+        self.update_summary()
         if self.current_step == 2:
             self._show_card(self.ids.loss_form_card, self._loss_form_target_height())
         
@@ -1398,10 +1412,6 @@ class LossesScreen(MDScreen):
         )
         self.start_damage_camera()
 
-    def _uses_remote_evidence_service(self):
-        module_name = str(getattr(self.db.__class__, "__module__", ""))
-        return module_name.startswith("database.client") or uses_remote_backend(self.db)
-
     def _attach_captured_damage_image(self, source_path):
         """Prepara e anexa apenas uma foto produzida pela camera desta sessao."""
         if self.selected_loss_type != "DAMAGE" or self._damage_analysis_in_progress:
@@ -1430,13 +1440,7 @@ class LossesScreen(MDScreen):
 
         def worker():
             try:
-                if self._uses_remote_evidence_service():
-                    result = self.db.upload_damage_evidence(str(captured_path))
-                    if result is None:
-                        error = getattr(self.db, "last_error", lambda: "")()
-                        raise DamageEvidenceError(error or "Nao foi possivel contactar o servidor para anexar a foto.")
-                else:
-                    result = create_local_damage_evidence(self.db, captured_path, created_by=user)
+                result = create_local_damage_evidence(self.db, captured_path, created_by=user)
                 return {"ok": True, "result": result}
             except DamageEvidenceError as exc:
                 return {"ok": False, "message": str(exc)}
@@ -1492,7 +1496,9 @@ class LossesScreen(MDScreen):
         self.ids.revenue_label.text = f"{total_revenue:.2f} MZN"
 
     def get_qty(self):
-        """Pega quantidade digitada"""
+        """Usa todo o stock para validade e a quantidade digitada nos outros tipos."""
+        if self.selected_loss_type == "EXPIRED" and self.selected_product:
+            return float(self.selected_product[2] or 0)
         try:
             text = self.ids.qty_input.text.strip()
             if not text:
@@ -1528,12 +1534,14 @@ class LossesScreen(MDScreen):
             self.show_dialog("Erro", "Selecione o tipo de perda")
             return
 
+        pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = self.selected_product
+
+        # Expirado significa retirar integralmente o lote seleccionado. Nao
+        # depende do estado visual do campo para preservar essa regra.
         qty = self.get_qty()
         if not qty or qty <= 0:
             self.show_dialog("Erro", "Quantidade invalida ou vazia")
             return
-
-        pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = self.selected_product
 
         # Validar quantidade inteira para unidades
         if not is_weight and not float(qty).is_integer():
@@ -1680,6 +1688,7 @@ class LossesScreen(MDScreen):
         self.selected_loss_type = ""
         self.selected_loss_reason = ""
         self.ids.loss_type_btn.text = "Selecionar Tipo"
+        self.ids.qty_input.disabled = False
         self.ids.qty_input.text = ""
         self.ids.reason_spinner_btn.text = "Selecionar motivo"
         self.ids.note_input.text = ""

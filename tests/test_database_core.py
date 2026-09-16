@@ -62,6 +62,74 @@ class DatabaseSetupAndUserTests(TemporaryDatabaseTestCase):
 
 
 class DatabaseProductAndSaleTests(TemporaryDatabaseTestCase):
+    def test_admin_business_rules_control_product_margin_at_persistence(self):
+        saved = self.db.update_product_business_rules(
+            {
+                "default_profit_margin_percent": 35,
+                "minimum_profit_margin_percent": 25,
+                "enforce_minimum_margin": True,
+                "allow_negative_margin": False,
+            },
+        )
+        self.assertEqual(saved["default_profit_margin_percent"], 35.0)
+        self.assertEqual(self.db.get_product_business_rules()["minimum_profit_margin_percent"], 25.0)
+
+        # A validacao acontece na base de dados, mesmo sem usar o formulario.
+        rejected = self.quiet(
+            self.db.add_product,
+            "Margem insuficiente", "Mercearia", 1, 0, 99, 80, 80,
+        )
+        self.assertIsNone(rejected)
+        accepted = self.quiet(
+            self.db.add_product,
+            "Margem correta", "Mercearia", 1, 0, 100, 80, 80,
+        )
+        self.assertIsNotNone(accepted)
+
+    def test_manager_cannot_change_business_rules(self):
+        self.db.set_active_user("maria", "manager")
+        with self.assertRaises(PermissionError):
+            self.db.update_product_business_rules({"default_profit_margin_percent": 20})
+
+    def test_admin_can_define_custom_product_inputs_and_values_are_persisted(self):
+        brand = self.db.create_product_custom_field("Marca", required=True)
+        weight = self.db.create_product_custom_field("Peso liquido", field_type="NUMBER")
+        product_id = self.quiet(
+            self.db.add_product,
+            "Sumo", "Bebidas", 3, 0, 120, 270, 90,
+            custom_fields={str(brand["id"]): "Empresa X", str(weight["id"]): "1.5"},
+        )
+        self.assertIsNotNone(product_id)
+        values = self.db.get_product_custom_field_values(product_id)
+        self.assertEqual(values[str(brand["id"])], "Empresa X")
+        self.assertEqual(values[str(weight["id"])], "1.5")
+        self.assertTrue(self.db.delete_product_custom_field(brand["id"]))
+        self.assertEqual(self.db.list_product_custom_fields(), [weight])
+
+    def test_old_sales_are_archived_and_remain_in_history(self):
+        product_id = self.add_sample_product(stock=3, sale_price=100)
+        sale_id = self.quiet(self.db.add_sale, product_id, 1, 100, username="maria")
+        old_date = (datetime.now() - timedelta(days=370)).strftime("%Y-%m-%d %H:%M:%S")
+        self.db.cursor.execute("UPDATE sales SET sale_date = ? WHERE id = ?", (old_date, sale_id))
+        self.db.conn.commit()
+
+        moved = self.db.archive_sales_older_than(days=365)
+
+        self.assertEqual(moved, 1)
+        self.assertEqual(self.fetch_scalar("SELECT COUNT(*) FROM sales WHERE id = ?", (sale_id,)), 0)
+        self.assertEqual(
+            self.db.conn.execute(
+                "SELECT COUNT(*) FROM sales_archive.sales WHERE id = ?", (sale_id,)
+            ).fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            self.db.conn.execute(
+                "SELECT COUNT(*) FROM sales_history WHERE id = ?", (sale_id,)
+            ).fetchone()[0],
+            1,
+        )
+
     def test_delete_product_with_history_archives_it_and_keeps_history(self):
         product_id = self.add_sample_product(description="Produto com histórico", stock=4)
         sale_id = self.quiet(

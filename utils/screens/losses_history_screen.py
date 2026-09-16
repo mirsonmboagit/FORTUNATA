@@ -3,6 +3,7 @@ from collections import deque
 from pathlib import Path
 from threading import Thread
 from time import perf_counter
+from contextlib import nullcontext
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -15,7 +16,7 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from database.provider import get_db, uses_remote_backend
+from database.provider import get_db
 from utils.screens.reports_screen import DateRangeDialog
 from utils.config.paths import resolve_path, temp_path
 from kivy.uix.image import Image
@@ -59,6 +60,7 @@ class LossesHistoryScreen(MDScreen):
         self._exporting_pdf = False
         self.back_target = "losses"
         super().__init__(**kwargs)
+        self._layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
 
     def _ensure_loss_report(self):
         if self.loss_report is None:
@@ -79,7 +81,7 @@ class LossesHistoryScreen(MDScreen):
         self._update_responsive_layout()
 
     def on_size(self, *args):
-        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+        self._layout_trigger()
 
     def request_enter_refresh(self, force=False, delay=0.05):
         stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
@@ -99,7 +101,7 @@ class LossesHistoryScreen(MDScreen):
         widget.disabled = not visible
         widget.size_hint_x = size_hint_x
 
-    def _update_responsive_layout(self):
+    def _update_responsive_layout(self, *_args):
         if not hasattr(self, "ids") or "header_date" not in self.ids:
             return
         width = self.width or dp(1200)
@@ -142,10 +144,13 @@ class LossesHistoryScreen(MDScreen):
 
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
+        connection_factory = getattr(self.db, "background_connection", None)
+        connection = connection_factory() if callable(connection_factory) else nullcontext(self.db)
 
         def worker():
             try:
-                rows = self.db.get_loss_history_items(start_dt, end_dt, limit=300) or []
+                with connection as db:
+                    rows = db.get_loss_history_items(start_dt, end_dt, limit=300) or []
             except Exception as exc:
                 print(f"Erro ao carregar perdas: {exc}")
                 rows = []
@@ -441,10 +446,6 @@ class LossesHistoryScreen(MDScreen):
         container.add_widget(Widget(size_hint_y=None, height=dp(1)))
         return container
 
-    def _uses_remote_evidence_service(self):
-        module_name = str(getattr(self.db.__class__, "__module__", ""))
-        return module_name.startswith("database.client") or uses_remote_backend(self.db)
-
     def open_damage_evidence(self, row):
         """Abre a foto anexada sem expor caminhos privados no historico."""
         evidence_id = (row or {}).get("evidence_id") if isinstance(row, dict) else None
@@ -457,14 +458,9 @@ class LossesHistoryScreen(MDScreen):
                 evidence = self.db.get_damage_evidence(evidence_id)
                 if not evidence:
                     return {"ok": False, "message": "Evidencia nao encontrada ou sem permissao."}
-                if self._uses_remote_evidence_service():
-                    image = self.db.download_damage_evidence(evidence_id)
-                    data = (image or {}).get("data")
-                    mime_type = (image or {}).get("mime_type") or evidence.get("mime_type")
-                else:
-                    relative_path = self.db.get_damage_evidence_storage_path(evidence_id)
-                    data = resolve_path(relative_path).read_bytes() if relative_path else b""
-                    mime_type = evidence.get("mime_type")
+                relative_path = self.db.get_damage_evidence_storage_path(evidence_id)
+                data = resolve_path(relative_path).read_bytes() if relative_path else b""
+                mime_type = evidence.get("mime_type")
                 if not data:
                     return {"ok": False, "message": "A imagem da evidencia ja nao esta disponivel."}
                 suffix = {"image/png": ".png", "image/webp": ".webp"}.get(str(mime_type), ".jpg")

@@ -207,6 +207,22 @@ def _send_message(recipient, subject, body):
     return True
 
 
+def send_system_email(recipient, subject, body):
+    """Envia uma mensagem transacional pela configuracao SMTP desta instalacao.
+
+    O chamador nunca recebe nem manipula a palavra-passe SMTP. Esta funcao e
+    usada, por exemplo, para um pedido de licenca sair automaticamente da
+    instalacao do cliente, da mesma forma que a recuperacao de senha.
+    """
+    safe_subject = str(subject or "").replace("\r", " ").replace("\n", " ").strip()
+    safe_body = str(body or "")
+    if not safe_subject:
+        raise EmailDeliveryError("O assunto do e-mail e obrigatorio.")
+    if not safe_body:
+        raise EmailDeliveryError("O conteudo do e-mail e obrigatorio.")
+    return _send_message(recipient, safe_subject, safe_body)
+
+
 def send_email_verification_code(email, username, code):
     """Envia o codigo que confirma o e-mail cadastrado."""
     body = (

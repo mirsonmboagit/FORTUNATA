@@ -48,14 +48,13 @@ for cache_file in (ROOT / "data" / "cache").glob("*") if (ROOT / "data" / "cache
 for config_file in (
     "VERSION",
     "config/app.json",
-    "config/api.json",
     "config/app_settings.json",
-    "config/service.json",
+    "config/license.json",
     "config/.env.example",
 ):
     _add_file(datas, config_file)
 
-for folder in ("user", "utils", "manager"):
+for folder in ("admin", "user", "utils", "manager"):
     for kv_file in (ROOT / folder).glob("*.kv") if (ROOT / folder).exists() else []:
         datas.append((str(kv_file), folder))
 
@@ -74,7 +73,6 @@ hiddenimports = [
     "bcrypt",
     "cv2",
     "fitz",
-    "flask",
     "kivy_deps.angle",
     "kivy_deps.glew",
     "kivy_deps.sdl2",
@@ -94,6 +92,8 @@ hiddenimports = [
     "reportlab.graphics.barcode.code128",
     "reportlab.graphics.barcode.qr",
     "requests",
+    "cryptography",
+    "win32crypt",
 ]
 
 for package in ("kivymd", "kivy_garden"):
@@ -103,6 +103,7 @@ for package in ("kivymd", "kivy_garden"):
         pass
 
 hiddenimports += _local_modules(
+    "admin",
     "user",
     "utils",
     "manager",
@@ -110,9 +111,8 @@ hiddenimports += _local_modules(
     "AI",
     "api",
     "database",
+    "licensing",
     "pdfs",
-    "server",
-    "waitress",
 )
 
 hiddenimports = sorted(set(hiddenimports))

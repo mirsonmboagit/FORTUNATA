@@ -118,6 +118,18 @@
                         font_size: sp(15)
 
                     AdminActionButton:
+                        id: archived_btn
+                        text: "Arquivados"
+                        icon: "archive-arrow-up-outline"
+                        tooltip_text: "Consultar e restaurar produtos arquivados"
+                        md_bg_color: app.theme_tokens['primary']
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+                        size_hint_x: 0.13
+                        on_release: root.open_archived_products()
+                        font_size: sp(15)
+
+                    AdminActionButton:
                         id: shopping_list_btn
                         text: "Sugestões de Compras"
                         icon: "cart-outline"

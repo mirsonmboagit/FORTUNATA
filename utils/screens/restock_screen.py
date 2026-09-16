@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Thread
 from time import perf_counter
 
 from kivy.app import App
@@ -34,10 +35,12 @@ class StockProductRow(ButtonBehavior, MDBoxLayout):
 
 
 class RestockScreen(MDScreen):
+    PRODUCTS_PAGE_SIZE = 10
     REFRESH_SECONDS = 5
     ENTER_REFRESH_DELAY_SECONDS = 0.14
     PRODUCTS_RENDER_BATCH_SIZE = 16
     MOVEMENTS_RENDER_BATCH_SIZE = 60
+    MOVEMENTS_PAGE_SIZE = 10
     LOW_STOCK_THRESHOLD = 5
     PRODUCT_COL_HINTS = [0.08, 0.24, 0.11, 0.09, 0.09, 0.13, 0.14, 0.12]
     MOVEMENT_COL_HINTS = [0.12, 0.12, 0.10, 0.10, 0.16, 0.10, 0.10, 0.10, 0.10]  # última coluna: ações
@@ -71,6 +74,8 @@ class RestockScreen(MDScreen):
         self.db = db or get_db()
         self.back_target = "admin_home"
         self.products = []
+        self._products_page_offset = 0
+        self._products_has_more = False
         self.movements = []
         self.selected_product = None
         self.current_mode = "IN"
@@ -950,6 +955,68 @@ class RestockScreen(MDScreen):
             rows = [self._normalize_product_row(r) for r in rows]
         return rows
 
+    def _request_products_page(self, reset=True, search_text="", offset=None):
+        if self._products_loading:
+            return False
+        if offset is None:
+            offset = 0 if reset else self._products_page_offset
+        token = self._products_load_token + 1
+        self._products_load_token = token
+        self._products_loading = True
+        query = str(search_text or "").strip()
+
+        def worker():
+            try:
+                getter = getattr(self.db, "get_products_for_stock_control_page", None)
+                payload = getter(query, self.PRODUCTS_PAGE_SIZE, offset) if callable(getter) else {"rows": [], "has_more": False}
+            except Exception:
+                payload = {"rows": [], "has_more": False}
+            Clock.schedule_once(lambda _dt: self._apply_products_page(payload, token, offset), 0)
+
+        Thread(target=worker, daemon=True).start()
+        return True
+
+    def _apply_products_page(self, payload, token, offset):
+        if token != self._products_load_token:
+            return
+        self._products_loading = False
+        self.products = [self._normalize_product_row(row) for row in (payload or {}).get("rows", [])]
+        self.products = [row for row in self.products if row is not None]
+        self._products_page_offset = offset
+        self._products_has_more = bool((payload or {}).get("has_more"))
+        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
+        self._last_products_loaded_at = perf_counter()
+        self._show_products(self.products)
+        self._sync_product_page_controls()
+        callbacks = list(self._product_load_callbacks)
+        self._product_load_callbacks.clear()
+        for callback in callbacks:
+            try:
+                callback(list(self.products))
+            except Exception:
+                pass
+
+    def next_products_page(self):
+        if self._products_has_more:
+            self._request_products_page(False, self._pending_search, self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
+
+    def previous_products_page(self):
+        if self._products_page_offset:
+            self._request_products_page(False, self._pending_search, max(0, self._products_page_offset - self.PRODUCTS_PAGE_SIZE))
+
+    def _sync_product_page_controls(self):
+        if not self.ids:
+            return
+        label = self.ids.get("products_page_label")
+        if label is not None:
+            start = self._products_page_offset + 1 if self.products else 0
+            end = self._products_page_offset + len(self.products)
+            label.text = f"{start}-{end}" if self.products else "0 produtos"
+        prev = self.ids.get("products_prev_btn")
+        nxt = self.ids.get("products_next_btn")
+        if prev is not None: prev.disabled = self._products_loading or self._products_page_offset <= 0
+        if nxt is not None: nxt.disabled = self._products_loading or not self._products_has_more
+
     def _fetch_movements_for_restock(self, limit=200):
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
@@ -971,20 +1038,8 @@ class RestockScreen(MDScreen):
         return rows
 
     def load_products(self):
-        rows = self._fetch_products_for_restock()
-        self.products = rows
-        self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
-        self._last_products_loaded_at = perf_counter()
-        self._apply_search_now()
-        # Drain any queued callbacks
-        callbacks = list(self._product_load_callbacks)
-        self._product_load_callbacks.clear()
-        for cb in callbacks:
-            try:
-                cb(list(rows))
-            except Exception:
-                pass
-        return rows
+        self._request_products_page(True, self._pending_search)
+        return self.products
 
     def load_movements(self, limit=200, update_table=True):
         rows = self._fetch_movements_for_restock(limit=limit)
@@ -1078,11 +1133,8 @@ class RestockScreen(MDScreen):
 
     def _apply_search_now(self):
         self._search_ev = None
-        query = (self._pending_search or self.ids.search_input.text if "search_input" in self.ids else "").strip().lower()
-        if not query:
-            self._show_products(self.products)
-            return
-        self._show_products(self._filter_products(query))
+        query = (self._pending_search or self.ids.search_input.text if "search_input" in self.ids else "").strip()
+        self._request_products_page(True, query)
 
     def _filter_products(self, query):
         normalized_query = str(query or "").strip().lower()
@@ -1245,12 +1297,15 @@ class RestockScreen(MDScreen):
         pid, name, stock, _price, _cost, _barcode, is_weight, _exp, _status, _avg, _days, _last_update = (
             self._unpack_product(self.selected_product)
         )
-        unit = "KG" if is_weight else "UN"
+        produce = self.db.get_produce_settings(pid) or {}
+        is_sacks = produce.get("stock_mode") == "SACKS"
+        unit = "SACO" if is_sacks else ("KG" if is_weight else "UN")
+        self.ids.qty_input.hint_text = "Quantidade de sacos" if is_sacks else "Quantidade"
         stock_text = f"{self._to_float(stock):.2f}" if is_weight else str(int(self._to_float(stock)))
         expiry_text = self._format_expiry_input(_exp) or "sem validade"
         self.ids.selected_product_label.text = f"Produto: {name or '--'} (ID {pid}) | Validade base: {expiry_text}"
         self.ids.selected_stock_label.text = f"Stock atual: {stock_text} {unit}"
-        current_price = self._to_float(_price)
+        current_price = self._to_float(_cost if is_sacks else _price)
         if current_price <= 0:
             current_price = self._to_float(_cost)
         self.ids.unit_cost_input.text = f"{current_price:.2f}" if current_price > 0 else ""
@@ -1373,6 +1428,11 @@ class RestockScreen(MDScreen):
         self._movements_modal_rows = list(rows or [])
         self._movements_modal_title = title
         self._movements_filter_key = ""
+        self._movements_page_index = 0
+        self._movements_page_index = 0
+        self._movements_prev_btn = None
+        self._movements_next_btn = None
+        self._movements_page_label = None
         tokens = self._theme_tokens()
 
         content = MDBoxLayout(
@@ -1489,6 +1549,15 @@ class RestockScreen(MDScreen):
         self._movements_table_container = body
         content.add_widget(body_scroll)
 
+        pager = MDBoxLayout(size_hint_y=None, height=dp(36), spacing=dp(8))
+        self._movements_prev_btn = MDFlatButton(text="ANTERIOR", on_release=lambda *_: self._change_movements_page(-1))
+        self._movements_page_label = MDLabel(text="0 movimentos", halign="center", theme_text_color="Secondary")
+        self._movements_next_btn = MDFlatButton(text="PRÓXIMO", on_release=lambda *_: self._change_movements_page(1))
+        pager.add_widget(self._movements_prev_btn)
+        pager.add_widget(self._movements_page_label)
+        pager.add_widget(self._movements_next_btn)
+        content.add_widget(pager)
+
         self._refresh_movements_modal_table()
 
         dialog = MDDialog(
@@ -1516,7 +1585,12 @@ class RestockScreen(MDScreen):
     def _set_movements_filter(self, filter_key, filter_label):
         # ── Step 1: visual feedback is INSTANT (same frame) ──────────────
         self._movements_filter_key = filter_key
+        self._movements_page_index = 0
         self._update_filter_btn_styles()
+
+        self._movements_row_cache = []
+        self._refresh_movements_modal_table()
+        return
 
         # ── Step 2: if rows already built → just toggle visibility ───────
         if self._movements_row_cache:
@@ -1586,7 +1660,13 @@ class RestockScreen(MDScreen):
 
         # Render first batch immediately so rows appear fast,
         # then continue in subsequent frames for the rest
-        self._movements_render_rows = list(self._movements_modal_rows)
+        filtered_rows = [
+            row for row in self._movements_modal_rows
+            if self._movement_matches_filter(row[5] if len(row) > 5 else "", row[6] if len(row) > 6 else "")
+        ]
+        start = self._movements_page_index * self.MOVEMENTS_PAGE_SIZE
+        self._movements_render_rows = filtered_rows[start:start + self.MOVEMENTS_PAGE_SIZE]
+        self._sync_movements_pager(len(filtered_rows))
         self._movements_render_index = 0
         self._render_next_movements_batch(0)   # first batch now
         if self._movements_render_index < len(self._movements_render_rows):
@@ -1831,6 +1911,27 @@ class RestockScreen(MDScreen):
                 height=dp(40),
                 padding=[dp(2), dp(5)],
             )
+
+    def _change_movements_page(self, delta):
+        filtered_count = sum(
+            1 for row in self._movements_modal_rows
+            if self._movement_matches_filter(row[5] if len(row) > 5 else "", row[6] if len(row) > 6 else "")
+        )
+        next_page = self._movements_page_index + int(delta)
+        if 0 <= next_page * self.MOVEMENTS_PAGE_SIZE < filtered_count:
+            self._movements_page_index = next_page
+            self._movements_row_cache = []
+            self._refresh_movements_modal_table()
+
+    def _sync_movements_pager(self, total):
+        start = self._movements_page_index * self.MOVEMENTS_PAGE_SIZE + 1 if total else 0
+        end = min(total, start + self.MOVEMENTS_PAGE_SIZE - 1) if total else 0
+        if self._movements_page_label:
+            self._movements_page_label.text = f"{start}-{end} de {total}" if total else "0 movimentos"
+        if self._movements_prev_btn:
+            self._movements_prev_btn.disabled = self._movements_page_index <= 0
+        if self._movements_next_btn:
+            self._movements_next_btn.disabled = end >= total
             del_btn = MDRaisedButton(
                 text="ELIMINAR",
                 md_bg_color=[0.75, 0.1, 0.1, 1],

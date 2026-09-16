@@ -226,7 +226,7 @@ class ConfigAndPathTests(ProjectTestCase):
         self.assertEqual(app["health_timeout"], 10.0)
         self.assertEqual(app["availability_ttl"], 0.2)
         self.assertEqual(app["http_pool_size"], 128)
-        self.assertEqual(app["db_mode"], "hybrid")
+        self.assertEqual(app["db_mode"], "local")
         self.assertEqual(app["api_base_url"], "http://127.0.0.1:65535")
 
     def test_runtime_api_key_is_generated_only_for_insecure_config(self):
@@ -235,7 +235,7 @@ class ConfigAndPathTests(ProjectTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
             with mock.patch.object(app_config, "ENV_FILE", env_file), mock.patch.dict(os.environ, {"API_KEY": ""}, clear=False):
-                app_config._ensure_runtime_api_key({"api_key": ""})
+                app_config._ensure_runtime_api_key({"db_mode": "hybrid", "api_key": ""})
                 self.assertTrue(os.environ.get("API_KEY"))
 
             self.assertTrue(env_file.exists())

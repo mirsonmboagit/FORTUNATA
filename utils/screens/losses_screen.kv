@@ -18,7 +18,7 @@
             ScrollView:
                 id: losses_scroll
                 do_scroll_x: False
-                do_scroll_y: True
+                do_scroll_y: False
 
                 MDBoxLayout:
                     id: content_column
@@ -199,6 +199,27 @@
                                 padding: 0
                                 spacing: dp(2)
 
+                        MDBoxLayout:
+                            size_hint_y: None
+                            height: dp(36)
+                            spacing: dp(8)
+
+                            MDFlatButton:
+                                id: losses_prev_btn
+                                text: "ANTERIOR"
+                                on_release: root.previous_products_page()
+
+                            MDLabel:
+                                id: losses_page_label
+                                text: "0 produtos"
+                                halign: "center"
+                                theme_text_color: "Secondary"
+
+                            MDFlatButton:
+                                id: losses_next_btn
+                                text: "PRÓXIMO"
+                                on_release: root.next_products_page()
+
                     MDCard:
                         id: loss_form_card
                         orientation: "vertical"
@@ -237,7 +258,7 @@
 
                             MDTextField:
                                 id: qty_input
-                                hint_text: "Qtd"
+                                hint_text: "Stock total (automatico)" if root.selected_loss_type == "EXPIRED" else "Qtd"
                                 input_filter: "int"
                                 mode: "rectangle"
                                 font_size: dp(16)

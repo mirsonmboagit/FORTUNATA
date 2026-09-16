@@ -2,13 +2,14 @@
 
 Versao atual: `1.0.0`.
 
-Sistema de gestao para mercearia/pequeno comercio, com aplicacoes separadas para administrador e gerente, API local, base de dados SQLite, relatorios PDF, controlo de stock, perdas, reposicao, validade, scanner e apoio por IA.
+Sistema de gestao para mercearia/pequeno comercio, com uma aplicacao desktop, uma unica tela de login e base de dados SQLite partilhada. O perfil autenticado abre o painel de administrador ou de gerente, mantendo as respetivas permissoes.
 
 ## Aplicacoes
 
-- `admin_app.py`: aplicacao do administrador. Gere produtos, stock, relatorios, configuracoes, utilizadores e visao geral do negocio.
-- `manager_app.py`: aplicacao do gerente/caixa. Focada em vendas, historico e operacao diaria.
-- `api_server_app.py`: servidor local da API, usado quando o sistema esta em modo remoto/hibrido.
+- `admin_app.py`: ponto de entrada do aplicativo desktop unico.
+- `manager_app.py` e `MERCEARIA.py`: atalhos de compatibilidade; abrem o mesmo aplicativo e o mesmo login.
+- `licensing/`: licenca offline assinada e ligada ao computador, validada antes do login.
+- `scripts/superadmin_terminal.py`: terminal local para o proprietario emitir e renovar licencas.
 
 ## Requisitos
 
@@ -45,40 +46,63 @@ scripts de build executam esta verificacao automaticamente.
 
 ## Execucao
 
-Administrador:
+Aplicativo desktop:
 
 ```powershell
 python admin_app.py
 ```
 
-Gerente:
-
-```powershell
-python manager_app.py
-```
-
-API local:
-
-```powershell
-python api_server_app.py
-```
-
-Por padrao, a API usa `config/api.json` e a aplicacao usa `config/app.json`.
+Use as credenciais de administrador ou gerente na mesma tela. O sistema abre automaticamente o painel permitido para essa conta.
 
 ## Configuracao
 
 Arquivos principais:
 
-- `config/app.json`: modo da base, URL da API, tempos limite e diretorios de runtime.
-- `config/api.json`: host, porta e runner da API local.
-- `config/service.json`: parametros do servico Windows.
+- `config/app.json`: caminho da base SQLite e diretorios de runtime.
 - `config/app_settings.json`: preferencias do sistema, tema, idioma, recibos e scanner.
-- `config/.env`: segredos locais, como `API_KEY` e as credenciais SMTP.
+- `config/license.json`: ativa o modo de licenca offline assinada.
+- `config/.env`: segredos locais, como as credenciais SMTP.
 - `config/.env.example`: modelo seguro com as variaveis que podem ser configuradas.
 
 Nunca versionar `.env`, bases reais, recibos, relatorios gerados, logs ou builds.
 
-### Envio de codigos por e-mail
+### Superadmin e licencas offline
+
+Nao existe servidor, site, API de licencas ou painel web. O superadmin trabalha
+somente no computador do proprietario pelo terminal local:
+
+```powershell
+python .\scripts\superadmin_terminal.py
+```
+
+Tambem existe o atalho `scripts\\abrir_superadmin_local.cmd` para abrir o
+terminal por duplo clique.
+
+Na primeira execucao, o terminal reaproveita de forma segura a credencial local
+existente, quando houver, e cria uma chave privada protegida pelo Windows. A
+chave privada nunca vai para o computador do cliente. O terminal configura um
+unico e-mail privado do proprietario e envia a licenca assinada apenas para
+esse endereco.
+
+Na primeira utilizacao, o cliente clica em **PEDIR LICENCA**: o pedido sai pelo
+mesmo SMTP usado na recuperacao de senha e chega ao Gmail privado configurado
+pelo proprietario. Um emissor local nesse computador cria e envia a licenca
+assinada automaticamente para esse mesmo e-mail; nao existe servidor, site nem
+API. O pedido e unico por computador e o cliente nao precisa ver nem copiar o
+seu codigo tecnico. Sem SMTP no computador do cliente, o programa abre um
+e-mail preenchido como alternativa segura. O login so e liberado depois de
+validar localmente a assinatura, o computador e a validade da licenca.
+
+Veja o fluxo completo em [Superadmin offline](docs/SUPERADMIN_OFFLINE.md).
+Depois de configurar o terminal pela primeira vez, feche e abra o aplicativo
+desktop. Antes de distribuir uma nova versao aos clientes, gere novamente o
+instalador para incluir a chave publica do emissor.
+
+O APK antigo do gerente fica bloqueado em Android enquanto nao receber um
+cofre seguro e o mesmo protocolo de licenca. Isto evita que ele seja um caminho
+alternativo sem o controlo do superadmin.
+
+### Recuperacao de palavra-passe por e-mail
 
 Copie `config/.env.example` para `config/.env` e configure o servidor SMTP:
 
@@ -93,9 +117,14 @@ SMTP_USE_TLS=true
 SMTP_USE_SSL=false
 ```
 
-O computador que executa a API precisa de acesso a Internet. O sistema envia
-os codigos apenas para o e-mail guardado no cadastro; a tela de recuperacao
-nunca permite escolher outro destinatario.
+O sistema envia os codigos de recuperacao apenas para o e-mail guardado no
+cadastro; a tela de recuperacao nunca permite escolher outro destinatario.
+
+Para emitir licencas, o terminal do superadmin pede a conta Gmail e a palavra-
+passe de aplicacao uma unica vez na opcao de emissao automatica. Ela fica no
+cofre DPAPI do computador do proprietario, nunca no projeto distribuido nem no
+computador do cliente. Execute `scripts\\iniciar_emissor_automatico.cmd` para
+manter o emissor local a verificar os pedidos recebidos.
 
 ## Testes
 
@@ -103,15 +132,14 @@ nunca permite escolher outro destinatario.
 python -m unittest discover
 ```
 
-Os testes atuais cobrem partes importantes da base de dados, API, configuracao, IA e servicos. Antes de novas funcionalidades grandes, vale adicionar testes de fluxo completo para venda, reposicao, perda, relatorio e recibo.
+Os testes atuais cobrem partes importantes da base de dados, configuracao, IA e servicos. Antes de novas funcionalidades grandes, vale adicionar testes de fluxo completo para venda, reposicao, perda, relatorio e recibo.
 
 ## Estrutura principal
 
-- `admin_app.py`, `manager_app.py`, `api_server_app.py`: pontos de entrada principais.
+- `admin_app.py`: ponto de entrada principal do desktop unificado.
 - `admin/`: telas e fluxos do administrador.
 - `manager/`: tela de vendas e servicos do gerente.
-- `database/`: acesso SQLite, cliente remoto/hibrido e automacoes.
-- `server/`: API Flask/Waitress.
+- `database/`: acesso SQLite e automacoes.
 - `utils/`: configuracoes, i18n, IA, relatorios/telas auxiliares e utilitarios.
 - `pdfs/`: geracao e visualizacao de relatorios PDF.
 - `AI/`: coleta, analise e alertas inteligentes.

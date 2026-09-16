@@ -3,6 +3,7 @@ from collections import deque
 from pathlib import Path
 from threading import Thread
 from time import perf_counter
+from contextlib import nullcontext
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -42,6 +43,7 @@ class RestockHistoryScreen(MDScreen):
         self._last_loaded_at = 0.0
         self._load_token = 0
         self.back_target = "restock"
+        self._layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
 
     def on_kv_post(self, base_widget):
         self._update_responsive_layout()
@@ -50,7 +52,7 @@ class RestockHistoryScreen(MDScreen):
         self.request_enter_refresh()
 
     def on_size(self, *args):
-        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0)
+        self._layout_trigger()
 
     def request_enter_refresh(self, force=False, delay=0.05):
         stale = (perf_counter() - self._last_loaded_at) >= self.ENTER_CACHE_SECONDS
@@ -70,7 +72,7 @@ class RestockHistoryScreen(MDScreen):
         widget.disabled = not visible
         widget.size_hint_x = size_hint_x
 
-    def _update_responsive_layout(self):
+    def _update_responsive_layout(self, *_args):
         if not hasattr(self, "ids") or "header_date" not in self.ids:
             return
         width = self.width or dp(1200)
@@ -110,10 +112,13 @@ class RestockHistoryScreen(MDScreen):
 
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=365)
+        connection_factory = getattr(self.db, "background_connection", None)
+        connection = connection_factory() if callable(connection_factory) else nullcontext(self.db)
 
         def worker():
             try:
-                rows = self.db.get_restock_records(start_dt, end_dt, limit=300) or []
+                with connection as db:
+                    rows = db.get_restock_records(start_dt, end_dt, limit=300) or []
                 aggregated = self._aggregate_restock_rows(rows)
             except Exception as exc:
                 print(f"Erro ao carregar reposicoes: {exc}")

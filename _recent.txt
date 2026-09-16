@@ -1,0 +1,4 @@
+﻿2026-09-15 09:35  C:\Users\Joe\OneDrive\Ambiente de Trabalho\loja\_recent.txt
+2026-09-15 09:31  C:\Users\Joe\OneDrive\Ambiente de Trabalho\loja\_git_status.txt
+2026-09-14 16:03  C:\Users\Joe\OneDrive\Ambiente de Trabalho\loja\docs\PERFORMANCE_OPTIMIZATION_REPORT.md
+2026-09-14 10:27  C:\Users\Joe\OneDrive\Ambiente de Trabalho\loja\docs\SUPERADMIN_OFFLINE.md

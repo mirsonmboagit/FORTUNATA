@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import traceback
+from collections import deque
 from datetime import datetime
 from threading import Thread
 
@@ -44,6 +45,9 @@ if PROJECT_ROOT not in sys.path:
 
 from AI.controller import ProactiveIntelligenceController
 from database.provider import get_db
+from manager.services.barcode_pipeline import BarcodeScanPipeline, BarcodeScanResult
+from manager.services.camera_service import CameraService
+from manager.services.scanner_service import ScannerService
 from pdfs.pdf_viewer import PDFViewer
 from pdfs.receipt_report import ReceiptReport
 from ui.components.tooltip_widgets import (
@@ -58,7 +62,6 @@ from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data
 from utils.config.system_identity import get_system_name
 from utils.hardware.thermal_printer import print_pdf_with_system, print_thermal_receipt
 from utils.business.vat import compute_vat_breakdown
-from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture
 from utils.core.formatters import format_date_dmy, format_money, format_quantity, safe_float
 
 
@@ -85,6 +88,8 @@ def _format_sale_expiry_date(value):
 
 
 def _sale_catalog_key_from_product(product):
+    if len(product) > 13 and product[13] == "SACKS":
+        return f"sacks:{int(product[0])}"
     barcode = str(product[4] if len(product) > 4 and product[4] is not None else "").strip().lower()
     if barcode:
         return f"bc:{barcode}"
@@ -152,6 +157,7 @@ def _sales_accessibility_palette():
 
 def _unpack_sale_product(product):
     return {
+        "stock_mode": product[13] if len(product) > 13 else "EXACT",
         "id": product[0],
         "name": str(product[1] or "").strip(),
         "stock": _safe_float(product[2], 0.0),
@@ -324,7 +330,9 @@ class QuickProductCard(MDCard):
         self.ids.compact_product_name.text = info["name"]
 
         meta_parts = []
-        if is_weight:
+        if info["stock_mode"] == "SACKS":
+            meta_parts.extend([f"{info['stock']:g} sacos", "Venda avulsa / saldo nao medido"])
+        elif is_weight:
             meta_parts.append(f"Stock {_format_qty(info['stock'], True)}")
             meta_parts.append("Venda por kg")
         else:
@@ -341,6 +349,8 @@ class QuickProductCard(MDCard):
         self._full_meta_text = " | ".join(meta_parts)
         qty_text = _format_qty(info["stock"], is_weight)
         self._compact_stock_text = f"Stock: {qty_text}" if is_weight else f"Stock: {qty_text} un"
+        if info["stock_mode"] == "SACKS":
+            self._compact_stock_text = f"{info['stock']:g} sacos | Avulso"
         self.ids.product_meta_label.text = self._full_meta_text
         self.ids.compact_stock_label.text = self._compact_stock_text
 
@@ -348,7 +358,9 @@ class QuickProductCard(MDCard):
         self.ids.product_price_label.text_color = colors["success_text"]
         self.ids.compact_product_price.text = _format_money(unit_price)
         self.ids.compact_product_price.text_color = colors["success_text"]
-        if promo_active:
+        if info["stock_mode"] == "SACKS":
+            self.ids.product_mode_label.text = "Venda avulsa"
+        elif promo_active:
             self.ids.product_mode_label.text = "Promo ativa"
             self.ids.product_mode_label.text_color = colors["success_text"]
         elif is_weight:
@@ -638,8 +650,11 @@ Builder.load_file(os.path.join(CURRENT_DIR, "sales_screen.kv"))
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class SalesScreen(MDScreen):
-    PRODUCTS_PAGE_SIZE = 80
+from manager.produce_sales import ProduceSalesMixin, MODE_LABELS
+
+
+class SalesScreen(ProduceSalesMixin, MDScreen):
+    PRODUCTS_PAGE_SIZE = 15
     PRODUCTS_CACHE_SECONDS = 20
     STOCK_SYNC_INTERVAL_SECONDS = 15
     SALE_EDIT_WINDOW_SECONDS = 10 * 60
@@ -677,7 +692,11 @@ class SalesScreen(MDScreen):
         self._stock_revision_loading = False
         self._clock_ev = None
         self._snapshot_loading = False
-        self._barcode_lookup_active = False
+        self._barcode_pipeline = BarcodeScanPipeline(self.db, self._on_barcode_scan_results)
+        self._barcode_ui_queue = deque()
+        self._barcode_weight_dialog_active = False
+        self._cart_render_suspended = 0
+        self._cart_render_pending = False
         self._sale_submitting = False
         self._suspended_sale = None
         self._last_completed_receipt_data = None
@@ -697,13 +716,25 @@ class SalesScreen(MDScreen):
         self._scanner_keyboard_first_at = 0.0
         self._scanner_keyboard_last_at = 0.0
         self._scanner_keyboard_max_gap = 0.12
-        self._last_physical_barcode = None
-        self._last_physical_barcode_at = 0.0
-        self._vision_modules = None
         self._scanner_panel_initialized = False
         self.scanning = False
         self.current_camera = 0
         self.camera_capture = None
+        self.camera_service = CameraService(
+            width=640,
+            height=480,
+            preview_fps=18,
+            on_started=self._on_camera_service_started,
+            on_error=self._on_camera_service_error,
+        )
+        self.scanner_service = ScannerService(
+            self.camera_service,
+            decode_scale=0.65,
+            decode_interval_seconds=0.18,
+            duplicate_cooldown_seconds=2.0,
+            on_detected=self._on_camera_service_detected,
+            on_error=self._on_camera_service_decode_error,
+        )
         self.last_barcode = None
         self.last_barcode_time = 0.0
         self.scanner_sound_success = None
@@ -790,6 +821,8 @@ class SalesScreen(MDScreen):
         self.close_notice_overlay()
         self.stop_scanner()
         self._reset_scanner_keyboard_buffer()
+        self._barcode_pipeline.stop()
+        self._barcode_ui_queue.clear()
 
     def _cash_identity(self):
         app = App.get_running_app()
@@ -1463,12 +1496,6 @@ class SalesScreen(MDScreen):
         if not code:
             return False
 
-        now = time.perf_counter()
-        if code == self._last_physical_barcode and (now - self._last_physical_barcode_at) < 0.9:
-            return True
-        self._last_physical_barcode = code
-        self._last_physical_barcode_at = now
-
         if self.ids:
             search_input = self.ids.get("search_input")
             if search_input is not None:
@@ -1479,8 +1506,7 @@ class SalesScreen(MDScreen):
             if status is not None:
                 status.text = f"Scanner USB leu: {code}"
 
-        self._lookup_barcode_async(code, source="physical")
-        return True
+        return self._lookup_barcode_async(code, source="physical")
 
     def _refresh_header_meta(self):
         app = App.get_running_app()
@@ -2693,6 +2719,7 @@ class SalesScreen(MDScreen):
                     "units_per_package": info["units_per_package"],
                     "allow_pack_sale": info["allow_pack_sale"],
                     "vat_rule_code": info["vat_rule_code"],
+                    "stock_mode": info["stock_mode"],
                     "catalog_key": catalog_key,
                     "lot_count": 1,
                 }
@@ -2720,6 +2747,7 @@ class SalesScreen(MDScreen):
                     item["vat_rule_code"],
                     item["catalog_key"],
                     item["lot_count"],
+                    item["stock_mode"],
                 )
             )
         return result
@@ -2815,47 +2843,86 @@ class SalesScreen(MDScreen):
         return grouped_rows[0] if grouped_rows else product
 
     def _lookup_barcode_async(self, barcode_value, source="search"):
-        code = str(barcode_value or "").strip()
-        if not code or self._barcode_lookup_active:
+        """Enfileira a leitura; a consulta SQLite ocorre numa so thread."""
+        code = BarcodeScanPipeline.normalize(barcode_value)
+        if not code:
             return False
-        self._barcode_lookup_active = True
-        self.set_search_feedback(f"À procura do código {code}...", "info", "barcode-scan")
-
-        def worker():
-            product = None
-            error = None
-            try:
-                product = self._resolve_product_from_barcode(code)
-            except Exception as exc:
-                error = str(exc)
-            Clock.schedule_once(
-                lambda _dt, data=product, err=error, raw=code, src=source: self._apply_barcode_lookup(data, err, raw, src),
-                0,
-            )
-
-        Thread(target=worker, daemon=True).start()
+        accepted = self._barcode_pipeline.submit(code, source)
+        if not accepted:
+            self.play_scanner_sound(False)
+            self.set_search_feedback("Fila do scanner temporariamente cheia", "warning", "alert-circle")
+            return False
+        if source == "search":
+            self.set_search_feedback(f"A procurar o codigo {code}...", "info", "barcode-scan")
         return True
 
-    def _apply_barcode_lookup(self, product, error, barcode_value, source):
-        self._barcode_lookup_active = False
-        if error:
-            self.play_scanner_sound(False)
-            self.set_search_feedback("Erro ao pesquisar o código de barras", "danger", "close-circle")
+    def _on_barcode_scan_results(self, results: list[BarcodeScanResult]):
+        if not self.ids:
             return
-        if not product:
-            self.play_scanner_sound(False)
-            self.set_search_feedback(f"Código {barcode_value} não encontrado", "warning", "alert-circle")
-            return
+        self._barcode_ui_queue.extend(results)
+        self._drain_barcode_ui_queue()
 
-        self.add_to_cart(product, source="barcode")
-        self.play_scanner_sound(True)
-        self.set_search_feedback(f"{product[1]} adicionado ao carrinho", "success", "check-circle")
-        if source in {"search", "physical"} and self.ids:
+    def _resume_barcode_after_weight_dialog(self):
+        self._barcode_weight_dialog_active = False
+        Clock.schedule_once(lambda _dt: self._drain_barcode_ui_queue(), 0)
+
+    def _drain_barcode_ui_queue(self):
+        """Atualiza o UI em blocos e redesenha o carrinho uma unica vez."""
+        if self._barcode_weight_dialog_active or not self.ids:
+            return
+        added = missing = failures = 0
+        last_product = None
+        last_source = None
+        self._cart_render_suspended += 1
+        try:
+            while self._barcode_ui_queue:
+                result = self._barcode_ui_queue.popleft()
+                last_source = result.source
+                if result.error:
+                    failures += 1
+                    continue
+                grouped_rows = self._aggregate_sale_lot_rows(result.rows)
+                product = grouped_rows[0] if grouped_rows else None
+                if product is None:
+                    missing += 1
+                    continue
+                if _unpack_sale_product(product)["is_weight"]:
+                    self._barcode_weight_dialog_active = True
+                    self.show_weight_dialog(product, on_close=self._resume_barcode_after_weight_dialog)
+                    break
+                self.add_to_cart(product, source="barcode")
+                added += 1
+                last_product = product
+        finally:
+            self._cart_render_suspended -= 1
+            if self._cart_render_suspended == 0 and self._cart_render_pending:
+                self._cart_render_pending = False
+                self.update_cart_display()
+
+        if added:
+            self.play_scanner_sound(True)
+            label = str(last_product[1]) if last_product is not None else "Produto"
+            message = f"{label} adicionado ao carrinho" if added == 1 else f"{added} produtos adicionados ao carrinho"
+            self.set_search_feedback(message, "success", "check-circle")
+        elif missing:
+            self.play_scanner_sound(False)
+            self.set_search_feedback("Codigo de barras nao encontrado", "warning", "alert-circle")
+        elif failures:
+            self.play_scanner_sound(False)
+            self.set_search_feedback("Erro ao pesquisar o codigo de barras", "danger", "close-circle")
+
+        if last_source in {"search", "physical"} and self.ids:
             search_input = self.ids.get("search_input")
             if search_input is not None:
                 search_input.text = ""
                 search_input.focus = True
         self._update_action_states()
+
+    def _request_cart_display_update(self):
+        if self._cart_render_suspended:
+            self._cart_render_pending = True
+            return
+        self.update_cart_display()
 
     def add_to_cart(self, product, sale_mode=None, source="manual"):
         try:
@@ -2863,6 +2930,11 @@ class SalesScreen(MDScreen):
                 self.show_message("Produto indisponível.")
                 return
             info = _unpack_sale_product(product)
+            # Administrative rows may not carry the extended sale metadata.
+            settings = self.db.get_produce_settings(info["id"])
+            if settings and settings["stock_mode"] == "SACKS":
+                self.show_produce_dialog(info)
+                return
             base_price, promo_active = _calculate_promo(product)
             is_weight = info["is_weight"]
             allow_pack_sale = bool(
@@ -2893,7 +2965,7 @@ class SalesScreen(MDScreen):
                         item["qty"] += 1
                         item["qty_units"] = next_units
                         item["total"] = item["qty"] * item["price"]
-                        self.update_cart_display()
+                        self._request_cart_display_update()
                         return
 
                 self.cart_items.append(
@@ -2917,7 +2989,7 @@ class SalesScreen(MDScreen):
                         "lot_count": int(info.get("lot_count") or 1),
                     }
                 )
-                self.update_cart_display()
+                self._request_cart_display_update()
                 return
 
             for item in self.cart_items:
@@ -2929,7 +3001,7 @@ class SalesScreen(MDScreen):
                     item["qty"] = next_qty
                     item["qty_units"] = next_qty
                     item["total"] = item["qty"] * item["price"]
-                    self.update_cart_display()
+                    self._request_cart_display_update()
                     return
 
             self.cart_items.append(
@@ -2953,12 +3025,12 @@ class SalesScreen(MDScreen):
                     "lot_count": int(info.get("lot_count") or 1),
                 }
             )
-            self.update_cart_display()
+            self._request_cart_display_update()
         except Exception:
             traceback.print_exc()
             self.show_message("Falha ao adicionar produto.")
 
-    def show_weight_dialog(self, product):
+    def show_weight_dialog(self, product, on_close=None):
         info = _unpack_sale_product(product)
         base_price, promo_active = _calculate_promo(product)
         colors = _sales_accessibility_palette()
@@ -3071,6 +3143,8 @@ class SalesScreen(MDScreen):
                 ),
             ],
         )
+        if on_close is not None:
+            dialog.bind(on_dismiss=lambda *_args: on_close())
 
         def confirm_add(_btn):
             weight = _parse_decimal_input(weight_input.text)
@@ -3178,7 +3252,7 @@ class SalesScreen(MDScreen):
                 "pack":   f"Emb ×{int(item.get('pack_units') or 1)}",
                 "weight": "Por peso",
             }
-            mode_text = mode_label_map.get(sale_mode, "Venda")
+            mode_text = MODE_LABELS.get(item.get("produce_sale_mode"), mode_label_map.get(sale_mode, "Venda"))
             if lot_count > 1:
                 mode_text = f"{mode_text} · {lot_count}L"
 
@@ -3214,7 +3288,9 @@ class SalesScreen(MDScreen):
                 padding=[dp(2), dp(12), dp(2), dp(12)],
             )
 
-            if item.get("is_weight"):
+            if item.get("produce_sale_mode") == "amount":
+                qty_box.add_widget(MDLabel(text="Valor total", halign="center"))
+            elif item.get("is_weight"):
                 qty_box.add_widget(MDLabel(
                     text=_format_qty(item.get("weight_kg"), True),
                     halign="center",
@@ -3239,7 +3315,7 @@ class SalesScreen(MDScreen):
                 dec_btn.bind(on_release=lambda _b, idx=index: self.decrease_qty(idx))
 
                 qty_input = TextInput(
-                    text=_format_qty(item.get("qty")),
+                    text=(item.get("qty_text", "0") if not item.get("qty") else _format_qty(item.get("qty"))),
                     multiline=False,
                     input_filter="int",
                     halign="center",
@@ -3323,6 +3399,7 @@ class SalesScreen(MDScreen):
 
             row.add_widget(info_box)
             row.add_widget(qty_box)
+            row.quantity_total_label = total_col.children[0]
             row.add_widget(total_col)
             row.add_widget(remove_anchor)
             cart_list.add_widget(row)
@@ -3450,6 +3527,7 @@ class SalesScreen(MDScreen):
             item["qty"] = next_qty
             item["qty_units"] = next_qty
             item["total"] = item["qty"] * item["price"]
+        item.pop("qty_text", None)
         self.update_cart_display()
 
     def decrease_qty(self, index):
@@ -3464,16 +3542,14 @@ class SalesScreen(MDScreen):
         item["qty"] -= 1
         item["qty_units"] = item["qty"] * int(item.get("pack_units") or 1) if item.get("sale_mode") == "pack" else item["qty"]
         item["total"] = item["qty"] * item["price"]
+        item.pop("qty_text", None)
         self.update_cart_display()
 
     def schedule_qty_update(self, index, value):
         pending = self._qty_update_events.pop(index, None)
         if pending:
             pending.cancel()
-        self._qty_update_events[index] = Clock.schedule_once(
-            lambda _dt, idx=index, raw=value: self._apply_scheduled_qty_update(idx, raw),
-            0.15,
-        )
+        self.update_qty(index, value)
 
     def _apply_scheduled_qty_update(self, index, value):
         self._qty_update_events.pop(index, None)
@@ -3486,8 +3562,7 @@ class SalesScreen(MDScreen):
         if item.get("is_weight"):
             return
         qty = int(_safe_float(value, 0))
-        if qty <= 0:
-            self.remove_from_cart(index)
+        if qty < 0:
             return
         qty_units = qty * int(item.get("pack_units") or 1) if item.get("sale_mode") == "pack" else qty
         if qty_units > _safe_float(item.get("max_stock")):
@@ -3497,7 +3572,12 @@ class SalesScreen(MDScreen):
         item["qty"] = qty
         item["qty_units"] = qty_units
         item["total"] = qty * item["price"]
-        self.update_cart_display()
+        item["qty_text"] = str(value)
+        if index < len(self._cart_row_widgets):
+            self._cart_row_widgets[index].quantity_total_label.text = _format_money(item["total"])
+        self.total_amount = sum(_safe_float(row.get("total")) for row in self.cart_items)
+        self.recalculate_totals()
+        self._update_action_states()
 
     def remove_from_cart(self, index):
         if 0 <= index < len(self.cart_items):
@@ -3982,7 +4062,7 @@ class SalesScreen(MDScreen):
                 "total": total,
                 "paid_amount": total,
                 "change_amount": 0.0,
-                "vat_note": "Recibo re-emitido. IVA considerado no preço final.",
+                "vat_note": "Segunda via.",
             }
             settings = get_device_settings(force_reload=True)
             paper_width = int(settings.get("receipt_paper_width_mm") or 80)
@@ -4025,6 +4105,9 @@ class SalesScreen(MDScreen):
             return
         if not self.cart_items:
             self.show_message("O carrinho está vazio.")
+            return
+        if any(_safe_float(item.get("qty")) <= 0 for item in self.cart_items):
+            self.show_message("Informe uma quantidade maior que zero ou remova o artigo.")
             return
         if not self.ensure_cash_session():
             self.show_message("Abra o caixa antes de finalizar a venda.")
@@ -4082,28 +4165,27 @@ class SalesScreen(MDScreen):
                 sale_allocations = allocation_plan.get("sale_allocations") or []
                 if conflicts:
                     return {"status": "conflict", "conflicts": conflicts, "live_map": live_map}
-                for item in sale_allocations:
-                    result = self.db.add_sale(
-                        item["id"],
-                        item["qty_units"],
-                        item["effective_unit_price"],
-                        username,
-                        role,
-                        terminal_id=terminal_id,
-                        is_promotional=bool(item.get("promo_active")),
-                        vat_rule_code=item.get("vat_rule_code"),
-                        transaction_code=transaction_code,
-                        payment_method=self.payment_method,
-                        discount_amount=(
-                            _safe_float(item.get("line_discount"))
-                            * (_safe_float(item.get("qty_units")) / max(_safe_float(item.get("original_qty_units") or item.get("qty_units")), 0.000001))
+                transaction_items = [
+                    {
+                        "product_id": item["id"], "quantity": item["qty_units"],
+                        "sale_price": item["effective_unit_price"],
+                        "produce_sale_mode": item.get("produce_sale_mode"),
+                        "is_promotional": bool(item.get("promo_active")),
+                        "vat_rule_code": item.get("vat_rule_code"),
+                        "discount_amount": _safe_float(item.get("line_discount")) * (
+                            _safe_float(item.get("qty_units")) / max(_safe_float(item.get("original_qty_units") or item.get("qty_units")), 0.000001)
                         ),
-                        cash_session_id=cash_session.get("id"),
-                        discount_reason=self._discount_reason or ("Desconto" if discount_amount else None),
-                        discount_authorized_by=self._discount_authorized_by,
-                    )
-                    if not result:
-                        raise RuntimeError(f"Falha ao gravar {item['name']}")
+                    } for item in sale_allocations
+                ]
+                result = self.db.add_sales_transaction(
+                    transaction_code, transaction_items, username=username, role=role,
+                    terminal_id=terminal_id, payment_method=self.payment_method,
+                    cash_session_id=cash_session.get("id"),
+                    discount_reason=self._discount_reason or ("Desconto" if discount_amount else None),
+                    discount_authorized_by=self._discount_authorized_by,
+                )
+                if not result or not result.get("ok"):
+                    raise RuntimeError((result or {}).get("message") or "Falha ao gravar a venda")
                 if username:
                     try:
                         details = (
@@ -4257,6 +4339,13 @@ class SalesScreen(MDScreen):
             catalog_key = str(item.get("catalog_key") or "").strip().lower()
             if not catalog_key:
                 catalog_key = f"id:{int(item.get('id') or 0)}"
+            if item.get("produce_sale_mode"):
+                settings = self.db.get_produce_settings(item["id"])
+                if not settings or settings["stock_mode"] != "SACKS" or settings["sacks_available"] < 1:
+                    conflicts.append((item.get("name"), 1, 0))
+                else:
+                    sale_allocations.append({**item, "original_qty_units": item["qty_units"]})
+                continue
             live_rows = self._get_live_sale_rows_for_item(item)
             grouped_live_rows = self._aggregate_sale_lot_rows(live_rows)
             if grouped_live_rows:
@@ -4333,7 +4422,10 @@ class SalesScreen(MDScreen):
             vat_bucket["vat_amount"] += _safe_float(breakdown.get("vat_amount"))
             vat_bucket["gross_total"] += _safe_float(breakdown.get("gross_total"))
             sale_mode = item.get("sale_mode")
-            if sale_mode == "weight":
+            if item.get("produce_sale_mode"):
+                sale_mode_label = MODE_LABELS[item["produce_sale_mode"]]
+                qty_text = f"{_safe_float(item.get('qty')):g} {sale_mode_label.lower()}"
+            elif sale_mode == "weight":
                 qty_text = _format_qty(item.get("weight_kg"), True)
                 sale_mode_label = "Peso"
             elif sale_mode == "pack":
@@ -4354,12 +4446,9 @@ class SalesScreen(MDScreen):
             )
 
         total = round(sum(_safe_float(item.get("effective_line_total")) for item in allocations), 2)
-        note_parts = [f"Pagamento: {self._payment_method_label()}."]
+        note_parts = []
         if discount_amount > 0:
             note_parts.append(f"Desconto aplicado: {_format_money(discount_amount)}.")
-        unique_vats = [tag for tag in dict.fromkeys(vat_tags) if tag]
-        if unique_vats:
-            note_parts.append("IVA considerado no preço final: " + ", ".join(unique_vats) + ".")
 
         return {
             "store_name": get_system_name(force_reload=True),
@@ -4589,38 +4678,78 @@ class SalesScreen(MDScreen):
         self.stop_scanner()
         self.manager.current = "losses"
 
-    def _load_vision_modules(self):
-        if self._vision_modules is None:
-            self._vision_modules = get_vision_dependencies()
-        return self._vision_modules
+    def _on_camera_service_started(self, camera_index):
+        Clock.schedule_once(lambda _dt: self._apply_camera_service_started(camera_index), 0)
+
+    def _apply_camera_service_started(self, camera_index):
+        if not self.scanning:
+            return
+        if self.ids:
+            self.ids.scanner_status_label.text = f"Camera {camera_index} ativa"
+        self.scanner_service.start()
+
+    def _on_camera_service_error(self, reason, message=None):
+        Clock.schedule_once(
+            lambda _dt: self._apply_camera_service_error(reason, message),
+            0,
+        )
+
+    def _on_camera_service_decode_error(self, message):
+        Clock.schedule_once(
+            lambda _dt: self._apply_camera_service_error("decode", message),
+            0,
+        )
+
+    def _apply_camera_service_error(self, reason, _message=None):
+        if not self.scanning:
+            return
+        self.stop_scanner()
+        if reason == "camera_missing":
+            self.set_search_feedback("Camera nao encontrada", "warning", "camera-off")
+        elif reason == "dependencies":
+            self.set_search_feedback("Scanner indisponivel neste ambiente", "danger", "camera-off")
+        else:
+            self.set_search_feedback("Erro ao iniciar o scanner", "danger", "alert-circle")
+
+    def _on_camera_service_detected(self, barcode_value):
+        Clock.schedule_once(
+            lambda _dt: self._apply_camera_service_detected(barcode_value),
+            0,
+        )
+
+    def _apply_camera_service_detected(self, barcode_value):
+        if not self.scanning:
+            return
+        if self.ids:
+            self.ids.scanner_status_label.text = "Codigo reconhecido com sucesso"
+            last_value = self.ids.get("scanner_last_value")
+            if last_value is not None:
+                last_value.text = barcode_value
+        self._lookup_barcode_async(barcode_value, source="scanner")
 
     def toggle_scanner(self):
         if self.scanning:
             self.stop_scanner()
-            return
-        try:
-            self._load_vision_modules()
-        except RuntimeError as exc:
-            self.show_message(str(exc))
-            self.set_search_feedback("Scanner indisponível neste ambiente", "danger", "camera-off")
             return
         self.scanning = True
         self._set_scanner_preview_visible(True)
         if self.ids:
             self.ids.scan_toggle_btn.icon = "barcode-off"
             self.ids.scan_toggle_btn.md_bg_color = [0.84, 0.24, 0.26, 1]
-            self.ids.scanner_status_label.text = "A iniciar a câmara..."
+            self.ids.scanner_status_label.text = "A iniciar a camera..."
             last_value = self.ids.get("scanner_last_value")
             if last_value is not None:
                 last_value.text = "A aguardar leitura"
-        Clock.schedule_once(self.init_camera, 0.1)
+        Clock.schedule_once(self.init_camera, 0)
 
     def stop_scanner(self):
-        if not self.scanning and self.camera_capture is None:
+        if not self.scanning:
             self._set_scanner_preview_visible(False)
             return
         self.scanning = False
         Clock.unschedule(self.update_camera)
+        self.scanner_service.stop()
+        self.camera_service.stop()
         self.release_camera()
         self._set_scanner_preview_visible(False)
         if self.ids:
@@ -4631,79 +4760,31 @@ class SalesScreen(MDScreen):
                 status_label.text = "Leitor parado"
 
     def release_camera(self):
-        if self.camera_capture is not None:
-            try:
-                self.camera_capture.release()
-            except Exception:
-                pass
-            self.camera_capture = None
+        self.camera_capture = None
         if self.ids:
             image = self.ids.get("camera_image")
             if image is not None:
                 image.texture = None
 
     def init_camera(self, _dt):
-        try:
-            cv2, _np, _decode = self._load_vision_modules()
-            self.release_camera()
-            self.camera_capture = open_optimized_camera_capture(
-                cv2,
-                self.current_camera,
-                width=640,
-                height=480,
-                preview_fps=18,
-            )
-            if not self.camera_capture or not self.camera_capture.isOpened():
-                self.stop_scanner()
-                self.set_search_feedback("Câmara não encontrada", "warning", "camera-off")
-                return
-            self.camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self.last_barcode = None
-            self.last_barcode_time = 0.0
-            if self.ids:
-                self.ids.scanner_status_label.text = f"Câmara {self.current_camera} ativa"
-            Clock.schedule_interval(self.update_camera, 1 / 18)
-        except Exception:
-            traceback.print_exc()
-            self.stop_scanner()
-            self.set_search_feedback("Erro ao iniciar o scanner", "danger", "alert-circle")
+        if not self.scanning:
+            return
+        self.last_barcode = None
+        self.last_barcode_time = 0.0
+        Clock.unschedule(self.update_camera)
+        Clock.schedule_interval(self.update_camera, 1 / 18)
+        self.camera_service.start(self.current_camera)
 
     def update_camera(self, _dt):
-        if not self.scanning or self.camera_capture is None:
+        if not self.scanning:
             return
+        payload = self.camera_service.consume_latest_preview_payload()
+        if not payload:
+            return
+        _frame_id, width, height, buffer = payload
         try:
-            cv2, np, decode = self._load_vision_modules()
-            ok, frame = self.camera_capture.read()
-            if not ok or frame is None:
-                return
-
-            frame = cv2.convertScaleAbs(frame, alpha=1.2, beta=10)
-            codes = decode(frame)
-            current_time = time.time()
-            if codes:
-                code = codes[0]
-                barcode_value = "".join(c for c in code.data.decode("utf-8", errors="ignore") if c.isprintable()).strip()
-                if barcode_value and (
-                    barcode_value != self.last_barcode or (current_time - self.last_barcode_time) > 2
-                ):
-                    self.last_barcode = barcode_value
-                    self.last_barcode_time = current_time
-                    if self.ids:
-                        self.ids.scanner_status_label.text = "Código reconhecido com sucesso"
-                        last_value = self.ids.get("scanner_last_value")
-                        if last_value is not None:
-                            last_value.text = barcode_value
-                    self._lookup_barcode_async(barcode_value, source="scanner")
-
-                pts = code.polygon
-                if len(pts) >= 4:
-                    points = [(p.x, p.y) for p in pts]
-                    cv2.polylines(frame, [np.array(points, dtype=np.int32)], True, (40, 220, 80), 3)
-
-            buf = cv2.flip(frame, 0).tobytes()
-            texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt="bgr")
-            texture.blit_buffer(buf, colorfmt="bgr", bufferfmt="ubyte")
+            texture = Texture.create(size=(width, height), colorfmt="bgr")
+            texture.blit_buffer(buffer, colorfmt="bgr", bufferfmt="ubyte")
             if self.ids:
                 image = self.ids.get("camera_image")
                 if image is not None:
@@ -4963,12 +5044,18 @@ class SalesScreen(MDScreen):
     def return_to_login(self):
         self.stop_scanner()
         app = App.get_running_app()
+        setter = getattr(self.db, "set_active_user", None)
+        if callable(setter):
+            try:
+                setter(None, None)
+            except Exception:
+                pass
         if app:
             app.current_user = None
             app.current_role = None
         if not self.manager:
             return
-        for screen_name in ("login_manager", "login"):
+        for screen_name in ("login",):
             if screen_name in self.manager.screen_names:
                 screen = self.manager.get_screen(screen_name)
                 if hasattr(screen, "reset_fields"):

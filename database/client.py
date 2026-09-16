@@ -376,6 +376,29 @@ class DatabaseClient:
     def get_user_data_owner(self, username):
         return self._rpc("get_user_data_owner", username)
 
+    # ---------- Regras comerciais de produtos ----------
+    def get_product_business_rules(self):
+        result = self._rpc("get_product_business_rules")
+        return result if isinstance(result, dict) else None
+
+    def update_product_business_rules(self, rules, username=None):
+        return self._rpc("update_product_business_rules", rules, username=username)
+
+    def list_product_custom_fields(self, active_only=True):
+        return self._rpc("list_product_custom_fields", active_only=active_only) or []
+
+    def create_product_custom_field(self, label, field_type="TEXT", required=False):
+        return self._rpc("create_product_custom_field", label, field_type, required)
+
+    def update_product_custom_field(self, field_id, label, field_type="TEXT", required=False, active=True):
+        return self._rpc("update_product_custom_field", field_id, label, field_type, required, active)
+
+    def delete_product_custom_field(self, field_id):
+        return self._rpc("delete_product_custom_field", field_id)
+
+    def get_product_custom_field_values(self, product_id):
+        return self._rpc("get_product_custom_field_values", product_id) or {}
+
     def validate_user(self, username, password):
         return self._rpc("validate_user", username, password)
 
@@ -766,6 +789,12 @@ class DatabaseClient:
     def get_product(self, product_id):
         return self._rpc("get_product", product_id)
 
+    def get_produce_settings(self, product_id):
+        return self._rpc("get_produce_settings", product_id)
+
+    def finish_produce_sack(self, product_id, username=None, role=None):
+        return self._rpc("finish_produce_sack", product_id, username=username, role=role) or {"ok": False, "message": self._last_error or "Falha ao terminar saco"}
+
     def get_vat_rules(self):
         return self._rpc("get_vat_rules") or []
 
@@ -796,6 +825,7 @@ class DatabaseClient:
         cash_session_id=None,
         discount_reason=None,
         discount_authorized_by=None,
+        produce_sale_mode=None,
     ):
         return self._rpc(
             "add_sale",
@@ -813,6 +843,7 @@ class DatabaseClient:
             cash_session_id=cash_session_id,
             discount_reason=discount_reason,
             discount_authorized_by=discount_authorized_by,
+            **({"produce_sale_mode": produce_sale_mode} if produce_sale_mode else {}),
         )
 
     def add_sales_transaction(

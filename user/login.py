@@ -1,6 +1,8 @@
 import os
 import re
+import webbrowser
 from threading import Thread
+from urllib.parse import quote
 
 from kivy.properties import (
     ObjectProperty,
@@ -12,7 +14,7 @@ from kivy.properties import (
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.app import App
-from kivy.metrics import dp
+from kivy.metrics import dp, sp
 from kivy.core.window import Window
 
 from datetime import datetime, timedelta
@@ -23,11 +25,19 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.textfield import MDTextField
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
+from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDRectangleFlatIconButton
 from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.menu import MDDropdownMenu
 
-from database.provider import get_db, uses_remote_backend
+from database.provider import get_db
+from licensing.offline import OfflineLicenseClient, LicenseResult, LICENSE_REQUEST_PLANS, parse_license_request
+from licensing.account_provisioning import (
+    AccountProvisioningError,
+    validate_admin_provisioning_for_license,
+)
+from licensing.account_events import notify_superadmin_account_event
+from licensing.offline_email import LICENSE_REQUEST_SUBJECT, license_request_body
+from utils.business.email_service import EmailServiceNotConfigured, send_system_email
 from utils.core.i18n import language_options, language_short, translate
 
 LOGIN_KV_PATH = os.path.join(os.path.dirname(__file__), 'login_screen.kv')
@@ -77,6 +87,8 @@ class LoginScreen(MDScreen):
     login_blocked = BooleanProperty(False)
     operation_in_progress = BooleanProperty(False)
     operation_status = StringProperty("")
+    license_status = StringProperty("")
+    allow_account_self_service = BooleanProperty(True)
 
     DEFAULT_PASSWORDS = ["123", "123456"]
 
@@ -276,18 +288,31 @@ class LoginScreen(MDScreen):
             form_top_actions.height = dp(34) if narrow_form else dp(38)
             form_top_actions.spacing = dp(8)
 
+        license_actions_installed = bool(
+            getattr(self, "_license_actions_installed", False)
+        )
         if form_links_row is not None:
-            form_links_row.orientation = "vertical" if narrow_form else "horizontal"
-            form_links_row.spacing = dp(6) if narrow_form else dp(8)
+            stack_vertical = narrow_form or license_actions_installed
+            form_links_row.orientation = "vertical" if stack_vertical else "horizontal"
+            form_links_row.spacing = dp(6) if stack_vertical else dp(8)
 
+        # Os links de autoatendimento (esqueci/criar conta) ficam colapsados
+        # neste acesso unificado.
         for button in (forgot_button, register_button):
             if button is None:
                 continue
-            if narrow_form:
+            if license_actions_installed:
+                button.size_hint_x = 0
+                button.size_hint_y = None
+                button.width = 0
+                button.height = 0
+            elif narrow_form:
                 button.size_hint_x = 1
+                button.size_hint_y = None
                 button.width = 0
             else:
                 button.size_hint_x = None
+                button.size_hint_y = None
                 button.width = dp(148)
 
     def _bind_app_language(self):
@@ -462,9 +487,6 @@ class LoginScreen(MDScreen):
         value = str(email or "").strip()
         return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value))
 
-    def _uses_remote_db(self):
-        return uses_remote_backend(self.db)
-
     def _run_background_task(self, task, callback, busy_text="A processar..."):
         # Executa operacoes de login sem bloquear a interface.
         token = self._operation_token + 1
@@ -518,10 +540,6 @@ class LoginScreen(MDScreen):
         if not self.allow_admin_setup:
             self._set_login_enabled(True)
             return
-        if self._uses_remote_db():
-            self._set_login_enabled(True)
-            return
-
         def task():
             has_admin = bool(self.db.has_admin())
             if self._db_last_error():
@@ -800,7 +818,12 @@ class LoginScreen(MDScreen):
             if not updated:
                 return {"status": "update_failed"}
             try:
-                self.db.log_action(username, role or 'admin', 'UPDATE_ADMIN', 'Senha do administrador alterada')
+                self.db.log_action(
+                    username,
+                    role or 'admin',
+                    'UPDATE_ADMIN' if role == 'admin' else 'UPDATE_PASSWORD',
+                    'Palavra-passe alterada por troca obrigatória',
+                )
             except Exception:
                 pass
             return {"status": "ok"}
@@ -848,11 +871,22 @@ class LoginScreen(MDScreen):
             if role is None and self._db_last_error():
                 return None
             is_default = False
+            must_change_password = False
             if role == 'admin':
                 is_default = bool(self.db.is_user_password_default(user, self.DEFAULT_PASSWORDS))
                 if self._db_last_error():
                     return None
-            return {"role": role, "is_default": is_default}
+            if role in ('admin', 'manager'):
+                requires_change = getattr(self.db, 'is_password_change_required', None)
+                if callable(requires_change):
+                    must_change_password = bool(requires_change(user))
+                    if self._db_last_error():
+                        return None
+            return {
+                "role": role,
+                "is_default": is_default,
+                "must_change_password": must_change_password,
+            }
 
         def handle_login(result, error):
             if error:
@@ -871,7 +905,7 @@ class LoginScreen(MDScreen):
                     self.username_error = "Acesso nao autorizado!"
                     self.password_error = "Acesso nao autorizado!"
                     return
-                if role == 'admin' and (result or {}).get("is_default"):
+                if (result or {}).get("is_default") or (result or {}).get("must_change_password"):
                     self._open_force_password_dialog(user, role)
                     return
                 self._complete_login(user, role)
@@ -912,6 +946,12 @@ class LoginScreen(MDScreen):
         self.password_error = ""
 
     def _set_current_user(self, username, role):
+        setter = getattr(self.db, "set_active_user", None)
+        if callable(setter):
+            try:
+                setter(username, role)
+            except Exception:
+                pass
         app = App.get_running_app()
         if app:
             app.current_user = username
@@ -1863,6 +1903,1661 @@ class AdminLoginScreen(LoginScreen):
         kwargs.setdefault("registration_password_min_len", 8)
         kwargs.setdefault("success_screen", "admin_home")
         super().__init__(**kwargs)
+
+
+class UnifiedLoginScreen(LoginScreen):
+    """Login unico que encaminha cada conta para o seu proprio painel."""
+
+    def __init__(self, **kwargs):
+        # Mantemos o estilo visual administrativo como base, mas sem restringir
+        # o acesso a uma funcao antes de validar as credenciais.
+        license_client = kwargs.pop("license_client", None)
+        kwargs.setdefault("login_variant", "admin")
+        kwargs.setdefault("allowed_roles", [])
+        # A primeira conta admin nunca e criada pela propria instalacao. Ela
+        # precisa ser provisionada pelo superadmin e importada com um codigo
+        # assinado, depois de a licenca local ser confirmada.
+        kwargs.setdefault("allow_admin_setup", False)
+        kwargs.setdefault("registration_mode", "disabled")
+        kwargs.setdefault("registration_password_min_len", 8)
+        kwargs.setdefault("allow_account_self_service", False)
+        kwargs.setdefault("show_theme_toggle", True)
+        self.license_client = license_client
+        self._license_access_confirmed = self.license_client is None
+        self._license_dialog = None
+        self._license_content_container = None
+        self._license_code_field = None
+        self._license_feedback = None
+        self._license_request_code = ""
+        self._license_request_recipient = ""
+        self._license_request_submitted = False
+        self._desktop_license_state = ""
+        # Estes atributos permanecem apenas para compatibilidade com sessoes
+        # antigas; os controlos de licenca sao recebidos e aplicados pela app.
+        self._license_revocation_action = None
+        self._license_revocation_dialog = None
+        self._license_revocation_code_field = None
+        self._license_revocation_feedback = None
+        # A suspensao e reversivel; a reativacao so aparece quando o proprio
+        # cofre local confirma que SIGE-SUS1 foi importado nesta instalacao.
+        self._license_suspension_action = None
+        self._license_reactivation_action = None
+        self._license_restoration_action = None
+        self._license_control_dialog = None
+        self._license_control_code_field = None
+        self._license_control_feedback = None
+        self._license_control_kind = ""
+        self._admin_provision_dialog = None
+        self._admin_provision_code_field = None
+        self._admin_provision_feedback = None
+        self._admin_provision_content_container = None
+        super().__init__(**kwargs)
+
+    def on_kv_post(self, base_widget):
+        super().on_kv_post(base_widget)
+
+    def on_size(self, *args):
+        super().on_size(*args)
+        Clock.schedule_once(lambda _dt: self._update_license_dialog_size(), 0)
+        Clock.schedule_once(lambda _dt: self._update_admin_provision_dialog_size(), 0)
+
+    def on_enter(self):
+        super().on_enter()
+        if self.license_client is not None:
+            self._set_login_enabled(False)
+            Clock.schedule_once(lambda _dt: self._validate_desktop_license(), 0.01)
+
+    def _ensure_admin_setup(self):
+        # O provisionamento local somente abre depois de este computador ter
+        # uma licenca offline valida. Nao ha fallback para criar um admin sem
+        # o codigo assinado do superadmin.
+        if self.license_client is not None and not self._license_access_confirmed:
+            return
+
+        if self.license_client is None:
+            self._set_login_enabled(False)
+            return
+
+        def task():
+            has_admin = bool(self.db.has_admin())
+            if self._db_last_error():
+                return None
+            return {"has_admin": has_admin}
+
+        def apply_setup(state, error):
+            # Uma revogacao pode ser importada enquanto esta verificacao da
+            # base local ainda esta a decorrer. Nunca deixe esse retorno
+            # tardio voltar a libertar o botao de login.
+            if self.license_client is not None and not self._license_access_confirmed:
+                self._set_login_enabled(False)
+                return
+            if error:
+                self._set_login_enabled(False)
+                self._show_message(
+                    "Configuração indisponível",
+                    "Não foi possível verificar a conta administrativa local.",
+                )
+                return
+            if (state or {}).get("has_admin"):
+                self._close_admin_provision_dialog()
+                self._set_login_enabled(True)
+                return
+            self._set_login_enabled(False)
+            self._open_admin_provision_dialog()
+
+        self._run_background_task(
+            task,
+            apply_setup,
+            busy_text="A verificar conta administrativa...",
+        )
+
+    def _calc_admin_provision_dialog_sizes(self):
+        width = Window.width or dp(900)
+        height = Window.height or dp(620)
+        if width < dp(620):
+            width_hint = 0.94
+        elif width < dp(980):
+            width_hint = 0.76
+        else:
+            width_hint = 0.58
+        dialog_height = min(max(dp(440), height * 0.82), dp(540))
+        content_height = max(dp(250), dialog_height - dp(142))
+        return width_hint, dialog_height, content_height
+
+    def _update_admin_provision_dialog_size(self):
+        if not self._admin_provision_dialog:
+            return
+        width_hint, dialog_height, content_height = self._calc_admin_provision_dialog_sizes()
+        self._admin_provision_dialog.size_hint = (width_hint, None)
+        self._admin_provision_dialog.height = dialog_height
+        if self._admin_provision_content_container is not None:
+            self._admin_provision_content_container.height = content_height
+
+    def _open_admin_provision_dialog(self):
+        """Pede o unico codigo assinado capaz de criar o admin local."""
+        if self._admin_provision_dialog:
+            self._update_admin_provision_dialog_size()
+            self._admin_provision_dialog.open()
+            return
+
+        accent = self._theme_color("primary", [0.10, 0.33, 0.58, 1])
+        card_alt = self._theme_color("card_alt", [0.94, 0.95, 0.97, 1])
+        on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
+        text_secondary = self._theme_color("text_secondary", [0.35, 0.38, 0.45, 1])
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(16), dp(10), dp(16), dp(10)],
+            adaptive_height=True,
+            size_hint_x=1,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        status_card = MDCard(
+            orientation="horizontal",
+            spacing=dp(12),
+            padding=[dp(14), dp(11), dp(14), dp(11)],
+            size_hint_y=None,
+            height=dp(92),
+            radius=[dp(16)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(accent, 0.12),
+        )
+        icon_slot = MDCard(
+            size_hint=(None, None),
+            size=(dp(48), dp(48)),
+            radius=[dp(15)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(accent, 0.18),
+        )
+        status_icon = MDIcon(
+            icon="account-key-outline",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=accent,
+        )
+        status_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        icon_slot.add_widget(status_icon)
+        status_text = MDBoxLayout(orientation="vertical", spacing=dp(3), size_hint_x=1)
+        status_text.add_widget(self._register_text_label(
+            "Conta administrativa necessária",
+            "text_primary",
+            "Subtitle1",
+            True,
+        ))
+        status_text.add_widget(self._register_text_label(
+            "A licença deste computador está ativa. Importe o código assinado enviado pelo superadmin para criar a única conta admin.",
+            "text_secondary",
+            "Caption",
+        ))
+        status_card.add_widget(icon_slot)
+        status_card.add_widget(status_text)
+        content.add_widget(status_card)
+
+        steps_card = MDCard(
+            orientation="horizontal",
+            spacing=dp(9),
+            padding=[dp(12), dp(8), dp(12), dp(8)],
+            size_hint_y=None,
+            height=dp(58),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+        steps_icon = MDIcon(
+            icon="format-list-numbered",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=accent,
+            size_hint_x=None,
+            width=dp(22),
+        )
+        steps_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        steps_card.add_widget(steps_icon)
+        steps_card.add_widget(self._register_text_label(
+            "1. Receba o código SIGE-ADM1  2. Cole-o aqui  3. Entre com a senha temporária e altere-a.",
+            "text_secondary",
+            "Caption",
+        ))
+        content.add_widget(steps_card)
+
+        content.add_widget(self._register_text_label(
+            "CÓDIGO ADMINISTRATIVO RECEBIDO",
+            "text_primary",
+            "Caption",
+            True,
+        ))
+        self._admin_provision_code_field = MDTextField(
+            hint_text="Cole o código completo SIGE-ADM1 enviado pelo superadmin",
+            helper_text="Pode colar todas as linhas do e-mail; o código pertence apenas a esta licença e computador.",
+            helper_text_mode="on_focus",
+            multiline=True,
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(110),
+        )
+        self._admin_provision_code_field.line_color_focus = accent
+        content.add_widget(self._admin_provision_code_field)
+
+        self._admin_provision_feedback = MDLabel(
+            text="",
+            opacity=0,
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=self._theme_color("danger", [0.78, 0.22, 0.24, 1]),
+            size_hint_y=None,
+            height=dp(0),
+        )
+        self._admin_provision_feedback.bind(
+            width=lambda instance, width: setattr(instance, "text_size", (width, None))
+        )
+        content.add_widget(self._admin_provision_feedback)
+
+        security_card = MDCard(
+            orientation="horizontal",
+            spacing=dp(9),
+            padding=[dp(12), dp(9), dp(12), dp(9)],
+            size_hint_y=None,
+            height=dp(64),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+        security_icon = MDIcon(
+            icon="shield-lock-outline",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=accent,
+            size_hint_x=None,
+            width=dp(22),
+        )
+        security_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        security_card.add_widget(security_icon)
+        security_card.add_widget(self._register_text_label(
+            "O código expira e só pode criar uma conta admin nesta instalação. A senha temporária não é guardada nem mostrada por este ecrã.",
+            "text_secondary",
+            "Caption",
+        ))
+        content.add_widget(security_card)
+
+        scroll = MDScrollView(do_scroll_x=False, size_hint=(1, 1))
+        scroll.add_widget(content)
+        width_hint, dialog_height, content_height = self._calc_admin_provision_dialog_sizes()
+        self._admin_provision_content_container = MDBoxLayout(
+            orientation="vertical",
+            size_hint=(1, None),
+            height=content_height,
+        )
+        self._admin_provision_content_container.add_widget(scroll)
+
+        submit_button = MDRaisedButton(
+            text="IMPORTAR E CRIAR ADMIN",
+            md_bg_color=accent,
+            theme_text_color="Custom",
+            text_color=on_primary,
+            on_release=lambda _button: self._submit_admin_provisioning(),
+        )
+        self._admin_provision_dialog = MDDialog(
+            title="Configuração administrativa",
+            type="custom",
+            content_cls=self._admin_provision_content_container,
+            size_hint=(width_hint, None),
+            height=dialog_height,
+            auto_dismiss=False,
+            buttons=[
+                MDFlatButton(
+                    text="AGUARDAR CÓDIGO",
+                    theme_text_color="Custom",
+                    text_color=text_secondary,
+                    on_release=lambda _button: self._set_admin_provision_feedback(
+                        "A instalação continuará bloqueada até o código administrativo ser importado."
+                    ),
+                ),
+                submit_button,
+            ],
+        )
+        # Este botão não fecha o diálogo: a instalação continua bloqueada até
+        # o proprietário entregar o código assinado, evitando um bypass de
+        # configuração por clique acidental.
+        self._admin_provision_dialog.open()
+
+    def _close_admin_provision_dialog(self):
+        if self._admin_provision_code_field is not None:
+            self._admin_provision_code_field.text = ""
+        if self._admin_provision_dialog:
+            self._admin_provision_dialog.dismiss()
+        self._admin_provision_dialog = None
+        self._admin_provision_code_field = None
+        self._admin_provision_feedback = None
+        self._admin_provision_content_container = None
+
+    def _set_admin_provision_feedback(self, message=""):
+        if not self._admin_provision_feedback:
+            return
+        self._admin_provision_feedback.text = str(message or "")
+        self._admin_provision_feedback.opacity = 1 if message else 0
+        self._admin_provision_feedback.height = dp(42) if message else dp(0)
+
+    def _submit_admin_provisioning(self):
+        if self.license_client is None or self.operation_in_progress:
+            return
+        raw_code = str(
+            self._admin_provision_code_field.text if self._admin_provision_code_field else ""
+        )
+        # E-mails podem inserir quebras de linha visuais; o código assinado
+        # não admite espaços, portanto removê-los não altera o seu conteúdo.
+        code = "".join(raw_code.split())
+        if not code:
+            self._set_admin_provision_feedback("Cole o código administrativo recebido por e-mail.")
+            return
+
+        def task():
+            license_result = self.license_client.validate()
+            if not license_result or not license_result.allowed:
+                return {
+                    "status": "license_invalid",
+                    "message": "A licença deste computador precisa estar ativa antes de importar a conta.",
+                }
+            try:
+                state = self.license_client.credential_store.load()
+                active_license_code = str(state.get("license_code") or "")
+                if not active_license_code:
+                    return {
+                        "status": "license_invalid",
+                        "message": "Não foi possível localizar a licença ativa deste computador.",
+                    }
+                payload = validate_admin_provisioning_for_license(
+                    code,
+                    self.license_client.public_key,
+                    active_license_code,
+                )
+            except AccountProvisioningError as error:
+                return {"status": "invalid_code", "message": str(error)}
+            except Exception:
+                return {
+                    "status": "invalid_code",
+                    "message": "Não foi possível validar o código administrativo.",
+                }
+
+            create_admin = getattr(self.db, "create_provisioned_admin", None)
+            if not callable(create_admin):
+                return {
+                    "status": "unsupported",
+                    "message": "Esta instalação ainda não suporta a importação segura da conta admin. Atualize o sistema.",
+                }
+            try:
+                created = create_admin(
+                    payload["username"],
+                    payload["password_hash"],
+                    email=payload.get("email"),
+                    provisioning_id=payload["provisioning_id"],
+                )
+            except Exception:
+                return {
+                    "status": "create_failed",
+                    "message": "Não foi possível criar a conta administrativa local.",
+                }
+
+            if isinstance(created, dict):
+                created_ok = bool(
+                    created.get("success", created.get("ok", created.get("created", False)))
+                )
+                failure_reason = str(created.get("message") or created.get("reason") or "")
+            else:
+                created_ok = bool(created)
+                failure_reason = ""
+            if not created_ok:
+                return {
+                    "status": "create_failed",
+                    "message": failure_reason or "A conta admin já existe ou não pôde ser criada.",
+                }
+            # O aviso e apenas uma auditoria adicional. A conta ja foi criada
+            # de forma atomica e nao pode depender de rede ou SMTP para ser
+            # valida; o e-mail tambem nunca leva senha, hash ou codigo.
+            notified = notify_superadmin_account_event(
+                payload["username"],
+                "ADMIN_CREATED",
+            )
+            return {
+                "status": "ok",
+                "username": payload["username"],
+                "notified": notified,
+            }
+
+        def handle_result(result, error):
+            if error:
+                self._set_admin_provision_feedback(
+                    "Não foi possível importar a conta administrativa neste momento."
+                )
+                return
+            if (result or {}).get("status") != "ok":
+                self._set_admin_provision_feedback(
+                    (result or {}).get("message") or "Não foi possível importar a conta administrativa."
+                )
+                return
+            username = (result or {}).get("username")
+            self._close_admin_provision_dialog()
+            if self.username:
+                self.username.text = str(username or "")
+            self._set_login_enabled(True)
+            self._show_message(
+                "Conta criada",
+                "Entre com a palavra-passe temporária fornecida pelo superadmin. Será obrigatório alterá-la no primeiro acesso.",
+            )
+
+        self._run_background_task(
+            task,
+            handle_result,
+            busy_text="A validar e criar conta administrativa...",
+        )
+
+    def _install_license_revocation_action(self):
+        """Acrescenta uma unica acao visivel apenas para licenca ativa.
+
+        O formulario unificado nao permite autoatendimento de contas, logo os
+        links existentes ficam invisiveis. Reutilizar essa faixa evita mudar o
+        layout KV e deixa a acao de cancelamento sempre ao alcance antes do
+        utilizador tentar iniciar sessao.
+        """
+        if self.license_client is None or self._license_revocation_action is not None:
+            return
+        links_row = self.ids.get("form_links_row") if hasattr(self, "ids") else None
+        if links_row is None:
+            return
+
+        # Estes dois botoes ja nao sao usados pelo login unificado. Sao
+        # colapsados (largura e altura) para deixar toda a largura do cartao
+        # disponivel para os comandos de licenca.
+        for widget_id in ("forgot_button", "register_button"):
+            widget = self.ids.get(widget_id)
+            if widget is not None:
+                widget.size_hint_x = 0
+                widget.size_hint_y = None
+                widget.width = 0
+                widget.height = 0
+
+        accent = self._theme_color("primary", [0.10, 0.33, 0.58, 1])
+        # Passamos a empilhar os comandos de licenca na vertical (largura total
+        # do cartao) para que os rotulos longos nunca transbordem para a
+        # direita. Cada botao reserva altura fixa e colapsa quando escondido.
+        self._license_actions_installed = True
+
+        self._license_revocation_action = MDFlatButton(
+            text="APLICAR CODIGO DE CANCELAMENTO",
+            size_hint_x=1,
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(12),
+            theme_text_color="Custom",
+            text_color=accent,
+            opacity=0,
+            disabled=True,
+            on_release=lambda _button: self._open_license_revocation_dialog(),
+        )
+        self._license_suspension_action = MDFlatButton(
+            text="APLICAR CODIGO DE SUSPENSAO",
+            size_hint_x=1,
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(12),
+            theme_text_color="Custom",
+            text_color=accent,
+            opacity=0,
+            disabled=True,
+            on_release=lambda _button: self._open_license_control_dialog("suspension"),
+        )
+        self._license_reactivation_action = MDFlatButton(
+            text="APLICAR CODIGO DE REATIVACAO",
+            size_hint_x=1,
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(12),
+            theme_text_color="Custom",
+            text_color=accent,
+            opacity=0,
+            disabled=True,
+            on_release=lambda _button: self._open_license_control_dialog("reactivation"),
+        )
+        self._license_restoration_action = MDFlatButton(
+            text="APLICAR CODIGO DE RECUPERACAO",
+            size_hint_x=1,
+            size_hint_y=None,
+            height=dp(40),
+            font_size=sp(12),
+            theme_text_color="Custom",
+            text_color=accent,
+            opacity=0,
+            disabled=True,
+            on_release=lambda _button: self._open_license_control_dialog("restoration"),
+        )
+        for action in (
+            self._license_revocation_action,
+            self._license_suspension_action,
+            self._license_reactivation_action,
+            self._license_restoration_action,
+        ):
+            links_row.add_widget(action)
+
+        links_row.orientation = "vertical"
+        links_row.spacing = dp(6)
+
+        self.bind(
+            operation_in_progress=lambda *_args: self._refresh_license_control_actions()
+        )
+        self._refresh_license_control_actions()
+        self._update_responsive_layout()
+
+    def _refresh_license_revocation_action(self):
+        action = self._license_revocation_action
+        if action is None:
+            return
+        visible = bool(self.license_client is not None and self._license_access_confirmed)
+        self._set_license_action_visibility(action, visible)
+
+    def _set_license_action_visibility(self, action, visible):
+        if action is None:
+            return
+        action.opacity = 1 if visible else 0
+        action.disabled = (not visible) or bool(self.operation_in_progress)
+        # Largura sempre total e colapso apenas na altura: o comando de licenca
+        # permanece alinhado com a largura do cartao quando visivel e nao
+        # ocupa espaco quando escondido.
+        action.size_hint_x = 1
+        action.size_hint_y = None
+        action.height = dp(40) if visible else 0
+
+    def _refresh_license_suspension_action(self):
+        visible = bool(self.license_client is not None and self._license_access_confirmed)
+        self._set_license_action_visibility(self._license_suspension_action, visible)
+
+    def _refresh_license_reactivation_action(self):
+        visible = bool(
+            self.license_client is not None
+            and self._desktop_license_state == "suspended"
+        )
+        self._set_license_action_visibility(self._license_reactivation_action, visible)
+
+    def _refresh_license_restoration_action(self):
+        visible = bool(
+            self.license_client is not None
+            and (self._license_access_confirmed or self._desktop_license_state == "revoked")
+        )
+        self._set_license_action_visibility(self._license_restoration_action, visible)
+
+    def _refresh_license_control_actions(self):
+        self._refresh_license_revocation_action()
+        self._refresh_license_suspension_action()
+        self._refresh_license_reactivation_action()
+        self._refresh_license_restoration_action()
+
+    def _open_license_revocation_dialog(self):
+        """Pede um SIGE-REV1, sem confundir cancelamento com renovacao."""
+        if self.license_client is None or self.operation_in_progress:
+            return
+        if not self._license_access_confirmed:
+            self._show_message(
+                "Licenca indisponivel",
+                "A licenca deste computador ja nao esta ativa. Atualize a verificacao antes de importar um codigo de cancelamento.",
+            )
+            return
+        if self._license_revocation_dialog:
+            self._license_revocation_dialog.open()
+            return
+
+        accent = self._theme_color("primary", [0.10, 0.33, 0.58, 1])
+        card_alt = self._theme_color("card_alt", [0.94, 0.95, 0.97, 1])
+        danger = self._theme_color("danger", [0.78, 0.22, 0.24, 1])
+        text_secondary = self._theme_color("text_secondary", [0.35, 0.38, 0.45, 1])
+        on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(16), dp(10), dp(16), dp(10)],
+            adaptive_height=True,
+            size_hint_x=1,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        warning_card = MDCard(
+            orientation="horizontal",
+            spacing=dp(10),
+            padding=[dp(12), dp(10), dp(12), dp(10)],
+            size_hint_y=None,
+            height=dp(82),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(danger, 0.10),
+        )
+        warning_icon = MDIcon(
+            icon="shield-alert-outline",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=danger,
+            size_hint_x=None,
+            width=dp(26),
+        )
+        warning_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        warning_card.add_widget(warning_icon)
+        warning_card.add_widget(self._register_text_label(
+            "Use somente o codigo SIGE-REV1 enviado pelo superadmin para este computador. Depois de aplicado, o acesso desta instalacao fica bloqueado definitivamente.",
+            "text_secondary",
+            "Caption",
+        ))
+        content.add_widget(warning_card)
+
+        details_card = MDCard(
+            orientation="horizontal",
+            spacing=dp(9),
+            padding=[dp(12), dp(8), dp(12), dp(8)],
+            size_hint_y=None,
+            height=dp(56),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+        details_icon = MDIcon(
+            icon="lock-check-outline",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=accent,
+            size_hint_x=None,
+            width=dp(22),
+        )
+        details_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        details_card.add_widget(details_icon)
+        details_card.add_widget(self._register_text_label(
+            "O codigo e validado localmente pela assinatura e pelo vinculo desta licenca; um codigo de outro computador sera recusado.",
+            "text_secondary",
+            "Caption",
+        ))
+        content.add_widget(details_card)
+
+        content.add_widget(self._register_text_label(
+            "CODIGO DE CANCELAMENTO RECEBIDO",
+            "text_primary",
+            "Caption",
+            True,
+        ))
+        self._license_revocation_code_field = MDTextField(
+            hint_text="Cole o codigo completo SIGE-REV1. recebido por e-mail",
+            helper_text="Pode colar todas as linhas do codigo de cancelamento.",
+            helper_text_mode="on_focus",
+            multiline=True,
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(100),
+        )
+        self._license_revocation_code_field.line_color_focus = accent
+        content.add_widget(self._license_revocation_code_field)
+
+        self._license_revocation_feedback = MDLabel(
+            text="",
+            opacity=0,
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=danger,
+            size_hint_y=None,
+            height=dp(0),
+        )
+        self._license_revocation_feedback.bind(
+            width=lambda instance, width: setattr(instance, "text_size", (width, None))
+        )
+        content.add_widget(self._license_revocation_feedback)
+
+        close_button = MDFlatButton(
+            text="FECHAR",
+            theme_text_color="Custom",
+            text_color=text_secondary,
+        )
+        submit_button = MDRaisedButton(
+            text="VALIDAR CANCELAMENTO",
+            md_bg_color=danger,
+            theme_text_color="Custom",
+            text_color=on_primary,
+            on_release=lambda _button: self._confirm_license_revocation(),
+        )
+        self._license_revocation_dialog = MDDialog(
+            title="Aplicar cancelamento definitivo",
+            type="custom",
+            content_cls=content,
+            size_hint=(0.64, None),
+            height=min(max(dp(420), (Window.height or dp(620)) * 0.72), dp(520)),
+            auto_dismiss=False,
+            buttons=[close_button, submit_button],
+        )
+        close_button.bind(on_release=lambda _button: self._close_license_revocation_dialog())
+        self._license_revocation_dialog.open()
+
+    def _close_license_revocation_dialog(self):
+        if self._license_revocation_code_field is not None:
+            self._license_revocation_code_field.text = ""
+        if self._license_revocation_dialog:
+            self._license_revocation_dialog.dismiss()
+        self._license_revocation_dialog = None
+        self._license_revocation_code_field = None
+        self._license_revocation_feedback = None
+
+    def _set_license_revocation_feedback(self, message=""):
+        if not self._license_revocation_feedback:
+            return
+        self._license_revocation_feedback.text = str(message or "")
+        self._license_revocation_feedback.opacity = 1 if message else 0
+        self._license_revocation_feedback.height = dp(42) if message else dp(0)
+
+    def _confirm_license_revocation(self):
+        if self.license_client is None or self.operation_in_progress:
+            return
+        raw_code = str(
+            self._license_revocation_code_field.text if self._license_revocation_code_field else ""
+        )
+        # Quebras de linha visuais do e-mail nao pertencem ao codigo assinado.
+        code = "".join(raw_code.split())
+        if not code:
+            self._set_license_revocation_feedback(
+                "Cole o codigo de cancelamento recebido do superadmin."
+            )
+            return
+        if not code.startswith("SIGE-REV1."):
+            self._set_license_revocation_feedback(
+                "Este nao e um codigo de cancelamento. O codigo deve iniciar por SIGE-REV1."
+            )
+            return
+
+        cancel_button = MDFlatButton(text="VOLTAR")
+        confirm_button = MDRaisedButton(
+            text="CONFIRMAR CANCELAMENTO",
+            md_bg_color=self._theme_color("danger", [0.78, 0.22, 0.24, 1]),
+        )
+        confirmation = MDDialog(
+            title="Confirmar cancelamento definitivo?",
+            text=(
+                "Esta acao validara o codigo e bloqueara o login neste computador de forma definitiva. "
+                "Para um bloqueio reversivel, use o codigo SIGE-SUS1 de suspensao."
+            ),
+            auto_dismiss=False,
+            buttons=[cancel_button, confirm_button],
+        )
+
+        def submit(_button):
+            confirmation.dismiss()
+            self._submit_license_revocation(code)
+
+        cancel_button.bind(on_release=lambda _button: confirmation.dismiss())
+        confirm_button.bind(on_release=submit)
+        confirmation.open()
+
+    def _submit_license_revocation(self, code):
+        """Aplica somente uma revogacao confirmada para a licenca ativa."""
+        if self.license_client is None or self.operation_in_progress:
+            return
+
+        def task():
+            active_result = self.license_client.validate()
+            if not active_result or not active_result.allowed:
+                return {"status": "license_not_active", "result": active_result}
+            apply_revocation = getattr(self.license_client, "apply_revocation", None)
+            if not callable(apply_revocation):
+                return {
+                    "status": "unsupported",
+                    "message": "Esta versao do sistema ainda nao suporta importar codigos de cancelamento.",
+                }
+            result = apply_revocation(code)
+            if getattr(result, "state", "") != "revoked":
+                return {"status": "not_revoked", "result": result}
+            return {"status": "revoked", "result": result}
+
+        def handle_result(payload, error):
+            if error:
+                self._set_license_revocation_feedback(
+                    "Nao foi possivel validar o codigo de cancelamento neste momento."
+                )
+                return
+            result = (payload or {}).get("result")
+            status = str((payload or {}).get("status") or "")
+            if status != "revoked":
+                message = (payload or {}).get("message") or self._license_message(result)
+                self._set_license_revocation_feedback(message)
+                if status == "license_not_active":
+                    self._license_access_confirmed = False
+                    self._desktop_license_state = str(getattr(result, "state", "") or "")
+                    self.license_status = self._license_message(result)
+                    self._set_login_enabled(False)
+                    self._refresh_license_control_actions()
+                return
+
+            # O resultado de revogacao nunca e uma autorizacao. O bloqueio e
+            # aplicado na interface imediatamente, antes de o utilizador poder
+            # tentar uma nova sessao ou reutilizar campos ja preenchidos.
+            self._license_access_confirmed = False
+            self._desktop_license_state = "revoked"
+            self.license_status = self._license_message(result)
+            self._set_login_enabled(False)
+            self._refresh_license_control_actions()
+            if self.password is not None:
+                self.password.text = ""
+            self._close_license_revocation_dialog()
+            self._close_license_dialog()
+            self._show_message(
+                "Licenca cancelada definitivamente",
+                "O codigo de cancelamento foi aplicado. O acesso a este sistema ficou bloqueado neste computador.",
+            )
+
+        self._run_background_task(
+            task,
+            handle_result,
+            busy_text="A validar codigo de cancelamento...",
+        )
+
+    def _open_license_control_dialog(self, kind):
+        """Importa suspensao, reativacao ou recuperacao sem misturar fluxos."""
+        if self.license_client is None or self.operation_in_progress:
+            return
+        if kind not in {"suspension", "reactivation", "restoration"}:
+            return
+        if kind == "suspension" and not self._license_access_confirmed:
+            self._show_message(
+                "Licenca indisponivel",
+                "A licenca precisa estar ativa antes de importar uma suspensao.",
+            )
+            return
+        if kind == "reactivation" and self._desktop_license_state != "suspended":
+            self._show_message(
+                "Reativacao indisponivel",
+                "Este computador nao possui uma suspensao ativa que possa ser reativada.",
+            )
+            return
+        if kind == "restoration" and not (
+            self._license_access_confirmed or self._desktop_license_state == "revoked"
+        ):
+            self._show_message(
+                "Recuperacao indisponivel",
+                "Este computador nao possui um cancelamento ativo que possa ser recuperado.",
+            )
+            return
+        if self._license_control_dialog:
+            if self._license_control_kind == kind:
+                self._license_control_dialog.open()
+                return
+            self._close_license_control_dialog()
+
+        self._license_control_kind = kind
+        is_suspension = kind == "suspension"
+        is_restoration = kind == "restoration"
+        prefix = "SIGE-SUS1" if is_suspension else "SIGE-RST1" if is_restoration else "SIGE-RES1"
+        title = (
+            "Aplicar suspensao de licenca" if is_suspension
+            else "Aplicar recuperacao de cancelamento" if is_restoration
+            else "Aplicar reativacao de licenca"
+        )
+        heading = (
+            "SUSPENSAO DE LICENCA" if is_suspension
+            else "RECUPERACAO DE CANCELAMENTO" if is_restoration
+            else "REATIVACAO DE LICENCA"
+        )
+        details = (
+            "A suspensao bloqueia o acesso neste computador, mas podera ser removida somente por um novo codigo assinado do superadmin."
+            if is_suspension
+            else "A recuperacao reverte somente o cancelamento indicado pelo superadmin. Ela nao altera o prazo contratado nem autoriza outro computador."
+            if is_restoration
+            else "A reativacao remove somente a suspensao correspondente. Ela nao anula cancelamentos definitivos e a licenca continua sujeita ao prazo contratado."
+        )
+        accent = self._theme_color("primary", [0.10, 0.33, 0.58, 1])
+        danger = self._theme_color("danger", [0.78, 0.22, 0.24, 1])
+        text_secondary = self._theme_color("text_secondary", [0.35, 0.38, 0.45, 1])
+        on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(16), dp(12), dp(16), dp(12)],
+            adaptive_height=True,
+            size_hint_x=1,
+        )
+        content.bind(minimum_height=content.setter("height"))
+        card = MDCard(
+            orientation="horizontal",
+            spacing=dp(10),
+            padding=[dp(12), dp(10), dp(12), dp(10)],
+            size_hint_y=None,
+            height=dp(88),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(danger if is_suspension else accent, 0.10),
+        )
+        icon = MDIcon(
+            icon="pause-circle-outline" if is_suspension else "backup-restore" if is_restoration else "play-circle-outline",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=danger if is_suspension else accent,
+            size_hint_x=None,
+            width=dp(28),
+        )
+        icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        card.add_widget(icon)
+        card.add_widget(self._register_text_label(details, "text_secondary", "Caption"))
+        content.add_widget(card)
+        content.add_widget(self._register_text_label(heading, "text_primary", "Caption", True))
+        self._license_control_code_field = MDTextField(
+            hint_text=f"Cole o codigo completo {prefix}. recebido por e-mail",
+            helper_text="Pode colar todas as linhas do codigo assinado enviado pelo superadmin.",
+            helper_text_mode="on_focus",
+            multiline=True,
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(100),
+        )
+        self._license_control_code_field.line_color_focus = accent
+        content.add_widget(self._license_control_code_field)
+        self._license_control_feedback = MDLabel(
+            text="",
+            opacity=0,
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=danger,
+            size_hint_y=None,
+            height=dp(0),
+        )
+        self._license_control_feedback.bind(
+            width=lambda instance, width: setattr(instance, "text_size", (width, None))
+        )
+        content.add_widget(self._license_control_feedback)
+        close_button = MDFlatButton(
+            text="FECHAR",
+            theme_text_color="Custom",
+            text_color=text_secondary,
+        )
+        submit_button = MDRaisedButton(
+            text="VALIDAR SUSPENSAO" if is_suspension else "VALIDAR RECUPERACAO" if is_restoration else "VALIDAR REATIVACAO",
+            md_bg_color=danger if is_suspension else accent,
+            theme_text_color="Custom",
+            text_color=on_primary,
+            on_release=lambda _button: self._confirm_license_control(),
+        )
+        self._license_control_dialog = MDDialog(
+            title=title,
+            type="custom",
+            content_cls=content,
+            size_hint=(0.64, None),
+            height=min(max(dp(385), (Window.height or dp(620)) * 0.66), dp(490)),
+            auto_dismiss=False,
+            buttons=[close_button, submit_button],
+        )
+        close_button.bind(on_release=lambda _button: self._close_license_control_dialog())
+        self._license_control_dialog.open()
+
+    def _close_license_control_dialog(self):
+        if self._license_control_code_field is not None:
+            self._license_control_code_field.text = ""
+        if self._license_control_dialog:
+            self._license_control_dialog.dismiss()
+        self._license_control_dialog = None
+        self._license_control_code_field = None
+        self._license_control_feedback = None
+        self._license_control_kind = ""
+
+    def _set_license_control_feedback(self, message=""):
+        if not self._license_control_feedback:
+            return
+        self._license_control_feedback.text = str(message or "")
+        self._license_control_feedback.opacity = 1 if message else 0
+        self._license_control_feedback.height = dp(42) if message else dp(0)
+
+    def _confirm_license_control(self):
+        if self.license_client is None or self.operation_in_progress:
+            return
+        kind = self._license_control_kind
+        prefix = "SIGE-SUS1." if kind == "suspension" else "SIGE-RST1." if kind == "restoration" else "SIGE-RES1."
+        raw_code = str(self._license_control_code_field.text if self._license_control_code_field else "")
+        code = "".join(raw_code.split())
+        if not code:
+            self._set_license_control_feedback("Cole o codigo recebido do superadmin.")
+            return
+        if not code.startswith(prefix):
+            self._set_license_control_feedback(
+                f"Este nao e o codigo esperado. O codigo deve iniciar por {prefix[:-1]}."
+            )
+            return
+        is_suspension = kind == "suspension"
+        is_restoration = kind == "restoration"
+        cancel_button = MDFlatButton(text="VOLTAR")
+        confirm_button = MDRaisedButton(
+            text="CONFIRMAR SUSPENSAO" if is_suspension else "CONFIRMAR RECUPERACAO" if is_restoration else "CONFIRMAR REATIVACAO",
+            md_bg_color=self._theme_color("danger", [0.78, 0.22, 0.24, 1]) if is_suspension else self._theme_color("primary", [0.10, 0.33, 0.58, 1]),
+        )
+        confirmation = MDDialog(
+            title="Confirmar suspensao?" if is_suspension else "Confirmar recuperacao?" if is_restoration else "Confirmar reativacao?",
+            text=(
+                "Esta acao bloqueara o login neste computador ate receber um codigo de reativacao do superadmin."
+                if is_suspension
+                else "Esta acao reverte o cancelamento indicado pelo superadmin e podera voltar a permitir o login se a licenca ainda estiver valida."
+                if is_restoration
+                else "Esta acao removera a suspensao correspondente e permitira voltar a iniciar sessao se a licenca ainda estiver valida."
+            ),
+            auto_dismiss=False,
+            buttons=[cancel_button, confirm_button],
+        )
+
+        def submit(_button):
+            confirmation.dismiss()
+            self._submit_license_control(kind, code)
+
+        cancel_button.bind(on_release=lambda _button: confirmation.dismiss())
+        confirm_button.bind(on_release=submit)
+        confirmation.open()
+
+    def _submit_license_control(self, kind, code):
+        if self.license_client is None or self.operation_in_progress:
+            return
+
+        def task():
+            current = self.license_client.validate()
+            if kind == "suspension":
+                if not current or not current.allowed:
+                    return {"status": "license_not_active", "result": current}
+                apply_suspension = getattr(self.license_client, "apply_suspension", None)
+                if not callable(apply_suspension):
+                    return {"status": "unsupported", "message": "Esta versao ainda nao suporta importar codigos de suspensao."}
+                result = apply_suspension(code)
+                if getattr(result, "state", "") != "suspended":
+                    return {"status": "not_suspended", "result": result}
+                return {"status": "suspended", "result": result}
+            if kind == "restoration":
+                if not current or not (
+                    getattr(current, "allowed", False)
+                    or getattr(current, "state", "") == "revoked"
+                ):
+                    return {"status": "license_not_recoverable", "result": current}
+                apply_restoration = getattr(self.license_client, "apply_restoration", None)
+                if not callable(apply_restoration):
+                    return {"status": "unsupported", "message": "Esta versao ainda nao suporta importar codigos de recuperacao."}
+                result = apply_restoration(code)
+                if not result or not getattr(result, "allowed", False):
+                    return {"status": "not_restored", "result": result}
+                return {"status": "restored", "result": result}
+            if not current or getattr(current, "state", "") != "suspended":
+                return {"status": "license_not_suspended", "result": current}
+            apply_reactivation = getattr(self.license_client, "apply_reactivation", None)
+            if not callable(apply_reactivation):
+                return {"status": "unsupported", "message": "Esta versao ainda nao suporta importar codigos de reativacao."}
+            result = apply_reactivation(code)
+            if not result or not getattr(result, "allowed", False):
+                return {"status": "not_reactivated", "result": result}
+            return {"status": "reactivated", "result": result}
+
+        def handle_result(payload, error):
+            if error:
+                self._set_license_control_feedback("Nao foi possivel validar este codigo de controlo neste momento.")
+                return
+            result = (payload or {}).get("result")
+            status = str((payload or {}).get("status") or "")
+            if status == "suspended":
+                self._license_access_confirmed = False
+                self._desktop_license_state = "suspended"
+                self.license_status = self._license_message(result)
+                self._set_login_enabled(False)
+                self._refresh_license_control_actions()
+                if self.password is not None:
+                    self.password.text = ""
+                self._close_license_control_dialog()
+                self._close_license_dialog()
+                self._show_message(
+                    "Licenca suspensa",
+                    "A suspensao foi aplicada. Este computador so voltara a funcionar depois de importar um codigo SIGE-RES1 do superadmin.",
+                )
+                return
+            if status in {"reactivated", "restored"}:
+                self._close_license_control_dialog()
+                self._close_license_dialog()
+                self._grant_license_access(result)
+                self._show_message(
+                    "Licenca recuperada" if status == "restored" else "Licenca reativada",
+                    self._license_message(result),
+                )
+                return
+            message = (payload or {}).get("message") or self._license_message(result)
+            self._set_license_control_feedback(message)
+            if status in {"license_not_active", "license_not_suspended", "license_not_recoverable"}:
+                self._license_access_confirmed = False
+                self._desktop_license_state = str(getattr(result, "state", "") or "")
+                self.license_status = self._license_message(result)
+                self._set_login_enabled(False)
+                self._refresh_license_control_actions()
+
+        busy = (
+            "A validar codigo de suspensao..." if kind == "suspension"
+            else "A validar codigo de recuperacao..." if kind == "restoration"
+            else "A validar codigo de reativacao..."
+        )
+        self._run_background_task(task, handle_result, busy_text=busy)
+
+    @staticmethod
+    def _license_message(result):
+        expiry = str(getattr(result, "expires_at", "") or "")
+        if getattr(result, "allowed", False) and expiry == "9999-12-31T23:59:59+00:00":
+            return "Licenca vitalicia ativa."
+        if getattr(result, "allowed", False) and expiry:
+            visible_expiry = expiry.replace("T", " ").replace("+00:00", " UTC")
+            return f"Licenca ativa ate {visible_expiry}."
+        return str(getattr(result, "message", "Nao foi possivel validar a licenca."))
+
+    def _grant_license_access(self, result):
+        # Uma licenca pode ter chegado pela sincronizacao automatica enquanto
+        # o dialogo de pedido ainda estava aberto. Feche-o para que o
+        # administrador nao tenha de o dispensar manualmente.
+        self._close_license_dialog()
+        self._license_access_confirmed = True
+        self._desktop_license_state = str(getattr(result, "state", "active") or "active")
+        self.license_status = self._license_message(result)
+        self._refresh_license_control_actions()
+        # O login so e libertado quando existir uma conta administrativa
+        # local valida ou o codigo assinado for importado com sucesso.
+        self._set_login_enabled(False)
+        Clock.schedule_once(lambda _dt: self._ensure_admin_setup(), 0)
+
+    def _deny_license_access(self, result, *, show_activation=False):
+        self._license_access_confirmed = False
+        self._desktop_license_state = str(getattr(result, "state", "") or "")
+        self.license_status = self._license_message(result)
+        self._set_login_enabled(False)
+        self._refresh_license_control_actions()
+        if show_activation:
+            self._open_license_dialog(result)
+
+    def _validate_desktop_license(self, *, continue_login=False, show_activation=True):
+        if self.license_client is None:
+            self._license_access_confirmed = True
+            if continue_login:
+                super().login()
+            return
+        if self.operation_in_progress:
+            return
+
+        def task():
+            return self.license_client.validate()
+
+        def handle_result(result, error):
+            if error:
+                result = LicenseResult(False, "storage_error", "Nao foi possivel validar a licenca local.")
+            if result and result.allowed:
+                self._grant_license_access(result)
+                if continue_login:
+                    super(UnifiedLoginScreen, self).login()
+                return
+            self._deny_license_access(result or LicenseResult(False, "storage_error", "Nao foi possivel validar a licenca local."), show_activation=show_activation)
+
+        self._run_background_task(task, handle_result, busy_text="A validar licenca do computador...")
+
+    def _calc_license_dialog_sizes(self):
+        width = Window.width or dp(900)
+        height = Window.height or dp(620)
+        if width < dp(620):
+            width_hint = 0.94
+        elif width < dp(980):
+            width_hint = 0.76
+        else:
+            width_hint = 0.64
+        dialog_height = min(max(dp(380), height * 0.65), dp(460))
+        content_height = max(dp(220), dialog_height - dp(150))
+        return width_hint, dialog_height, content_height
+
+    def _update_license_dialog_size(self):
+        if not self._license_dialog:
+            return
+        width_hint, dialog_height, content_height = self._calc_license_dialog_sizes()
+        self._license_dialog.size_hint = (width_hint, None)
+        self._license_dialog.height = dialog_height
+        if self._license_content_container is not None:
+            self._license_content_container.height = content_height
+
+    def _open_license_dialog(self, result):
+        if self._license_dialog:
+            self._license_dialog.open()
+            return
+
+        license_import_states = {"activation_required", "expired"}
+        can_activate = getattr(result, "state", "") in license_import_states
+        is_renewal = getattr(result, "state", "") == "expired"
+        request_ready = False
+        self._license_request_code = ""
+        self._license_request_recipient = ""
+        self._license_request_submitted = False
+        if can_activate:
+            try:
+                (
+                    self._license_request_recipient,
+                    self._license_request_code,
+                    self._license_request_submitted,
+                ) = self.license_client.pending_license_request()
+                request_ready = True
+            except Exception:
+                request_ready = False
+        accent = self._theme_color("primary", [0.10, 0.33, 0.58, 1])
+        card_alt = self._theme_color("card_alt", [0.94, 0.95, 0.97, 1])
+        text_secondary = self._theme_color("text_secondary", [0.35, 0.38, 0.45, 1])
+        on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
+        dialog_title = (
+            "Renovacao da licenca" if is_renewal
+            else "Ativacao da licenca" if can_activate
+            else "Licenca suspensa" if getattr(result, "state", "") == "suspended"
+            else "Licenca cancelada" if getattr(result, "state", "") == "revoked"
+            else "Licenca indisponivel"
+        )
+        status_title = (
+            "Pedido pendente" if can_activate and self._license_request_submitted
+            else "Renovacao necessaria" if is_renewal
+            else "Ativacao necessaria" if can_activate
+            else "Reativacao necessaria" if getattr(result, "state", "") == "suspended"
+            else "Recuperacao necessaria" if getattr(result, "state", "") == "revoked"
+            else "Verificacao necessaria"
+        )
+        status_message = self._license_message(result)
+        if can_activate and self._license_request_submitted:
+            status_message = "Pedido enviado. Aguarde a resposta do responsavel."
+        elif is_renewal and request_ready:
+            status_message = "Selecione o plano e peca a renovacao."
+        elif can_activate and not request_ready:
+            status_message = "Pode copiar o pedido e envia-lo ao responsavel."
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(16), dp(10), dp(16), dp(10)],
+            adaptive_height=True,
+            size_hint_x=1,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        status_card = MDCard(
+            orientation="horizontal",
+            spacing=dp(12),
+            padding=[dp(14), dp(11), dp(14), dp(11)],
+            size_hint_y=None,
+            height=dp(92),
+            radius=[dp(16)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(accent, 0.12),
+        )
+        icon_slot = MDCard(
+            size_hint=(None, None),
+            size=(dp(48), dp(48)),
+            radius=[dp(15)],
+            elevation=0,
+            md_bg_color=self._color_with_alpha(accent, 0.18),
+        )
+        status_icon = MDIcon(
+            icon="email-check-outline" if can_activate and self._license_request_submitted else "shield-sync" if is_renewal else "shield-key-outline" if can_activate else "shield-alert-outline",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=accent,
+        )
+        status_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+        icon_slot.add_widget(status_icon)
+        status_text = MDBoxLayout(orientation="vertical", spacing=dp(3), size_hint_x=1)
+        status_text.add_widget(self._register_text_label(status_title, "text_primary", "Subtitle1", True))
+        status_text.add_widget(self._register_text_label(status_message, "text_secondary", "Caption"))
+        status_card.add_widget(icon_slot)
+        status_card.add_widget(status_text)
+        content.add_widget(status_card)
+
+        if can_activate:
+            self._license_selected_plan = "" if is_renewal else "Mensal"
+            saved_details = {}
+            try:
+                saved_details = parse_license_request(self.license_client.activation_request()).get("request_details") or {}
+            except Exception:
+                pass
+            if saved_details:
+                self._license_selected_plan = (
+                    "" if saved_details.get("plan_choice") == "Manter plano atual"
+                    else saved_details.get("requested_plan", "")
+                )
+            self._license_plan_button = MDRectangleFlatIconButton(
+                icon="menu-down",
+                text="Plano: " + (self._license_selected_plan or "Manter plano atual"),
+                theme_text_color="Custom", text_color=accent,
+                disabled=bool(saved_details),
+                on_release=lambda caller: self._open_license_plan_menu(caller, is_renewal),
+            )
+            content.add_widget(self._license_plan_button)
+            content.add_widget(self._register_text_label(
+                "O pedido usa os dados desta instalacao. Quando o superadmin emitir a licenca, o sistema recebe e aplica-a automaticamente.",
+                "text_secondary", "Caption",
+            ))
+        else:
+            support_card = MDCard(
+                orientation="horizontal",
+                spacing=dp(9),
+                padding=[dp(12), dp(10), dp(12), dp(10)],
+                size_hint_y=None,
+                height=dp(64),
+                radius=[dp(14)],
+                elevation=0,
+                md_bg_color=card_alt,
+            )
+            support_icon = MDIcon(
+                icon="information-outline",
+                halign="center",
+                valign="middle",
+                theme_text_color="Custom",
+                text_color=accent,
+                size_hint_x=None,
+                width=dp(22),
+            )
+            support_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+            support_card.add_widget(support_icon)
+            support_message = (
+                "A reativacao sera aplicada automaticamente assim que o superadmin a emitir."
+                if getattr(result, "state", "") == "suspended"
+                else "A recuperacao sera aplicada automaticamente assim que o superadmin a emitir."
+                if getattr(result, "state", "") == "revoked"
+                else "Confirme a data e hora do computador e tente novamente. Se o problema continuar, contacte o superadmin."
+            )
+            support_card.add_widget(self._register_text_label(
+                support_message,
+                "text_secondary",
+                "Caption",
+            ))
+            content.add_widget(support_card)
+
+        scroll = MDScrollView(do_scroll_x=False, size_hint=(1, 1))
+        scroll.add_widget(content)
+        width_hint, dialog_height, content_height = self._calc_license_dialog_sizes()
+        self._license_content_container = MDBoxLayout(
+            orientation="vertical",
+            size_hint=(1, None),
+            height=content_height,
+        )
+        self._license_content_container.add_widget(scroll)
+
+        close_button = MDFlatButton(
+            text="FECHAR",
+            theme_text_color="Custom",
+            text_color=text_secondary,
+        )
+        buttons = [close_button]
+        if can_activate:
+            if request_ready and self._license_request_submitted:
+                buttons.insert(
+                    0,
+                    MDFlatButton(
+                        text="REENVIAR PEDIDO",
+                        theme_text_color="Custom",
+                        text_color=accent,
+                        on_release=lambda _button: self._retry_license_request_email(),
+                    ),
+                )
+            else:
+                buttons.insert(
+                    0,
+                    MDRaisedButton(
+                        text="PEDIR RENOVACAO" if is_renewal else "PEDIR LICENCA",
+                        md_bg_color=accent,
+                        theme_text_color="Custom",
+                        text_color=on_primary,
+                        on_release=lambda _button: self._confirm_license_request_email(),
+                    ),
+                )
+        elif getattr(result, "state", "") != "not_configured":
+            buttons.insert(0, MDRaisedButton(text="TENTAR NOVAMENTE", on_release=lambda _button: self._retry_license_validation()))
+        self._license_dialog = MDDialog(
+            title=dialog_title,
+            type="custom",
+            content_cls=self._license_content_container,
+            size_hint=(width_hint, None),
+            height=dialog_height,
+            auto_dismiss=False,
+            buttons=buttons,
+        )
+        close_button.bind(on_release=lambda _button: self._close_license_dialog())
+        self._license_dialog.open()
+
+    def _open_license_plan_menu(self, caller, is_renewal):
+        choices = [("", "Manter plano atual")] if is_renewal else []
+        choices.extend((plan, plan) for plan in LICENSE_REQUEST_PLANS)
+        self._license_plan_menu = MDDropdownMenu(
+            caller=caller,
+            items=[{
+                "viewclass": "OneLineListItem", "text": label,
+                "on_release": lambda value=plan: self._select_license_plan(value),
+            } for plan, label in choices],
+            width_mult=4,
+        )
+        self._license_plan_menu.open()
+
+    def _select_license_plan(self, plan):
+        self._license_selected_plan = plan
+        self._license_plan_button.text = "Plano: " + (plan or "Manter plano atual")
+        self._license_plan_menu.dismiss()
+
+    def _retry_license_validation(self):
+        self._close_license_dialog()
+        self._validate_desktop_license(show_activation=True)
+
+    def _switch_to_reactivation_dialog(self):
+        self._close_license_dialog()
+        Clock.schedule_once(lambda _dt: self._open_license_control_dialog("reactivation"), 0)
+
+    def _switch_to_restoration_dialog(self):
+        self._close_license_dialog()
+        Clock.schedule_once(lambda _dt: self._open_license_control_dialog("restoration"), 0)
+
+    def _close_license_dialog(self):
+        if getattr(self, "_license_plan_menu", None):
+            self._license_plan_menu.dismiss()
+        self._license_plan_menu = None
+        self._license_plan_button = None
+        if self._license_dialog:
+            self._license_dialog.dismiss()
+        self._license_dialog = None
+        self._license_content_container = None
+        self._license_code_field = None
+        self._license_feedback = None
+        self._license_request_code = ""
+        self._license_request_recipient = ""
+        self._license_request_submitted = False
+
+    def _set_license_feedback(self, message=""):
+        if not self._license_feedback:
+            return
+        self._license_feedback.text = str(message or "")
+        self._license_feedback.opacity = 1 if message else 0
+        self._license_feedback.height = dp(42) if message else 0
+
+    def _retry_license_request_email(self):
+        """Permite reenviar o pedido salvo, sem gerar uma nova licenca."""
+        if self.license_client is None or self.operation_in_progress:
+            return
+        try:
+            self.license_client.retry_license_request()
+            self._license_request_submitted = False
+        except Exception:
+            self._set_license_feedback("Nao foi possivel preparar o reenvio deste pedido.")
+            return
+        self._confirm_license_request_email()
+
+    def _confirm_license_request_email(self):
+        if self.license_client is None or self.operation_in_progress:
+            return
+        try:
+            _recipient, _request_code, already_submitted = self.license_client.pending_license_request()
+        except Exception as error:
+            if str(error) == "request_email_not_configured":
+                try:
+                    code = self.license_client.prepare_license_request(
+                        username=self.username.text.strip() if self.username else "",
+                        plan=getattr(self, "_license_selected_plan", ""),
+                    )
+                except Exception:
+                    self._set_license_feedback("Nao foi possivel preparar o pedido. Tente novamente.")
+                    return
+                if getattr(self, "_license_plan_button", None):
+                    self._license_plan_button.disabled = True
+                self._show_license_request_fallback("", code)
+            else:
+                self._set_license_feedback("Nao foi possivel preparar o pedido de licenca deste computador.")
+            return
+        if already_submitted:
+            self._set_license_feedback("Este computador ja realizou o pedido de licenca.")
+            return
+
+        try:
+            self.license_client.prepare_license_request(
+                username=self.username.text.strip() if self.username else "",
+                plan=getattr(self, "_license_selected_plan", ""),
+            )
+        except Exception:
+            self._set_license_feedback("Nao foi possivel preparar o pedido. Tente novamente.")
+            return
+        if getattr(self, "_license_plan_button", None):
+            self._license_plan_button.disabled = True
+        self._send_license_request_email()
+
+    def _send_license_request_email(self, confirmation=None):
+        if confirmation is not None:
+            confirmation.dismiss()
+        try:
+            recipient, request_code, already_submitted = self.license_client.pending_license_request()
+            if already_submitted:
+                self._set_license_feedback("Este computador ja realizou o pedido de licenca.")
+                return
+        except Exception:
+            self._set_license_feedback("Nao foi possivel preparar o pedido de licenca deste computador.")
+            return
+
+        def task():
+            try:
+                send_system_email(
+                    recipient,
+                    LICENSE_REQUEST_SUBJECT,
+                    license_request_body(request_code),
+                )
+                return "sent"
+            except EmailServiceNotConfigured:
+                # Uma instalacao sem SMTP nao recebe credenciais do dono. Como
+                # alternativa segura, abre o cliente de e-mail do proprio
+                # utilizador com a mesma mensagem preenchida.
+                return "mail_client"
+
+        def handle_result(mode, error):
+            if error:
+                self._set_license_feedback(
+                    "O envio direto falhou. Vamos abrir o pedido no seu e-mail."
+                )
+                self._open_prepared_license_request_email(recipient, request_code)
+                return
+            if mode == "mail_client":
+                self._open_prepared_license_request_email(recipient, request_code)
+                return
+            self._finish_license_request_submission(
+                "Pedido enviado",
+                "Aguarde a resposta do responsavel. Depois, cole o codigo recebido e clique em APLICAR CODIGO.",
+            )
+
+        self._run_background_task(task, handle_result, busy_text="A enviar pedido de licenca...")
+
+    def _open_prepared_license_request_email(self, recipient, request_code):
+        try:
+            subject = quote(LICENSE_REQUEST_SUBJECT)
+            body = quote(license_request_body(request_code))
+            mailto_url = f"mailto:{quote(recipient, safe='@')}?subject={subject}&body={body}"
+            if not webbrowser.open(mailto_url):
+                raise RuntimeError("Nao foi possivel abrir o aplicativo de e-mail deste computador.")
+        except Exception:
+            self._show_license_request_fallback(recipient, request_code)
+            return
+        # Abrir o editor de e-mail nao comprova que a mensagem foi enviada.
+        self._set_license_feedback("Pedido aberto no seu e-mail. Clique em Enviar nessa janela.")
+
+    def _show_license_request_fallback(self, recipient, request_code):
+        close = MDFlatButton(text="FECHAR")
+        copy = MDRaisedButton(text="COPIAR PEDIDO")
+        dialog = MDDialog(
+            title="Enviar pedido ao responsavel",
+            text="O envio automatico nao esta disponivel. Copie o pedido e envie ao responsavel por mensagem ou e-mail.",
+            buttons=[close, copy],
+        )
+        def copy_request(*_args):
+            from kivy.core.clipboard import Clipboard
+            try:
+                Clipboard.copy((f"Para: {recipient}\n\n" if recipient else "") + license_request_body(request_code))
+            except Exception:
+                self._set_license_feedback("Nao foi possivel copiar o pedido. Tente novamente.")
+                return
+            dialog.dismiss()
+            self._set_license_feedback("Pedido copiado. Envie-o ao responsavel para receber a licenca.")
+        close.bind(on_release=lambda *_args: dialog.dismiss())
+        copy.bind(on_release=copy_request)
+        dialog.open()
+
+    def _finish_license_request_submission(self, title, message):
+        try:
+            if not self.license_client.mark_license_request_submitted():
+                self._set_license_feedback("Este computador ja realizou o pedido de licenca.")
+                return
+        except Exception:
+            self._set_license_feedback("O pedido foi enviado, mas nao foi possivel guardar a confirmacao local.")
+            return
+        self._license_request_submitted = True
+        self._close_license_dialog()
+        self._show_message(title, message)
+
+    def _submit_license_activation(self):
+        if self.license_client is None or self.operation_in_progress:
+            return
+        code = str(self._license_code_field.text if self._license_code_field else "").strip()
+        if not code:
+            self._set_license_feedback("Informe o codigo de ativacao.")
+            return
+
+        def task():
+            return self.license_client.activate(code)
+
+        def handle_result(result, error):
+            if error:
+                result = LicenseResult(False, "storage_error", "Nao foi possivel ativar a licenca local.")
+            if result and result.allowed:
+                self._close_license_dialog()
+                self._grant_license_access(result)
+                self._show_message("Licenca ativada", self._license_message(result))
+                return
+            failed = result or LicenseResult(False, "storage_error", "Nao foi possivel ativar a licenca local.")
+            self.license_status = self._license_message(failed)
+            self._set_license_feedback(self._license_message(failed))
+
+        self._run_background_task(task, handle_result, busy_text="A ativar este computador...")
+
+    def login(self):
+        if self.license_client is not None and not self._license_access_confirmed:
+            self._validate_desktop_license(continue_login=True, show_activation=True)
+            return
+        super().login()
+
+    def _apply_variant_defaults(self):
+        super()._apply_variant_defaults()
+        self.profile_name = self._tr("login.unified.profile_name")
+        self.identity_badge = self._tr("login.unified.identity_badge")
+        self.hero_title = self._tr("login.unified.hero_title")
+        self.hero_subtitle = self._tr("login.unified.hero_subtitle")
+        self.feature_one = self._tr("login.unified.feature_one")
+        self.feature_two = self._tr("login.unified.feature_two")
+        self.feature_three = self._tr("login.unified.feature_three")
+        self.login_heading = self._tr("login.unified.heading")
+        self.login_caption = self._tr("login.unified.caption")
+        self.login_button_text = self._tr("login.unified.button")
+        self.form_footer_text = self._tr("login.unified.footer")
+        self.context_label = self._tr("login.unified.context")
+
+    def _complete_login(self, user, role):
+        self.success_screen = "admin_home" if role == "admin" else "manager"
+        super()._complete_login(user, role)
 
 
 class ManagerLoginScreen(LoginScreen):

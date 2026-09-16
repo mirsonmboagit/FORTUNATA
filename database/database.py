@@ -4,6 +4,8 @@ import os
 import secrets
 import sqlite3
 import sys
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, date
 from time import perf_counter
 import bcrypt
@@ -247,15 +249,25 @@ def _build_forecasts(db, days=14, limit=10):
     expiry_risk.sort(key=lambda x: x["days_to_expiry"])
     return forecasts[:limit], expiry_risk[:limit]
 
-class Database(DatabaseAutomationMixin):
+from database.produce import ProduceInventoryMixin, PRODUCE_MODES
+
+
+class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
     # Camada principal de acesso ao SQLite.
     SKU_PREFIX_DEFAULT = "LOJA"
     BACKUP_RETENTION_DAYS = 30
     BACKUP_INTERVAL_HOURS = 24
     RECONCILE_INTERVAL_MINUTES = 60
     RECONCILE_DIFF_TOLERANCE = 0.0001
+    LOGIN_MAX_FAILED_ATTEMPTS = 5
+    LOGIN_LOCK_MINUTES = 15
+    SALES_ARCHIVE_AFTER_DAYS = 365
+    SALES_ARCHIVE_BATCH_SIZE = 1000
 
-    def __init__(self, db_name="inventory.db", db_path=None, db_folder="database"):
+    def __init__(
+        self, db_name="inventory.db", db_path=None, db_folder="database", *,
+        initialize=True, configure_journal=True,
+    ):
         # Guardamos o nome simples
         self.db_name = db_name
 
@@ -276,17 +288,50 @@ class Database(DatabaseAutomationMixin):
 
         self.conn = None
         self.cursor = None
+        self._configure_journal = bool(configure_journal)
         self.backup_root = str(DB_BACKUP_DIR)
         self.current_user = None
         self.current_role = None
         self.current_data_owner = None
+        # Mantem apenas o motivo seguro do ultimo login nesta instancia. A
+        # interface continua a receber a role ou None, como antes, para nao
+        # revelar se um utilizador existe a quem tenta entrar.
+        self._last_authentication_status = "unknown"
         self.sku_prefix = self._sanitize_sku_token(
             os.getenv("SKU_PREFIX", self.SKU_PREFIX_DEFAULT),
             fallback=self.SKU_PREFIX_DEFAULT,
             max_len=8,
         )
         self.connect()
-        self.setup()
+        if initialize:
+            self.setup()
+            self._setup_produce_inventory()
+        # A view temporaria inclui o arquivo sem alterar as consultas ja
+        # existentes a ``sales_history``. Ela precisa existir em cada conexao,
+        # inclusive nas conexoes usadas por workers.
+        self._configure_sales_archive()
+
+    def background_connection(self):
+        """Captura a sessao e abre/fecha uma conexao na thread consumidora.
+
+        A base desta instancia ja passou por setup; a nova conexao nao deve
+        repetir migracoes nem partilhar o cursor ou a transacao da interface.
+        """
+        db_path = self.db_path
+        context = (self.current_user, self.current_role, self.current_data_owner, self.sku_prefix)
+
+        @contextmanager
+        def connection():
+            db = Database(db_path=db_path, initialize=False, configure_journal=False)
+            try:
+                db.current_user, db.current_role, db.current_data_owner, db.sku_prefix = context
+                # Um worker breve nao necessita do cache de 20 MiB do POS.
+                db.conn.execute("PRAGMA cache_size = -4096")
+                yield db
+            finally:
+                db.close()
+
+        return connection()
     
     def connect(self):
         """Conectar ao banco de dados"""
@@ -297,7 +342,8 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute("PRAGMA busy_timeout = 30000")
             self.cursor.execute("PRAGMA foreign_keys = ON")
             try:
-                self.cursor.execute("PRAGMA journal_mode = WAL")
+                if self._configure_journal:
+                    self.cursor.execute("PRAGMA journal_mode = WAL")
                 self.cursor.execute("PRAGMA synchronous = NORMAL")
                 self.cursor.execute("PRAGMA temp_store = MEMORY")
                 self.cursor.execute("PRAGMA cache_size = -20000")
@@ -314,6 +360,139 @@ class Database(DatabaseAutomationMixin):
         """Fechar a conexÃƒÆ’Ã‚Â£o com o banco de dados"""
         if self.conn:
             self.conn.close()
+
+    def _configure_sales_archive(self):
+        """Liga o arquivo de vendas e mantem o historico transparente.
+
+        O arquivo contem apenas vendas finalizadas ha mais de um ano sem
+        devolucoes. Assim, o POS continua a usar a base operacional pequena,
+        enquanto relatorios que consultam ``sales_history`` continuam a ver
+        todo o historico.
+        """
+        archive_path = os.path.join(self.db_folder, "sales_archive.db")
+        self.sales_archive_path = archive_path
+        try:
+            attached = [row[1] for row in self.conn.execute("PRAGMA database_list")]
+            if "sales_archive" not in attached:
+                self.conn.execute("ATTACH DATABASE ? AS sales_archive", (archive_path,))
+
+            # CTAS preserva exatamente as colunas da versao instalada de
+            # sales, sem levar FKs para uma base que deliberadamente nao tem
+            # catalogo de produtos. Os IDs mantem-se para auditoria.
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS sales_archive.sales "
+                "AS SELECT * FROM main.sales WHERE 0"
+            )
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS sales_archive.idx_sales_archive_id "
+                "ON sales(id)"
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS sales_archive.idx_sales_archive_date "
+                "ON sales(sale_date)"
+            )
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS sales_archive.produce_sales "
+                "AS SELECT * FROM main.produce_sales WHERE 0"
+            )
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS sales_archive.idx_produce_sales_archive_id "
+                "ON produce_sales(sale_id)"
+            )
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS sales_archive.archive_metadata ("
+                "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+
+            # Uma TEMP VIEW tem precedencia sobre a view persistente de mesmo
+            # nome e pode referenciar uma base ATTACHed (algo que uma view
+            # persistente do SQLite nao permite). Vendas arquivadas nunca
+            # possuem devolucao, pois sao filtradas no arquivamento.
+            self.conn.execute("DROP VIEW IF EXISTS temp.sales_history")
+            self.conn.execute(
+                "CREATE TEMP VIEW sales_history AS "
+                "SELECT s.* FROM main.sales s "
+                "LEFT JOIN (SELECT sale_id, COALESCE(SUM(returned_qty), 0) returned_qty "
+                "FROM main.sales_returns GROUP BY sale_id) sr ON sr.sale_id = s.id "
+                "WHERE COALESCE(sr.returned_qty, 0) <= 0.000001 "
+                "UNION ALL SELECT * FROM sales_archive.sales"
+            )
+            self.conn.commit()
+        except sqlite3.Error as exc:
+            # Arquivo indisponivel nunca pode impedir o caixa de abrir. As
+            # vendas continuam na base principal e a tentativa sera repetida.
+            print(f"Erro ao preparar arquivo de vendas: {exc}")
+
+    def archive_sales_older_than(self, days=None, batch_size=None):
+        """Move com seguranca vendas antigas para ``sales_archive.db``.
+
+        Apenas vendas sem devolucao sao movidas. A operacao conserva os IDs e
+        tambem move metadados de venda avulsa; e uma unica transacao SQLite,
+        portanto uma falha nao deixa uma venda apenas em uma das bases.
+        Retorna a quantidade efetivamente arquivada.
+        """
+        days = self.SALES_ARCHIVE_AFTER_DAYS if days is None else max(1, int(days))
+        batch_size = self.SALES_ARCHIVE_BATCH_SIZE if batch_size is None else max(1, int(batch_size))
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            self._configure_sales_archive()
+            rows = self.conn.execute(
+                "SELECT s.id FROM main.sales s "
+                "LEFT JOIN main.sales_returns sr ON sr.sale_id = s.id "
+                "WHERE s.sale_date < ? GROUP BY s.id HAVING COUNT(sr.id) = 0 "
+                "ORDER BY s.id LIMIT ?",
+                (cutoff, batch_size),
+            ).fetchall()
+            sale_ids = [int(row[0]) for row in rows]
+            if not sale_ids:
+                return 0
+            placeholders = ",".join("?" for _ in sale_ids)
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                "INSERT OR IGNORE INTO sales_archive.sales "
+                f"SELECT * FROM main.sales WHERE id IN ({placeholders})",
+                sale_ids,
+            )
+            self.conn.execute(
+                "INSERT OR IGNORE INTO sales_archive.produce_sales "
+                f"SELECT * FROM main.produce_sales WHERE sale_id IN ({placeholders})",
+                sale_ids,
+            )
+            self.conn.execute(
+                f"DELETE FROM main.produce_sales WHERE sale_id IN ({placeholders})", sale_ids
+            )
+            self.conn.execute(
+                f"DELETE FROM main.sales WHERE id IN ({placeholders})", sale_ids
+            )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sales_archive.archive_metadata(key, value) VALUES (?, ?)",
+                ("last_archive_at", self._now_str()),
+            )
+            self.conn.commit()
+            return len(sale_ids)
+        except (sqlite3.Error, ValueError) as exc:
+            self.conn.rollback()
+            print(f"Erro ao arquivar vendas antigas: {exc}")
+            return 0
+
+    def _run_sales_archive_maintenance(self):
+        """Executa no maximo uma vez por dia, apos uma venda confirmada."""
+        try:
+            row = self.conn.execute(
+                "SELECT value FROM sales_archive.archive_metadata WHERE key = 'last_auto_check'"
+            ).fetchone()
+            today = datetime.now().strftime("%Y-%m-%d")
+            if row and str(row[0]) == today:
+                return 0
+            self.conn.execute(
+                "INSERT OR REPLACE INTO sales_archive.archive_metadata(key, value) VALUES (?, ?)",
+                ("last_auto_check", today),
+            )
+            self.conn.commit()
+            return self.archive_sales_older_than()
+        except sqlite3.Error as exc:
+            print(f"Erro na manutencao do arquivo de vendas: {exc}")
+            return 0
 
     @staticmethod
     def _sanitize_sku_token(value, fallback="SKU", max_len=8):
@@ -353,21 +532,23 @@ class Database(DatabaseAutomationMixin):
 
     def _rebuild_all_skus(self):
         """Regera SKUs no formato MANUAL-PREFIXO-000001 para produtos e arquivo."""
-        self.cursor.execute("SELECT id, description FROM products")
-        for product_id, description in self.cursor.fetchall():
-            sku = self._build_sku(product_id, description)
-            self.cursor.execute(
-                "UPDATE products SET sku = ? WHERE id = ?",
-                (sku, product_id),
-            )
-
-        self.cursor.execute("SELECT id, description FROM products_archive")
-        for product_id, description in self.cursor.fetchall():
-            sku = self._build_sku(product_id, description)
-            self.cursor.execute(
-                "UPDATE products_archive SET sku = ? WHERE id = ?",
-                (sku, product_id),
-            )
+        for table in ("products", "products_archive"):
+            # Um cursor de leitura independente permite processar lotes sem
+            # materializar o catalogo inteiro nem reescrever SKUs identicos.
+            reader = self.conn.execute(f"SELECT id, description, sku FROM {table}")
+            try:
+                while rows := reader.fetchmany(512):
+                    updates = []
+                    for product_id, description, current_sku in rows:
+                        sku = self._build_sku(product_id, description)
+                        if sku != current_sku:
+                            updates.append((sku, product_id))
+                    if updates:
+                        self.cursor.executemany(
+                            f"UPDATE {table} SET sku = ? WHERE id = ?", updates
+                        )
+            finally:
+                reader.close()
 
     @staticmethod
     def _normalize_vat_rule_code(vat_rule_code):
@@ -554,6 +735,33 @@ class Database(DatabaseAutomationMixin):
                     )
                 if "email_verified_at" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
+                # Campos de governanca de conta. Sao adicionados separadamente
+                # para que bases de dados antigas sejam atualizadas sem perder
+                # utilizadores nem as suas palavras-passe com hash.
+                if "is_active" not in cols:
+                    self.cursor.execute(
+                        "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                    )
+                if "must_change_password" not in cols:
+                    self.cursor.execute(
+                        "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "created_at" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN created_at TEXT")
+                if "password_changed_at" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN password_changed_at TEXT")
+                if "last_login_at" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+                if "failed_login_attempts" not in cols:
+                    self.cursor.execute(
+                        "ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "locked_until" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN locked_until TEXT")
+                if "blocked_at" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN blocked_at TEXT")
+                if "blocked_reason" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN blocked_reason TEXT")
                 self.cursor.execute(
                     "UPDATE users SET email = NULL "
                     "WHERE email IS NOT NULL AND TRIM(email) = ''"
@@ -561,8 +769,34 @@ class Database(DatabaseAutomationMixin):
                 self.cursor.execute(
                     "UPDATE users SET email = LOWER(TRIM(email)) WHERE email IS NOT NULL"
                 )
+                self.cursor.execute(
+                    "UPDATE users SET is_active = 1 WHERE is_active IS NULL"
+                )
+                self.cursor.execute(
+                    "UPDATE users SET must_change_password = 0 "
+                    "WHERE must_change_password IS NULL"
+                )
+                self.cursor.execute(
+                    "UPDATE users SET failed_login_attempts = 0 "
+                    "WHERE failed_login_attempts IS NULL"
+                )
             except sqlite3.Error as e:
                 print(f"Erro ao adicionar colunas de contacto: {e}")
+
+            # Uma instalacao nova deve ter somente um administrador. Bases
+            # antigas podem conter mais de um admin; nesses casos preservamos
+            # os dados tal como estao e deixamos a regularizacao para uma
+            # decisao explicita, sem criar um indice que pudesse falhar.
+            try:
+                self.cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+                admin_count = int(self.cursor.fetchone()[0] or 0)
+                if admin_count <= 1:
+                    self.cursor.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_admin "
+                        "ON users(role) WHERE role = 'admin'"
+                    )
+            except sqlite3.Error as e:
+                print(f"Erro ao preparar regra de administrador unico: {e}")
 
             # Codigos de uso unico para confirmar o e-mail cadastrado.
             self.cursor.execute('''
@@ -610,6 +844,15 @@ class Database(DatabaseAutomationMixin):
                 "CREATE INDEX IF NOT EXISTS idx_account_recovery_codes_username "
                 "ON account_recovery_codes(username)"
             )
+            # Recibo local de uso do codigo SIGE-ADM1. Impede que o mesmo
+            # codigo volte a criar uma conta mesmo se alguem tentar apagar a
+            # conta admin pela interface normal.
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admin_provisioning_receipts (
+                provisioning_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                consumed_at TEXT NOT NULL
+            )''')
             # Tabela de perguntas de seguranca
             self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_security_questions (
@@ -641,6 +884,53 @@ class Database(DatabaseAutomationMixin):
                 '''
             )
             self._seed_vat_rules()
+            # Regras comerciais configuradas pelo administrador.  Ficam
+            # separadas do produto para que uma alteracao seja aplicada de
+            # forma uniforme aos proximos cadastros e edicoes.
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS business_rules (
+                    owner_username TEXT NOT NULL,
+                    rule_key TEXT NOT NULL,
+                    rule_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT,
+                    PRIMARY KEY (owner_username, rule_key)
+                )
+                '''
+            )
+            # Campos livres do catalogo: o administrador pode adaptar o
+            # formulario sem alterar o esquema principal de products.
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS product_custom_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_username TEXT NOT NULL,
+                    field_key TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    field_type TEXT NOT NULL DEFAULT 'TEXT',
+                    required INTEGER NOT NULL DEFAULT 0,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_username, field_key)
+                )
+                '''
+            )
+            self.cursor.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS product_custom_field_values (
+                    product_id INTEGER NOT NULL,
+                    field_id INTEGER NOT NULL,
+                    value TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (product_id, field_id),
+                    FOREIGN KEY (product_id) REFERENCES products(id),
+                    FOREIGN KEY (field_id) REFERENCES product_custom_fields(id)
+                )
+                '''
+            )
             # Nao criar usuario padrao automaticamente
             # Tabela de produtos (atualizada com barcode, expiry_date, status e is_sold_by_weight)
             self.cursor.execute(''' 
@@ -1235,6 +1525,10 @@ class Database(DatabaseAutomationMixin):
                 "ON products (status)"
             )
             self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_owner_status "
+                "ON products (COALESCE(owner_username, ''), status)"
+            )
+            self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_fraud_status "
                 "ON fraud_alerts (status, severity)"
             )
@@ -1245,6 +1539,16 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_products_barcode "
                 "ON products (barcode)"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_barcode_normalized "
+                "ON products (LOWER(TRIM(barcode))) "
+                "WHERE barcode IS NOT NULL AND TRIM(barcode) <> ''"
+            )
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_products_owner_barcode_normalized "
+                "ON products (COALESCE(owner_username, ''), LOWER(TRIM(barcode))) "
+                "WHERE barcode IS NOT NULL AND TRIM(barcode) <> ''"
             )
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_products_description "
@@ -1269,6 +1573,12 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sales_product_date "
                 "ON sales (product_id, sale_date)"
+            )
+            # Os filtros historicos usam DATE e COALESCE; os indices nas
+            # colunas originais nao cobrem estas expressoes.
+            self.cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sales_owner_day "
+                "ON sales (COALESCE(owner_username, ''), DATE(sale_date))"
             )
             self.cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sales_terminal_date "
@@ -1312,17 +1622,168 @@ class Database(DatabaseAutomationMixin):
     
     # Autenticacao e recuperacao de acesso.
     def validate_user(self, username, password):
-        """Validar credenciais do usuÃƒÆ’Ã‚Â¡rio usando hashing"""
+        """Valida credenciais sem revelar estados sensiveis ao ecrã de login.
+
+        A API historica continua a devolver a role quando a autenticacao e
+        valida e ``None`` nos restantes casos. O motivo seguro fica disponivel
+        em :meth:`get_last_authentication_status` para a propria aplicacao.
+        """
+        username = str(username or "").strip()
+        password_text = str(password or "")
+        self._last_authentication_status = "invalid"
+        if not username or not password_text:
+            return None
         try:
             self.cursor.execute(
-                "SELECT password, role FROM users WHERE username = ?", (username,)
+                """
+                SELECT password, role, COALESCE(is_active, 1),
+                       COALESCE(failed_login_attempts, 0), locked_until
+                FROM users WHERE username = ?
+                """,
+                (username,),
             )
             result = self.cursor.fetchone()
-            if result and bcrypt.checkpw(password.encode('utf-8'), result[0]):
-                return result[1]  # Retorna a role do usuÃƒÆ’Ã‚Â¡rio
+            if not result:
+                return None
+
+            stored_hash, role, is_active, failed_attempts, locked_until_raw = result
+            if not bool(is_active):
+                self._last_authentication_status = "inactive"
+                return None
+
+            now = datetime.now().replace(microsecond=0)
+            locked_until = _parse_datetime_value(locked_until_raw)
+            if locked_until and locked_until > now:
+                self._last_authentication_status = "locked"
+                return None
+            if locked_until:
+                # Uma suspensao temporaria vencida e limpa antes da nova
+                # tentativa, para que o contador recomece de forma previsivel.
+                self.cursor.execute(
+                    "UPDATE users SET failed_login_attempts = 0, locked_until = NULL "
+                    "WHERE username = ?",
+                    (username,),
+                )
+                self.conn.commit()
+                failed_attempts = 0
+
+            if isinstance(stored_hash, str):
+                stored_hash = stored_hash.encode("utf-8")
+            try:
+                authenticated = bcrypt.checkpw(password_text.encode("utf-8"), stored_hash)
+            except (TypeError, ValueError):
+                authenticated = False
+
+            if authenticated:
+                self.cursor.execute(
+                    """
+                    UPDATE users
+                    SET last_login_at = ?, failed_login_attempts = 0,
+                        locked_until = NULL
+                    WHERE username = ?
+                    """,
+                    (now.isoformat(), username),
+                )
+                self.conn.commit()
+                self._last_authentication_status = "authenticated"
+                return role
+
+            attempts = max(0, int(failed_attempts or 0)) + 1
+            if attempts >= self.LOGIN_MAX_FAILED_ATTEMPTS:
+                lock_until = now + timedelta(minutes=self.LOGIN_LOCK_MINUTES)
+                self.cursor.execute(
+                    """
+                    UPDATE users
+                    SET failed_login_attempts = ?, locked_until = ?
+                    WHERE username = ?
+                    """,
+                    (attempts, lock_until.isoformat(), username),
+                )
+                self._last_authentication_status = "locked"
+            else:
+                self.cursor.execute(
+                    "UPDATE users SET failed_login_attempts = ? WHERE username = ?",
+                    (attempts, username),
+                )
+                self._last_authentication_status = "invalid"
+            self.conn.commit()
             return None
-        except (sqlite3.Error, ValueError) as e:
+        except (sqlite3.Error, TypeError, ValueError) as e:
             print(f"Erro ao validar usuÃƒÆ’Ã‚Â¡rio: {e}")
+            try:
+                self.conn.rollback()
+            except sqlite3.Error:
+                pass
+            self._last_authentication_status = "error"
+            return None
+
+    def get_last_authentication_status(self):
+        """Devolve o estado seguro da ultima autenticacao desta instancia."""
+        return self._last_authentication_status
+
+    @staticmethod
+    def _notify_superadmin_account_event(username, event_name):
+        """Entrega um alerta opcional sem deixar SMTP afetar a transacao local."""
+        try:
+            # A funcao de alertas envia SMTP de forma assincrona. Importacao
+            # tardia mantem compatibilidade com instalacoes ainda sem o modulo.
+            from licensing.account_events import notify_superadmin_account_event
+
+            notify_superadmin_account_event(username, event_name)
+        except Exception:
+            # O evento e adicional. Falhas de e-mail nunca podem desfazer uma
+            # alteracao local ja confirmada.
+            pass
+
+    def is_password_change_required(self, username):
+        """Indica se a conta tem de trocar a palavra-passe antes de uso normal."""
+        username = str(username or "").strip()
+        if not username:
+            return False
+        try:
+            self.cursor.execute(
+                "SELECT COALESCE(must_change_password, 0) FROM users WHERE username = ?",
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            return bool(row and row[0])
+        except sqlite3.Error as e:
+            print(f"Erro ao consultar troca obrigatoria de senha: {e}")
+            return False
+
+    def get_user_security_status(self, username):
+        """Resumo seguro de governanca; nunca inclui a palavra-passe nem hash."""
+        username = str(username or "").strip()
+        if not username:
+            return None
+        try:
+            self.cursor.execute(
+                """
+                SELECT username, role, COALESCE(is_active, 1),
+                       COALESCE(must_change_password, 0), created_at,
+                       password_changed_at, last_login_at,
+                       COALESCE(failed_login_attempts, 0), locked_until,
+                       blocked_at, blocked_reason
+                FROM users WHERE username = ?
+                """,
+                (username,),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+            keys = (
+                "username", "role", "is_active", "must_change_password",
+                "created_at", "password_changed_at", "last_login_at",
+                "failed_login_attempts", "locked_until", "blocked_at",
+                "blocked_reason",
+            )
+            status = dict(zip(keys, row))
+            status["is_active"] = bool(status["is_active"])
+            status["must_change_password"] = bool(status["must_change_password"])
+            status["failed_login_attempts"] = int(status["failed_login_attempts"] or 0)
+            return status
+        except sqlite3.Error as e:
+            print(f"Erro ao consultar seguranca da conta: {e}")
             return None
 
 
@@ -1380,53 +1841,165 @@ class Database(DatabaseAutomationMixin):
         except (TypeError, ValueError):
             return False
 
-    def create_admin(self, username, password, email=None):
-        """Criar admin inicial"""
+    def _assign_unowned_records_to_first_admin(self, username):
+        """Associa dados legados ao primeiro admin, sem tocar em dados ja donos."""
+        for table in (
+            "products",
+            "products_archive",
+            "sales",
+            "sales_returns",
+            "stock_movements",
+            "damage_evidence",
+            "product_status_history",
+            "fraud_alerts",
+            "stock_reconciliation_issues",
+            "user_logs",
+        ):
+            self.cursor.execute(
+                f"UPDATE {table} SET owner_username = ? "
+                "WHERE owner_username IS NULL OR TRIM(owner_username) = ''",
+                (username,),
+            )
+
+    @staticmethod
+    def _valid_bcrypt_hash(password_hash):
+        """Confirma formato bcrypt sem guardar ou revelar nenhum segredo."""
+        if isinstance(password_hash, str):
+            password_hash = password_hash.encode("utf-8")
+        if not isinstance(password_hash, (bytes, bytearray)):
+            return None
+        password_hash = bytes(password_hash)
+        if len(password_hash) != 60 or not password_hash.startswith((b"$2a$", b"$2b$", b"$2y$")):
+            return None
         try:
-            username = str(username or "").strip()
-            if not username or not password:
+            # A comparacao e intencionalmente falsa; bcrypt apenas valida o
+            # formato/custo do hash recebido no codigo assinado.
+            bcrypt.checkpw(b"provisioning-hash-validation", password_hash)
+        except (TypeError, ValueError):
+            return None
+        return password_hash
+
+    def create_admin(self, username, password, email=None):
+        """Cria o unico admin de uma instalacao quando ainda nao existe um."""
+        username = str(username or "").strip()
+        password_text = str(password or "")
+        if not username or not password_text:
+            return False
+        normalized_email = normalize_email(email) if email is not None else None
+        if normalized_email == "":
+            normalized_email = None
+        if normalized_email is not None and not is_valid_email(normalized_email):
+            return False
+        try:
+            # O bloqueio de escrita elimina a corrida entre duas tentativas de
+            # criacao e complementa o indice parcial nas bases novas.
+            self.cursor.execute("BEGIN IMMEDIATE")
+            if normalized_email is not None and self._email_in_use(normalized_email):
+                self.conn.rollback()
                 return False
-            normalized_email = normalize_email(email) if email is not None else None
-            if normalized_email == "":
-                normalized_email = None
-            if normalized_email is not None:
-                if not is_valid_email(normalized_email) or self._email_in_use(normalized_email):
-                    return False
+            self.cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            if int(self.cursor.fetchone()[0] or 0) > 0:
+                self.conn.rollback()
+                return False
             self.cursor.execute("SELECT COUNT(*) FROM users")
             had_users = int(self.cursor.fetchone()[0] or 0) > 0
-            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+            now = datetime.now().replace(microsecond=0).isoformat()
+            hashed_password = bcrypt.hashpw(password_text.encode("utf-8"), bcrypt.gensalt())
             self.cursor.execute(
-                "INSERT INTO users "
-                "(username, password, role, email, email_verified, email_verified_at, data_owner) "
-                "VALUES (?, ?, ?, ?, 0, NULL, ?)",
-                (username, hashed_password, 'admin', normalized_email, username),
+                """
+                INSERT INTO users (
+                    username, password, role, email, email_verified,
+                    email_verified_at, data_owner, is_active,
+                    must_change_password, created_at, password_changed_at,
+                    failed_login_attempts, locked_until
+                ) VALUES (?, ?, 'admin', ?, 0, NULL, ?, 1, 0, ?, ?, 0, NULL)
+                """,
+                (username, hashed_password, normalized_email, username, now, now),
             )
             if not had_users:
-                for table in (
-                    "products",
-                    "products_archive",
-                    "sales",
-                    "sales_returns",
-                    "stock_movements",
-                    "damage_evidence",
-                    "product_status_history",
-                    "fraud_alerts",
-                    "stock_reconciliation_issues",
-                    "user_logs",
-                ):
-                    self.cursor.execute(
-                        f"UPDATE {table} SET owner_username = ? "
-                        "WHERE owner_username IS NULL OR TRIM(owner_username) = ''",
-                        (username,),
-                    )
+                self._assign_unowned_records_to_first_admin(username)
             self.conn.commit()
-            self.log_action(username, 'admin', 'CREATE_USER', f"Admin criado: {username}")
+            self.log_action(username, "admin", "CREATE_USER", f"Admin criado: {username}")
             return True
         except sqlite3.IntegrityError:
             self.conn.rollback()
             return False
-        except (sqlite3.Error, ValueError) as e:
+        except (sqlite3.Error, TypeError, ValueError) as e:
             print(f"Erro ao criar admin: {e}")
+            self.conn.rollback()
+            return False
+
+    def create_provisioned_admin(self, username, password_hash, email=None, provisioning_id=None):
+        """Importa o unico admin a partir de credenciais bcrypt provisionadas.
+
+        ``password_hash`` e ``provisioning_id`` veem do codigo de
+        provisionamento assinado. O recibo do identificador torna a
+        importacao de uso unico; a palavra-passe temporaria nunca chega a
+        esta base em texto.
+        """
+        username = str(username or "").strip()
+        hashed_password = self._valid_bcrypt_hash(password_hash)
+        try:
+            code_id = str(uuid.UUID(str(provisioning_id or "")))
+        except (ValueError, AttributeError):
+            code_id = ""
+        if not username or not hashed_password or not code_id:
+            return False
+        normalized_email = normalize_email(email) if email is not None else None
+        if normalized_email == "":
+            normalized_email = None
+        if normalized_email is not None and not is_valid_email(normalized_email):
+            return False
+        try:
+            self.cursor.execute("BEGIN IMMEDIATE")
+            self.cursor.execute(
+                "SELECT 1 FROM admin_provisioning_receipts WHERE provisioning_id = ?",
+                (code_id,),
+            )
+            if self.cursor.fetchone():
+                self.conn.rollback()
+                return False
+            if normalized_email is not None and self._email_in_use(normalized_email):
+                self.conn.rollback()
+                return False
+            self.cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            if int(self.cursor.fetchone()[0] or 0) > 0:
+                self.conn.rollback()
+                return False
+            self.cursor.execute("SELECT COUNT(*) FROM users")
+            had_users = int(self.cursor.fetchone()[0] or 0) > 0
+            now = datetime.now().replace(microsecond=0).isoformat()
+            self.cursor.execute(
+                """
+                INSERT INTO users (
+                    username, password, role, email, email_verified,
+                    email_verified_at, data_owner, is_active,
+                    must_change_password, created_at, password_changed_at,
+                    failed_login_attempts, locked_until
+                ) VALUES (?, ?, 'admin', ?, 0, NULL, ?, 1, 1, ?, NULL, 0, NULL)
+                """,
+                (username, hashed_password, normalized_email, username, now),
+            )
+            if not had_users:
+                self._assign_unowned_records_to_first_admin(username)
+            self.cursor.execute(
+                "INSERT INTO admin_provisioning_receipts (provisioning_id, username, consumed_at) "
+                "VALUES (?, ?, ?)",
+                (code_id, username, now),
+            )
+            self.conn.commit()
+            self.log_action(
+                username,
+                "admin",
+                "CREATE_PROVISIONED_ADMIN",
+                "Conta admin provisionada; troca obrigatoria de palavra-passe.",
+            )
+            return True
+        except sqlite3.IntegrityError:
+            self.conn.rollback()
+            return False
+        except (sqlite3.Error, TypeError, ValueError) as e:
+            print(f"Erro ao importar admin provisionado: {e}")
             self.conn.rollback()
             return False
 
@@ -1451,22 +2024,51 @@ class Database(DatabaseAutomationMixin):
             return False
 
     def update_user_password(self, username, new_password, role=None):
-        """Atualizar senha do usuario"""
+        """Atualiza a senha e encerra o estado de credencial temporaria."""
+        username = str(username or "").strip()
+        password_text = str(new_password or "")
+        if not username or not password_text:
+            return False
         try:
-            hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+            hashed_password = bcrypt.hashpw(password_text.encode("utf-8"), bcrypt.gensalt())
+            now = datetime.now().replace(microsecond=0).isoformat()
             if role:
                 self.cursor.execute(
-                    "UPDATE users SET password = ? WHERE username = ? AND role = ?",
-                    (hashed_password, username, role),
+                    """
+                    UPDATE users
+                    SET password = ?, must_change_password = 0,
+                        password_changed_at = ?, failed_login_attempts = 0,
+                        locked_until = NULL
+                    WHERE username = ? AND role = ?
+                    """,
+                    (hashed_password, now, username, role),
                 )
             else:
                 self.cursor.execute(
-                    "UPDATE users SET password = ? WHERE username = ?",
-                    (hashed_password, username),
+                    """
+                    UPDATE users
+                    SET password = ?, must_change_password = 0,
+                        password_changed_at = ?, failed_login_attempts = 0,
+                        locked_until = NULL
+                    WHERE username = ?
+                    """,
+                    (hashed_password, now, username),
                 )
+            if self.cursor.rowcount != 1:
+                self.conn.rollback()
+                return False
+            # Um reset/recuperacao anterior nao pode ser reutilizado depois de
+            # uma nova palavra-passe ter sido escolhida.
+            self.cursor.execute("DELETE FROM password_resets WHERE username = ?", (username,))
+            self.cursor.execute(
+                "DELETE FROM account_recovery_codes WHERE username = ? AND used_at IS NULL",
+                (username,),
+            )
             self.conn.commit()
+            self._notify_superadmin_account_event(username, "PASSWORD_CHANGED")
+            self.log_action(username, role or self.get_user_role(username) or "user", "PASSWORD_CHANGED", "Palavra-passe alterada")
             return True
-        except sqlite3.Error as e:
+        except (sqlite3.Error, TypeError, ValueError) as e:
             print(f"Erro ao atualizar senha: {e}")
             self.conn.rollback()
             return False
@@ -1489,7 +2091,10 @@ class Database(DatabaseAutomationMixin):
     def update_admin_credentials(self, old_username, new_username, new_password):
         """Atualizar username e senha do admin padrao"""
         try:
-            if not new_username:
+            old_username = str(old_username or "").strip()
+            new_username = str(new_username or "").strip()
+            password_text = str(new_password or "")
+            if not old_username or not new_username or not password_text:
                 return False
             self.cursor.execute(
                 "SELECT COUNT(*) FROM users WHERE username = ? AND username != ?",
@@ -1498,15 +2103,30 @@ class Database(DatabaseAutomationMixin):
             if self.cursor.fetchone()[0] > 0:
                 return False
 
-            hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+            hashed_password = bcrypt.hashpw(password_text.encode("utf-8"), bcrypt.gensalt())
+            now = datetime.now().replace(microsecond=0).isoformat()
             self.cursor.execute(
-                "UPDATE users SET username = ?, password = ? WHERE username = ? AND role = 'admin'",
-                (new_username, hashed_password, old_username),
+                """
+                UPDATE users
+                SET username = ?, password = ?, must_change_password = 0,
+                    password_changed_at = ?, failed_login_attempts = 0,
+                    locked_until = NULL
+                WHERE username = ? AND role = 'admin'
+                """,
+                (new_username, hashed_password, now, old_username),
             )
             if self.cursor.rowcount == 0:
                 self.conn.rollback()
                 return False
+            self.cursor.execute(
+                "DELETE FROM password_resets WHERE username = ?", (old_username,)
+            )
+            self.cursor.execute(
+                "DELETE FROM account_recovery_codes WHERE username = ? AND used_at IS NULL",
+                (old_username,),
+            )
             self.conn.commit()
+            self._notify_superadmin_account_event(new_username, "PASSWORD_CHANGED")
             return True
         except sqlite3.Error as e:
             print(f"Erro ao atualizar admin: {e}")
@@ -1603,11 +2223,11 @@ class Database(DatabaseAutomationMixin):
             return username
 
     def create_user(self, username, password, role, email=None, phone=None, data_owner=None):
-        """Criar usuario (admin ou manager)"""
+        """Cria apenas gerentes; admins entram pelo provisionamento assinado."""
         try:
             username = str(username or "").strip()
             role = str(role or "").strip().lower()
-            if not username or not password or role not in ("admin", "manager"):
+            if not username or not password or role != "manager":
                 return False
             email = normalize_email(email) if email is not None else None
             if email == "":
@@ -1618,11 +2238,17 @@ class Database(DatabaseAutomationMixin):
             phone = str(phone).strip() if phone else None
             owner = str(data_owner or username or "").strip() or username
             hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+            now = datetime.now().replace(microsecond=0).isoformat()
             self.cursor.execute(
-                "INSERT INTO users "
-                "(username, password, role, email, phone, data_owner, email_verified, email_verified_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL)",
-                (username, hashed_password, role, email, phone, owner),
+                """
+                INSERT INTO users (
+                    username, password, role, email, phone, data_owner,
+                    email_verified, email_verified_at, is_active,
+                    must_change_password, created_at, password_changed_at,
+                    failed_login_attempts, locked_until
+                ) VALUES (?, ?, 'manager', ?, ?, ?, 0, NULL, 1, 0, ?, ?, 0, NULL)
+                """,
+                (username, hashed_password, email, phone, owner, now, now),
             )
             self.conn.commit()
             return True
@@ -1921,13 +2547,25 @@ class Database(DatabaseAutomationMixin):
                 self.conn.rollback()
                 return {"ok": False, "reason": "invalid"}
             self.cursor.execute(
-                "UPDATE users SET password = ? WHERE username = ?",
-                (hashed_password, username),
+                """
+                UPDATE users
+                SET password = ?, must_change_password = 0,
+                    password_changed_at = ?, failed_login_attempts = 0,
+                    locked_until = NULL
+                WHERE username = ?
+                """,
+                (hashed_password, now, username),
             )
             if self.cursor.rowcount == 0:
                 self.conn.rollback()
                 return {"ok": False, "reason": "not_found"}
+            self.cursor.execute(
+                "DELETE FROM account_recovery_codes WHERE username = ? AND used_at IS NULL",
+                (username,),
+            )
+            self.cursor.execute("DELETE FROM password_resets WHERE username = ?", (username,))
             self.conn.commit()
+            self._notify_superadmin_account_event(username, "PASSWORD_CHANGED")
             return {"ok": True, "reason": "password_reset"}
         except (sqlite3.Error, TypeError, ValueError) as exc:
             print(f"Erro ao confirmar codigo de recuperacao: {exc}")
@@ -2074,13 +2712,22 @@ class Database(DatabaseAutomationMixin):
                 self.conn.rollback()
                 return {"ok": False, "reason": "not_found"}
             self.cursor.execute(
-                "UPDATE users SET password = ?, email_verified = 1, email_verified_at = ? "
-                "WHERE username = ?",
-                (hashed_password, now.isoformat(), username),
+                """
+                UPDATE users
+                SET password = ?, email_verified = 1, email_verified_at = ?,
+                    must_change_password = 0, password_changed_at = ?,
+                    failed_login_attempts = 0, locked_until = NULL
+                WHERE username = ?
+                """,
+                (hashed_password, now.isoformat(), now.isoformat(), username),
             )
             if self.cursor.rowcount == 0:
                 self.conn.rollback()
                 return {"ok": False, "reason": "not_found"}
+            self.cursor.execute(
+                "DELETE FROM account_recovery_codes WHERE username = ? AND used_at IS NULL",
+                (username,),
+            )
             self.cursor.execute(
                 """
                 INSERT INTO user_logs
@@ -2096,6 +2743,7 @@ class Database(DatabaseAutomationMixin):
                 ),
             )
             self.conn.commit()
+            self._notify_superadmin_account_event(username, "PASSWORD_CHANGED")
 
             notice_sent = True
             try:
@@ -2118,6 +2766,11 @@ class Database(DatabaseAutomationMixin):
         if not new_username and not new_password:
             return False
         try:
+            current_username = str(current_username or "").strip()
+            new_username = str(new_username or "").strip() if new_username else None
+            password_text = str(new_password or "") if new_password else None
+            if not current_username:
+                return False
             if new_username and self.user_exists(new_username, exclude_username=current_username):
                 return False
             update_parts = []
@@ -2125,10 +2778,20 @@ class Database(DatabaseAutomationMixin):
             if new_username:
                 update_parts.append("username = ?")
                 params.append(new_username)
-            if new_password:
-                hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+            if password_text:
+                hashed_password = bcrypt.hashpw(password_text.encode("utf-8"), bcrypt.gensalt())
                 update_parts.append("password = ?")
                 params.append(hashed_password)
+                now = datetime.now().replace(microsecond=0).isoformat()
+                update_parts.extend(
+                    (
+                        "must_change_password = 0",
+                        "password_changed_at = ?",
+                        "failed_login_attempts = 0",
+                        "locked_until = NULL",
+                    )
+                )
+                params.append(now)
             params.append(current_username)
             self.cursor.execute(
                 f"UPDATE users SET {', '.join(update_parts)} WHERE username = ? AND role = 'admin'",
@@ -2137,9 +2800,22 @@ class Database(DatabaseAutomationMixin):
             if self.cursor.rowcount == 0:
                 self.conn.rollback()
                 return False
+            if password_text:
+                self.cursor.execute(
+                    "DELETE FROM password_resets WHERE username = ?", (current_username,)
+                )
+                self.cursor.execute(
+                    "DELETE FROM account_recovery_codes WHERE username = ? AND used_at IS NULL",
+                    (current_username,),
+                )
             self.conn.commit()
+            if password_text:
+                self._notify_superadmin_account_event(
+                    new_username or current_username,
+                    "PASSWORD_CHANGED",
+                )
             return True
-        except sqlite3.Error as e:
+        except (sqlite3.Error, TypeError, ValueError) as e:
             print(f"Erro ao atualizar admin: {e}")
             self.conn.rollback()
             return False
@@ -2668,12 +3344,13 @@ class Database(DatabaseAutomationMixin):
         approved_by=None,
         approved_at=None,
         apply_stock=True,
+        movement_unit=None,
     ):
         scope_sql, scope_params = self._owner_filter()
         cursor.execute(
             f"""
             SELECT existing_stock, sold_stock, unit_purchase_price,
-                   sale_price, is_sold_by_weight
+                   sale_price, is_sold_by_weight, stock_mode
             FROM products WHERE id = ?
             {scope_sql}
             """,
@@ -2688,7 +3365,7 @@ class Database(DatabaseAutomationMixin):
         qty = float(qty)
         if qty <= 0:
             return None
-        if not is_by_weight and not qty.is_integer():
+        if not is_by_weight and movement_unit != "KG" and not qty.is_integer():
             return None
 
         if unit_cost is None:
@@ -2745,7 +3422,7 @@ class Database(DatabaseAutomationMixin):
         else:
             stock_after = stock_before
 
-        unit = "KG" if is_by_weight else "UN"
+        unit = movement_unit or ("SACO" if product[5] == "SACKS" else ("KG" if is_by_weight else "UN"))
         now_str = self._now_str()
         approved_at = approved_at or (now_str if approval_status == "APPROVED" else None)
         approved_by = approved_by or (created_by if approval_status == "APPROVED" else None)
@@ -3608,11 +4285,14 @@ class Database(DatabaseAutomationMixin):
                 else normalized_base_expiry
             )
 
+            source_produce = self.get_produce_settings(product_id)
             target_product_id = int(product_id)
             if normalized_barcode and target_expiry != normalized_base_expiry:
                 sibling = self._find_existing_batch(normalized_barcode, target_expiry)
                 if sibling:
                     target_product_id = int(sibling[0])
+                    if self.get_produce_settings(target_product_id)["stock_mode"] != source_produce["stock_mode"]:
+                        raise ValueError("O lote de destino usa outra unidade de stock")
                 else:
                     cloned_profit = float(base_sale_price or 0) - unit_cost
                     target_product_id = self._insert_product_row(
@@ -3633,6 +4313,7 @@ class Database(DatabaseAutomationMixin):
                         vat_rule_code=self._normalize_vat_rule_code(vat_rule_code),
                     )
 
+            self._save_produce_options_tx(target_product_id, source_produce)
             self.cursor.execute(
                 """
                 SELECT existing_stock, unit_purchase_price, sale_price
@@ -3681,7 +4362,7 @@ class Database(DatabaseAutomationMixin):
                 new_unit_cost = ((stock_before * old_cost) + (qty * unit_cost)) / total_qty
 
             new_total_purchase = new_unit_cost * total_qty
-            profit_per_unit = sale_price - new_unit_cost
+            profit_per_unit = 0 if source_produce["stock_mode"] == "SACKS" else sale_price - new_unit_cost
 
             self.cursor.execute(
                 """
@@ -4297,6 +4978,235 @@ class Database(DatabaseAutomationMixin):
         )
         return product_id
 
+    @staticmethod
+    def _default_product_business_rules():
+        """Defaults conservadores para uma instalacao que ainda nao configurou regras."""
+        return {
+            "default_profit_margin_percent": 30.0,
+            "minimum_profit_margin_percent": 0.0,
+            "enforce_minimum_margin": False,
+            # Preserva o comportamento de bases ja instaladas. O administrador
+            # pode ativar a protecao contra prejuizo nas regras comerciais.
+            "allow_negative_margin": True,
+        }
+
+    def get_product_business_rules(self):
+        """Obtem as regras de preco do proprietario ativo, com valores seguros por omissao."""
+        rules = self._default_product_business_rules()
+        owner = self._owner_value()
+        try:
+            self.cursor.execute(
+                "SELECT rule_key, rule_value FROM business_rules WHERE owner_username = ?",
+                (owner,),
+            )
+            stored = {key: value for key, value in self.cursor.fetchall()}
+            for key in rules:
+                if key not in stored:
+                    continue
+                value = json.loads(stored[key])
+                if key in {"enforce_minimum_margin", "allow_negative_margin"}:
+                    rules[key] = bool(value)
+                else:
+                    rules[key] = float(value)
+        except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+            # Uma configuracao danificada nao pode impedir a venda; os valores
+            # padrao continuam a ser usados ate o administrador corrigi-la.
+            return self._default_product_business_rules()
+        return rules
+
+    def update_product_business_rules(self, rules, username=None):
+        """Valida e guarda a politica comercial definida pelo administrador."""
+        if self.current_role and self.current_role != "admin":
+            raise PermissionError("Somente o administrador pode alterar regras comerciais.")
+        if not isinstance(rules, dict):
+            raise ValueError("As regras comerciais devem ser um conjunto de valores.")
+        defaults = self._default_product_business_rules()
+        normalized = dict(defaults)
+        for key in defaults:
+            if key not in rules:
+                continue
+            if key in {"enforce_minimum_margin", "allow_negative_margin"}:
+                normalized[key] = bool(rules[key])
+            else:
+                normalized[key] = float(rules[key])
+        for key in ("default_profit_margin_percent", "minimum_profit_margin_percent"):
+            if not 0 <= normalized[key] <= 1000:
+                raise ValueError("A margem deve estar entre 0% e 1000%.")
+        if normalized["enforce_minimum_margin"] and normalized["minimum_profit_margin_percent"] < 0:
+            raise ValueError("A margem minima nao pode ser negativa.")
+
+        owner = self._owner_value(username)
+        updated_by = username or self.current_user or "SYSTEM"
+        now = self._now_str()
+        try:
+            for key, value in normalized.items():
+                self.cursor.execute(
+                    '''INSERT INTO business_rules (owner_username, rule_key, rule_value, updated_at, updated_by)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(owner_username, rule_key) DO UPDATE SET
+                           rule_value = excluded.rule_value,
+                           updated_at = excluded.updated_at,
+                           updated_by = excluded.updated_by''',
+                    (owner, key, json.dumps(value), now, updated_by),
+                )
+            self.conn.commit()
+            return normalized
+        except sqlite3.Error:
+            self.conn.rollback()
+            raise
+
+    def _validate_product_pricing(self, sale_price, unit_purchase_price):
+        """Aplica a politica comercial no ponto de persistencia, nao apenas na UI."""
+        sale_price = float(sale_price)
+        unit_purchase_price = float(unit_purchase_price)
+        rules = self.get_product_business_rules()
+        if unit_purchase_price < 0 or sale_price < 0:
+            raise ValueError("Os precos nao podem ser negativos.")
+        profit = sale_price - unit_purchase_price
+        if profit < 0 and not rules["allow_negative_margin"]:
+            raise ValueError("O preco de venda nao pode ser inferior ao custo de compra.")
+        if rules["enforce_minimum_margin"] and unit_purchase_price > 0:
+            margin = (profit / unit_purchase_price) * 100
+            minimum = rules["minimum_profit_margin_percent"]
+            if margin + 1e-9 < minimum:
+                minimum_price = unit_purchase_price * (1 + minimum / 100)
+                raise ValueError(
+                    f"Preco abaixo da margem minima de {minimum:.2f}%. "
+                    f"Preco minimo: {minimum_price:.2f}."
+                )
+
+    def _ensure_admin_business_configuration(self):
+        if self.current_role and self.current_role != "admin":
+            raise PermissionError("Somente o administrador pode configurar o formulario.")
+
+    @staticmethod
+    def _normalize_custom_field_type(field_type):
+        field_type = str(field_type or "TEXT").strip().upper()
+        if field_type not in {"TEXT", "NUMBER"}:
+            raise ValueError("O tipo do campo deve ser TEXTO ou NUMERO.")
+        return field_type
+
+    def list_product_custom_fields(self, active_only=True):
+        owner = self._owner_value()
+        query = """SELECT id, field_key, label, field_type, required, active, sort_order
+                   FROM product_custom_fields WHERE owner_username = ?"""
+        params = [owner]
+        if active_only:
+            query += " AND active = 1"
+        query += " ORDER BY sort_order, id"
+        try:
+            self.cursor.execute(query, params)
+            return [
+                {
+                    "id": row[0], "key": row[1], "label": row[2], "type": row[3],
+                    "required": bool(row[4]), "active": bool(row[5]), "sort_order": row[6],
+                }
+                for row in self.cursor.fetchall()
+            ]
+        except sqlite3.Error:
+            return []
+
+    def create_product_custom_field(self, label, field_type="TEXT", required=False):
+        self._ensure_admin_business_configuration()
+        label = str(label or "").strip()
+        if not label or len(label) > 80:
+            raise ValueError("O nome do campo deve ter entre 1 e 80 caracteres.")
+        field_type = self._normalize_custom_field_type(field_type)
+        owner = self._owner_value()
+        base_key = "".join(char.lower() if char.isalnum() else "_" for char in label).strip("_") or "campo"
+        now = self._now_str()
+        try:
+            self.cursor.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM product_custom_fields WHERE owner_username = ?",
+                (owner,),
+            )
+            order = int(self.cursor.fetchone()[0] or 1)
+            field_key = base_key
+            suffix = 2
+            while self.cursor.execute(
+                "SELECT 1 FROM product_custom_fields WHERE owner_username = ? AND field_key = ?",
+                (owner, field_key),
+            ).fetchone():
+                field_key = f"{base_key}_{suffix}"
+                suffix += 1
+            self.cursor.execute(
+                '''INSERT INTO product_custom_fields
+                   (owner_username, field_key, label, field_type, required, active, sort_order, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)''',
+                (owner, field_key, label, field_type, int(bool(required)), order, now, now),
+            )
+            field_id = self.cursor.lastrowid
+            self.conn.commit()
+            return {"id": field_id, "key": field_key, "label": label, "type": field_type,
+                    "required": bool(required), "active": True, "sort_order": order}
+        except sqlite3.Error:
+            self.conn.rollback()
+            raise
+
+    def update_product_custom_field(self, field_id, label, field_type="TEXT", required=False, active=True):
+        self._ensure_admin_business_configuration()
+        label = str(label or "").strip()
+        if not label or len(label) > 80:
+            raise ValueError("O nome do campo deve ter entre 1 e 80 caracteres.")
+        field_type = self._normalize_custom_field_type(field_type)
+        try:
+            self.cursor.execute(
+                """UPDATE product_custom_fields SET label = ?, field_type = ?, required = ?, active = ?, updated_at = ?
+                   WHERE id = ? AND owner_username = ?""",
+                (label, field_type, int(bool(required)), int(bool(active)), self._now_str(), int(field_id), self._owner_value()),
+            )
+            if self.cursor.rowcount == 0:
+                raise ValueError("Campo personalizado nao encontrado.")
+            self.conn.commit()
+            return True
+        except (sqlite3.Error, ValueError):
+            self.conn.rollback()
+            raise
+
+    def delete_product_custom_field(self, field_id):
+        """Remove o campo do formulario sem apagar os valores historicos."""
+        return self.update_product_custom_field(
+            field_id,
+            next((field["label"] for field in self.list_product_custom_fields(False) if field["id"] == int(field_id)), "Campo"),
+            next((field["type"] for field in self.list_product_custom_fields(False) if field["id"] == int(field_id)), "TEXT"),
+            required=False,
+            active=False,
+        )
+
+    def get_product_custom_field_values(self, product_id):
+        try:
+            self.cursor.execute(
+                "SELECT field_id, value FROM product_custom_field_values WHERE product_id = ?",
+                (int(product_id),),
+            )
+            return {str(row[0]): row[1] or "" for row in self.cursor.fetchall()}
+        except (sqlite3.Error, TypeError, ValueError):
+            return {}
+
+    def _save_product_custom_field_values_tx(self, product_id, values):
+        if values is None:
+            return
+        if not isinstance(values, dict):
+            raise ValueError("Os campos personalizados sao invalidos.")
+        definitions = {str(field["id"]): field for field in self.list_product_custom_fields(True)}
+        for field_id, definition in definitions.items():
+            value = str(values.get(field_id, values.get(int(field_id), "")) or "").strip()
+            if definition["required"] and not value:
+                raise ValueError(f"{definition['label']} e obrigatorio.")
+            if value and definition["type"] == "NUMBER":
+                try:
+                    number = float(value.replace(",", "."))
+                    if number != number or abs(number) == float("inf"):
+                        raise ValueError
+                except (TypeError, ValueError):
+                    raise ValueError(f"{definition['label']} deve ser numerico.")
+            self.cursor.execute(
+                '''INSERT INTO product_custom_field_values (product_id, field_id, value, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(product_id, field_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at''',
+                (int(product_id), int(field_id), value or None, self._now_str()),
+            )
+
     def add_product(
         self,
         description,
@@ -4313,9 +5223,15 @@ class Database(DatabaseAutomationMixin):
         units_per_package=None,
         allow_pack_sale=False,
         vat_rule_code=DEFAULT_VAT_RULE_CODE,
+        produce_options=None,
+        custom_fields=None,
     ):
         """Adicionar um novo produto ao banco de dados"""
         try:
+            if produce_options is not None:
+                produce_mode, _ = self._normalize_produce_options(produce_options)
+                if produce_mode == "SACKS" and (is_sold_by_weight or allow_pack_sale):
+                    raise ValueError("Sacos avulsos nao usam conversao por embalagem ou stock em kg")
             is_sold_by_weight = bool(is_sold_by_weight)
             incoming_stock = _inventory_quantity(
                 existing_stock,
@@ -4330,6 +5246,7 @@ class Database(DatabaseAutomationMixin):
             sale_price = float(sale_price)
             total_purchase_price = float(total_purchase_price)
             unit_purchase_price = float(unit_purchase_price)
+            self._validate_product_pricing(sale_price, unit_purchase_price)
             profit_per_unit = sale_price - unit_purchase_price
             date_added = self._now_str()
             normalized_barcode = self._normalize_barcode_value(barcode)
@@ -4344,6 +5261,10 @@ class Database(DatabaseAutomationMixin):
             existing_batch = self._find_existing_batch(normalized_barcode, normalized_expiry)
             if existing_batch:
                 product_id, current_stock, current_sold_stock, current_unit_cost = existing_batch
+                existing_mode = self.get_produce_settings(product_id)["stock_mode"]
+                incoming_mode, _ = self._normalize_produce_options(produce_options)
+                if existing_mode != incoming_mode:
+                    raise ValueError("Este codigo e validade ja usam outra unidade de stock")
                 current_stock = float(current_stock or 0.0)
                 current_sold_stock = float(current_sold_stock or 0.0)
                 current_unit_cost = float(current_unit_cost or 0.0)
@@ -4398,6 +5319,8 @@ class Database(DatabaseAutomationMixin):
                         product_id,
                     ),
                 )
+                self._save_produce_options_tx(product_id, produce_options)
+                self._save_product_custom_field_values_tx(product_id, custom_fields)
                 self.conn.commit()
                 tipo = "KG" if is_sold_by_weight else "UNIDADE"
                 print(f"Lote existente fundido com sucesso! ID: {product_id} | Tipo: {tipo}")
@@ -4421,6 +5344,8 @@ class Database(DatabaseAutomationMixin):
                 vat_rule_code=normalized_vat_rule,
                 date_added=date_added,
             )
+            self._save_produce_options_tx(product_id, produce_options)
+            self._save_product_custom_field_values_tx(product_id, custom_fields)
             self.conn.commit()
             tipo = "KG" if is_sold_by_weight else "UNIDADE"
             print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Produto adicionado com sucesso! ID: {product_id} | Tipo: {tipo}")
@@ -4451,6 +5376,8 @@ class Database(DatabaseAutomationMixin):
         units_per_package=None,
         allow_pack_sale=False,
         vat_rule_code=DEFAULT_VAT_RULE_CODE,
+        produce_options=None,
+        custom_fields=None,
     ):
         """Atualizar produto existente"""
         return self._update_product_impl(
@@ -4469,11 +5396,14 @@ class Database(DatabaseAutomationMixin):
             units_per_package=units_per_package,
             allow_pack_sale=allow_pack_sale,
             vat_rule_code=vat_rule_code,
+            produce_options=produce_options,
+            custom_fields=custom_fields,
         )
         try:
             sale_price = float(sale_price)
             total_purchase_price = float(total_purchase_price)
             unit_purchase_price = float(unit_purchase_price)
+            self._validate_product_pricing(sale_price, unit_purchase_price)
             profit_per_unit = sale_price - unit_purchase_price
             normalized_barcode = self._normalize_barcode_value(barcode)
             normalized_expiry = self._normalize_expiry_value(expiry_date)
@@ -4566,6 +5496,81 @@ class Database(DatabaseAutomationMixin):
             print(f"Erro ao eliminar produto: {e}")
             self.conn.rollback()
             return False
+
+    def get_archived_products(self):
+        """Inclui os dois formatos de arquivo, apenas no espaco da sessao."""
+        scope, params = self._owner_filter()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = []
+            for table, source in (("products", "catalog"), ("products_archive", "archive")):
+                condition = "status = ?" if source == "catalog" else "1=1"
+                args = [ARCHIVED_PRODUCT_STATUS, *params] if source == "catalog" else params
+                for row in conn.execute(f"SELECT * FROM {table} WHERE {condition}{scope}", args):
+                    item = dict(row)
+                    item["archive_source"] = source
+                    rows.append(item)
+            return sorted(rows, key=lambda row: (str(row["description"]).casefold(), row["id"]))
+
+    def restore_archived_product(self, product_id, archive_source, username=None):
+        """Restaura atomicamente, sem sobrepor IDs, SKUs ou lotes existentes."""
+        if archive_source not in ("catalog", "archive"):
+            return {"ok": False, "message": "Origem do arquivo invalida."}
+        if self.current_role and self.current_role != "admin":
+            return {"ok": False, "message": "Apenas o administrador pode restaurar produtos."}
+        table = "products" if archive_source == "catalog" else "products_archive"
+        scope, params = self._owner_filter()
+        try:
+            with sqlite3.connect(self.db_path, timeout=30) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(f"SELECT * FROM {table} WHERE id = ?{scope}", (product_id, *params)).fetchone()
+                if row is None or (archive_source == "catalog" and row["status"] != ARCHIVED_PRODUCT_STATUS):
+                    return {"ok": False, "message": "Produto arquivado nao encontrado ou ja restaurado."}
+                item = dict(row)
+                if archive_source == "archive" and conn.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone():
+                    return {"ok": False, "message": "Este ID ja pertence a outro produto. O arquivo foi preservado."}
+                duplicate = conn.execute(
+                    """SELECT id FROM products WHERE id != ? AND COALESCE(owner_username, '') = ?
+                       AND LOWER(TRIM(barcode)) = LOWER(TRIM(?)) AND TRIM(COALESCE(barcode, '')) != ''
+                       AND TRIM(COALESCE(expiry_date, '')) = TRIM(COALESCE(?, ''))""",
+                    (product_id, item.get("owner_username") or "", item.get("barcode"), item.get("expiry_date")),
+                ).fetchone()
+                if duplicate:
+                    return {"ok": False, "message": f"Ja existe o lote #{duplicate['id']} com o mesmo codigo e validade. O arquivo foi preservado."}
+                status = item.get("status") or "ATIVO"
+                source = item.get("status_source") or "MANUAL"
+                if archive_source == "catalog":
+                    previous = conn.execute(
+                        "SELECT old_status, source FROM product_status_history WHERE product_id = ? AND new_status = ? ORDER BY id DESC LIMIT 1",
+                        (product_id, ARCHIVED_PRODUCT_STATUS),
+                    ).fetchone()
+                    status = previous["old_status"] if previous else "ATIVO"
+                if status == ARCHIVED_PRODUCT_STATUS:
+                    status = "ATIVO"
+                expiry = self._parse_expiry_date(item.get("expiry_date"))
+                if status in ("ATIVO", "PERTO_DO_PRAZO", "EXPIRADO"):
+                    today = datetime.now().date()
+                    status = "EXPIRADO" if expiry and expiry < today else "PERTO_DO_PRAZO" if expiry and expiry <= today + timedelta(days=NEAR_EXPIRY_DAYS) else "ATIVO"
+                    source = "AUTO"
+                now = self._now_str()
+                user = username or self.current_user or "SYSTEM"
+                reason = "Produto restaurado do arquivo"
+                if archive_source == "archive":
+                    columns = [r[1] for r in conn.execute("PRAGMA table_info(products)") if r[1] in item]
+                    conn.execute(f"INSERT INTO products ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                                 [item[column] for column in columns])
+                    conn.execute("DELETE FROM products_archive WHERE id = ?", (product_id,))
+                conn.execute("UPDATE products SET status = ?, status_source = ?, status_reason = ?, status_updated_at = ?, status_updated_by = ? WHERE id = ?",
+                             (status, source, reason, now, user, product_id))
+                conn.execute("""INSERT INTO product_status_history
+                    (product_id, old_status, new_status, reason, source, changed_at, changed_by, owner_username)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (product_id, ARCHIVED_PRODUCT_STATUS, status, reason, source, now, user, item.get("owner_username")))
+            return {"ok": True, "message": f"Produto restaurado ao catalogo. Estado: {status}."}
+        except sqlite3.Error:
+            return {"ok": False, "message": "Nao foi possivel restaurar: conflito ou erro na base de dados. O arquivo foi preservado."}
 
     def _product_has_related_records(self, product_id):
         """Indica se o produto e referenciado por alguma chave estrangeira.
@@ -4705,38 +5710,70 @@ class Database(DatabaseAutomationMixin):
         offset=0,
         selected_lot_ids_by_catalog_key=None,
     ):
-        """Return one aggregated Admin catalogue page instead of the whole table.
+        """Devolve somente uma página administrativa do catálogo.
 
-        Grouping runs next to the database, which keeps the API response small and
-        lets the Admin screen render its first rows without waiting for every lot
-        to cross the network.
+        A versão anterior buscava todos os lotes, agrupava em Python e só então
+        fatiava a página. Isso anulava a paginação em catálogos grandes.
         """
         started_at = perf_counter()
         try:
+            page_size = max(1, int(limit or 120))
+            page_offset = max(0, int(offset or 0))
+            count_query = "SELECT COUNT(*) FROM products p WHERE COALESCE(p.status, 'ATIVO') <> ?"
+            count_params = [ARCHIVED_PRODUCT_STATUS]
+            scope_sql, scope_params = self._owner_filter("p")
+            count_query += scope_sql
+            count_params.extend(scope_params)
+            search = (search_text or "").strip().lower()
+            if search:
+                like = f"%{search}%"
+                count_query += """ AND (CAST(p.id AS TEXT) LIKE ?
+                                        OR LOWER(COALESCE(p.description, '')) LIKE ?
+                                        OR LOWER(COALESCE(p.category, '')) LIKE ?
+                                        OR LOWER(COALESCE(p.barcode, '')) LIKE ?
+                                        OR LOWER(COALESCE(p.sku, '')) LIKE ?)"""
+                count_params.extend((like, like, like, like, like))
+            if category and category not in ("Todas", "Todas as Categorias"):
+                count_query += " AND p.category = ?"
+                count_params.append(category)
+            if sold_by_weight is not None:
+                count_query += " AND p.is_sold_by_weight = ?"
+                count_params.append(1 if bool(sold_by_weight) else 0)
+            total = int(self._readonly_fetchall(count_query, count_params)[0][0])
             rows = self.get_all_products_page(
                 search_text=search_text,
                 category=category,
                 sold_by_weight=sold_by_weight,
-                limit=None,
-                offset=0,
+                limit=page_size + 1,
+                offset=page_offset,
             ) or []
-            grouped_rows = aggregate_admin_product_rows(
-                rows,
-                selected_lot_ids_by_catalog_key,
-            )
-            page_size = max(1, int(limit or 120))
-            page_offset = max(0, int(offset or 0))
-            page_rows = grouped_rows[page_offset:page_offset + page_size]
+            has_more = len(rows) > page_size
+            page_rows = rows[:page_size]
+            # Em catálogos que cabem integralmente numa página preservamos a
+            # semântica histórica: lotes irmãos chegam já consolidados e o
+            # total é exato. Em bases grandes, ``has_more`` evita carregar as
+            # páginas restantes só para descobrir esse total.
+            if not has_more and page_offset == 0:
+                page_rows = aggregate_admin_product_rows(
+                    page_rows,
+                    selected_lot_ids_by_catalog_key,
+                )
+                return {
+                    "rows": page_rows,
+                    "has_more": False,
+                    "total": len(page_rows),
+                    "aggregated": True,
+                }
             result = {
                 "rows": page_rows,
-                "has_more": (page_offset + len(page_rows)) < len(grouped_rows),
-                "total": len(grouped_rows),
-                "aggregated": True,
+                "has_more": has_more,
+                "total": total,
+                "aggregated": False,
             }
             perf_log(
                 "db.get_all_products_catalog_page",
                 started_at,
-                f"rows={len(page_rows)} total={len(grouped_rows)} limit={page_size} offset={page_offset}",
+                f"rows={len(page_rows)} limit={page_size} offset={page_offset}",
             )
             return result
         except Exception as exc:
@@ -4804,6 +5841,7 @@ class Database(DatabaseAutomationMixin):
                     "allow_pack_sale": bool(row[9]) if len(row) > 9 else False,
                     "vat_rule_code": row[10] if len(row) > 10 else DEFAULT_VAT_RULE_CODE,
                     "catalog_key": catalog_key,
+                    "stock_mode": row[13] if len(row) > 13 else "EXACT",
                     "lot_count": 1,
                 }
                 ordered_keys.append(catalog_key)
@@ -4830,12 +5868,15 @@ class Database(DatabaseAutomationMixin):
                     item["vat_rule_code"],
                     item["catalog_key"],
                     item["lot_count"],
+                    item["stock_mode"],
                 )
             )
         return result
 
     @staticmethod
     def _catalog_identity_from_sale_row(row):
+        if len(row) > 13 and row[13] == "SACKS":
+            return f"sacks:{int(row[0])}"
         barcode = str(row[4] if len(row) > 4 and row[4] is not None else "").strip().lower()
         if barcode:
             return f"bc:{barcode}"
@@ -4879,7 +5920,7 @@ class Database(DatabaseAutomationMixin):
 
             query = """
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code, NULL, 1, stock_mode
                 FROM products
                 WHERE existing_stock > 0
                   AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
@@ -4963,7 +6004,7 @@ class Database(DatabaseAutomationMixin):
             placeholders = ",".join(["?"] * len(ids))
             query = f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code, NULL, 1, stock_mode
                 FROM products
                 WHERE id IN ({placeholders})
             """
@@ -5021,7 +6062,6 @@ class Database(DatabaseAutomationMixin):
     def get_product_by_barcode(self, barcode):
         """Buscar produto pelo cÃƒÆ’Ã‚Â³digo de barras - VERSÃƒÆ’Ã†â€™O ROBUSTA COM SUPORTE A KG"""
         try:
-            self.refresh_auto_statuses()
             barcode_clean = self._normalize_barcode_value(barcode)
             
             print(f"\nÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â DB: Buscando cÃƒÆ’Ã‚Â³digo de barras...")
@@ -5035,7 +6075,7 @@ class Database(DatabaseAutomationMixin):
             self.cursor.execute(
                 f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code, NULL, 1, stock_mode
                 FROM products
                 WHERE barcode IS NOT NULL
                   AND TRIM(barcode) != ''
@@ -5062,7 +6102,9 @@ class Database(DatabaseAutomationMixin):
             # Listar cÃƒÆ’Ã‚Â³digos disponÃƒÆ’Ã‚Â­veis para debug
             scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(
-                "SELECT barcode FROM products WHERE barcode IS NOT NULL AND barcode != ''" + scope_sql,
+                "SELECT barcode FROM products WHERE barcode IS NOT NULL AND barcode != ''"
+                + scope_sql
+                + " ORDER BY id DESC LIMIT 5",
                 tuple(scope_params),
             )
             available_barcodes = self.cursor.fetchall()
@@ -5093,7 +6135,7 @@ class Database(DatabaseAutomationMixin):
 
             query = f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code, NULL, 1, stock_mode
                 FROM products
                 WHERE barcode IS NOT NULL
                   AND TRIM(barcode) != ''
@@ -5130,7 +6172,7 @@ class Database(DatabaseAutomationMixin):
             rows = self._readonly_fetchall(
                 f"""
                 SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
-                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code
+                       expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code, NULL, 1, stock_mode
                 FROM products
                 WHERE barcode IS NOT NULL
                   AND TRIM(barcode) != ''
@@ -5148,9 +6190,42 @@ class Database(DatabaseAutomationMixin):
         except sqlite3.Error as e:
             print(f"Erro SQL ao buscar codigo de barras: {e}")
             return None
+
+    def get_sale_lots_by_barcode_fast(self, barcode):
+        """Retorna os lotes vendaveis de um barcode para a fila do scanner.
+
+        Esta consulta roda na conexao exclusiva do worker do scanner e evita
+        abrir uma segunda conexao ou carregar o catalogo inteiro para juntar
+        lotes com o mesmo barcode.
+        """
+        barcode_clean = self._normalize_barcode_value(barcode)
+        if not barcode_clean:
+            return []
+        try:
+            scope_sql, scope_params = self._owner_filter()
+            self.cursor.execute(
+                f"""
+            SELECT id, description, existing_stock, sale_price, barcode, is_sold_by_weight,
+                   expiry_date, status, units_per_package, allow_pack_sale, vat_rule_code, NULL, 1, stock_mode
+            FROM products
+            WHERE barcode IS NOT NULL
+              AND TRIM(barcode) != ''
+              AND LOWER(TRIM(barcode)) = LOWER(TRIM(?))
+              AND existing_stock > 0
+              AND status IN ('ATIVO', 'PERTO_DO_PRAZO')
+              AND (expiry_date IS NULL OR expiry_date = '' OR DATE(expiry_date) >= DATE('now'))
+              {scope_sql}
+            ORDER BY {self._expiry_order_clause()}
+                """,
+                (barcode_clean, *scope_params),
+            )
+            return self.cursor.fetchall()
+        except sqlite3.Error as exc:
+            print(f"Erro SQL ao consultar lotes do scanner: {exc}")
+            return []
         except Exception as e:
-            print(f"Erro geral ao buscar codigo de barras: {e}")
-            return None
+            print(f"Erro geral ao consultar lotes do scanner: {e}")
+            return []
 
     def _add_sale_tx(
         self,
@@ -5168,6 +6243,7 @@ class Database(DatabaseAutomationMixin):
         cash_session_id=None,
         discount_reason=None,
         discount_authorized_by=None,
+        produce_sale_mode=None,
         commit=True,
     ):
         """Grava uma linha de venda; permite uma transacao composta atomica."""
@@ -5185,7 +6261,7 @@ class Database(DatabaseAutomationMixin):
             scope_sql, scope_params = self._owner_filter()
             self.cursor.execute(f"""
                 SELECT description, existing_stock, sold_stock, is_sold_by_weight,
-                       unit_purchase_price, vat_rule_code, status
+                       unit_purchase_price, vat_rule_code, status, stock_mode
                 FROM products
                 WHERE id = ?
                 {scope_sql}
@@ -5201,6 +6277,22 @@ class Database(DatabaseAutomationMixin):
                 print(f"Erro: Produto ID {product_id} esta arquivado e nao pode ser vendido!")
                 return None
 
+            import math
+            if not math.isfinite(quantity) or quantity <= 0 or not math.isfinite(float(sale_price)) or float(sale_price) < 0:
+                raise ValueError("Quantidade ou preco invalido")
+            produce = product_info[7] == "SACKS"
+            if produce:
+                if produce_sale_mode not in PRODUCE_MODES:
+                    raise ValueError("Escolha a forma de venda avulsa")
+                if product_info[6] not in ("ATIVO", "PERTO_DO_PRAZO") or self._is_product_expired_for_sale(product_id):
+                    raise ValueError("Produto indisponivel para venda")
+                if produce_sale_mode != "weight" and not quantity.is_integer():
+                    raise ValueError("Quantidade deve ser inteira")
+                if produce_sale_mode == "amount" and quantity != 1:
+                    raise ValueError("Venda por valor deve ter quantidade 1")
+            elif produce_sale_mode is not None:
+                raise ValueError("Produto nao permite venda avulsa")
+            apply_stock = not produce or produce_sale_mode == "sack"
             product_name = product_info[0]
             stock_before = product_info[1]
             sold_before = product_info[2]
@@ -5216,7 +6308,7 @@ class Database(DatabaseAutomationMixin):
             )
             total_price = float(vat_data["gross_total"])
 
-            if stock_before < quantity:
+            if (apply_stock and stock_before < quantity) or (produce and stock_before < 1):
                 print(f"Erro: Estoque insuficiente! Disponivel: {stock_before:.2f}, Solicitado: {quantity:.2f}")
                 return None
 
@@ -5232,12 +6324,13 @@ class Database(DatabaseAutomationMixin):
                 created_by=created_by,
                 created_role=created_role,
                 terminal_id=terminal_id,
-                unit_cost=unit_purchase_price,
+                unit_cost=unit_purchase_price if apply_stock else 0,
                 unit_price=sale_price,
                 approval_status="APPROVED",
                 approved_by=created_by,
                 approved_at=sale_date,
-                apply_stock=True,
+                apply_stock=apply_stock,
+                movement_unit=PRODUCE_MODES.get(produce_sale_mode) if produce else None,
             )
 
             if not movement_id:
@@ -5298,6 +6391,11 @@ class Database(DatabaseAutomationMixin):
                 str(discount_authorized_by or "").strip() or None,
             ))
             sale_id = self.cursor.lastrowid
+            if produce:
+                self.cursor.execute(
+                    "INSERT INTO produce_sales (sale_id, sale_mode, stock_applied) VALUES (?, ?, ?)",
+                    (sale_id, produce_sale_mode, int(apply_stock)),
+                )
 
             if commit:
                 self.conn.commit()
@@ -5361,9 +6459,10 @@ class Database(DatabaseAutomationMixin):
         cash_session_id=None,
         discount_reason=None,
         discount_authorized_by=None,
+        produce_sale_mode=None,
     ):
         """Regista uma linha isolada, mantendo compatibilidade com o POS desktop."""
-        return self._add_sale_tx(
+        sale_id = self._add_sale_tx(
             product_id,
             quantity,
             sale_price,
@@ -5378,8 +6477,12 @@ class Database(DatabaseAutomationMixin):
             cash_session_id=cash_session_id,
             discount_reason=discount_reason,
             discount_authorized_by=discount_authorized_by,
+            produce_sale_mode=produce_sale_mode,
             commit=True,
         )
+        if sale_id:
+            self._run_sales_archive_maintenance()
+        return sale_id
 
     @staticmethod
     def _transaction_item_signature(items):
@@ -5393,7 +6496,7 @@ class Database(DatabaseAutomationMixin):
                 float(item.get("sale_price", item.get("effective_unit_price", item.get("price"))) or 0.0),
                 6,
             )
-            result.append((product_id, quantity, unit_price))
+            result.append((product_id, quantity, unit_price, item.get("produce_sale_mode") or ""))
         return sorted(result)
 
     def add_sales_transaction(
@@ -5425,7 +6528,7 @@ class Database(DatabaseAutomationMixin):
             expected_signature = self._transaction_item_signature(normalized_items)
         except (TypeError, ValueError):
             return {"ok": False, "message": "Itens de venda invalidos"}
-        if not expected_signature or any(product_id <= 0 or quantity <= 0 or price < 0 for product_id, quantity, price in expected_signature):
+        if not expected_signature or any(product_id <= 0 or quantity <= 0 or price < 0 for product_id, quantity, price, _mode in expected_signature):
             return {"ok": False, "message": "Itens de venda invalidos"}
 
         created_by = str(username or "SYSTEM").strip() or "SYSTEM"
@@ -5449,13 +6552,14 @@ class Database(DatabaseAutomationMixin):
             header = self.cursor.fetchone()
             if header:
                 self.cursor.execute(
-                    "SELECT product_id, quantity, sale_price, id FROM sales "
+                    "SELECT product_id, quantity, sale_price, id, "
+                    "COALESCE((SELECT sale_mode FROM produce_sales WHERE sale_id = sales.id), '') FROM sales "
                     "WHERE transaction_code = ? ORDER BY id",
                     (code,),
                 )
                 stored_rows = self.cursor.fetchall()
                 stored_signature = sorted(
-                    (int(row[0]), round(float(row[1] or 0.0), 6), round(float(row[2] or 0.0), 6))
+                    (int(row[0]), round(float(row[1] or 0.0), 6), round(float(row[2] or 0.0), 6), row[4])
                     for row in stored_rows
                 )
                 metadata_matches = (
@@ -5508,6 +6612,7 @@ class Database(DatabaseAutomationMixin):
                 ),
             )
 
+            self._validate_produce_checkout(normalized_items)
             sale_ids = []
             for item in normalized_items:
                 product_id = int(item.get("product_id", item.get("id")) or 0)
@@ -5522,6 +6627,7 @@ class Database(DatabaseAutomationMixin):
                     username=created_by,
                     role=created_role,
                     terminal_id=terminal_id,
+                    produce_sale_mode=item.get("produce_sale_mode"),
                     is_promotional=bool(item.get("is_promotional")),
                     vat_rule_code=item.get("vat_rule_code"),
                     transaction_code=code,
@@ -5541,6 +6647,7 @@ class Database(DatabaseAutomationMixin):
                 (code,),
             )
             self.conn.commit()
+            self._run_sales_archive_maintenance()
             return {
                 "ok": True,
                 "idempotent": False,
@@ -6020,6 +7127,9 @@ class Database(DatabaseAutomationMixin):
             total_refund = quantity * sale_price
             now_str = self._now_str()
 
+            produce_sale = self.conn.execute(
+                "SELECT sale_mode, stock_applied FROM produce_sales WHERE sale_id = ?", (sale_id,)
+            ).fetchone()
             movement_id = self._record_stock_movement_tx(
                 self.cursor,
                 product_id,
@@ -6037,7 +7147,9 @@ class Database(DatabaseAutomationMixin):
                 approval_status="APPROVED",
                 approved_by=created_by,
                 approved_at=now_str,
-                apply_stock=True,
+                apply_stock=bool(produce_sale[1]) if produce_sale else True,
+                unit_cost=0 if produce_sale and not produce_sale[1] else None,
+                movement_unit=PRODUCE_MODES.get(produce_sale[0]) if produce_sale else None,
             )
             if not movement_id:
                 self.conn.rollback()
@@ -6508,6 +7620,85 @@ class Database(DatabaseAutomationMixin):
         except sqlite3.Error as e:
             print(f"Erro ao obter produtos para controlo de stock: {e}")
             return []
+
+    def get_products_for_losses_page(self, search_text="", limit=10, offset=0):
+        """Página de produtos elegíveis para perdas, filtrada no SQLite."""
+        try:
+            scope_sql, scope_params = self._owner_filter()
+            params = [ARCHIVED_PRODUCT_STATUS, *scope_params]
+            query = """SELECT id, description, existing_stock, sale_price,
+                       unit_purchase_price, barcode, is_sold_by_weight,
+                       expiry_date, status, vat_rule_code
+                FROM products WHERE existing_stock > 0
+                  AND COALESCE(status, 'ATIVO') <> ?""" + scope_sql
+            search = str(search_text or "").strip().lower()
+            if search:
+                like = f"%{search}%"
+                query += " AND (CAST(id AS TEXT) LIKE ? OR LOWER(description) LIKE ? OR LOWER(COALESCE(barcode, '')) LIKE ?)"
+                params.extend((like, like, like))
+            size = max(1, min(100, int(limit or 10)))
+            query += " ORDER BY id ASC LIMIT ? OFFSET ?"
+            params.extend((size + 1, max(0, int(offset or 0))))
+            rows = self._readonly_fetchall(query, params)
+            return {"rows": rows[:size], "has_more": len(rows) > size}
+        except sqlite3.Error as exc:
+            print(f"Erro ao obter página de produtos para perdas: {exc}")
+            return {"rows": [], "has_more": False}
+
+    def get_products_for_stock_control_page(self, search_text="", limit=100, offset=0):
+        """Página leve do controlo de stock, própria para catálogos grandes.
+
+        Não agrega movimentos nem vendas de todo o catálogo. A última alteração
+        e a velocidade são calculadas apenas para a página devolvida.
+        """
+        try:
+            page_size = max(1, min(500, int(limit or 100)))
+            page_offset = max(0, int(offset or 0))
+            scope_sql, scope_params = self._owner_filter("p")
+            params = [ARCHIVED_PRODUCT_STATUS, *scope_params]
+            query = """
+                SELECT p.id, p.description, p.existing_stock, p.sale_price,
+                       p.unit_purchase_price, p.barcode, p.is_sold_by_weight,
+                       p.expiry_date, p.status, p.sold_stock
+                FROM products p
+                WHERE COALESCE(p.status, 'ATIVO') <> ?
+            """ + scope_sql
+            search = str(search_text or "").strip().lower()
+            if search:
+                like = f"%{search}%"
+                query += """ AND (CAST(p.id AS TEXT) LIKE ?
+                                  OR LOWER(COALESCE(p.description, '')) LIKE ?
+                                  OR LOWER(COALESCE(p.barcode, '')) LIKE ?)"""
+                params.extend((like, like, like))
+            # A prioridade detalhada de reposição é calculada apenas depois de
+            # pesquisar. Para a tabela inicial, ordenar pelo PK permite ao
+            # SQLite devolver a primeira página sem classificar o catálogo.
+            query += " ORDER BY p.id ASC LIMIT ? OFFSET ?"
+            params.extend((page_size + 1, page_offset))
+            rows = self._readonly_fetchall(query, params)
+            has_more = len(rows) > page_size
+            rows = rows[:page_size]
+            if not rows:
+                return {"rows": [], "has_more": False}
+            ids = [row[0] for row in rows]
+            marks = ",".join("?" for _ in ids)
+            last_updates = dict(self._readonly_fetchall(
+                f"SELECT product_id, MAX(created_at) FROM stock_movements WHERE applied = 1 AND product_id IN ({marks}) GROUP BY product_id",
+                ids,
+            ))
+            velocity = dict(self._readonly_fetchall(
+                f"SELECT product_id, SUM(quantity) / 14.0 FROM sales WHERE sale_date >= DATE('now', '-14 days') AND product_id IN ({marks}) GROUP BY product_id",
+                ids,
+            ))
+            result = []
+            for row in rows:
+                stock = _safe_float(row[2], 0.0)
+                avg = _safe_float(velocity.get(row[0]), 0.0)
+                result.append((*row[:9], avg, (stock / avg) if avg > 0 else None, last_updates.get(row[0]), row[9]))
+            return {"rows": result, "has_more": has_more}
+        except sqlite3.Error as exc:
+            print(f"Erro ao obter página de controlo de stock: {exc}")
+            return {"rows": [], "has_more": False}
 
     def get_stock_movements(
         self,
@@ -7793,8 +8984,9 @@ class Database(DatabaseAutomationMixin):
         low_stock_raw = self.cursor.fetchall()
 
         low_stock = []
+        daily_sales_by_product = _fetch_sales_velocity(self) if low_stock_raw else {}
         for prod_id, name, stock, is_weight in low_stock_raw:
-            daily_sales = _get_product_daily_sales(self, prod_id)
+            daily_sales = daily_sales_by_product.get(prod_id, 0.0)
             days_left = _safe_float(stock) / max(daily_sales, 0.1) if daily_sales > 0 else 999
             low_stock.append((name, stock, is_weight, days_left, prod_id))
 
@@ -7996,9 +9188,15 @@ class Database(DatabaseAutomationMixin):
         units_per_package=None,
         allow_pack_sale=False,
         vat_rule_code=DEFAULT_VAT_RULE_CODE,
+        produce_options=None,
+        custom_fields=None,
     ):
         """Atualizar produto existente"""
         try:
+            if produce_options is not None:
+                produce_mode, _ = self._normalize_produce_options(produce_options)
+                if produce_mode == "SACKS" and (is_sold_by_weight or allow_pack_sale):
+                    raise ValueError("Sacos avulsos nao usam conversao por embalagem ou stock em kg")
             is_sold_by_weight = bool(is_sold_by_weight)
             existing_stock = _inventory_quantity(
                 existing_stock,
@@ -8059,6 +9257,8 @@ class Database(DatabaseAutomationMixin):
             if self.cursor.rowcount == 0:
                 self.conn.rollback()
                 return False
+            self._save_produce_options_tx(id, produce_options)
+            self._save_product_custom_field_values_tx(id, custom_fields)
             self.conn.commit()
             return True
         except (sqlite3.Error, ValueError):

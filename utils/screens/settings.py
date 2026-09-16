@@ -31,7 +31,7 @@ from kivy.animation import Animation
 from kivy.properties import BooleanProperty, NumericProperty, StringProperty
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.scrollview import ScrollView
-from database.provider import get_db, uses_remote_backend
+from database.provider import get_db
 from AI.controller import ProactiveIntelligenceController
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton
 from ui.components.loading_overlay import ScreenLoadingController
@@ -802,7 +802,10 @@ class AddUserDialog:
         self.dialog = None
         self.db = get_db()
         self._field_navigation = None
-        self.selected_data_scope = "own"
+        # Um gerente criado pelo admin normalmente trabalha na mesma loja.
+        # Mantemos a escolha visivel, mas este e o padrao seguro para nao
+        # separar vendas e stock do proprio administrador.
+        self.selected_data_scope = "shared"
         self._email_verification_dialog = None
 
     def _active_db(self):
@@ -872,34 +875,30 @@ class AddUserDialog:
             )
             content.add_widget(self.password)
 
+            # A conta admin da instalacao e criada apenas pelo codigo
+            # assinado emitido pelo superadmin. Dentro do painel normal, o
+            # administrador so pode adicionar gerentes.
             role_box = MDBoxLayout(
                 orientation='horizontal',
                 spacing=dp(10),
                 size_hint_y=None,
                 height=dp(56)
             )
-
             role_box.add_widget(MDLabel(
                 text='Função:',
                 size_hint_x=0.3
             ))
-
-            self.role_admin_btn = MDRectangleFlatButton(
-                text='Admin',
-                size_hint_x=0.35,
-                on_release=lambda x: self.select_role('admin')
-            )
             self.role_manager_btn = MDRectangleFlatButton(
-                text='Manager',
-                size_hint_x=0.35,
-                on_release=lambda x: self.select_role('manager')
+                text='Gerente',
+                size_hint_x=0.7,
+                disabled=True,
             )
-
-            role_box.add_widget(self.role_admin_btn)
+            self.role_manager_btn.md_bg_color = (0.2, 0.5, 0.8, 1)
+            self.role_manager_btn.text_color = (1, 1, 1, 1)
             role_box.add_widget(self.role_manager_btn)
             content.add_widget(role_box)
 
-            self.selected_role = None
+            self.selected_role = 'manager'
 
             access_box = MDBoxLayout(
                 orientation='horizontal',
@@ -924,7 +923,7 @@ class AddUserDialog:
             access_box.add_widget(self.access_own_btn)
             access_box.add_widget(self.access_shared_btn)
             content.add_widget(access_box)
-            self.select_data_scope('own')
+            self.select_data_scope('shared')
             
             self.dialog = MDDialog(
                 title='Adicionar Novo Usuário',
@@ -949,8 +948,6 @@ class AddUserDialog:
                 on_submit=self.save_user,
                 shortcuts={
                     "ctrl+s": self.save_user,
-                    "alt+a": lambda: self.select_role('admin'),
-                    "alt+m": lambda: self.select_role('manager'),
                 },
             )
             self.dialog.bind(on_pre_open=lambda *_: self._field_navigation.activate(focus_initial=True))
@@ -964,20 +961,16 @@ class AddUserDialog:
             if field is not None:
                 field.text = ""
         self.select_role("manager")
-        self.select_data_scope("own")
+        self.select_data_scope("shared")
     
     def select_role(self, role):
-        self.selected_role = role
-        if role == 'admin':
-            self.role_admin_btn.md_bg_color = (0.2, 0.5, 0.8, 1)
-            self.role_admin_btn.text_color = (1, 1, 1, 1)
-            self.role_manager_btn.md_bg_color = (0, 0, 0, 0)
-            self.role_manager_btn.text_color = (0, 0, 0, 1)
-        else:
+        # Mesmo que uma chamada antiga tente pedir ``admin``, esta tela nunca
+        # entrega essa permissao. A regra definitiva tambem e aplicada no
+        # banco de dados.
+        self.selected_role = 'manager'
+        if getattr(self, 'role_manager_btn', None) is not None:
             self.role_manager_btn.md_bg_color = (0.2, 0.5, 0.8, 1)
             self.role_manager_btn.text_color = (1, 1, 1, 1)
-            self.role_admin_btn.md_bg_color = (0, 0, 0, 0)
-            self.role_admin_btn.text_color = (0, 0, 0, 1)
 
     def select_data_scope(self, scope):
         self.selected_data_scope = scope if scope in ("own", "shared") else "own"
@@ -995,7 +988,7 @@ class AddUserDialog:
         password = self.password.text.strip()
         email = self.email.text.strip() if hasattr(self, "email") else ""
         
-        if not username or not email or not password or not self.selected_role:
+        if not username or not email or not password:
             self.show_message('Erro', 'Todos os campos são obrigatórios')
             return
 
@@ -1021,16 +1014,16 @@ class AddUserDialog:
             create_kwargs = {"email": email}
             if data_owner:
                 create_kwargs["data_owner"] = data_owner
-            if not db.create_user(username, password, self.selected_role, **create_kwargs):
+            if not db.create_user(username, password, 'manager', **create_kwargs):
                 self.show_message('Erro', 'Não foi possível criar o usuário')
                 return
 
             scope_label = "dados proprios" if not data_owner else f"dados de {data_owner}"
             db.log_action(
                 username,
-                self.selected_role,
+                'manager',
                 'CREATE_USER',
-                f'Novo usuário criado: {username} ({self.selected_role})'
+                f'Novo usuário criado: {username} (manager)'
             )
 
             self.dialog.dismiss()
@@ -3169,7 +3162,7 @@ class SystemStatusDialog:
 
         def worker():
             try:
-                status = collect_system_status(self.db, include_api_health=True)
+                status = collect_system_status(self.db)
                 Clock.schedule_once(lambda _dt: self._render_status(status), 0)
             except Exception as exc:
                 Clock.schedule_once(lambda _dt: self._render_error(str(exc)), 0)
@@ -3225,7 +3218,7 @@ class SystemStatusDialog:
             return
         self.content.clear_widgets()
         self.content.add_widget(MDLabel(
-            text='A verificar base de dados, API, backups e logs...',
+            text='A verificar base de dados, backups e logs...',
             theme_text_color='Secondary',
             size_hint_y=None,
             height=dp(32),
@@ -3251,8 +3244,6 @@ class SystemStatusDialog:
         self.content.clear_widgets()
 
         db_info = status.get('database') or {}
-        api_info = status.get('api') or {}
-        api_health = api_info.get('health') or {}
         automation = status.get('automation') or {}
         files = status.get('files') or {}
         latest_backup = files.get('latest_backup') or {}
@@ -3277,9 +3268,6 @@ class SystemStatusDialog:
             ('Base de dados', db_info.get('path') or '-'),
             ('Tamanho da base', self._format_bytes(db_info.get('size_bytes'))),
             ('Integridade SQLite', self._ok_text((db_info.get('integrity') or {}).get('ok'))),
-            ('API', api_info.get('base_url') or '-'),
-            ('Saude da API', self._health_text(api_health)),
-            ('Chave da API', 'Configurada' if api_info.get('has_api_key') else 'Ausente'),
             ('Ultimo backup', automation.get('last_backup_run') or 'Sem registo'),
             ('Estado do backup', automation.get('last_backup_status') or 'Sem registo'),
             ('Ultimo ficheiro backup', latest_backup.get('path') or 'Nenhum encontrado'),
@@ -4441,7 +4429,6 @@ class AdminSettingsScreen(MDScreen):
             self._show_inline_message("Erro", "Nao foi possivel salvar as regras de IVA.")
             return
 
-        self._sync_local_vat_rules_if_needed(payload=payload)
         dialog.dismiss()
         self._refresh_vat_overview()
         self._show_inline_message("Sucesso", "Regras de IVA atualizadas.")
@@ -4454,28 +4441,9 @@ class AdminSettingsScreen(MDScreen):
         if not resetter():
             self._show_inline_message("Erro", "Nao foi possivel restaurar as regras oficiais.")
             return
-        self._sync_local_vat_rules_if_needed(reset=True)
         dialog.dismiss()
         self._refresh_vat_overview()
         self._show_inline_message("Sucesso", "Regras oficiais de IVA restauradas.")
-
-    def _sync_local_vat_rules_if_needed(self, payload=None, reset=False):
-        if not uses_remote_backend(self.db):
-            return
-        local_db = getattr(self.db, "local_db", None)
-        if local_db is None:
-            return
-        try:
-            if reset:
-                local_resetter = getattr(local_db, "reset_vat_rules", None)
-                if callable(local_resetter):
-                    local_resetter()
-                return
-            local_saver = getattr(local_db, "replace_vat_rules", None)
-            if callable(local_saver):
-                local_saver(payload or [])
-        except Exception:
-            pass
 
     def _show_inline_message(self, title, message):
         MDDialog(

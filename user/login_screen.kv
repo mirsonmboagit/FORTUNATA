@@ -513,6 +513,16 @@
                             text_size: self.width, None
                             adaptive_height: True
 
+                        MDLabel:
+                            text: root.license_status
+                            font_size: sp(12)
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['success'] if "ativa" in root.license_status.lower() else app.theme_tokens['warning']
+                            text_size: self.width, None
+                            size_hint_y: None
+                            height: self.texture_size[1] if root.license_status else 0
+                            opacity: 1 if root.license_status else 0
+
                         MDTextField:
                             id: username_input
                             hint_text: root.username_hint
@@ -568,13 +578,15 @@
                             MDFlatButton:
                                 id: forgot_button
                                 text: root.forgot_password_text
-                                disabled: root.operation_in_progress
+                                disabled: root.operation_in_progress or not root.allow_account_self_service
+                                opacity: 1 if root.allow_account_self_service else 0
                                 on_release: root.forgot_password()
 
                             MDFlatButton:
                                 id: register_button
                                 text: root.register_text
-                                disabled: root.operation_in_progress
+                                disabled: root.operation_in_progress or not root.allow_account_self_service
+                                opacity: 1 if root.allow_account_self_service else 0
                                 on_release: root.register()
 
                         MDLabel:

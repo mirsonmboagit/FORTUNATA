@@ -15,7 +15,7 @@
 
         ScrollView:
             do_scroll_x: False
-            do_scroll_y: True
+            do_scroll_y: False
 
             MDBoxLayout:
                 orientation: "vertical"
@@ -54,7 +54,7 @@
                 MDCard:
                     orientation: "vertical"
                     size_hint_y: None
-                    height: dp(360)
+                    height: dp(560)
                     padding: [dp(12), dp(10)]
                     spacing: dp(8)
                     radius: [dp(10)]
@@ -167,6 +167,28 @@
                             size_hint_y: None
                             height: self.minimum_height
                             spacing: dp(2)
+
+                    MDBoxLayout:
+                        size_hint_y: None
+                        height: dp(36)
+                        spacing: dp(8)
+                        padding: [dp(4), 0]
+
+                        MDFlatButton:
+                            id: products_prev_btn
+                            text: "ANTERIOR"
+                            on_release: root.previous_products_page()
+
+                        MDLabel:
+                            id: products_page_label
+                            text: "0 produtos"
+                            halign: "center"
+                            theme_text_color: "Secondary"
+
+                        MDFlatButton:
+                            id: products_next_btn
+                            text: "PRÓXIMO"
+                            on_release: root.next_products_page()
 
                 MDCard:
                     id: stock_form_hidden_card

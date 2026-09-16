@@ -6,10 +6,7 @@ from kivy.clock import Clock
 from kivy.uix.screenmanager import ScreenManager
 
 from app_base import BaseApp
-from database.client import DatabaseClient
-from mobile.manager.connection_screen import MobileConnectionScreen
-from mobile.manager.sales_screen import MobileManagerSalesScreen
-from user.login import ManagerLoginScreen
+from mobile.license_required_screen import MobileLicenseRequiredScreen
 from utils.config.app_config import get_runtime_config, has_remote_connection
 from utils.config.paths import is_mobile_runtime
 from version import __version__
@@ -27,6 +24,8 @@ class MobileManagerApp(BaseApp):
     @staticmethod
     def _create_remote_client():
         """Nunca deixa o Manager Mobile abrir um SQLite de fallback."""
+        from database.client import DatabaseClient
+
         return DatabaseClient(config=get_runtime_config(force_reload=True))
 
     def build(self):
@@ -38,22 +37,43 @@ class MobileManagerApp(BaseApp):
 
             self.icon = str(asset_path("icon", "manager.ico"))
 
-        self.db = self._create_remote_client()
         manager = ScreenManager()
         self._screen_manager = manager
+        # O conector atual usa Windows DPAPI; o APK nao pode reutilizar essa
+        # credencial nem continuar como caminho alternativo sem licenca.
+        if is_mobile_runtime():
+            manager.add_widget(MobileLicenseRequiredScreen(name="mobile_license_required"))
+            manager.current = "mobile_license_required"
+            return manager
+
+        from mobile.manager.connection_screen import MobileConnectionScreen
+        from user.login import ManagerLoginScreen
+
+        self.db = self._create_remote_client()
         manager.add_widget(MobileConnectionScreen(name="mobile_connection"))
         manager.add_widget(ManagerLoginScreen(
             db=self.db,
             name="login",
             success_screen="mobile_manager",
         ))
-        manager.add_widget(MobileManagerSalesScreen(
-            db=self.db,
-            name="mobile_manager",
-        ))
         manager.current = "login" if has_remote_connection(force_reload=True) else "mobile_connection"
         Clock.schedule_once(lambda _dt: self.refresh_language(manager), 0)
         return manager
+
+    def ensure_screen(self, name):
+        manager = self._screen_manager or self.root
+        if manager is None:
+            return None
+        if manager.has_screen(name):
+            return manager.get_screen(name)
+        if name != "mobile_manager" or is_mobile_runtime():
+            return None
+        from mobile.manager.sales_screen import MobileManagerSalesScreen
+
+        screen = MobileManagerSalesScreen(db=self.db, name=name)
+        manager.add_widget(screen)
+        Clock.schedule_once(lambda _dt: self.refresh_language(screen), 0)
+        return screen
 
     def apply_mobile_connection(self):
         """Recria o cliente depois de o onboarding validar e guardar a API."""
@@ -71,9 +91,9 @@ class MobileManagerApp(BaseApp):
         if not manager:
             return
         login = manager.get_screen("login")
-        sales = manager.get_screen("mobile_manager")
         login.db = self.db
-        sales.set_database(self.db)
+        if manager.has_screen("mobile_manager"):
+            manager.get_screen("mobile_manager").set_database(self.db)
         self.current_user = None
         self.current_role = None
         login.reset_fields()
@@ -84,8 +104,8 @@ class MobileManagerApp(BaseApp):
         manager = self._screen_manager or self.root
         if not manager:
             return
-        sales = manager.get_screen("mobile_manager")
-        sales.clear_cart()
+        if manager.has_screen("mobile_manager"):
+            manager.get_screen("mobile_manager").clear_cart()
         setter = getattr(self.db, "set_active_user", None)
         if callable(setter):
             try:

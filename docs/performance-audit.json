@@ -1,0 +1,2730 @@
+[
+  {
+    "file": "admin/admin_home_screen.kv",
+    "lines": 432,
+    "markers": {}
+  },
+  {
+    "file": "admin/admin_home_screen.py",
+    "lines": 3031,
+    "functions": 160,
+    "top_level_imports": [
+      "from datetime import datetime, timedelta",
+      "import os",
+      "import sys",
+      "from contextlib import nullcontext",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from kivy.app import App",
+      "from kivy.animation import Animation",
+      "from kivy.clock import Clock",
+      "from kivy.core.window import Window",
+      "from kivy.factory import Factory",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.recycleview import RecycleView",
+      "from kivy.uix.recycleview.views import RecycleDataViewBehavior",
+      "from kivy.uix.recycleboxlayout import RecycleBoxLayout",
+      "from kivy.uix.modalview import ModalView",
+      "from kivy.properties import BooleanProperty, StringProperty",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.label import MDIcon, MDLabel",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.textfield import MDTextField",
+      "from database.provider import get_db",
+      "from ui.components.admin_home_dashboard import SalesTrendChart",
+      "from ui.components.hover_widgets import HoverCard, HoverRaisedButton",
+      "from ui.components.tooltip_widgets import TooltipFloatingActionButton, set_attention_shake",
+      "from utils.core.formatters import format_compact_number, format_display_value, format_money"
+    ],
+    "markers": {
+      "Thread(": 8,
+      "schedule_interval(": 1,
+      "clear_widgets(": 5,
+      "RecycleView": 2
+    }
+  },
+  {
+    "file": "admin/admin_screen.kv",
+    "lines": 424,
+    "markers": {
+      "RecycleView": 1
+    }
+  },
+  {
+    "file": "admin/admin_screen.py",
+    "lines": 5351,
+    "functions": 283,
+    "top_level_imports": [
+      "from kivy.uix.screenmanager import Screen",
+      "import os",
+      "import sys",
+      "import math",
+      "import unicodedata",
+      "from kivy.properties import ObjectProperty, ListProperty, BooleanProperty, NumericProperty",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.core.window import Window",
+      "from kivy.metrics import dp, sp",
+      "from kivy.uix.modalview import ModalView",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.floatlayout import FloatLayout",
+      "from kivy.uix.recycleview.views import RecycleDataViewBehavior",
+      "from kivy.app import App",
+      "from kivy.graphics import Color, Line, RoundedRectangle",
+      "from kivy.animation import Animation",
+      "from collections import deque",
+      "from threading import Thread",
+      "import time",
+      "from datetime import datetime, timedelta",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.gridlayout import MDGridLayout",
+      "from kivymd.uix.label import MDIcon, MDLabel",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivymd.uix.snackbar import MDSnackbar",
+      "from kivymd.uix.textfield import MDTextField",
+      "from database.provider import get_db",
+      "from ui.components.hover_widgets import HoverCard, HoverRaisedButton",
+      "from utils.core.i18n import correct_portuguese_text",
+      "from utils.core.formatters import format_money",
+      "from ui.components.tooltip_widgets import TooltipFloatingActionButton, TooltipIconButton, set_attention_shake",
+      "from utils.business.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts",
+      "from utils.business.purchase_suggestions import (\n    build_demand_purchase_candidates,\n    load_product_api_context,\n    normalize_barcode,\n)",
+      "from utils.ai.ai_insights import build_ai_purchase_suggestions"
+    ],
+    "markers": {
+      "Thread(": 4,
+      "schedule_interval(": 1,
+      "clear_widgets(": 2,
+      "RecycleView": 2
+    }
+  },
+  {
+    "file": "admin/detail_popup.py",
+    "lines": 457,
+    "functions": 18,
+    "top_level_imports": [
+      "from datetime import datetime",
+      "from kivy.app import App",
+      "from kivy.core.window import Window",
+      "from kivy.metrics import dp, sp",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.popup import Popup",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.label import MDLabel, MDIcon",
+      "from kivymd.uix.button import MDRaisedButton",
+      "from kivymd.uix.card import MDSeparator"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "admin/product_form.py",
+    "lines": 1879,
+    "functions": 118,
+    "top_level_imports": [
+      "import time",
+      "import re",
+      "import unicodedata",
+      "from datetime import datetime",
+      "from threading import Lock, Thread",
+      "from kivy.uix.popup import Popup",
+      "from kivy.uix.boxlayout import BoxLayout",
+      "from kivy.uix.label import Label",
+      "from kivy.uix.image import Image",
+      "from kivy.uix.anchorlayout import AnchorLayout",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.graphics.texture import Texture",
+      "from kivy.graphics import Color, RoundedRectangle",
+      "from kivy.core.window import Window",
+      "from kivy.core.audio import SoundLoader",
+      "from kivy.clock import Clock",
+      "from kivy.animation import Animation",
+      "from kivy.metrics import dp, sp",
+      "from kivy.app import App",
+      "from kivymd.uix.button import MDRaisedButton, MDFlatButton",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.textfield import MDTextField",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivymd.uix.selectioncontrol import MDSwitch",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.pickers import MDDatePicker",
+      "from ui.components.tooltip_widgets import (\n    TooltipFlatButton,\n    TooltipIconButton,\n    TooltipRaisedButton,\n    TooltipTextField,\n)",
+      "from utils.core.focus_navigation import FormKeyboardController",
+      "from utils.core.i18n import correct_portuguese_text",
+      "from utils.business.vat import (\n    DEFAULT_VAT_RULE_CODE,\n    VAT_RULE_CHOICES,\n    describe_vat_choice,\n    get_vat_choice_label,\n)",
+      "from utils.hardware.vision import get_vision_dependencies"
+    ],
+    "markers": {
+      "Thread(": 2,
+      "schedule_interval(": 1
+    }
+  },
+  {
+    "file": "admin_app.py",
+    "lines": 120,
+    "functions": 13,
+    "top_level_imports": [
+      "from kivy.uix.screenmanager import ScreenManager",
+      "from kivy.clock import Clock",
+      "from app_base import BaseApp",
+      "from database.provider import get_db",
+      "from licensing.offline import OfflineLicenseClient",
+      "from user.login import UnifiedLoginScreen",
+      "from utils.config.paths import asset_path",
+      "from version import __version__"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "AI/__init__.py",
+    "lines": 2,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "AI/alert_manager.py",
+    "lines": 109,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from collections import deque",
+      "from datetime import datetime",
+      "from threading import Lock",
+      "from typing import Any"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "AI/controller.py",
+    "lines": 368,
+    "functions": 30,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from typing import Any, Callable",
+      "from kivy.app import App",
+      "from .alert_manager import AlertManager",
+      "from .monitor import IntelligenceMonitor",
+      "from ui.components import intelligent_banner as intelligent_banner_module"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "AI/data_collector.py",
+    "lines": 719,
+    "functions": 20,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "import sqlite3",
+      "from math import ceil",
+      "from collections import defaultdict",
+      "from datetime import date, datetime, timedelta",
+      "from statistics import mean, pstdev",
+      "from threading import Lock",
+      "from typing import Any, Callable",
+      "from utils.config.app_config import get_database_path"
+    ],
+    "markers": {
+      "sqlite3.connect(": 1
+    }
+  },
+  {
+    "file": "AI/engine.py",
+    "lines": 300,
+    "functions": 12,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import datetime",
+      "from typing import Any"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "AI/monitor.py",
+    "lines": 140,
+    "functions": 12,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from threading import Lock, Thread",
+      "from typing import Any, Callable",
+      "from kivy.clock import Clock",
+      "from .alert_manager import AlertManager",
+      "from .data_collector import IntelligenceDataCollector",
+      "from .engine import executar_analise",
+      "from utils.ai.ai_insights import build_proactive_ai_recommendations"
+    ],
+    "markers": {
+      "Thread(": 2,
+      "schedule_interval(": 1
+    }
+  },
+  {
+    "file": "api/__init__.py",
+    "lines": 0,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "api/api_bazara.py",
+    "lines": 578,
+    "functions": 32,
+    "top_level_imports": [
+      "import json",
+      "import re",
+      "from datetime import datetime",
+      "from pathlib import Path",
+      "from urllib.parse import urljoin",
+      "import requests",
+      "from api.optional_deps import BeautifulSoup, has_beautifulsoup",
+      "from utils.config.paths import CACHE_DIR"
+    ],
+    "markers": {
+      "requests.": 1
+    }
+  },
+  {
+    "file": "api/api_manager.py",
+    "lines": 1560,
+    "functions": 77,
+    "top_level_imports": [
+      "from threading import Thread",
+      "from concurrent.futures import ThreadPoolExecutor, as_completed",
+      "from threading import Thread",
+      "from typing import Callable",
+      "from kivy.clock import Clock",
+      "import time",
+      "import json",
+      "import os",
+      "import requests",
+      "from datetime import datetime, timedelta",
+      "from pathlib import Path",
+      "from urllib.parse import urlparse",
+      "from xml.etree import ElementTree as ET",
+      "from api.api_bazara import BazaraAPI",
+      "from api.api_openfoodfacts import OpenFoodFactsAPI",
+      "from api.optional_deps import BeautifulSoup, has_beautifulsoup",
+      "from api.api_ranxo import RanxoAPI",
+      "from api.api_upcitemdb import UPCitemdbAPI",
+      "from api.api_sixty60 import Sixty60API",
+      "from utils.config.paths import CACHE_DIR"
+    ],
+    "markers": {
+      "Thread(": 4,
+      "requests.": 2
+    }
+  },
+  {
+    "file": "api/api_openfoodfacts.py",
+    "lines": 126,
+    "functions": 5,
+    "top_level_imports": [
+      "import requests",
+      "import requests"
+    ],
+    "markers": {
+      "requests.": 2
+    }
+  },
+  {
+    "file": "api/api_ranxo.py",
+    "lines": 125,
+    "functions": 6,
+    "top_level_imports": [
+      "import re",
+      "import json",
+      "import requests",
+      "from urllib.parse import urljoin",
+      "from api.optional_deps import BeautifulSoup, has_beautifulsoup, strip_html_text"
+    ],
+    "markers": {
+      "requests.": 2
+    }
+  },
+  {
+    "file": "api/api_sixty60.py",
+    "lines": 94,
+    "functions": 4,
+    "top_level_imports": [
+      "import requests"
+    ],
+    "markers": {
+      "requests.": 2
+    }
+  },
+  {
+    "file": "api/api_upcitemdb.py",
+    "lines": 74,
+    "functions": 3,
+    "top_level_imports": [
+      "import requests"
+    ],
+    "markers": {
+      "requests.": 2
+    }
+  },
+  {
+    "file": "api/bazara_backfill_barcodes.py",
+    "lines": 366,
+    "functions": 11,
+    "top_level_imports": [
+      "import argparse",
+      "import json",
+      "import re",
+      "import sys",
+      "import time",
+      "from datetime import datetime",
+      "from pathlib import Path",
+      "import requests",
+      "from api.api_bazara import BazaraAPI",
+      "from utils.config.paths import CACHE_DIR",
+      "from api.optional_deps import BeautifulSoup, has_beautifulsoup"
+    ],
+    "markers": {
+      "requests.": 1
+    }
+  },
+  {
+    "file": "api/bazara_prefill.py",
+    "lines": 519,
+    "functions": 12,
+    "top_level_imports": [
+      "import argparse",
+      "import json",
+      "import os",
+      "import re",
+      "import sys",
+      "import time",
+      "from datetime import datetime",
+      "from pathlib import Path",
+      "import requests",
+      "from api.api_bazara import BazaraAPI",
+      "from utils.config.paths import CACHE_DIR",
+      "from api.optional_deps import BeautifulSoup, has_beautifulsoup"
+    ],
+    "markers": {
+      "requests.": 1
+    }
+  },
+  {
+    "file": "api/optional_deps.py",
+    "lines": 25,
+    "functions": 2,
+    "top_level_imports": [
+      "import re"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "api_server_app.py",
+    "lines": 8,
+    "functions": 0,
+    "top_level_imports": [
+      "from multiprocessing import freeze_support",
+      "from server.run_api import main"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "app_base.py",
+    "lines": 487,
+    "functions": 26,
+    "top_level_imports": [
+      "import json",
+      "import os",
+      "import sys",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from utils.config.app_config import get_app_settings, save_app_settings as persist_app_settings",
+      "from utils.config.paths import (\n    APP_SETTINGS_FILE,\n    ROOT_DIR,\n    asset_path,\n    ensure_runtime_dirs,\n    is_mobile_runtime,\n    set_project_cwd,\n)",
+      "from utils.config.logging_setup import configure_runtime_logging",
+      "from kivymd.app import MDApp",
+      "from kivy.config import Config",
+      "from kivy.core.window import Window",
+      "from kivy.metrics import dp",
+      "from kivy.properties import DictProperty, StringProperty",
+      "from kivy.core.text import LabelBase",
+      "from kivy.clock import Clock",
+      "from kivy.resources import resource_add_path",
+      "from utils.config.theme import get_theme_tokens",
+      "from utils.core.i18n import language_label, language_options, language_short, normalize_language, translate",
+      "from utils.core.i18n_runtime import install_i18n_hooks, localize_widget_tree",
+      "from utils.config.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name"
+    ],
+    "markers": {
+      "Thread(": 2,
+      "schedule_interval(": 1
+    }
+  },
+  {
+    "file": "database/automation.py",
+    "lines": 325,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import logging",
+      "import os",
+      "import sqlite3",
+      "import tempfile",
+      "from datetime import datetime, timedelta",
+      "from utils.config.paths import TEMP_DIR"
+    ],
+    "markers": {
+      "sqlite3.connect(": 4
+    }
+  },
+  {
+    "file": "database/client.py",
+    "lines": 1232,
+    "functions": 124,
+    "top_level_imports": [
+      "import copy",
+      "import logging",
+      "import threading",
+      "import time",
+      "from datetime import date, datetime",
+      "from utils.config.app_config import get_runtime_config"
+    ],
+    "markers": {
+      "requests.": 2
+    }
+  },
+  {
+    "file": "database/database.py",
+    "lines": 8619,
+    "functions": 194,
+    "top_level_imports": [
+      "import builtins",
+      "import json",
+      "import os",
+      "import secrets",
+      "import sqlite3",
+      "import sys",
+      "import uuid",
+      "from contextlib import contextmanager",
+      "from datetime import datetime, timedelta, date",
+      "from time import perf_counter",
+      "import bcrypt",
+      "from database.automation import DatabaseAutomationMixin",
+      "from utils.business.email_service import (\n    EmailServiceError,\n    is_valid_email,\n    normalize_email,\n    send_email_verification_code,\n    send_password_changed_notice,\n    send_password_reset_code,\n)",
+      "from utils.core.perf_utils import perf_log, should_log_debug",
+      "from utils.config.paths import DB_BACKUP_DIR, resolve_path",
+      "from utils.business.vat import (\n    DEFAULT_VAT_RULE_CODE,\n    VAT_RULES,\n    compute_vat_breakdown,\n    normalize_reference_date,\n)",
+      "from utils.business.sales_transactions import REFUND_WINDOW_MINUTES, refund_window_status",
+      "from utils.business.product_catalog import aggregate_admin_product_rows"
+    ],
+    "markers": {
+      "sqlite3.connect(": 5
+    }
+  },
+  {
+    "file": "database/provider.py",
+    "lines": 20,
+    "functions": 2,
+    "top_level_imports": [
+      "from utils.config.app_config import get_database_path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/__init__.py",
+    "lines": 10,
+    "functions": 0,
+    "top_level_imports": [
+      "from licensing.offline import LicenseResult, OfflineLicenseClient"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/account_events.py",
+    "lines": 74,
+    "functions": 3,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import datetime, timezone",
+      "import os",
+      "from threading import Thread"
+    ],
+    "markers": {
+      "Thread(": 1
+    }
+  },
+  {
+    "file": "licensing/account_provisioning.py",
+    "lines": 274,
+    "functions": 19,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import base64",
+      "import json",
+      "import re",
+      "import secrets",
+      "import uuid",
+      "from datetime import date, datetime, time, timezone",
+      "from typing import Any",
+      "from cryptography.hazmat.primitives import serialization",
+      "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey",
+      "from licensing.offline import OfflineLicenseError, verify_license_code"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/automatic_email.py",
+    "lines": 340,
+    "functions": 12,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import imaplib",
+      "import hashlib",
+      "import os",
+      "import re",
+      "import socket",
+      "import ssl",
+      "import time",
+      "from contextlib import contextmanager",
+      "from dataclasses import dataclass, field",
+      "from email import message_from_bytes",
+      "from email.header import decode_header",
+      "from email.utils import parseaddr",
+      "from typing import Any, Callable",
+      "from licensing.offline import OfflineLicenseError, parse_license_request, superadmin_state_path",
+      "from licensing.offline_email import LICENSE_REQUEST_SUBJECT, SMTPSettings, send_license_email"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/client.py",
+    "lines": 12,
+    "functions": 0,
+    "top_level_imports": [
+      "from licensing.offline import LicenseResult, OfflineLicenseClient"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/config.py",
+    "lines": 25,
+    "functions": 2,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from dataclasses import dataclass",
+      "from licensing.offline_issuer_key import OFFLINE_LICENSE_PUBLIC_KEY"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/crypto.py",
+    "lines": 73,
+    "functions": 6,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import base64",
+      "import json",
+      "import time",
+      "from typing import Any",
+      "from cryptography.hazmat.primitives import serialization",
+      "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/device_identity.py",
+    "lines": 42,
+    "functions": 3,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import hashlib",
+      "import os",
+      "import platform",
+      "import uuid"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/issuer_key.py",
+    "lines": 7,
+    "functions": 0,
+    "top_level_imports": [
+      "from licensing.offline_issuer_key import OFFLINE_LICENSE_PUBLIC_KEY"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/offline.py",
+    "lines": 1446,
+    "functions": 70,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import base64",
+      "import hashlib",
+      "import json",
+      "import os",
+      "import re",
+      "import secrets",
+      "import uuid",
+      "from dataclasses import dataclass",
+      "from datetime import date, datetime, time, timedelta, timezone",
+      "from pathlib import Path",
+      "from typing import Any, Callable",
+      "from cryptography.hazmat.primitives import serialization",
+      "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey",
+      "from licensing.crypto import new_device_keypair",
+      "from licensing.device_identity import device_fingerprint, device_label",
+      "from licensing.offline_issuer_key import OFFLINE_LICENSE_PUBLIC_KEY, OFFLINE_LICENSE_REQUEST_EMAIL",
+      "from licensing.secure_store import CredentialStorageError, WindowsDPAPIProtector"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/offline_email.py",
+    "lines": 427,
+    "functions": 11,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import smtplib",
+      "import ssl",
+      "from dataclasses import dataclass",
+      "from email.message import EmailMessage",
+      "from email.utils import formataddr"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/offline_issuer_key.py",
+    "lines": 10,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "licensing/secure_store.py",
+    "lines": 44,
+    "functions": 3,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "licensing/superadmin.py",
+    "lines": 1831,
+    "functions": 69,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import base64",
+      "import calendar",
+      "import json",
+      "import os",
+      "import re",
+      "import sqlite3",
+      "import unicodedata",
+      "from dataclasses import dataclass",
+      "from datetime import date, datetime, timedelta, timezone",
+      "from pathlib import Path",
+      "from typing import Any",
+      "import bcrypt",
+      "from licensing.account_provisioning import (\n    AccountProvisioningError,\n    issue_admin_provisioning_code,\n    verify_admin_provisioning_code,\n)",
+      "from licensing.offline import (\n    OfflineLicenseError,\n    OfflineLicenseIssuer,\n    OfflineLicenseStorageError,\n    ProtectedJsonStore,\n    generate_issuer_private_key,\n    license_code_hash,\n    parse_license_request,\n    superadmin_state_path,\n    verify_license_code,\n)",
+      "from licensing.offline_email import OfflineEmailError, gmail_settings"
+    ],
+    "markers": {
+      "sqlite3.connect(": 1
+    }
+  },
+  {
+    "file": "licensing/user_directory.py",
+    "lines": 68,
+    "functions": 1,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import sqlite3",
+      "from datetime import datetime, timezone",
+      "from pathlib import Path",
+      "from licensing.offline import OfflineLicenseClient, OfflineLicenseStore, OfflineLicenseError, OfflineLicenseStorageError, verify_license_code",
+      "from licensing.superadmin import SuperadminError",
+      "from utils.config.app_config import get_database_path"
+    ],
+    "markers": {
+      "sqlite3.connect(": 1
+    }
+  },
+  {
+    "file": "losses_log.py",
+    "lines": 19,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "main.py",
+    "lines": 7,
+    "functions": 0,
+    "top_level_imports": [
+      "from manager_mobile_app import MobileManagerApp"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "manager/manager_screen.py",
+    "lines": 4990,
+    "functions": 216,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "import sys",
+      "import time",
+      "import traceback",
+      "from datetime import datetime",
+      "from threading import Thread",
+      "from kivy.app import App",
+      "from kivy.animation import Animation",
+      "from kivy.clock import Clock",
+      "from kivy.core.audio import SoundLoader",
+      "from kivy.core.window import Window",
+      "from kivy.graphics import Color, Line, RoundedRectangle",
+      "from kivy.graphics.texture import Texture",
+      "from kivy.factory import Factory",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp, sp",
+      "from kivy.properties import ListProperty, NumericProperty, StringProperty",
+      "from kivy.uix.anchorlayout import AnchorLayout",
+      "from kivy.uix.behaviors import ButtonBehavior",
+      "from kivy.uix.floatlayout import FloatLayout",
+      "from kivy.uix.gridlayout import GridLayout",
+      "from kivy.uix.modalview import ModalView",
+      "from kivy.uix.scrollview import ScrollView as KivyScrollView",
+      "from kivy.uix.recycleview.views import RecycleDataViewBehavior",
+      "from kivy.uix.textinput import TextInput",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.label import MDIcon, MDLabel",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.snackbar import MDSnackbar",
+      "from kivymd.uix.textfield import MDTextField",
+      "from kivymd.uix.tooltip import MDTooltip",
+      "from AI.controller import ProactiveIntelligenceController",
+      "from database.provider import get_db",
+      "from pdfs.pdf_viewer import PDFViewer",
+      "from pdfs.receipt_report import ReceiptReport",
+      "from ui.components.tooltip_widgets import (\n    TooltipCleanupBehavior,\n    TooltipIconButton,\n    set_attention_shake,\n)",
+      "from utils.core.i18n import correct_portuguese_text",
+      "from utils.config.device_config import get_device_settings",
+      "from utils.config.theme import get_theme_tokens",
+      "from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission",
+      "from utils.config.system_identity import get_system_name",
+      "from utils.hardware.thermal_printer import print_pdf_with_system, print_thermal_receipt",
+      "from utils.business.vat import compute_vat_breakdown",
+      "from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture",
+      "from utils.core.formatters import format_date_dmy, format_money, format_quantity, safe_float"
+    ],
+    "markers": {
+      "Thread(": 11,
+      "schedule_interval(": 4,
+      "clear_widgets(": 3
+    }
+  },
+  {
+    "file": "manager/sales_screen.kv",
+    "lines": 1917,
+    "markers": {
+      "RecycleView": 1
+    }
+  },
+  {
+    "file": "manager/services/__init__.py",
+    "lines": 9,
+    "functions": 0,
+    "top_level_imports": [
+      "from manager.services.camera_service import CameraService",
+      "from manager.services.scanner_service import ScannerService",
+      "from manager.services.sales_data_service import SalesDataService"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "manager/services/camera_service.py",
+    "lines": 215,
+    "functions": 13,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import time",
+      "from threading import Event, Lock, Thread",
+      "from typing import Callable",
+      "from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture"
+    ],
+    "markers": {
+      "Thread(": 1
+    }
+  },
+  {
+    "file": "manager/services/sales_data_service.py",
+    "lines": 90,
+    "functions": 12,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from threading import RLock"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "manager/services/scanner_service.py",
+    "lines": 138,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import time",
+      "from threading import Event, Lock, Thread",
+      "from typing import Callable",
+      "from manager.services.camera_service import CameraService",
+      "from utils.hardware.vision import (\n    build_barcode_decode_frame,\n    get_vision_dependencies,\n    normalize_barcode_value,\n)"
+    ],
+    "markers": {
+      "Thread(": 1
+    }
+  },
+  {
+    "file": "manager_app.py",
+    "lines": 15,
+    "functions": 0,
+    "top_level_imports": [
+      "from admin_app import StoreApp"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "manager_mobile_app.py",
+    "lines": 141,
+    "functions": 9,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from kivy.clock import Clock",
+      "from kivy.uix.screenmanager import ScreenManager",
+      "from app_base import BaseApp",
+      "from mobile.license_required_screen import MobileLicenseRequiredScreen",
+      "from utils.config.app_config import get_runtime_config, has_remote_connection",
+      "from utils.config.paths import is_mobile_runtime",
+      "from version import __version__"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "MERCEARIA.py",
+    "lines": 15,
+    "functions": 0,
+    "top_level_imports": [
+      "from admin_app import StoreApp"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "mobile/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "mobile/license_required_screen.py",
+    "lines": 42,
+    "functions": 1,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from kivy.metrics import dp",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.screen import MDScreen"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "mobile/manager/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "mobile/manager/connection_screen.kv",
+    "lines": 111,
+    "markers": {}
+  },
+  {
+    "file": "mobile/manager/connection_screen.py",
+    "lines": 132,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from pathlib import Path",
+      "from threading import Thread",
+      "from urllib.parse import urlparse",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.properties import BooleanProperty, ObjectProperty, StringProperty",
+      "from kivymd.uix.screen import MDScreen",
+      "from database.client import DatabaseClient",
+      "from utils.config.app_config import save_remote_connection"
+    ],
+    "markers": {
+      "Thread(": 1
+    }
+  },
+  {
+    "file": "mobile/manager/runtime.py",
+    "lines": 26,
+    "functions": 1,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from uuid import uuid4",
+      "from utils.config.app_config import get_app_settings, save_app_settings"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "mobile/manager/sales_screen.kv",
+    "lines": 105,
+    "markers": {}
+  },
+  {
+    "file": "mobile/manager/sales_screen.py",
+    "lines": 1290,
+    "functions": 87,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from collections import OrderedDict",
+      "from datetime import datetime",
+      "from pathlib import Path",
+      "from threading import Thread",
+      "from uuid import uuid4",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp",
+      "from kivy.properties import (\n    BooleanProperty,\n    DictProperty,\n    ListProperty,\n    NumericProperty,\n    ObjectProperty,\n    StringProperty,\n)",
+      "from kivy.uix.gridlayout import GridLayout",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.textfield import MDTextField",
+      "from mobile.manager.runtime import get_mobile_terminal_id",
+      "from utils.business.sales_transactions import (\n    REFUND_WINDOW_MINUTES,\n    group_sale_records,\n    refund_window_status,\n)"
+    ],
+    "markers": {
+      "Thread(": 1,
+      "clear_widgets(": 1
+    }
+  },
+  {
+    "file": "pdfs/barcode_labels_report.py",
+    "lines": 115,
+    "functions": 5,
+    "top_level_imports": [
+      "from datetime import datetime",
+      "from reportlab.graphics import renderPDF",
+      "from reportlab.graphics.barcode import eanbc",
+      "from reportlab.graphics.shapes import Drawing",
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import A4",
+      "from reportlab.lib.units import mm",
+      "from reportlab.pdfgen import canvas",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/base_report.py",
+    "lines": 373,
+    "functions": 12,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.platypus import Table, TableStyle, Paragraph, Spacer",
+      "from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle",
+      "from reportlab.lib.enums import TA_CENTER",
+      "from reportlab.lib.units import inch",
+      "from reportlab.graphics.shapes import Drawing, Line, Rect, String",
+      "from datetime import datetime",
+      "import math",
+      "import os",
+      "import re",
+      "from utils.config.paths import REPORTS_DIR, resolve_path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/cash_user_report.py",
+    "lines": 201,
+    "functions": 7,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import A4, landscape",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from reportlab.lib.units import inch",
+      "from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/complete_report.py",
+    "lines": 426,
+    "functions": 6,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import landscape, A4",
+      "from reportlab.platypus import (\n    SimpleDocTemplate,\n    Table,\n    TableStyle,\n    Paragraph,\n    Spacer,\n    PageBreak,\n)",
+      "from reportlab.lib.units import inch",
+      "from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle",
+      "import pandas as pd",
+      "from xml.sax.saxutils import escape",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/logs_report.py",
+    "lines": 149,
+    "functions": 2,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import A4",
+      "from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from reportlab.lib.enums import TA_CENTER",
+      "from reportlab.lib.units import inch",
+      "from datetime import datetime",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/loss_report.py",
+    "lines": 273,
+    "functions": 8,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import landscape, A4",
+      "from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer",
+      "from reportlab.lib.units import inch",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from .base_report import BasePDFReport",
+      "from datetime import datetime"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/pdf_viewer.py",
+    "lines": 961,
+    "functions": 36,
+    "top_level_imports": [
+      "import importlib",
+      "import io",
+      "import os",
+      "import platform",
+      "import subprocess",
+      "import sys",
+      "from threading import Thread",
+      "from kivy.uix.popup import Popup",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.button import (\n    MDRaisedButton,\n    MDFlatButton,\n    MDRectangleFlatButton,\n    MDIconButton,\n)",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.image import Image as KivyImage",
+      "from kivy.graphics import Color, RoundedRectangle",
+      "from kivy.graphics.texture import Texture",
+      "from kivy.core.window import Window",
+      "from kivy.metrics import dp",
+      "from kivy.clock import Clock",
+      "from kivy.app import App",
+      "from PIL import Image as PILImage"
+    ],
+    "markers": {
+      "Thread(": 3
+    }
+  },
+  {
+    "file": "pdfs/productivity_charts_report.py",
+    "lines": 188,
+    "functions": 6,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import A4, landscape",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from reportlab.lib.units import inch",
+      "from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/profit_report.py",
+    "lines": 291,
+    "functions": 5,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import landscape, A4",
+      "from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer",
+      "from reportlab.lib.units import inch",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/receipt_report.py",
+    "lines": 73,
+    "functions": 3,
+    "top_level_imports": [
+      "import os",
+      "from datetime import datetime",
+      "from reportlab.lib import colors",
+      "from reportlab.lib.styles import ParagraphStyle",
+      "from reportlab.lib.units import mm",
+      "from reportlab.platypus import SimpleDocTemplate, Preformatted",
+      "from .base_report import BasePDFReport",
+      "from utils.config.paths import RECEIPTS_DIR",
+      "from utils.hardware.thermal_printer import format_receipt_text"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/sales_history_report.py",
+    "lines": 316,
+    "functions": 12,
+    "top_level_imports": [
+      "from datetime import datetime",
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import A4, landscape",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from reportlab.lib.units import inch",
+      "from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/sales_report.py",
+    "lines": 224,
+    "functions": 4,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import landscape, A4",
+      "from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer",
+      "from reportlab.lib.units import inch",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/shopping_list_report.py",
+    "lines": 150,
+    "functions": 6,
+    "top_level_imports": [
+      "from datetime import datetime",
+      "from xml.sax.saxutils import escape",
+      "from reportlab.lib import colors",
+      "from reportlab.lib.enums import TA_CENTER",
+      "from reportlab.lib.pagesizes import A4",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from reportlab.lib.units import inch",
+      "from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle",
+      "from utils.core.formatters import format_money, safe_float",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/stock_movements_report.py",
+    "lines": 240,
+    "functions": 5,
+    "top_level_imports": [
+      "from datetime import datetime",
+      "from xml.sax.saxutils import escape",
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import A4, landscape",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "from reportlab.lib.units import inch",
+      "from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "pdfs/stock_report.py",
+    "lines": 532,
+    "functions": 10,
+    "top_level_imports": [
+      "from reportlab.lib import colors",
+      "from reportlab.lib.pagesizes import landscape, A4",
+      "from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak",
+      "from reportlab.lib.units import inch",
+      "from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet",
+      "import pandas as pd",
+      "from .base_report import BasePDFReport"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "scripts/benchmark_performance.py",
+    "lines": 111,
+    "functions": 3,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import argparse",
+      "import ast",
+      "import contextlib",
+      "import io",
+      "import json",
+      "from pathlib import Path",
+      "import statistics",
+      "import sys",
+      "import tempfile",
+      "from time import perf_counter",
+      "from datetime import datetime, timedelta",
+      "import database.database as database_module"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "scripts/emissor_licencas_automatico.py",
+    "lines": 41,
+    "functions": 1,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import sys",
+      "from pathlib import Path",
+      "from licensing.automatic_email import AutomaticEmailError, run_superadmin_emitter",
+      "from licensing.superadmin import LocalSuperadmin, SuperadminError"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "scripts/preflight_release.py",
+    "lines": 109,
+    "functions": 8,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import argparse",
+      "import json",
+      "import subprocess",
+      "import sys",
+      "from pathlib import Path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "scripts/pyinstaller_kivy_runtime_hook.py",
+    "lines": 35,
+    "functions": 3,
+    "top_level_imports": [
+      "import os",
+      "import site",
+      "import sys"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "scripts/superadmin_terminal.py",
+    "lines": 941,
+    "functions": 38,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import getpass",
+      "import json",
+      "import os",
+      "import shutil",
+      "import subprocess",
+      "import sys",
+      "import textwrap",
+      "from pathlib import Path",
+      "from licensing.offline_email import (\n    OfflineEmailError,\n    SMTPSettings,\n    gmail_settings,\n    send_admin_provisioning_email,\n    send_license_email,\n    send_license_reactivation_email,\n    send_license_restoration_email,\n    send_license_revocation_email,\n    send_license_suspension_email,\n)",
+      "from licensing.superadmin import (\n    LocalSuperadmin,\n    SUPERADMIN_USERNAME,\n    SuperadminError,\n    license_duration_label,\n    normalize_license_duration,\n)"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "server/app.py",
+    "lines": 419,
+    "functions": 16,
+    "top_level_imports": [
+      "import logging",
+      "import os",
+      "import sys",
+      "from atexit import register as register_atexit",
+      "from datetime import date, datetime",
+      "from pathlib import Path",
+      "from threading import Event, Lock, Thread",
+      "from flask import Flask, current_app, jsonify, request, send_file",
+      "from utils.config.app_config import get_api_config, get_app_config",
+      "from utils.config.logging_setup import configure_runtime_logging",
+      "from utils.config.paths import ROOT_DIR, ensure_runtime_dirs, set_project_cwd",
+      "from version import __version__",
+      "from database.database import Database"
+    ],
+    "markers": {
+      "Thread(": 1
+    }
+  },
+  {
+    "file": "server/run_api.py",
+    "lines": 63,
+    "functions": 1,
+    "top_level_imports": [
+      "import sys",
+      "import logging",
+      "from pathlib import Path",
+      "from utils.config.app_config import get_api_config",
+      "from utils.config.logging_setup import configure_runtime_logging",
+      "from utils.config.paths import ensure_runtime_dirs, set_project_cwd",
+      "from server.app import app, start_background_services"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "tests/helpers.py",
+    "lines": 94,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import contextlib",
+      "import shutil",
+      "import sqlite3",
+      "import sys",
+      "import tempfile",
+      "import unittest",
+      "from io import StringIO",
+      "from pathlib import Path"
+    ],
+    "markers": {
+      "sqlite3.connect(": 1
+    }
+  },
+  {
+    "file": "tests/manual/testes_geral.py",
+    "lines": 1392,
+    "functions": 108,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import contextlib",
+      "import importlib",
+      "import logging",
+      "import hashlib",
+      "import shutil",
+      "import sqlite3",
+      "import sys",
+      "import time",
+      "import types",
+      "import unittest",
+      "from datetime import datetime",
+      "from io import StringIO",
+      "from pathlib import Path",
+      "from unittest import mock",
+      "from AI.alert_manager import AlertManager",
+      "from AI.engine import executar_analise",
+      "from database.client import DatabaseClient",
+      "from database.database import Database",
+      "from database.provider import HybridDatabase, uses_remote_backend",
+      "from utils.config.app_config import get_api_config, get_app_config, get_app_settings",
+      "from utils.config.paths import (\n    API_CONFIG_FILE,\n    APP_CONFIG_FILE,\n    APP_SETTINGS_FILE,\n    CACHE_DIR,\n    DB_FILE,\n    LOGS_DIR,\n    RECEIPTS_DIR,\n    REPORTS_DIR,\n    TEMP_DIR,\n    ensure_runtime_dirs,\n)",
+      "from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission",
+      "from utils.business.security_questions import check_answer, hash_answer, normalize_answer",
+      "from utils.business.vat import describe_vat_choice, get_vat_choice_label"
+    ],
+    "markers": {
+      "sqlite3.connect(": 2,
+      "requests.": 2
+    }
+  },
+  {
+    "file": "tests/test_account_provisioning_database.py",
+    "lines": 103,
+    "functions": 4,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import bcrypt",
+      "from pathlib import Path",
+      "from uuid import uuid4",
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_automatic_license_email.py",
+    "lines": 262,
+    "functions": 27,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import imaplib",
+      "import socket",
+      "from email.message import EmailMessage",
+      "import pytest",
+      "from licensing.automatic_email import AutomaticEmailError, AutomaticEmailReport, poll_superadmin_once, poll_unread_requests",
+      "from licensing.offline_email import LICENSE_REQUEST_SUBJECT, gmail_settings, license_request_body",
+      "from licensing.superadmin import AutomaticEmailSettings"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_cart_quantity_editing.py",
+    "lines": 41,
+    "functions": 2,
+    "top_level_imports": [
+      "import ast",
+      "from pathlib import Path",
+      "from types import SimpleNamespace",
+      "import pytest"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_damage_evidence.py",
+    "lines": 108,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from io import BytesIO",
+      "from unittest import mock",
+      "from tests.helpers import ProjectTestCase, TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_database_client_provider.py",
+    "lines": 153,
+    "functions": 15,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import date, datetime",
+      "from tests.helpers import ProjectTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_database_core.py",
+    "lines": 615,
+    "functions": 25,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import datetime, timedelta",
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_email_recovery.py",
+    "lines": 110,
+    "functions": 8,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from unittest import mock",
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_formatters.py",
+    "lines": 40,
+    "functions": 5,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import unittest",
+      "from utils.core.formatters import (\n    format_compact_number,\n    format_date_dmy,\n    format_display_value,\n    format_money,\n    format_quantity,\n    safe_float,\n)"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_license_request_flow.py",
+    "lines": 86,
+    "functions": 9,
+    "top_level_imports": [
+      "import ast",
+      "from pathlib import Path",
+      "from types import SimpleNamespace",
+      "from unittest.mock import Mock",
+      "from urllib.parse import quote"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_loss_controls.py",
+    "lines": 363,
+    "functions": 10,
+    "top_level_imports": [
+      "from datetime import date, timedelta",
+      "from database.database import EXPIRY_LOSS_REASON",
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_mobile_manager_contracts.py",
+    "lines": 278,
+    "functions": 28,
+    "top_level_imports": [
+      "from pathlib import Path",
+      "from database.client import DatabaseClient",
+      "from mobile.manager.sales_screen import MobileManagerSalesScreen, _aggregate_lots"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_offline_licensing.py",
+    "lines": 968,
+    "functions": 31,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "from datetime import date, datetime, timedelta, timezone",
+      "from pathlib import Path",
+      "import pytest",
+      "import bcrypt",
+      "from licensing.account_provisioning import (\n    AccountProvisioningError,\n    issue_admin_provisioning_code,\n    validate_admin_provisioning_for_license,\n)",
+      "from licensing.offline import (\n    OfflineLicenseClient,\n    OfflineLicenseIssuer,\n    OfflineLicenseStore,\n    generate_issuer_private_key,\n    normalize_license_code,\n    verify_license_code,\n    verify_reactivation_code,\n    verify_restoration_code,\n    verify_revocation_code,\n    verify_suspension_code,\n)",
+      "from licensing.superadmin import (\n    LocalSuperadmin,\n    SuperadminError,\n    add_license_duration,\n    normalize_license_duration,\n)",
+      "from licensing.secure_store import WindowsDPAPIProtector"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_performance_regressions.py",
+    "lines": 140,
+    "functions": 9,
+    "top_level_imports": [
+      "from concurrent.futures import ThreadPoolExecutor",
+      "from datetime import datetime",
+      "import sqlite3",
+      "from unittest.mock import patch",
+      "from types import SimpleNamespace",
+      "from database.database import Database, _fetch_sales_velocity, _get_product_daily_sales",
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_product_lookup_guard.py",
+    "lines": 15,
+    "functions": 2,
+    "top_level_imports": [
+      "from api.api_manager import APIManager",
+      "from admin.product_form import ProductForm"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_product_restoration.py",
+    "lines": 79,
+    "functions": 7,
+    "top_level_imports": [
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_purchase_suggestions.py",
+    "lines": 221,
+    "functions": 8,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import json",
+      "import tempfile",
+      "from datetime import date",
+      "from pathlib import Path",
+      "from unittest import mock",
+      "from tests.helpers import ProjectTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_receipt_seller_name.py",
+    "lines": 44,
+    "functions": 3,
+    "top_level_imports": [
+      "from tests.helpers import TemporaryDatabaseTestCase",
+      "from utils.hardware.thermal_printer import format_receipt_text"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_release_contracts.py",
+    "lines": 75,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import ast",
+      "from pathlib import Path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_sales_transactions.py",
+    "lines": 42,
+    "functions": 2,
+    "top_level_imports": [
+      "from datetime import datetime, timedelta",
+      "from utils.business.sales_transactions import group_sale_records, refund_window_status"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_server_app.py",
+    "lines": 181,
+    "functions": 12,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import importlib",
+      "import os",
+      "import sys",
+      "import types",
+      "import unittest",
+      "from datetime import date, datetime",
+      "from threading import Lock",
+      "from unittest import mock",
+      "from tests.helpers import ProjectTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_services_and_ai.py",
+    "lines": 405,
+    "functions": 27,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import unittest",
+      "from unittest import mock",
+      "from tests.helpers import ProjectTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_superadmin_user_directory.py",
+    "lines": 50,
+    "functions": 3,
+    "top_level_imports": [
+      "import sqlite3",
+      "from types import SimpleNamespace",
+      "import pytest",
+      "from licensing.user_directory import local_user_directory",
+      "from licensing.superadmin import SuperadminError",
+      "from scripts.superadmin_terminal import _print_table"
+    ],
+    "markers": {
+      "sqlite3.connect(": 1
+    }
+  },
+  {
+    "file": "tests/test_system_status.py",
+    "lines": 100,
+    "functions": 6,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import datetime",
+      "from tests.helpers import TemporaryDatabaseTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_unified_desktop_login.py",
+    "lines": 95,
+    "functions": 5,
+    "top_level_imports": [
+      "from pathlib import Path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "tests/test_utils.py",
+    "lines": 271,
+    "functions": 19,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "import tempfile",
+      "import unittest",
+      "from datetime import date, datetime",
+      "from pathlib import Path",
+      "from unittest import mock",
+      "from tests.helpers import ProjectTestCase"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "ui/__init__.py",
+    "lines": 2,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "ui/components/__init__.py",
+    "lines": 2,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "ui/components/admin_home_dashboard.py",
+    "lines": 530,
+    "functions": 19,
+    "top_level_imports": [
+      "from datetime import datetime",
+      "from kivy.app import App",
+      "from kivy.metrics import dp",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from ui.components.chart_hover import MatplotlibHoverController",
+      "from ui.components.hover_widgets import HoverCard"
+    ],
+    "markers": {
+      "clear_widgets(": 1
+    }
+  },
+  {
+    "file": "ui/components/chart_hover.py",
+    "lines": 323,
+    "functions": 19,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "ui/components/hover_widgets.py",
+    "lines": 306,
+    "functions": 20,
+    "top_level_imports": [
+      "from kivy.animation import Animation",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.core.window import Window",
+      "from kivy.factory import Factory",
+      "from kivy.properties import BooleanProperty, ListProperty, NumericProperty",
+      "from kivymd.uix.button import MDRaisedButton",
+      "from kivymd.uix.card import MDCard",
+      "from ui.components.tooltip_widgets import TooltipIconButton, TooltipRaisedButton"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "ui/components/intelligent_banner.py",
+    "lines": 786,
+    "functions": 39,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from collections import defaultdict",
+      "import time",
+      "from typing import Any",
+      "from kivy.core.window import Window",
+      "from kivy.metrics import dp",
+      "from kivy.uix.floatlayout import FloatLayout",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.dropdownitem import MDDropDownItem",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from utils.ai.ai_popups import build_auto_banner_data, clear_banner_container, render_auto_banners"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "ui/components/loading_overlay.py",
+    "lines": 213,
+    "functions": 18,
+    "top_level_imports": [
+      "from collections import OrderedDict",
+      "from kivy.animation import Animation",
+      "from kivy.graphics import Color, Rectangle, RoundedRectangle",
+      "from kivy.metrics import dp",
+      "from kivy.uix.anchorlayout import AnchorLayout",
+      "from kivy.uix.floatlayout import FloatLayout",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.spinner import MDSpinner"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "ui/components/productivity_dashboard.py",
+    "lines": 805,
+    "functions": 37,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import datetime",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.metrics import dp",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.gridlayout import MDGridLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from ui.components.chart_hover import MatplotlibHoverController",
+      "from ui.components.hover_widgets import HoverCard"
+    ],
+    "markers": {
+      "clear_widgets(": 3
+    }
+  },
+  {
+    "file": "ui/components/tooltip_widgets.py",
+    "lines": 249,
+    "functions": 19,
+    "top_level_imports": [
+      "from kivy.animation import Animation",
+      "from kivy.clock import Clock",
+      "from kivy.factory import Factory",
+      "from kivy.metrics import dp",
+      "from kivy.properties import BooleanProperty, NumericProperty, StringProperty",
+      "from kivymd.uix.button import MDFlatButton, MDFloatingActionButton, MDIconButton, MDRaisedButton",
+      "from kivymd.uix.textfield import MDTextField",
+      "from kivymd.uix.tooltip import MDTooltip"
+    ],
+    "markers": {
+      "schedule_interval(": 1
+    }
+  },
+  {
+    "file": "user/login.py",
+    "lines": 3594,
+    "functions": 159,
+    "top_level_imports": [
+      "import os",
+      "import os",
+      "import re",
+      "import webbrowser",
+      "from threading import Thread",
+      "from urllib.parse import quote",
+      "from kivy.properties import (\n    ObjectProperty,\n    StringProperty,\n    ListProperty,\n    BooleanProperty,\n    NumericProperty,\n)",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.app import App",
+      "from kivy.metrics import dp",
+      "from kivy.core.window import Window",
+      "from datetime import datetime, timedelta",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.label import MDIcon, MDLabel",
+      "from kivymd.uix.textfield import MDTextField",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDRectangleFlatIconButton",
+      "from kivymd.uix.scrollview import MDScrollView",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from database.provider import get_db",
+      "from licensing.offline import OfflineLicenseClient, LicenseResult, LICENSE_REQUEST_PLANS, parse_license_request",
+      "from licensing.account_provisioning import (\n    AccountProvisioningError,\n    validate_admin_provisioning_for_license,\n)",
+      "from licensing.account_events import notify_superadmin_account_event",
+      "from licensing.offline_email import LICENSE_REQUEST_SUBJECT, license_request_body",
+      "from utils.business.email_service import EmailServiceNotConfigured, send_system_email",
+      "from utils.core.i18n import language_options, language_short, translate"
+    ],
+    "markers": {
+      "Thread(": 2,
+      "schedule_interval(": 1
+    }
+  },
+  {
+    "file": "user/login_screen.kv",
+    "lines": 599,
+    "markers": {}
+  },
+  {
+    "file": "utils/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/ai/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/ai/ai_assistant_popup.py",
+    "lines": 916,
+    "functions": 58,
+    "top_level_imports": [
+      "import math",
+      "import time",
+      "from threading import Thread",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.graphics import (\n    Color, Line, Rectangle, Ellipse,\n    RoundedRectangle, Canvas, PushMatrix, PopMatrix, Rotate,\n)",
+      "from kivy.metrics import dp",
+      "from kivy.properties import NumericProperty, ListProperty, StringProperty",
+      "from kivy.uix.popup import Popup",
+      "from kivy.uix.widget import Widget",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivymd.uix.scrollview import MDScrollView",
+      "from kivymd.uix.textfield import MDTextField",
+      "from utils.ai.ai_insights import answer_management_question, can_use_ai_api, build_admin_insights"
+    ],
+    "markers": {
+      "Thread(": 1,
+      "schedule_interval(": 5,
+      "clear_widgets(": 5
+    }
+  },
+  {
+    "file": "utils/ai/ai_insights.py",
+    "lines": 1576,
+    "functions": 53,
+    "top_level_imports": [
+      "from datetime import datetime, timedelta",
+      "import json",
+      "import os",
+      "import re",
+      "import time",
+      "import random",
+      "from collections import defaultdict",
+      "from kivy.app import App",
+      "from database.provider import get_db",
+      "from utils.config.env_loader import load_dotenv",
+      "from utils.core.i18n import normalize_language, translate"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/ai/ai_popups.py",
+    "lines": 2684,
+    "functions": 114,
+    "top_level_imports": [
+      "import re",
+      "from kivy.animation import Animation",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.core.window import Window",
+      "from kivy.graphics import Color, Line, RoundedRectangle",
+      "from kivy.metrics import dp",
+      "from kivy.uix.anchorlayout import AnchorLayout",
+      "from kivy.uix.behaviors import ButtonBehavior",
+      "from kivy.uix.floatlayout import FloatLayout",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.widget import Widget",
+      "from kivy.utils import escape_markup",
+      "from kivymd.icon_definitions import md_icons",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDIconButton",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.progressbar import MDProgressBar",
+      "from utils.business.expiry_alerts import (\n    ALERT_COLORS,\n    ALERT_LEVEL_ALTO,\n    ALERT_LEVEL_CRITICO,\n    ALERT_LEVEL_LEVE,\n    ALERT_LEVEL_MEDIO,\n    ALERT_LEVEL_VENCIDO,\n)",
+      "from utils.config.theme import get_theme_tokens"
+    ],
+    "markers": {
+      "clear_widgets(": 2
+    }
+  },
+  {
+    "file": "utils/business/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/damage_evidence.py",
+    "lines": 173,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from io import BytesIO",
+      "import hashlib",
+      "import os",
+      "from pathlib import Path",
+      "from uuid import uuid4",
+      "from utils.config.paths import data_path, relativize_to_root, resolve_path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/email_service.py",
+    "lines": 255,
+    "functions": 10,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "import re",
+      "import smtplib",
+      "import ssl",
+      "from email.message import EmailMessage",
+      "from email.utils import formataddr",
+      "from pathlib import Path",
+      "from utils.config.paths import ENV_FILE"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/expiry_alerts.py",
+    "lines": 133,
+    "functions": 3,
+    "top_level_imports": [
+      "from datetime import date, datetime"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/product_catalog.py",
+    "lines": 183,
+    "functions": 9,
+    "top_level_imports": [
+      "from datetime import datetime"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/purchase_suggestions.py",
+    "lines": 266,
+    "functions": 8,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import json",
+      "import math",
+      "import re",
+      "from datetime import date, datetime",
+      "from pathlib import Path",
+      "from typing import Any",
+      "from utils.config.paths import CACHE_DIR"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/receipt_policy.py",
+    "lines": 13,
+    "functions": 2,
+    "top_level_imports": [
+      "from __future__ import annotations"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/sales_transactions.py",
+    "lines": 95,
+    "functions": 4,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from collections import OrderedDict",
+      "from datetime import datetime, timedelta",
+      "from typing import Any, Iterable"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/security_questions.py",
+    "lines": 37,
+    "functions": 4,
+    "top_level_imports": [
+      "import unicodedata",
+      "import bcrypt"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/business/vat.py",
+    "lines": 281,
+    "functions": 10,
+    "top_level_imports": [
+      "from datetime import date, datetime"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/app_config.py",
+    "lines": 557,
+    "functions": 28,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import copy",
+      "import json",
+      "import os",
+      "import secrets",
+      "from functools import lru_cache",
+      "from pathlib import Path",
+      "from typing import Any",
+      "from utils.config.env_loader import load_dotenv",
+      "from utils.config.paths import (\n    API_CONFIG_FILE,\n    API_STDERR_LOG,\n    API_STDOUT_LOG,\n    APP_CONFIG_FILE,\n    APP_SETTINGS_FILE,\n    ASSETS_DIR,\n    CACHE_DIR,\n    CONFIG_DIR,\n    DB_BACKUP_DIR,\n    DB_FILE,\n    ENV_FILE,\n    LEGACY_ENV_FILE,\n    LOGS_DIR,\n    RECEIPTS_DIR,\n    REPORTS_DIR,\n    ROOT_DIR,\n    RUNTIME_ROOT_DIR,\n    SERVICE_CONFIG_FILE,\n    TEMP_DIR,\n    ensure_runtime_dirs,\n    is_mobile_runtime,\n    relativize_to_root,\n    resolve_path,\n)"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/device_config.py",
+    "lines": 74,
+    "functions": 5,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from typing import Any",
+      "from utils.config.app_config import get_app_settings, save_app_settings"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/env_loader.py",
+    "lines": 67,
+    "functions": 4,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "from pathlib import Path",
+      "from utils.config.paths import ENV_FILE, LEGACY_ENV_FILE, resolve_path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/logging_setup.py",
+    "lines": 54,
+    "functions": 2,
+    "top_level_imports": [
+      "import logging",
+      "import os",
+      "from utils.config.app_config import get_app_config"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/paths.py",
+    "lines": 170,
+    "functions": 15,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "import sys",
+      "from pathlib import Path"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/system_identity.py",
+    "lines": 27,
+    "functions": 3,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from typing import Any",
+      "from utils.config.app_config import get_app_settings, save_app_settings"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/config/system_status.py",
+    "lines": 141,
+    "functions": 7,
+    "top_level_imports": [
+      "import sqlite3",
+      "from datetime import datetime, timedelta",
+      "from pathlib import Path",
+      "from typing import Any",
+      "from utils.config.app_config import get_app_config",
+      "from utils.config.paths import DB_BACKUP_DIR, LOGS_DIR, relativize_to_root, resolve_path"
+    ],
+    "markers": {
+      "sqlite3.connect(": 1
+    }
+  },
+  {
+    "file": "utils/config/theme.py",
+    "lines": 45,
+    "functions": 1,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/focus_navigation.py",
+    "lines": 213,
+    "functions": 18,
+    "top_level_imports": [
+      "from kivy.clock import Clock",
+      "from kivy.core.window import Window"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/formatters.py",
+    "lines": 68,
+    "functions": 6,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from datetime import datetime",
+      "from typing import Any"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/i18n.py",
+    "lines": 434,
+    "functions": 16,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import json",
+      "import re",
+      "import unicodedata",
+      "from functools import lru_cache",
+      "from pathlib import Path",
+      "from typing import Any",
+      "from utils.config.paths import ROOT_DIR"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/i18n_runtime.py",
+    "lines": 161,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from typing import Any",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from utils.core.i18n import (\n    has_portuguese_correction,\n    has_text_translation,\n    normalize_language,\n    translate_text,\n)",
+      "from utils.core.readability import improve_readability"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/perf_utils.py",
+    "lines": 62,
+    "functions": 6,
+    "top_level_imports": [
+      "import os",
+      "import sys",
+      "from time import perf_counter"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/core/readability.py",
+    "lines": 86,
+    "functions": 4,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "from typing import Any",
+      "from kivy.clock import Clock",
+      "from kivy.metrics import sp"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/hardware/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/hardware/thermal_printer.py",
+    "lines": 233,
+    "functions": 13,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import os",
+      "import platform",
+      "import subprocess",
+      "import time",
+      "import unicodedata",
+      "from typing import Any",
+      "from utils.core.formatters import format_money, safe_float",
+      "from utils.config.system_identity import DEFAULT_SYSTEM_NAME"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/hardware/vision.py",
+    "lines": 177,
+    "functions": 7,
+    "top_level_imports": [
+      "from __future__ import annotations",
+      "import importlib",
+      "import os",
+      "from contextlib import contextmanager"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/__init__.py",
+    "lines": 1,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/losses_history_screen.kv",
+    "lines": 148,
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/losses_history_screen.py",
+    "lines": 570,
+    "functions": 35,
+    "top_level_imports": [
+      "from datetime import datetime, timedelta",
+      "from collections import deque",
+      "from pathlib import Path",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp",
+      "from kivy.properties import BooleanProperty",
+      "from kivy.uix.widget import Widget",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from database.provider import get_db",
+      "from utils.screens.reports_screen import DateRangeDialog",
+      "from utils.config.paths import resolve_path, temp_path",
+      "from kivy.uix.image import Image"
+    ],
+    "markers": {
+      "Thread(": 3,
+      "schedule_interval(": 1,
+      "clear_widgets(": 2
+    }
+  },
+  {
+    "file": "utils/screens/losses_screen.kv",
+    "lines": 608,
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/losses_screen.py",
+    "lines": 1695,
+    "functions": 105,
+    "top_level_imports": [
+      "from kivy.lang import Builder",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.factory import Factory",
+      "from kivy.graphics import Color, Line",
+      "from kivy.graphics.texture import Texture",
+      "from kivy.metrics import dp",
+      "from kivy.core.audio import SoundLoader",
+      "from kivy.animation import Animation",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.list import TwoLineListItem",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivy.properties import NumericProperty, ObjectProperty, StringProperty",
+      "from database.provider import get_db",
+      "from datetime import date, datetime",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from pathlib import Path",
+      "import time",
+      "import os",
+      "from ui.components.tooltip_widgets import TooltipIconButton",
+      "from utils.hardware.vision import get_vision_dependencies, open_optimized_camera_capture",
+      "from utils.business.damage_evidence import DamageEvidenceError, create_local_damage_evidence",
+      "from utils.config.paths import temp_path"
+    ],
+    "markers": {
+      "Thread(": 3,
+      "schedule_interval(": 3,
+      "clear_widgets(": 1
+    }
+  },
+  {
+    "file": "utils/screens/reports_screen.kv",
+    "lines": 630,
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/reports_screen.py",
+    "lines": 2493,
+    "functions": 154,
+    "top_level_imports": [
+      "import os",
+      "import sys",
+      "import unicodedata",
+      "from pathlib import Path",
+      "from collections import deque",
+      "from utils.config.paths import ROOT_DIR, report_search_dirs",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.gridlayout import MDGridLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.button import MDRaisedButton, MDFlatButton",
+      "from kivymd.uix.textfield import MDTextField",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.list import OneLineListItem",
+      "from kivymd.uix.card import MDSeparator",
+      "from kivymd.uix.pickers import MDDatePicker",
+      "from AI.controller import ProactiveIntelligenceController",
+      "from datetime import datetime, timedelta",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from kivy.metrics import dp, sp",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.widget import Widget",
+      "from kivy.core.window import Window",
+      "from kivy.clock import Clock",
+      "from kivy.app import App",
+      "from kivy.animation import Animation",
+      "from kivy.lang import Builder",
+      "from kivy.properties import ObjectProperty, StringProperty",
+      "from database.provider import get_db",
+      "from ui.components.hover_widgets import HoverCard, HoverRaisedButton",
+      "from ui.components.loading_overlay import ScreenLoadingController",
+      "from ui.components.tooltip_widgets import set_attention_shake",
+      "from utils.business.expiry_alerts import evaluate_expiry_alert",
+      "from utils.core.focus_navigation import FormKeyboardController",
+      "from utils.core.perf_utils import perf_start, perf_log"
+    ],
+    "markers": {
+      "Thread(": 6,
+      "schedule_interval(": 2,
+      "clear_widgets(": 3
+    }
+  },
+  {
+    "file": "utils/screens/restock_history_screen.kv",
+    "lines": 138,
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/restock_history_screen.py",
+    "lines": 368,
+    "functions": 21,
+    "top_level_imports": [
+      "from datetime import datetime, timedelta",
+      "from collections import deque",
+      "from pathlib import Path",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp",
+      "from kivy.properties import BooleanProperty",
+      "from kivy.uix.widget import Widget",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.screen import MDScreen",
+      "from database.provider import get_db"
+    ],
+    "markers": {
+      "Thread(": 1,
+      "schedule_interval(": 1,
+      "clear_widgets(": 2
+    }
+  },
+  {
+    "file": "utils/screens/restock_screen.kv",
+    "lines": 337,
+    "markers": {}
+  },
+  {
+    "file": "utils/screens/restock_screen.py",
+    "lines": 2331,
+    "functions": 108,
+    "top_level_imports": [
+      "from datetime import datetime, timedelta",
+      "from pathlib import Path",
+      "from time import perf_counter",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp",
+      "from kivy.uix.behaviors import ButtonBehavior",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.gridlayout import MDGridLayout",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.snackbar import MDSnackbar",
+      "from kivymd.uix.textfield import MDTextField",
+      "from database.provider import get_db",
+      "from ui.components.loading_overlay import ScreenLoadingController",
+      "from utils.business.expiry_alerts import evaluate_expiry_alert",
+      "from utils.core.i18n import correct_portuguese_text",
+      "from utils.core.perf_utils import perf_start, perf_log"
+    ],
+    "markers": {
+      "schedule_interval(": 2,
+      "clear_widgets(": 4
+    }
+  },
+  {
+    "file": "utils/screens/sales_history_screen.py",
+    "lines": 1648,
+    "functions": 65,
+    "top_level_imports": [
+      "from collections import deque",
+      "from datetime import datetime, timedelta",
+      "from functools import lru_cache",
+      "from threading import Thread",
+      "from time import perf_counter",
+      "from kivy.app import App",
+      "from kivy.clock import Clock",
+      "from kivy.graphics import Color, Rectangle",
+      "from kivy.lang import Builder",
+      "from kivy.metrics import dp",
+      "from kivy.properties import BooleanProperty, StringProperty, ListProperty",
+      "from kivy.uix.recycleview import RecycleView",
+      "from kivy.uix.recycleview.views import RecycleDataViewBehavior",
+      "from kivy.uix.scrollview import ScrollView",
+      "from kivy.uix.widget import Widget",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.button import MDFlatButton, MDRaisedButton",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.label import MDLabel",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.textfield import MDTextField",
+      "from database.provider import get_db",
+      "from utils.business.sales_transactions import (\n    REFUND_WINDOW_MINUTES,\n    group_sale_records,\n    refund_window_status,\n    transaction_key,\n)"
+    ],
+    "markers": {
+      "Thread(": 4,
+      "clear_widgets(": 1,
+      "RecycleView": 13
+    }
+  },
+  {
+    "file": "utils/screens/settings.py",
+    "lines": 5638,
+    "functions": 319,
+    "top_level_imports": [
+      "import sqlite3",
+      "import os",
+      "import json",
+      "import secrets",
+      "import webbrowser",
+      "from collections import Counter",
+      "from datetime import datetime",
+      "from threading import Thread",
+      "from kivymd.uix.screen import MDScreen",
+      "from kivymd.uix.boxlayout import MDBoxLayout",
+      "from kivymd.uix.dialog import MDDialog",
+      "from kivymd.uix.button import (\n    MDRaisedButton,\n    MDFlatButton,\n    MDRectangleFlatButton,\n    MDRectangleFlatIconButton,\n    MDIconButton,\n)",
+      "from kivymd.uix.textfield import MDTextField",
+      "from kivymd.uix.label import MDLabel, MDIcon",
+      "from kivymd.uix.card import MDCard",
+      "from kivymd.uix.list import TwoLineListItem, OneLineListItem",
+      "from kivymd.uix.selectioncontrol import MDCheckbox, MDSwitch",
+      "from kivymd.uix.menu import MDDropdownMenu",
+      "from kivymd.uix.progressbar import MDProgressBar",
+      "from kivy.metrics import dp",
+      "from kivy.clock import Clock",
+      "from kivy.core.window import Window",
+      "from kivy.app import App",
+      "from kivy.animation import Animation",
+      "from kivy.properties import BooleanProperty, NumericProperty, StringProperty",
+      "from kivy.uix.anchorlayout import AnchorLayout",
+      "from kivy.uix.scrollview import ScrollView",
+      "from database.provider import get_db",
+      "from AI.controller import ProactiveIntelligenceController",
+      "from ui.components.hover_widgets import HoverCard, HoverRaisedButton",
+      "from ui.components.loading_overlay import ScreenLoadingController",
+      "from ui.components.tooltip_widgets import set_attention_shake",
+      "from utils.config.device_config import get_device_settings, save_device_settings",
+      "from utils.config.env_loader import load_dotenv",
+      "from utils.core.focus_navigation import FormKeyboardController",
+      "from utils.core.i18n import language_label, language_options, normalize_language, translate",
+      "from utils.config.paths import APP_SETTINGS_FILE, ENV_FILE, data_path",
+      "from utils.config.system_status import collect_system_status",
+      "from utils.config.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name, save_system_name",
+      "from utils.hardware.thermal_printer import (\n    get_default_printer_name,\n    list_system_printers,\n    print_thermal_receipt,\n)",
+      "from kivy.lang import Builder",
+      "from utils.business.security_questions import QUESTIONS",
+      "from utils.business.email_service import save_smtp_settings",
+      "from utils.business.vat import VAT_RULES, DEFAULT_VAT_RULE_CODE, describe_vat_choice"
+    ],
+    "markers": {
+      "Thread(": 17,
+      "schedule_interval(": 1,
+      "clear_widgets(": 9
+    }
+  },
+  {
+    "file": "utils/screens/settings_layout.kv",
+    "lines": 1334,
+    "markers": {}
+  },
+  {
+    "file": "version.py",
+    "lines": 4,
+    "functions": 0,
+    "top_level_imports": [],
+    "markers": {}
+  },
+  {
+    "file": "waitress/__init__.py",
+    "lines": 3,
+    "functions": 0,
+    "top_level_imports": [
+      "from .runner import serve"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "waitress/__main__.py",
+    "lines": 46,
+    "functions": 3,
+    "top_level_imports": [
+      "import argparse",
+      "import importlib",
+      "import sys",
+      "from .runner import serve"
+    ],
+    "markers": {}
+  },
+  {
+    "file": "waitress/runner.py",
+    "lines": 15,
+    "functions": 1,
+    "top_level_imports": [
+      "import socketserver",
+      "from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server"
+    ],
+    "markers": {}
+  }
+]
