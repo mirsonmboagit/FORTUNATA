@@ -1,18 +1,21 @@
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.core.window import Window
 from kivy.factory import Factory
 from kivy.graphics import Color, Line
 from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.core.audio import SoundLoader
 from kivy.animation import Animation
-from kivymd.uix.card import MDCard
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.list import TwoLineListItem
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.menu import MDDropdownMenu
+from kivy.uix.behaviors import ButtonBehavior
+from kivy.uix.scrollview import ScrollView
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton, NativeCard as MDCard,
+    NativeDialog as MDDialog, NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton, NativeIcon as MDIcon, NativeLabel as MDLabel,
+    NativeListItem as TwoLineListItem, NativeScreen as MDScreen,
+)
 from kivy.properties import NumericProperty, ObjectProperty, StringProperty
 from database.provider import get_db
 from datetime import date, datetime
@@ -118,8 +121,11 @@ class LossesFloatingScannerPanel(MDCard):
         return touch.y >= (self.top - self.drag_bar_height)
 
     def on_touch_down(self, touch):
-        if self.disabled or self.opacity <= 0.01 or not self.collide_point(*touch.pos):
-            return super().on_touch_down(touch)
+        # Painel oculto nunca captura toques (deixa passar aos botoes de baixo)
+        if self.disabled or self.opacity <= 0.01:
+            return False
+        if not self.collide_point(*touch.pos):
+            return False
 
         if self._touch_in_resize_zone(touch):
             touch.grab(self)
@@ -137,6 +143,8 @@ class LossesFloatingScannerPanel(MDCard):
         return super().on_touch_down(touch)
 
     def on_touch_move(self, touch):
+        if self.disabled or self.opacity <= 0.01:
+            return False
         if touch.grab_current is not self:
             return super().on_touch_move(touch)
 
@@ -175,6 +183,11 @@ class LossesFloatingScannerPanel(MDCard):
 Factory.register("LossesFloatingScannerPanel", cls=LossesFloatingScannerPanel)
 Builder.load_file(os.path.join(os.path.dirname(__file__), "losses_screen.kv"))
 
+class ExpiredBatchRow(ButtonBehavior, MDCard):
+    """Linha clicável no modal de lote — clicar alterna a seleção."""
+    def __init__(self, product_id=None, **kwargs):
+        super().__init__(**kwargs)
+        self.product_id = product_id
 
 
 class LossesScreen(MDScreen):
@@ -196,6 +209,7 @@ class LossesScreen(MDScreen):
         self.products = []
         self._products_page_offset = 0
         self._products_has_more = False
+        self._pending_products_page_request = None
         self.selected_product = None
         self.loss_menu = None
         self.reason_menu = None
@@ -234,7 +248,17 @@ class LossesScreen(MDScreen):
         self._damage_camera_snapshot_path = None
         self._damage_camera_cleanup_path = None
         self._damage_camera_panel_initialized = False
-        
+
+        # Lote de vencidos
+        self._expired_batch_rows = []
+        self._expired_batch_selection = set()
+        self._expired_batch_dialog = None
+        self._expired_batch_checking = False
+        self._expired_batch_total_label = None
+        self._expired_batch_confirm_btn = None
+        self._pending_products_page_request = None
+        self._pending_products_offset = 0
+
         Clock.schedule_once(self.init_screen, 0.1)
 
     @staticmethod
@@ -274,6 +298,7 @@ class LossesScreen(MDScreen):
         self.clear_form()
         self.update_ui_state()
         self._update_responsive_layout()
+        Clock.schedule_once(lambda dt: self._check_expired_batch(), 0.3)
         app = App.get_running_app()
         warmup = getattr(app, "warmup_screens", None) if app else None
         if callable(warmup):
@@ -301,6 +326,7 @@ class LossesScreen(MDScreen):
             "query": str(query or "").strip(),
             "loss_type_label": loss_type_label,
             "loss_type_code": loss_type_code,
+            "attempts": 0,
         }
         # Uma página pode não conter o produto do alerta. A pesquisa abaixo
         # força uma consulta SQL por ID/código em vez de procurar apenas os 10
@@ -369,10 +395,21 @@ class LossesScreen(MDScreen):
         if visible:
             panel.opacity = 1
             panel.disabled = False
-            self._ensure_scanner_panel_geometry(reset=reset_geometry)
+            # Restaura tamanho minimo antes de posicionar
+            if panel.width < dp(100) or panel.height < dp(100):
+                panel.size = (dp(280), dp(240))
+            self._ensure_scanner_panel_geometry(reset=reset_geometry or True)
+            # Trazer para a frente
+            parent = panel.parent
+            if parent is not None:
+                parent.remove_widget(panel)
+                parent.add_widget(panel)
         else:
             panel.opacity = 0
             panel.disabled = True
+            # Fora da area clicavel
+            panel.size = (dp(1), dp(1))
+            panel.pos = (-dp(500), -dp(500))
 
         Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
 
@@ -421,10 +458,18 @@ class LossesScreen(MDScreen):
         if visible:
             panel.opacity = 1
             panel.disabled = False
-            self._ensure_damage_camera_panel_geometry(reset=reset_geometry)
+            if panel.width < dp(100) or panel.height < dp(100):
+                panel.size = (dp(340), dp(380))
+            self._ensure_damage_camera_panel_geometry(reset=reset_geometry or True)
+            parent = panel.parent
+            if parent is not None:
+                parent.remove_widget(panel)
+                parent.add_widget(panel)
         else:
             panel.opacity = 0
             panel.disabled = True
+            panel.size = (dp(1), dp(1))
+            panel.pos = (-dp(500), -dp(500))
 
         Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
 
@@ -433,36 +478,100 @@ class LossesScreen(MDScreen):
         self.stop_scanner(status_text="Scanner fechado", hide_panel=True)
 
     def _update_responsive_layout(self):
-        if not hasattr(self, "ids") or "loss_type_qty_row" not in self.ids:
+        """Responsividade sem bloquear cliques.
+
+        - Paineis ocultos ficam fora do ecran (nao capturam toque)
+        - Formulario empilha em ecras estreitos
+        - Padding inferior so cresce quando ha painel visivel
+        """
+        if not hasattr(self, "ids") or not self.ids:
+            return
+        if "loss_type_qty_row" not in self.ids:
             return
 
-        width = self.width or dp(1200)
-        compact = width < dp(1120)
+        width = float(self.width or Window.width or 1200)
+        compact = width < dp(900)
+        narrow = width < dp(720)
 
-        content_column = self.ids.content_column
-        selected_meta = self.ids.selected_product_meta_row
-        scanner_preview = self.ids.scanner_preview_card
-        damage_camera_preview = self.ids.damage_camera_preview_card
-        scanner_buttons = self.ids.scanner_buttons_row
-        loss_type_row = self.ids.loss_type_qty_row
-        loss_type_btn = self.ids.loss_type_btn
-        qty_input = self.ids.qty_input
+        content_column = self.ids.get("content_column")
+        selected_meta = self.ids.get("selected_product_meta_row")
+        scanner_preview = self.ids.get("scanner_preview_card")
+        damage_camera_preview = self.ids.get("damage_camera_preview_card")
+        scanner_buttons = self.ids.get("scanner_buttons_row")
+        loss_type_row = self.ids.get("loss_type_qty_row")
+        loss_type_btn = self.ids.get("loss_type_btn")
+        qty_input = self.ids.get("qty_input")
+        loss_body = self.ids.get("loss_body_row")
+        loss_fields = self.ids.get("loss_fields_col")
+        loss_impact = self.ids.get("loss_impact_card")
+        loss_form = self.ids.get("loss_form_card")
+        search_card = self.ids.get("search_card")
 
-        selected_meta.orientation = "vertical" if compact else "horizontal"
-        selected_meta.height = dp(58) if compact else dp(20)
-        self._ensure_scanner_panel_geometry()
-        self._ensure_damage_camera_panel_geometry()
-        scanner_buttons.width = dp(116) if compact else dp(132)
-        visible_panel_height = max(
-            scanner_preview.height if scanner_preview.opacity > 0.01 else 0,
-            damage_camera_preview.height if damage_camera_preview.opacity > 0.01 else 0,
-        )
-        bottom_padding = visible_panel_height + dp(34) if visible_panel_height else dp(16)
-        content_column.padding = [dp(16), dp(16), dp(16), bottom_padding]
-        loss_type_row.orientation = "vertical" if compact else "horizontal"
-        loss_type_row.height = dp(104) if compact else dp(52)
-        loss_type_btn.size_hint_x = 1 if compact else 0.55
-        qty_input.size_hint_x = 1 if compact else 0.45
+        if selected_meta is not None:
+            selected_meta.orientation = "vertical" if narrow else "horizontal"
+            selected_meta.height = dp(54) if narrow else dp(20)
+
+        if scanner_preview is not None and scanner_preview.opacity > 0.5 and not scanner_preview.disabled:
+            self._ensure_scanner_panel_geometry()
+        if damage_camera_preview is not None and damage_camera_preview.opacity > 0.5 and not damage_camera_preview.disabled:
+            self._ensure_damage_camera_panel_geometry()
+
+        if scanner_buttons is not None:
+            scanner_buttons.width = dp(120) if compact else dp(132)
+
+        if loss_body is not None:
+            if narrow:
+                loss_body.orientation = "vertical"
+                loss_body.height = dp(420) if self.selected_loss_type == "DAMAGE" else dp(340)
+                if loss_fields is not None:
+                    loss_fields.size_hint_x = 1
+                if loss_impact is not None:
+                    loss_impact.size_hint_x = 1
+                    loss_impact.size_hint_y = None
+                    loss_impact.height = dp(140)
+            else:
+                loss_body.orientation = "horizontal"
+                loss_body.height = dp(280)
+                if loss_fields is not None:
+                    loss_fields.size_hint_x = 0.58
+                if loss_impact is not None:
+                    loss_impact.size_hint_x = 0.42
+                    loss_impact.size_hint_y = 1
+                    loss_impact.height = 0
+
+        if loss_type_row is not None:
+            loss_type_row.orientation = "vertical" if narrow else "horizontal"
+            loss_type_row.height = dp(96) if narrow else dp(46)
+        if loss_type_btn is not None:
+            loss_type_btn.size_hint_x = 1 if narrow else 0.58
+        if qty_input is not None:
+            qty_input.size_hint_x = 1 if narrow else 0.42
+
+        if search_card is not None and float(getattr(search_card, "opacity", 0) or 0) > 0.5:
+            search_card.height = dp(320) if narrow else dp(380)
+
+        if loss_form is not None and float(getattr(loss_form, "opacity", 0) or 0) > 0.5:
+            target = self._loss_form_target_height()
+            if narrow:
+                target = max(target, dp(480 if self.selected_loss_type == "DAMAGE" else 400))
+            loss_form.height = target
+            loss_form.disabled = False
+
+        visible_h = 0.0
+        if scanner_preview is not None and float(getattr(scanner_preview, "opacity", 0) or 0) > 0.5 and not scanner_preview.disabled:
+            visible_h = max(visible_h, float(scanner_preview.height or 0))
+        if damage_camera_preview is not None and float(getattr(damage_camera_preview, "opacity", 0) or 0) > 0.5 and not damage_camera_preview.disabled:
+            visible_h = max(visible_h, float(damage_camera_preview.height or 0))
+        bottom_padding = (visible_h + dp(28)) if visible_h else dp(16)
+        if content_column is not None:
+            content_column.padding = [
+                dp(12) if narrow else dp(14),
+                dp(10),
+                dp(12) if narrow else dp(14),
+                bottom_padding,
+            ]
+            content_column.spacing = dp(10) if narrow else dp(12)
+
 
     def request_enter_refresh(self, force=False, delay=None):
         delay = self.ENTER_REFRESH_DELAY_SECONDS if delay is None else max(0, float(delay))
@@ -505,8 +614,11 @@ class LossesScreen(MDScreen):
 
     # ========== UI STATE MANAGEMENT (NOVO) ==========
     def _loss_form_target_height(self):
-        """Mantem o formulario ajustado ao seu conteudo, sem areas vazias."""
-        return dp(800 if self.selected_loss_type == "DAMAGE" else 460)
+        """Altura do formulario de perda (com ou sem evidencia)."""
+        base = dp(320)
+        if self.selected_loss_type == "DAMAGE":
+            return base + dp(200)
+        return base
 
     def _scroll_loss_form_to_top(self, _dt=0):
         if "losses_scroll" in self.ids:
@@ -524,12 +636,12 @@ class LossesScreen(MDScreen):
             self.ids.step1_icon.icon = "numeric-1-circle"
             self.ids.step1_icon.text_color = _theme_color("info", [0.15, 0.65, 0.85, 1])
             self.ids.step1_label.bold = True
-            self.ids.step1_label.theme_text_color = "Primary"
+            self.ids.step1_label.text_color = _theme_color("text_primary", [0.9, 0.9, 0.9, 1])
             
             self.ids.step2_icon.icon = "numeric-2-circle-outline"
             self.ids.step2_icon.text_color = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
             self.ids.step2_label.bold = False
-            self.ids.step2_label.theme_text_color = "Hint"
+            self.ids.step2_label.text_color = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
             
         elif self.current_step == 2:
             # Step 2: Preencher perda
@@ -541,21 +653,23 @@ class LossesScreen(MDScreen):
             self.ids.step1_icon.icon = "check-circle"
             self.ids.step1_icon.text_color = _theme_color("success", [0.2, 0.7, 0.3, 1])
             self.ids.step1_label.bold = False
-            self.ids.step1_label.theme_text_color = "Secondary"
+            self.ids.step1_label.text_color = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
             
             self.ids.step2_icon.icon = "numeric-2-circle"
             self.ids.step2_icon.text_color = _theme_color("info", [0.15, 0.65, 0.85, 1])
             self.ids.step2_label.bold = True
-            self.ids.step2_label.theme_text_color = "Primary"
+            self.ids.step2_label.text_color = _theme_color("text_primary", [0.9, 0.9, 0.9, 1])
 
     def _show_card(self, card, height):
         """Anima card para aparecer"""
-        anim = Animation(height=height, opacity=1, duration=0.3, t='out_cubic')
+        card.disabled = False
+        anim = Animation(height=height, opacity=1, duration=0.25, t='out_cubic')
         anim.start(card)
 
     def _hide_card(self, card):
         """Anima card para desaparecer"""
-        anim = Animation(height=0, opacity=0, duration=0.3, t='out_cubic')
+        card.disabled = True
+        anim = Animation(height=0, opacity=0, duration=0.25, t='out_cubic')
         anim.start(card)
 
     # ========== SONS ==========
@@ -759,54 +873,62 @@ class LossesScreen(MDScreen):
             Clock.schedule_once(lambda dt: self.start_scanner(), 0.1)
 
     # ========== PRODUTOS ==========
-    def load_products(self):
-        """Carrega produtos do banco"""
+    def load_products(self, offset=0):
+        """Carrega uma página de produtos (offset = posição inicial)."""
+        offset = max(0, int(offset or 0))
         if self._products_loading:
             self._pending_products_load = True
+            self._pending_products_offset = offset
             return
 
         token = self._products_load_token + 1
         self._products_load_token = token
         self._products_loading = True
-
-        offset = 0
         query = str(self._pending_search or "").strip()
+
         def worker():
             try:
                 getter = getattr(self.db, "get_products_for_losses_page", None)
                 payload = getter(query, self.PRODUCTS_PAGE_SIZE, offset) if callable(getter) else {"rows": [], "has_more": False}
             except Exception as e:
-                print(f"Erro ao carregar produtos: {e}")
+                print(f"[losses] Erro ao carregar produtos (offset={offset}): {e}")
                 payload = {"rows": [], "has_more": False}
             Clock.schedule_once(
-                lambda dt, data=payload, tok=token: self._apply_loaded_products(data, tok),
+                lambda dt, data=payload, tok=token, off=offset: self._apply_loaded_products(data, tok, off),
                 0,
             )
 
         Thread(target=worker, daemon=True).start()
 
-    def _apply_loaded_products(self, payload, token):
+    def _apply_loaded_products(self, payload, token, offset=0):
         if token != self._products_load_token:
             return
 
         self._products_loading = False
         self._last_products_load_at = perf_counter()
-        self.products = [
-            normalized
-            for normalized in (self._normalize_product_row(row) for row in (payload or {}).get("rows", []))
-            if normalized is not None
+        rows = [
+            n for n in (self._normalize_product_row(r) for r in (payload or {}).get("rows", []))
+            if n is not None
         ]
 
-        self._products_page_offset = 0
+        # Página vazia depois da primeira: volta à anterior em vez de mostrar lista vazia
+        if not rows and offset > 0:
+            self._products_has_more = False
+            self.load_products(max(0, offset - self.PRODUCTS_PAGE_SIZE))
+            return
+
+        self.products = rows
+        self._products_page_offset = offset
         self._products_has_more = bool((payload or {}).get("has_more"))
         self.show_products(self.products)
         self._sync_products_page_controls()
-
         self._consume_pending_product_focus()
 
         if self._pending_products_load:
             self._pending_products_load = False
-            Clock.schedule_once(lambda dt: self.load_products(), 0.05)
+            pending_offset = getattr(self, "_pending_products_offset", 0)
+            self._pending_products_offset = 0
+            Clock.schedule_once(lambda dt, off=pending_offset: self.load_products(off), 0.05)
 
     def _find_product_for_focus(self, product_id=None, query=None):
         target_id = str(product_id or "").strip()
@@ -843,6 +965,16 @@ class LossesScreen(MDScreen):
             query=request.get("query"),
         )
         if product is None:
+            request["attempts"] = int(request.get("attempts", 0)) + 1
+            if request["attempts"] >= 3:
+                self._pending_product_focus = None
+                self.show_dialog(
+                    "Produto não encontrado",
+                    "Não foi possível localizar automaticamente o produto para registar a perda. "
+                    "Utilize a pesquisa manual para encontrá-lo.",
+                )
+                return False
+
             search_text = str(request.get("query") or request.get("product_id") or "").strip()
             if search_text and "search_input" in self.ids:
                 self._pending_search = search_text
@@ -942,11 +1074,26 @@ class LossesScreen(MDScreen):
         elif status == "PERTO_DO_PRAZO":
             tag = " • PERTO DO PRAZO"
 
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        is_attention = status in {"EXPIRADO", "PERTO_DO_PRAZO"}
         item = TwoLineListItem(
             text=name,
-            secondary_text=f"Stock: {stock:.1f} {unit} • {price:.2f} MZN{tag}"
+            secondary_text=f"Stock: {stock:.1f} {unit}  |  {price:.2f} MZN{tag}",
+            md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+            line_color=tokens.get("warning" if is_attention else "divider", [0, 0, 0, 0.12]),
+            line_width=1,
+            radius=[dp(8)],
+            padding=[dp(12), dp(7)],
+            elevation=0,
         )
-        item.bind(on_release=lambda instance, current=product: self.select_product(current))
+        item._primary.text_color = tokens.get("text_primary", [0.12, 0.15, 0.20, 1])
+        item._secondary.text_color = tokens.get(
+            "warning" if is_attention else "text_secondary", [0.35, 0.40, 0.50, 1]
+        )
+        # A seleção ocorre no pressionar, antes de qualquer gesto curto do
+        # ScrollView. Assim o item continua fiável tanto com clique como com
+        # toque, sem cair no botão de registo abaixo da lista.
+        item.bind(on_press=lambda instance, current=product: self.select_product(current))
         return item
 
     def on_search(self, text):
@@ -988,32 +1135,47 @@ class LossesScreen(MDScreen):
         self._search_ev = None
         self.load_products()
 
-    def _load_products_page(self, offset):
-        if self._products_loading:
-            return
-        self._products_page_offset = max(0, int(offset))
-        token = self._products_load_token + 1
-        self._products_load_token = token
-        self._products_loading = True
-        query = str(self._pending_search or "").strip()
-        def worker():
-            payload = self.db.get_products_for_losses_page(query, self.PRODUCTS_PAGE_SIZE, self._products_page_offset)
-            Clock.schedule_once(lambda _dt: self._apply_products_page(payload, token), 0)
-        Thread(target=worker, daemon=True).start()
+    # def _load_products_page(self, offset):
+    #     if self._products_loading:
+    #         self._pending_products_page_request = int(offset)
+    #         return
+    #     self._products_page_offset = max(0, int(offset))
+    #     token = self._products_load_token + 1
+    #     self._products_load_token = token
+    #     self._products_loading = True
+    #     query = str(self._pending_search or "").strip()
+    #     def worker():
+    #         try:
+    #             payload = self.db.get_products_for_losses_page(query, self.PRODUCTS_PAGE_SIZE, self._products_page_offset)
+    #         except Exception as exc:
+    #             print(f"[losses] ERRO ao paginar produtos (offset={self._products_page_offset}): {exc}")
+    #             payload = {"rows": [], "has_more": False}
+    #         Clock.schedule_once(lambda _dt: self._apply_products_page(payload, token), 0)
+    #     Thread(target=worker, daemon=True).start()
 
-    def _apply_products_page(self, payload, token):
-        if token != self._products_load_token: return
-        self._products_loading = False
-        self.products = [p for p in (self._normalize_product_row(row) for row in payload.get("rows", [])) if p]
-        self._products_has_more = bool(payload.get("has_more"))
-        self.show_products(self.products)
-        self._sync_products_page_controls()
+    # def _apply_products_page(self, payload, token):
+    #     if token != self._products_load_token:
+    #         return
+    #     self._products_loading = False
+    #     self.products = [p for p in (self._normalize_product_row(row) for row in (payload or {}).get("rows", [])) if p]
+    #     self._products_has_more = bool((payload or {}).get("has_more"))
+    #     self.show_products(self.products)
+    #     self._sync_products_page_controls()
+
+    #     pending_offset = self._pending_products_page_request
+    #     if pending_offset is not None:
+    #         self._pending_products_page_request = None
+    #         Clock.schedule_once(lambda _dt, off=pending_offset: self._load_products_page(off), 0.05)
 
     def previous_products_page(self):
-        self._load_products_page(self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
+        if self._products_loading or self._products_page_offset <= 0:
+            return
+        self.load_products(self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
 
     def next_products_page(self):
-        if self._products_has_more: self._load_products_page(self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
+        if self._products_loading or not self._products_has_more:
+            return
+        self.load_products(self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
 
     def _sync_products_page_controls(self):
         if not self.ids: return
@@ -1021,6 +1183,11 @@ class LossesScreen(MDScreen):
         if label: label.text = f"{self._products_page_offset + 1}-{self._products_page_offset + len(self.products)}"
         if self.ids.get("losses_prev_btn"): self.ids.losses_prev_btn.disabled = self._products_page_offset <= 0
         if self.ids.get("losses_next_btn"): self.ids.losses_next_btn.disabled = not self._products_has_more
+        if label:
+            if self.products:
+                label.text = f"{self._products_page_offset + 1}-{self._products_page_offset + len(self.products)}"
+            else:
+                label.text = "0"
 
     def _filter_products(self, query):
         filtered = []
@@ -1667,6 +1834,355 @@ class LossesScreen(MDScreen):
             Clock.schedule_once(lambda dt, payload=result: apply_result(payload), 0)
 
         Thread(target=finish_worker, daemon=True).start()
+
+            # ========== LOTE DE PRODUTOS VENCIDOS ==========
+    def _check_expired_batch(self, on_ready=None):
+        """Verifica, em segundo plano, quantos produtos estão vencidos no catálogo inteiro."""
+        if self._expired_batch_checking:
+            return
+        self._expired_batch_checking = True
+
+        def worker():
+            try:
+                payload = self.db.get_products_for_losses_page("", 500, 0)
+                rows = (payload or {}).get("rows", [])
+            except Exception as exc:
+                print(f"[losses] erro ao verificar vencidos em lote: {exc}")
+                rows = []
+            normalized = [
+                r for r in (self._normalize_product_row(row) for row in rows) if r is not None
+            ]
+            expired = [r for r in normalized if r[8] == "EXPIRADO"]
+            Clock.schedule_once(
+                lambda _dt, data=expired, cb=on_ready: self._apply_expired_batch_check(data, cb), 0
+            )
+
+        Thread(target=worker, daemon=True).start()
+
+    def _apply_expired_batch_check(self, expired_rows, on_ready=None):
+        self._expired_batch_checking = False
+        self._expired_batch_rows = expired_rows
+        self._update_expired_batch_banner()
+        if callable(on_ready):
+            on_ready()
+
+    def _update_expired_batch_banner(self):
+        if not hasattr(self, "ids") or "expired_batch_banner" not in self.ids:
+            return
+        banner = self.ids.expired_batch_banner
+        count = len(self._expired_batch_rows)
+        threshold = 3
+        if count >= threshold:
+            self.ids.expired_batch_label.text = f"{count} produtos vencidos encontrados"
+            banner.height = dp(48)
+            banner.opacity = 1
+            banner.disabled = False
+        else:
+            banner.height = 0
+            banner.opacity = 0
+            banner.disabled = True
+
+    def open_expired_batch_modal(self, *args, preloaded_items=None):
+        if preloaded_items is not None:
+            def worker():
+                data = self._enrich_batch_items(list(preloaded_items))
+                Clock.schedule_once(lambda _dt, d=data: self._set_batch_rows_and_show(d), 0)
+            Thread(target=worker, daemon=True).start()
+            return
+        if not self._expired_batch_rows:
+            self._check_expired_batch(on_ready=self.open_expired_batch_modal)
+            return
+        self._show_expired_batch_dialog()
+
+    def _set_batch_rows_and_show(self, items):
+        self._expired_batch_rows = [
+            r for r in (self._normalize_product_row(i) for i in items) if r is not None
+        ]
+        self._show_expired_batch_dialog()
+
+    def _show_expired_batch_dialog(self):
+        if not self._expired_batch_rows:
+            self.show_dialog("Aviso", "Não há produtos vencidos para registar em lote.")
+            return
+
+        self._expired_batch_selection = {row[0] for row in self._expired_batch_rows}
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        danger = tokens.get("danger", [0.85, 0.2, 0.2, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+
+        content = MDBoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(460))
+
+        header = MDBoxLayout(size_hint_y=None, height=dp(26), spacing=dp(8))
+        header.add_widget(
+            MDIcon(
+                icon="clock-alert-outline",
+                theme_text_color="Custom",
+                text_color=danger,
+                size_hint=(None, None),
+                size=(dp(20), dp(20)),
+            )
+        )
+        header.add_widget(
+            MDLabel(
+                text=f"{len(self._expired_batch_rows)} produtos vencidos",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=foreground,
+                font_style="Body2",
+            )
+        )
+        content.add_widget(header)
+
+        content.add_widget(
+            MDLabel(
+                text="Desmarque os produtos que não devem ser dados como perda agora.",
+                theme_text_color="Custom",
+                text_color=muted,
+                font_style="Caption",
+                size_hint_y=None,
+                height=dp(18),
+                halign="left",
+            )
+        )
+
+        scroll = ScrollView(do_scroll_x=False, bar_width=dp(6), size_hint_y=None, height=dp(300))
+        rows_box = MDBoxLayout(orientation="vertical", spacing=dp(4), size_hint_y=None)
+        rows_box.bind(minimum_height=rows_box.setter("height"))
+        scroll.add_widget(rows_box)
+
+        for row in self._expired_batch_rows:
+            rows_box.add_widget(self._build_expired_batch_row(row, tokens))
+
+        content.add_widget(scroll)
+
+        self._expired_batch_total_label = MDLabel(
+            text="",
+            theme_text_color="Custom",
+            text_color=foreground,
+            font_style="Caption",
+            size_hint_y=None,
+            height=dp(18),
+            halign="left",
+        )
+        content.add_widget(self._expired_batch_total_label)
+
+        cancel_btn = MDFlatButton(
+            text="CANCELAR", theme_text_color="Custom", text_color=muted, radius=[dp(10)]
+        )
+        self._expired_batch_confirm_btn = MDRaisedButton(
+            text=f"REGISTAR {len(self._expired_batch_selection)}",
+            md_bg_color=danger,
+            radius=[dp(10)],
+        )
+        self._update_expired_batch_totals()
+
+        dialog = MDDialog(
+            title="Perdas por validade — lote",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(520), Window.width - dp(48)), dp(520)),
+            buttons=[cancel_btn, self._expired_batch_confirm_btn],
+        )
+        cancel_btn.bind(on_release=lambda _x: dialog.dismiss())
+        self._expired_batch_confirm_btn.bind(on_release=lambda _x: self._confirm_expired_batch(dialog))
+        self._expired_batch_dialog = dialog
+        dialog.open()
+
+    def _build_expired_batch_row(self, row, tokens):
+        pid, name, stock, price, cost, _barcode, is_weight, _exp, _status, _vat = row
+        unit = "KG" if is_weight else "UN"
+        stock_val = float(stock or 0)
+        stock_text = f"{stock_val:.2f} {unit}" if is_weight else f"{int(stock_val)} {unit}"
+        cost_text = f"{stock_val * float(cost or 0):.2f} MZN"
+
+        card_alt = tokens.get("card_alt", [0.16, 0.19, 0.24, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        success = tokens.get("success", [0.2, 0.7, 0.3, 1])
+
+        row_widget = ExpiredBatchRow(
+            product_id=pid,
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(46),
+            padding=[dp(8), dp(4)],
+            spacing=dp(8),
+            radius=[dp(6)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+
+        check_icon = MDIcon(
+            icon="check-circle",
+            theme_text_color="Custom",
+            text_color=success,
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
+        )
+        row_widget.add_widget(check_icon)
+
+        info = MDBoxLayout(orientation="vertical", size_hint_x=1)
+        info.add_widget(
+            MDLabel(
+                text=str(name or "-"),
+                theme_text_color="Custom",
+                text_color=foreground,
+                font_style="Caption",
+                bold=True,
+                halign="left",
+                shorten=True,
+                shorten_from="right",
+                size_hint_y=None,
+                height=dp(18),
+            )
+        )
+        info.add_widget(
+            MDLabel(
+                text=f"{stock_text}  •  {cost_text}",
+                theme_text_color="Custom",
+                text_color=muted,
+                font_style="Caption",
+                halign="left",
+                size_hint_y=None,
+                height=dp(16),
+            )
+        )
+
+        for lbl in info.children:
+            lbl.bind(size=lambda inst, val: setattr(inst, "text_size", (val[0], None)))
+        row_widget.add_widget(info)
+
+        def toggle(_instance, product_id=pid, icon_ref=check_icon):
+            if product_id in self._expired_batch_selection:
+                self._expired_batch_selection.discard(product_id)
+                icon_ref.icon = "close-circle"
+                icon_ref.text_color = muted
+            else:
+                self._expired_batch_selection.add(product_id)
+                icon_ref.icon = "check-circle"
+                icon_ref.text_color = success
+            self._update_expired_batch_totals()
+
+        row_widget.bind(on_release=toggle)
+        return row_widget
+        """"novo codigo"""
+    def _enrich_batch_items(self, items):
+        """Completa stock/custo/preço com a linha real da BD (o banner não os traz)."""
+        enriched = []
+        for item in items:
+            pid = item.get("id")
+            row = None
+            if pid not in (None, ""):
+                try:
+                    row = self.db.get_product(pid)
+                except Exception as exc:
+                    print(f"[losses] get_product({pid!r}) falhou: {exc}")
+            if not row:
+                print(f"[losses] produto sem linha na BD: {item!r}")
+                enriched.append(item)
+                continue
+            enriched.append({
+                **item,
+                "stock": row[2],
+                "price": row[4],
+                "cost": row[6],
+                "expiry_date": row[13] if len(row) > 13 else item.get("expiry_date"),
+                "is_weight": bool(row[15]) if len(row) > 15 else item.get("is_weight"),
+                "barcode": row[12] if len(row) > 12 else item.get("barcode"),
+            })
+        return enriched    
+
+    def _update_expired_batch_totals(self):
+        if not self._expired_batch_total_label:
+            return
+        selected_rows = [r for r in self._expired_batch_rows if r[0] in self._expired_batch_selection]
+        total_units = sum(float(r[2] or 0) for r in selected_rows)
+        total_cost = sum(float(r[2] or 0) * float(r[4] or 0) for r in selected_rows)
+        self._expired_batch_total_label.text = (
+            f"{len(selected_rows)} selecionado(s)  •  {total_units:.2f} unidades  •  "
+            f"custo total {total_cost:.2f} MZN"
+        )
+        if self._expired_batch_confirm_btn:
+            self._expired_batch_confirm_btn.text = f"REGISTAR {len(selected_rows)}"
+            self._expired_batch_confirm_btn.disabled = not selected_rows
+
+    def _confirm_expired_batch(self, dialog):
+        selected_rows = [r for r in self._expired_batch_rows if r[0] in self._expired_batch_selection]
+        if not selected_rows:
+            return
+        dialog.dismiss()
+
+        app = App.get_running_app()
+        user = getattr(app, "current_user", None)
+        role = getattr(app, "current_role", "manager")
+
+        def worker():
+            results = {"approved": 0, "pending": 0, "failed": 0, "skipped": 0, "errors": []}
+            for row in selected_rows:
+                pid, name, stock, price, cost, barcode, is_weight, _exp, _status, _vat = row
+                qty = float(stock or 0)
+                if pid in (None, ""):
+                    results["failed"] += 1
+                    results["errors"].append(f"{name}: sem ID de produto")
+                    continue
+                if qty <= 0:
+                    results["skipped"] += 1
+                    continue
+                try:
+                    movement_id = self.db.request_stock_movement(
+                        pid, "EXPIRED", qty, EXPIRY_LOSS_REASON, user, role,
+                        direction="OUT", note="Registo em lote de vencidos", evidence_id=None,
+                        unit_cost=cost, unit_price=price,
+                    )
+                    print(f"[losses] lote: pid={pid} qty={qty} -> movement_id={movement_id!r}")
+                    if not movement_id:
+                        results["failed"] += 1
+                        results["errors"].append(f"{name}: a BD recusou o registo")
+                        continue
+                    approval = self.db.get_stock_movement_approval_status(movement_id) or {}
+                    is_pending = str(approval.get("approval_status") or "APPROVED").upper() == "PENDING"
+                    results["pending" if is_pending else "approved"] += 1
+                    if user:
+                        try:
+                            action = "REQUEST_LOSS_APPROVAL" if is_pending else "REGISTER_LOSS"
+                            self.db.log_action(user, role, action, f"EXPIRED (lote) | {name} | {qty}")
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    print(f"[losses] lote: erro em pid={pid}: {exc}")
+                    results["failed"] += 1
+                    results["errors"].append(f"{name}: {exc}")
+            return results
+
+        def finish():
+            payload = worker()
+            Clock.schedule_once(lambda _dt, data=payload: self._finish_expired_batch(data), 0)
+
+        Thread(target=finish, daemon=True).start()
+
+    def _finish_expired_batch(self, results):
+        lines = [f"{results.get('approved', 0)} perda(s) registada(s) e stock atualizado."]
+        if results.get("pending"):
+            lines.append(f"{results['pending']} enviada(s) para aprovação (o stock só muda depois de aprovadas).")
+        if results.get("skipped"):
+            lines.append(f"{results['skipped']} ignorada(s): já sem stock, nada a dar baixa.")
+        if results.get("failed"):
+            lines.append(f"{results['failed']} falha(s):")
+            lines += [f"• {e}" for e in results.get("errors", [])[:5]]
+        self.show_dialog("Registo em lote concluído", "\n".join(lines))
+        self.load_products()
+        self._check_expired_batch()
+        self._refresh_home_alerts()
+
+    def _refresh_home_alerts(self):
+        if not self.manager or "admin_home" not in self.manager.screen_names:
+            return
+        home = self.manager.get_screen("admin_home")
+        home._snapshot_loaded_at = 0.0
+        if hasattr(home, "_ensure_snapshot_loaded"):
+            home._ensure_snapshot_loaded(force=True)
 
     # ========== HELPERS ==========
     def _append_loss_log(self, entry):

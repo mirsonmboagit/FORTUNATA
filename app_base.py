@@ -3,7 +3,11 @@ import os
 import sys
 from threading import Thread
 from time import perf_counter
-from utils.config.app_config import get_app_settings, save_app_settings as persist_app_settings
+
+from utils.config.app_config import (
+    get_app_settings,
+    save_app_settings as persist_app_settings,
+)
 from utils.config.paths import (
     APP_SETTINGS_FILE,
     ROOT_DIR,
@@ -14,95 +18,130 @@ from utils.config.paths import (
 )
 from utils.config.logging_setup import configure_runtime_logging
 
+
 # Prepara caminhos, pastas e logs antes de carregar o Kivy.
 set_project_cwd()
 ensure_runtime_dirs()
 configure_runtime_logging()
 
-from kivymd.app import MDApp
+from kivy.app import App
 from kivy.config import Config
 
-# O APK nao tem uma janela desktop nem permite gravar dentro do bundle.  A
-# interface mobile usa as dimensoes reais do dispositivo e o teclado nativo.
 IS_MOBILE_RUNTIME = is_mobile_runtime()
 
-# Configuracao basica da janela.
+
+# ============================================================
+# ÍCONE DA APLICAÇÃO
+# ============================================================
+
+APP_ICON_PATH = asset_path("icon", "admin.ico")
+
 if not IS_MOBILE_RUNTIME:
-    Config.set('kivy', 'window_icon', str(asset_path('icon', 'icon4.ico')))
-Config.set('kivy', 'exit_on_escape', '0')
+    Config.set("kivy", "window_icon", str(APP_ICON_PATH))
+
+Config.set("kivy", "exit_on_escape", "0")
+
 if IS_MOBILE_RUNTIME:
-    Config.set('kivy', 'keyboard_mode', 'systemanddock')
+    Config.set("kivy", "keyboard_mode", "systemanddock")
 else:
-    # Forca modo janela: fullscreen estava a causar cliques desalinhados
-    # e quebra de layout em varias telas no ambiente atual.
-    Config.set('graphics', 'fullscreen', '0')
-    Config.set('graphics', 'minimum_width', '640')
-    Config.set('graphics', 'minimum_height', '420')
+    Config.set("graphics", "fullscreen", "0")
+    Config.set("graphics", "minimum_width", "640")
+    Config.set("graphics", "minimum_height", "420")
+
 
 from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.properties import DictProperty, StringProperty
+from kivy.properties import DictProperty, ObjectProperty, StringProperty
 from kivy.core.text import LabelBase
 from kivy.clock import Clock
 from kivy.resources import resource_add_path
 
-from utils.config.theme import get_theme_tokens
-from utils.core.i18n import language_label, language_options, language_short, normalize_language, translate
-from utils.core.i18n_runtime import install_i18n_hooks, localize_widget_tree
-from utils.config.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name
+from utils.config.theme import get_theme_tokens, detect_system_theme   # ← ADICIONADO
+from utils.core.i18n import (
+    language_label,
+    language_options,
+    language_short,
+    normalize_language,
+    translate,
+)
+from utils.core.i18n_runtime import (
+    install_i18n_hooks,
+    localize_widget_tree,
+)
+from utils.config.system_identity import (
+    DEFAULT_SYSTEM_NAME,
+    get_system_name,
+    normalize_system_name,
+)
+from ui.components.native_widgets import NativeTheme
 
 
-if sys.platform.startswith('win'):
+# Identificação da aplicação no Windows.
+if sys.platform.startswith("win"):
     try:
         import ctypes
-        # Define o identificador da app no Windows.
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            'SIGEMPE.SistemaGestaoComercial.1.0'
+            "c o n e c t a r"
         )
     except Exception:
         pass
 
+
 os.environ["KIVY_NO_WM_PEN"] = "1"
 
 BASE_DIR = str(ROOT_DIR)
+
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
 try:
-    # O APK nao usa o diretório de trabalho como raiz de recursos. Registar
-    # explicitamente a raiz do bundle mantém imagens e fontes do login
-    # disponíveis sem escrever nem depender do cwd Android.
     resource_add_path(BASE_DIR)
 except Exception:
     pass
 
-# Fontes customizadas
-logo_font_path = asset_path('fonts', 'h2.ttf')
-main_font_path = asset_path('fonts', 'yahoo.ttf')
-joe_font_path = asset_path('fonts', 'joe.ttf')
-brand_font_path = asset_path('fonts', 'DMSans.ttf')
-brand_display_font_path = asset_path('fonts', 'DMSerifDisplay-Regular.ttf')
+
+# ============================================================
+# FONTES PERSONALIZADAS
+# ============================================================
+
+logo_font_path = asset_path("fonts", "h2.ttf")
+main_font_path = asset_path("fonts", "yahoo.ttf")
+joe_font_path = asset_path("fonts", "joe.ttf")
+brand_font_path = asset_path("fonts", "DMSans.ttf")
+brand_display_font_path = asset_path("fonts", "DMSerifDisplay-Regular.ttf")
 
 if os.path.exists(logo_font_path):
-    LabelBase.register(name='LogoFont', fn_regular=str(logo_font_path))
+    LabelBase.register(name="LogoFont", fn_regular=str(logo_font_path))
+
 if os.path.exists(main_font_path):
-    LabelBase.register(name='MainFont', fn_regular=str(main_font_path))
+    LabelBase.register(name="MainFont", fn_regular=str(main_font_path))
+
 if os.path.exists(joe_font_path):
-    LabelBase.register(name='JoeFont', fn_regular=str(joe_font_path))
+    LabelBase.register(name="JoeFont", fn_regular=str(joe_font_path))
+
 if os.path.exists(brand_font_path):
-    LabelBase.register(name='BrandFont', fn_regular=str(brand_font_path))
+    LabelBase.register(name="BrandFont", fn_regular=str(brand_font_path))
+
 if os.path.exists(brand_display_font_path):
-    LabelBase.register(name='BrandDisplayFont', fn_regular=str(brand_display_font_path))
+    LabelBase.register(name="BrandDisplayFont", fn_regular=str(brand_display_font_path))
 
 
-# Limites usados para abrir a janela em tamanho seguro.
+# ============================================================
+# DIMENSÕES DA JANELA
+# ============================================================
+
 DEFAULT_WINDOW_MIN_WIDTH = int(dp(920))
 DEFAULT_WINDOW_MIN_HEIGHT = int(dp(560))
+
 WINDOW_IDEAL_WIDTH = int(dp(1280))
 WINDOW_IDEAL_HEIGHT = int(dp(800))
+
 WINDOW_FLOOR_WIDTH = int(dp(680))
 WINDOW_FLOOR_HEIGHT = int(dp(460))
+
 WINDOW_MARGIN_X = int(dp(48))
 WINDOW_MARGIN_Y = int(dp(56))
+
 WINDOW_TARGET_MAX_WIDTH = int(dp(1500))
 WINDOW_TARGET_MAX_HEIGHT = int(dp(920))
 
@@ -115,14 +154,15 @@ def _coerce_int(value, fallback):
 
 
 def _get_display_size():
-    fallback = getattr(Window, "system_size", None) or Window.size or (
-        DEFAULT_WINDOW_MIN_WIDTH,
-        DEFAULT_WINDOW_MIN_HEIGHT,
+    fallback = (
+        getattr(Window, "system_size", None)
+        or Window.size
+        or (DEFAULT_WINDOW_MIN_WIDTH, DEFAULT_WINDOW_MIN_HEIGHT)
     )
+
     if sys.platform.startswith("win"):
         try:
             import ctypes
-
             user32 = ctypes.windll.user32
             width = _coerce_int(user32.GetSystemMetrics(0), fallback[0])
             height = _coerce_int(user32.GetSystemMetrics(1), fallback[1])
@@ -130,6 +170,7 @@ def _get_display_size():
                 return width, height
         except Exception:
             pass
+
     return (
         max(1, _coerce_int(fallback[0], DEFAULT_WINDOW_MIN_WIDTH)),
         max(1, _coerce_int(fallback[1], DEFAULT_WINDOW_MIN_HEIGHT)),
@@ -141,13 +182,16 @@ def _resolve_window_constraints():
 
     usable_w = screen_w - WINDOW_MARGIN_X
     usable_h = screen_h - WINDOW_MARGIN_Y
+
     max_w = min(screen_w, max(WINDOW_FLOOR_WIDTH, usable_w))
     max_h = min(screen_h, max(WINDOW_FLOOR_HEIGHT, usable_h))
+
     min_w = min(DEFAULT_WINDOW_MIN_WIDTH, max_w)
     min_h = min(DEFAULT_WINDOW_MIN_HEIGHT, max_h)
 
     initial_w = max(min_w, min(WINDOW_IDEAL_WIDTH, WINDOW_TARGET_MAX_WIDTH, max_w))
     initial_h = max(min_h, min(WINDOW_IDEAL_HEIGHT, WINDOW_TARGET_MAX_HEIGHT, max_h))
+
     return {
         "screen_w": screen_w,
         "screen_h": screen_h,
@@ -161,6 +205,7 @@ def _resolve_window_constraints():
 
 
 _WINDOW_CONSTRAINTS = None
+
 if IS_MOBILE_RUNTIME:
     try:
         Window.softinput_mode = "below_target"
@@ -168,6 +213,7 @@ if IS_MOBILE_RUNTIME:
         pass
 else:
     _WINDOW_CONSTRAINTS = _resolve_window_constraints()
+
     Window.size = (
         _WINDOW_CONSTRAINTS["initial_w"],
         _WINDOW_CONSTRAINTS["initial_h"],
@@ -175,6 +221,7 @@ else:
     Window.minimum_width = _WINDOW_CONSTRAINTS["min_w"]
     Window.minimum_height = _WINDOW_CONSTRAINTS["min_h"]
     Window.fullscreen = False
+
     try:
         Window.left = max(0, int((_WINDOW_CONSTRAINTS["screen_w"] - _WINDOW_CONSTRAINTS["initial_w"]) / 2))
         Window.top = max(0, int((_WINDOW_CONSTRAINTS["screen_h"] - _WINDOW_CONSTRAINTS["initial_h"]) / 2))
@@ -182,104 +229,178 @@ else:
         pass
 
 
-class BaseApp(MDApp):
-    # Base comum usada pelas apps de admin e manager.
+# ============================================================
+# APLICAÇÃO BASE
+# ============================================================
+
+class BaseApp(App):
+    """Base comum utilizada pelas aplicações de administrador e gerente."""
+
     theme_tokens = DictProperty({})
     language = StringProperty("pt")
     system_name = StringProperty(DEFAULT_SYSTEM_NAME)
+    theme_cls = ObjectProperty(None, allownone=True)
+
     theme_settings_key = "theme_style"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
         self.current_user = None
         self.current_role = None
         self.db = None
+
         self._ai_notifications_seen_key = None
         self._ai_banners_shown = False
         self._ai_banners_last_key = None
+
         self.base_dir = BASE_DIR
         self._app_settings_path = str(APP_SETTINGS_FILE)
+
         self.ai_enabled = True
         self.smart_monitor_enabled = True
         self.auto_banners_enabled = True
+
         self.theme_style = "Light"
         self.language = "pt"
         self.system_name = DEFAULT_SYSTEM_NAME
+
         self._automation_ev = None
         self._automation_running = False
+
         self._optional_warmup_ev = None
         self._optional_warmup_started = False
+
         self._screen_warmup_ev = None
         self._screen_warmup_queue = []
-        # Evita disputar CPU/IO com login e primeiros cliques. Tarefas pesadas
-        # so aquecem depois de a interface estar estabilizada.
+
         self.background_warmup_delay = 8.0
         self._startup_started_at = perf_counter()
         self._ignored_early_close = False
+
+        self.theme_cls = NativeTheme()
+
         self._load_app_settings()
         self.apply_theme(self.theme_style, persist=False)
+
         install_i18n_hooks()
 
-        # Mantemos o tema base do KivyMD alinhado com os tokens da app para
-        # evitar que dialogs e componentes padrao aparecam em laranja quando
-        # o resto da interface usa azul/verde como linguagem principal.
         self.theme_cls.primary_palette = "Blue"
         self.theme_cls.primary_hue = "800"
         self.theme_cls.accent_palette = "BlueGray"
         self.theme_cls.accent_hue = "600"
 
+    # ========================================================
+    # CONFIGURAÇÃO DO ÍCONE
+    # ========================================================
+
+    def _apply_application_icon(self):
+        if IS_MOBILE_RUNTIME:
+            return
+
+        try:
+            icon_path = asset_path("icon", "admin.ico")
+            if not os.path.isfile(str(icon_path)):
+                print(f"[BaseApp] Ícone não encontrado: {icon_path}")
+                return
+            Window.set_icon(str(icon_path))
+        except Exception as exc:
+            print(f"[BaseApp] Não foi possível aplicar o ícone: {exc}")
+
+    # ========================================================
+    # DEFINIÇÕES E PREFERÊNCIAS
+    # ========================================================
+
     def _load_app_settings(self):
-        # Carrega preferencias salvas e usa valores seguros se houver erro.
         try:
             data = get_app_settings(force_reload=True)
+
             self.ai_enabled = bool(data.get("ai_enabled", True))
             self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
             self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
+
             self.language = normalize_language(data.get("language", self.language))
             self.system_name = normalize_system_name(data.get("system_name", self.system_name))
+
             theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
-            theme_style = data.get(theme_key, data.get("theme_style", self.theme_style))
-            if theme_style in ("Light", "Dark"):
-                self.theme_style = theme_style
+
+            # Preferência guardada pelo utilizador
+            saved_theme = data.get(theme_key) or data.get("theme_style")
+
+            if saved_theme in ("Light", "Dark"):
+                self.theme_style = saved_theme
+            else:
+                # Sem preferência → usa o tema do sistema operativo
+                self.theme_style = detect_system_theme()
+
         except Exception:
             self.ai_enabled = True
             self.smart_monitor_enabled = True
             self.auto_banners_enabled = True
-            self.theme_style = "Light"
+            self.theme_style = detect_system_theme()   # ← também no fallback
             self.language = "pt"
             self.system_name = get_system_name()
 
     def apply_theme(self, style, persist=True):
-        # Aplica o tema visual e atualiza os tokens usados nas telas.
         style = "Dark" if style == "Dark" else "Light"
+
         self.theme_style = style
         self.theme_cls.theme_style = style
+
         self.theme_cls.primary_palette = "Blue"
         self.theme_cls.primary_hue = "700" if style == "Dark" else "800"
         self.theme_cls.accent_palette = "BlueGray"
         self.theme_cls.accent_hue = "500" if style == "Dark" else "600"
+
         self.theme_tokens = get_theme_tokens(style)
+        tokens = self.theme_tokens
+
+        self.theme_cls.primary_color = list(tokens["primary"])
+        self.theme_cls.primary_light = list(tokens["primary_hover"])
+        self.theme_cls.primary_dark = list(tokens["primary"])
+        self.theme_cls.accent_color = list(tokens["info"])
+
+        self.theme_cls.text_color = list(tokens["text_primary"])
+        self.theme_cls.secondary_text_color = list(tokens["text_secondary"])
+        self.theme_cls.disabled_hint_text_color = list(tokens["text_muted"])
+        self.theme_cls.disabled_primary_color = list(tokens["text_muted"])
+
+        self.theme_cls.divider_color = list(tokens["divider"])
+        self.theme_cls.error_color = list(tokens["danger"])
+
+        self.theme_cls.ripple_color = [*tokens["primary"][:3], 0.16]
+
+        self.theme_cls.bg_light = list(tokens["surface"])
+        self.theme_cls.bg_normal = list(tokens["surface_alt"])
+        self.theme_cls.bg_dark = list(tokens["card"])
+        self.theme_cls.bg_darkest = list(tokens["surface_sunken"])
+        self.theme_cls.opposite_bg_dark = list(tokens["surface_sunken"])
+
         if persist:
             self.save_app_settings()
 
     def save_app_settings(self):
         try:
             theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
-            persist_app_settings(
-                {
-                    "ai_enabled": bool(self.ai_enabled),
-                    "smart_monitor_enabled": bool(self.smart_monitor_enabled),
-                    "auto_banners_enabled": bool(self.auto_banners_enabled),
-                    "language": normalize_language(getattr(self, "language", "pt")),
-                    "system_name": normalize_system_name(getattr(self, "system_name", DEFAULT_SYSTEM_NAME)),
-                    theme_key: self.theme_style,
-                }
-            )
+
+            persist_app_settings({
+                "ai_enabled": bool(self.ai_enabled),
+                "smart_monitor_enabled": bool(self.smart_monitor_enabled),
+                "auto_banners_enabled": bool(self.auto_banners_enabled),
+                "language": normalize_language(getattr(self, "language", "pt")),
+                "system_name": normalize_system_name(
+                    getattr(self, "system_name", DEFAULT_SYSTEM_NAME)
+                ),
+                theme_key: self.theme_style,
+            })
         except Exception:
             pass
 
+    # ========================================================
+    # IDIOMA
+    # ========================================================
+
     def set_language(self, language_code, persist=True):
-        # Troca o idioma e atualiza os textos da interface.
         self.language = normalize_language(language_code)
         if persist:
             self.save_app_settings()
@@ -293,7 +414,9 @@ class BaseApp(MDApp):
         return language_options()
 
     def language_label(self, code=None, include_short=False):
-        return language_label(self.language if code is None else code, include_short=include_short)
+        if code is None:
+            code = self.language
+        return language_label(code, include_short=include_short)
 
     def language_short(self, code=None):
         return language_short(self.language if code is None else code)
@@ -302,16 +425,18 @@ class BaseApp(MDApp):
         target = root or getattr(self, "root", None)
         localize_widget_tree(target, self.language)
 
+    # ========================================================
+    # ARRANQUE E ENCERRAMENTO
+    # ========================================================
+
     def on_start(self):
         if self.title:
             Window.set_title(self.title)
+
         if not IS_MOBILE_RUNTIME:
-            icon_path = asset_path('icon', 'icon4.ico')
-            if icon_path.exists():
-                Window.set_icon(str(icon_path))
+            self._apply_application_icon()
             Window.bind(on_request_close=self._handle_window_request_close)
-        # A mesma passagem localiza os textos e aplica a escala minima de
-        # leitura a toda a arvore, inclusive componentes adicionados depois.
+
         Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
         self._start_automation_tasks()
         self._queue_optional_dependency_warmup()
@@ -326,6 +451,7 @@ class BaseApp(MDApp):
         if self._screen_warmup_ev:
             self._screen_warmup_ev.cancel()
             self._screen_warmup_ev = None
+
         try:
             Window.unbind(on_request_close=self._handle_window_request_close)
         except Exception:
@@ -333,13 +459,12 @@ class BaseApp(MDApp):
 
     def _handle_window_request_close(self, *args):
         elapsed = perf_counter() - self._startup_started_at
+
         if elapsed < 8.0 and not self._ignored_early_close:
             self._ignored_early_close = True
             print(f"[BaseApp] Ignored early close request at {elapsed:.2f}s")
             return True
-        # O gerente nao pode terminar a sessao sem prestar contas do caixa.
-        # Mantemos esta verificacao na aplicacao, pois este evento recebe o
-        # clique no X da janela antes de a tela ativa ser destruida.
+
         try:
             manager = getattr(self, "root", None)
             if manager and "manager" in getattr(manager, "screen_names", []):
@@ -350,7 +475,12 @@ class BaseApp(MDApp):
         except Exception as exc:
             print(f"[BaseApp] Falha ao validar caixa antes de fechar: {exc}")
             return True
+
         return False
+
+    # ========================================================
+    # TAREFAS EM SEGUNDO PLANO
+    # ========================================================
 
     def _run_automation_tasks(self, *args):
         if self._automation_running:
@@ -358,15 +488,13 @@ class BaseApp(MDApp):
         if not self.db or not hasattr(self.db, "run_automation_tasks"):
             return False
 
-        # Antes isto corria no arranque diretamente na thread da UI e deixava
-        # a aplicacao lenta logo nos primeiros cliques.
         self._automation_running = True
 
         def worker():
             try:
                 self.db.run_automation_tasks()
-            except Exception as e:
-                print(f"Erro ao executar automacoes locais: {e}")
+            except Exception as exc:
+                print(f"Erro ao executar automações locais: {exc}")
             finally:
                 self._automation_running = False
 
@@ -376,19 +504,19 @@ class BaseApp(MDApp):
     def _start_automation_tasks(self):
         if not self.db or not hasattr(self.db, "run_automation_tasks"):
             return
+
         Clock.schedule_once(self._run_automation_tasks, self.background_warmup_delay)
+
         if self._automation_ev:
             self._automation_ev.cancel()
-        # Checagem leve a cada minuto; execução real respeita intervalos internos do DB.
         self._automation_ev = Clock.schedule_interval(self._run_automation_tasks, 60)
 
     def _queue_optional_dependency_warmup(self):
-        # ReportLab/PyMuPDF/OpenCV/ZBar sao dependencias do executavel Windows.
-        # O cliente Android nao as empacota e nao deve tentar importa-las.
         if IS_MOBILE_RUNTIME:
             return
         if self._optional_warmup_started or self._optional_warmup_ev is not None:
             return
+
         self._optional_warmup_ev = Clock.schedule_once(
             lambda _dt: self._warmup_optional_dependencies(),
             self.background_warmup_delay + 2.0,
@@ -403,16 +531,13 @@ class BaseApp(MDApp):
         def worker():
             try:
                 import importlib
-
                 for module_name in ("reportlab.platypus", "PIL.Image", "fitz"):
                     try:
                         importlib.import_module(module_name)
                     except Exception:
                         pass
-
                 try:
                     from utils.hardware.vision import get_vision_dependencies
-
                     get_vision_dependencies()
                 except Exception:
                     pass
@@ -421,15 +546,21 @@ class BaseApp(MDApp):
 
         Thread(target=worker, daemon=True).start()
 
+    # ========================================================
+    # CARREGAMENTO PROGRESSIVO DAS TELAS
+    # ========================================================
+
     def warmup_screens(self, screen_names, delay=0.14):
         ensure_screen = getattr(self, "ensure_screen", None)
         manager = getattr(self, "_screen_manager", None) or getattr(self, "root", None)
+
         if manager is None or not callable(ensure_screen):
             return False
 
         known = set(getattr(manager, "screen_names", []) or [])
         queued = set(self._screen_warmup_queue)
         added = False
+
         for screen_name in screen_names or []:
             if not screen_name or screen_name in known or screen_name in queued:
                 continue
@@ -466,10 +597,14 @@ class BaseApp(MDApp):
         if self._screen_warmup_queue:
             self._schedule_screen_warmup(delay)
 
+    # ========================================================
+    # REDIMENSIONAMENTO DA JANELA
+    # ========================================================
+
     def change_screen_size(self, width, height):
         if IS_MOBILE_RUNTIME:
-            # A dimensao e controlada pelo Android e pela orientacao do ecran.
             return False
+
         constraints = _resolve_window_constraints()
         min_w = constraints["min_w"]
         min_h = constraints["min_h"]
@@ -477,9 +612,7 @@ class BaseApp(MDApp):
         max_h = constraints["max_h"]
 
         if width < min_w or height < min_h:
-            raise ValueError(
-                f"Tamanho minimo permitido e {int(min_w)}x{int(min_h)}"
-            )
+            raise ValueError(f"Tamanho mínimo permitido é {int(min_w)}x{int(min_h)}")
 
         Window.size = (int(min(width, max_w)), int(min(height, max_h)))
         Window.minimum_width = min_w

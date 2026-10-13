@@ -3,9 +3,10 @@ from kivy.clock import Clock
 from kivy.factory import Factory
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty, NumericProperty, StringProperty
-from kivymd.uix.button import MDFlatButton, MDFloatingActionButton, MDIconButton, MDRaisedButton
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.tooltip import MDTooltip
+from ui.components.native_widgets import (
+    NativeFlatButton, NativeFloatingActionButton, NativeIconButton,
+    NativeButton, NativeIconTextButton, NativeTextField, NativeTooltip,
+)
 
 DEFAULT_TOOLTIP_DELAY = 0.18
 
@@ -146,23 +147,27 @@ class TooltipTextCleanupBehavior(_TooltipCleanupBase):
         )
 
 
-class TooltipIconButton(TooltipCleanupBehavior, MDIconButton, MDTooltip):
+class TooltipIconButton(TooltipCleanupBehavior, NativeIconButton, NativeTooltip):
     """MDIconButton com tooltip curto para desktop."""
 
 
-class TooltipFloatingActionButton(TooltipCleanupBehavior, MDFloatingActionButton, MDTooltip):
+class TooltipFloatingActionButton(TooltipCleanupBehavior, NativeFloatingActionButton, NativeTooltip):
     """MDFloatingActionButton com tooltip curto para desktop."""
 
 
-class TooltipTextField(TooltipTextCleanupBehavior, MDTextField, MDTooltip):
+class TooltipTextField(TooltipTextCleanupBehavior, NativeTextField, NativeTooltip):
     """MDTextField com tooltip no hover para desktop."""
 
 
-class TooltipRaisedButton(TooltipTextCleanupBehavior, MDRaisedButton, MDTooltip):
+class TooltipRaisedButton(TooltipTextCleanupBehavior, NativeButton, NativeTooltip):
     """MDRaisedButton com tooltip no hover para desktop."""
 
 
-class TooltipFlatButton(TooltipTextCleanupBehavior, MDFlatButton, MDTooltip):
+class TooltipIconTextButton(TooltipCleanupBehavior, NativeIconTextButton, NativeTooltip):
+    """Botão Material com ícone, texto e tooltip, sem depender de KivyMD."""
+
+
+class TooltipFlatButton(TooltipTextCleanupBehavior, NativeFlatButton, NativeTooltip):
     """MDFlatButton com tooltip no hover para desktop."""
 
 
@@ -245,5 +250,6 @@ Factory.register("TooltipIconButton", cls=TooltipIconButton)
 Factory.register("TooltipFloatingActionButton", cls=TooltipFloatingActionButton)
 Factory.register("TooltipTextField", cls=TooltipTextField)
 Factory.register("TooltipRaisedButton", cls=TooltipRaisedButton)
+Factory.register("TooltipIconTextButton", cls=TooltipIconTextButton)
 Factory.register("TooltipFlatButton", cls=TooltipFlatButton)
 Factory.register("DraggableTooltipFloatingActionButton", cls=DraggableTooltipFloatingActionButton)

@@ -1,10 +1,13 @@
+
+#:kivy 2.0
+
 <AdminHoverCard@HoverCard>:
     hover_bg_mix: 0.05
     hover_line_mix: 0.24
     hover_elevation_delta: 1.2
     hover_accent_color: app.theme_tokens["primary"]
 
-<AdminActionButton@HoverTooltipRaisedButton>:
+<AdminActionButton@HoverTooltipIconTextButton>:
     press_enabled: True
     hover_bg_mix: 0.12
     hover_line_mix: 0.22
@@ -13,6 +16,52 @@
     press_line_mix: 0.34
     press_elevation_delta: 0.8
     hover_accent_color: [1, 1, 1, 1]
+    size_hint_y: None
+    height: dp(46)
+    radius: [dp(8)]
+    spacing: dp(7)
+    padding: [dp(14), dp(6)]
+
+<AdminHeaderCell@MDBoxLayout>:
+    text: ""
+    col_align: "center"
+    size_hint_y: 1
+    padding: [dp(4), 0]
+
+    canvas.after:
+        Color:
+            rgba: app.theme_tokens['divider'][0], app.theme_tokens['divider'][1], app.theme_tokens['divider'][2], 0.55
+        Line:
+            points: [self.right - 0.5, self.y, self.right - 0.5, self.top]
+            width: 1
+
+    MDLabel:
+        text: root.text
+        bold: True
+        halign: root.col_align
+        valign: "middle"
+        theme_text_color: "Custom"
+        text_color: app.theme_tokens['text_primary']
+        font_style: "Subtitle2"
+        font_size: sp(15)
+        padding: [dp(6), 0] if root.col_align == "left" else [0, 0]
+
+<AdminHeaderCellLast@MDBoxLayout>:
+    text: ""
+    col_align: "center"
+    size_hint_y: 1
+    padding: [dp(4), 0]
+
+    MDLabel:
+        text: root.text
+        bold: True
+        halign: root.col_align
+        valign: "middle"
+        theme_text_color: "Custom"
+        text_color: app.theme_tokens['text_primary']
+        font_style: "Subtitle2"
+        font_size: sp(15)
+
 
 <AdminScreen>:
     product_table: product_table
@@ -20,13 +69,24 @@
     category_spinner: category_spinner
 
     FloatLayout:
+
+        # Marca-d'agua: folha do NECTAR
+        # Fica atrás de toda a interface.
+        Image:
+            source: app.base_dir + "/assets/image/fundo.png"
+            size_hint: None, None
+            size: dp(360), dp(360)
+            pos_hint: {"center_x": 0.5, "center_y": 0.48}
+            opacity: 0.08
+            allow_stretch: True
+            keep_ratio: True
+
         MDBoxLayout:
             orientation: 'vertical'
             md_bg_color: app.theme_tokens['surface']
             padding: 0
             spacing: 0
 
-            # HEADER - Navegação Principal
             MDTopAppBar:
                 id: header_bar
                 title: "Gestao de produtos"
@@ -38,127 +98,135 @@
                 left_action_items: [["view-dashboard-outline", lambda x: root.go_home(), "Pagina inicial (Alt+1)"]]
                 right_action_items: []
 
-            # BARRA DE FERRAMENTAS COMPACTA
             AdminHoverCard:
                 id: toolbar_card
                 size_hint_y: None
-                height: max(dp(78), root.height * 0.09)
-                padding: [dp(18), dp(10)]
-                spacing: dp(10)
+                height: dp(120)
+                padding: [dp(14), dp(10)]
+                spacing: dp(8)
                 elevation: 2
                 md_bg_color: app.theme_tokens['card']
                 radius: [0, 0, 0, 0]
 
                 MDBoxLayout:
                     id: toolbar_row
-                    spacing: dp(10)
+                    orientation: "vertical"
+                    spacing: dp(8)
 
-                    TooltipTextField:
-                        id: search_input
-                        hint_text: "Pesquisar produto..."
-                        tooltip_text: "Pesquisar produto (/ ou Ctrl+F)"
-                        mode: "rectangle"
-                        size_hint_x: 0.29
-                        icon_left: "magnify"
-                        on_text: root.queue_filter(self.text)
-                        font_size: sp(16)
+                    MDBoxLayout:
+                        id: toolbar_search_row
+                        size_hint_y: None
+                        height: dp(46)
+                        spacing: dp(8)
 
-                    # Filtro de Categorias
-                    AdminActionButton:
-                        id: category_spinner
-                        text: "Todas as Categorias"
-                        tooltip_text: "Abrir categorias (Alt+C)"
-                        size_hint_x: 0.18
-                        md_bg_color: app.theme_tokens['card_alt']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['text_primary']
-                        hover_accent_color: app.theme_tokens['primary']
-                        elevation: 1
-                        on_release: root.show_category_menu(self)
-                        font_size: sp(15)
+                        TooltipTextField:
+                            id: search_input
+                            hint_text: "Pesquisar produto..."
+                            tooltip_text: "Pesquisar produto (/ ou Ctrl+F)"
+                            mode: "rectangle"
+                            size_hint_x: 0.55
+                            icon_left: "magnify"
+                            on_text: root.queue_filter(self.text)
+                            font_size: sp(16)
 
-                    AdminActionButton:
-                        id: filter_btn
-                        text: "Filtrar"
-                        icon: "filter-variant"
-                        tooltip_text: "Alternar filtro KG/unidade/todos (Alt+F)"
-                        md_bg_color: app.theme_tokens['warning']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        hover_accent_color: [1, 1, 1, 1]
-                        size_hint_x: None
-                        width: dp(48)
-                        on_release: root.toggle_kg_products()
-                        font_size: sp(14)
+                        AdminActionButton:
+                            id: category_spinner
+                            text: "Todas as Categorias"
+                            tooltip_text: "Abrir categorias (Alt+C)"
+                            size_hint_x: 0.35
+                            md_bg_color: app.theme_tokens['card_alt']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['text_primary']
+                            hover_accent_color: app.theme_tokens['primary']
+                            elevation: 1
+                            on_release: root.show_category_menu(self)
+                            font_size: sp(15)
 
-                    AdminActionButton:
-                        id: refresh_btn
-                        text: "Atualizar"
-                        icon: "refresh"
-                        tooltip_text: "Atualizar lista de produtos (Ctrl+R)"
-                        md_bg_color: app.theme_tokens['primary']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        hover_accent_color: [1, 1, 1, 1]
-                        size_hint_x: 0.12
-                        on_release: root.refresh_products_panel()
-                        font_size: sp(15)
+                        AdminActionButton:
+                            id: filter_btn
+                            text: ""
+                            icon: "filter-variant"
+                            tooltip_text: "Alternar filtro KG/unidade/todos (Alt+F)"
+                            md_bg_color: app.theme_tokens['warning']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            hover_accent_color: [1, 1, 1, 1]
+                            size_hint_x: None
+                            width: dp(46)
+                            on_release: root.toggle_kg_products()
+                            font_size: sp(14)
 
-                    AdminActionButton:
-                        id: add_btn
-                        text: "Adicionar"
-                        icon: "plus-circle"
-                        tooltip_text: "Adicionar produto (Ctrl+N)"
-                        md_bg_color: app.theme_tokens['success']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        hover_accent_color: [1, 1, 1, 1]
-                        size_hint_x: 0.13
-                        on_release: root.add_product()
-                        font_size: sp(15)
+                    MDBoxLayout:
+                        id: toolbar_actions_row
+                        size_hint_y: None
+                        height: dp(46)
+                        spacing: dp(8)
 
-                    AdminActionButton:
-                        id: archived_btn
-                        text: "Arquivados"
-                        icon: "archive-arrow-up-outline"
-                        tooltip_text: "Consultar e restaurar produtos arquivados"
-                        md_bg_color: app.theme_tokens['primary']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        size_hint_x: 0.13
-                        on_release: root.open_archived_products()
-                        font_size: sp(15)
+                        AdminActionButton:
+                            id: refresh_btn
+                            text: "Atualizar"
+                            icon: "refresh"
+                            tooltip_text: "Atualizar lista de produtos (Ctrl+R)"
+                            md_bg_color: app.theme_tokens['primary']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            hover_accent_color: [1, 1, 1, 1]
+                            size_hint_x: 0.18
+                            on_release: root.refresh_products_panel()
+                            font_size: sp(15)
 
-                    AdminActionButton:
-                        id: shopping_list_btn
-                        text: "Sugestões de Compras"
-                        icon: "cart-outline"
-                        tooltip_text: "Ver sugestões de compras com IA"
-                        md_bg_color: app.theme_tokens['info']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        hover_accent_color: [1, 1, 1, 1]
-                        size_hint_x: 0.18
-                        disabled: root.shopping_list_busy
-                        on_release: root.open_shopping_list_preview()
-                        font_size: sp(15)
+                        AdminActionButton:
+                            id: add_btn
+                            text: "Adicionar"
+                            icon: "plus-circle"
+                            tooltip_text: "Adicionar produto (Ctrl+N)"
+                            md_bg_color: app.theme_tokens['success']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            hover_accent_color: [1, 1, 1, 1]
+                            size_hint_x: 0.18
+                            on_release: root.add_product()
+                            font_size: sp(15)
 
-                    AdminActionButton:
-                        id: inventory_btn
-                        text: "Inventario"
-                        icon: "clipboard-list-outline"
-                        tooltip_text: "Iniciar ou continuar inventario fisico"
-                        md_bg_color: app.theme_tokens['warning']
-                        theme_text_color: "Custom"
-                        text_color: app.theme_tokens['on_primary']
-                        hover_accent_color: [1, 1, 1, 1]
-                        size_hint_x: 0.14
-                        on_release: root.open_physical_inventory()
-                        font_size: sp(15)
+                        AdminActionButton:
+                            id: archived_btn
+                            text: "Arquivados"
+                            icon: "archive-arrow-up-outline"
+                            tooltip_text: "Consultar e restaurar produtos arquivados"
+                            md_bg_color: app.theme_tokens['primary']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            size_hint_x: 0.18
+                            on_release: root.open_archived_products()
+                            font_size: sp(15)
 
-                    
+                        AdminActionButton:
+                            id: shopping_list_btn
+                            text: "Sugestões de Compras"
+                            icon: "cart-outline"
+                            tooltip_text: "Ver sugestões de compras com IA"
+                            md_bg_color: app.theme_tokens['info']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            hover_accent_color: [1, 1, 1, 1]
+                            size_hint_x: 0.28
+                            disabled: root.shopping_list_busy
+                            on_release: root.open_shopping_list_preview()
+                            font_size: sp(15)
 
-            # TABELA DE PRODUTOS MELHORADA
+                        AdminActionButton:
+                            id: inventory_btn
+                            text: "Inventário"
+                            icon: "clipboard-list-outline"
+                            tooltip_text: "Iniciar ou continuar inventario fisico"
+                            md_bg_color: app.theme_tokens['warning']
+                            theme_text_color: "Custom"
+                            text_color: app.theme_tokens['on_primary']
+                            hover_accent_color: [1, 1, 1, 1]
+                            size_hint_x: 0.18
+                            on_release: root.open_physical_inventory()
+                            font_size: sp(15)
+
             MDBoxLayout:
                 size_hint_y: 1
                 padding: [dp(12), dp(8), dp(12), dp(12)]
@@ -195,107 +263,58 @@
                                 width: table_scroll_content.width
                                 md_bg_color: app.theme_tokens['surface_alt']
                                 padding: [dp(8), 0]
+
                                 canvas.after:
                                     Color:
                                         rgba: app.theme_tokens['divider']
                                     Line:
                                         width: 1
-                                        rectangle: self.x, self.y, self.width, self.height
+                                        points: [self.x, self.y, self.right, self.y]
 
-                                MDLabel:
+                                AdminHeaderCell:
                                     text: "SEQ."
-                                    bold: True
                                     size_hint_x: 0.06
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
+                                AdminHeaderCell:
                                     text: "PRODUTO"
-                                    bold: True
                                     size_hint_x: 0.18
-                                    halign: "left"
-                                    padding: [dp(10), 0]
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "left"
 
-                                MDLabel:
-                                    text: "ESTOQUE"
-                                    bold: True
+                                AdminHeaderCell:
+                                    text: "STOCK"
                                     size_hint_x: 0.09
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
+                                AdminHeaderCell:
                                     text: "VENDIDO"
-                                    bold: True
                                     size_hint_x: 0.09
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
+                                AdminHeaderCell:
                                     text: "TIPO"
-                                    bold: True
                                     size_hint_x: 0.07
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
-                                    text: "PRECO"
-                                    bold: True
+                                AdminHeaderCell:
+                                    text: "PREÇO"
                                     size_hint_x: 0.11
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
+                                AdminHeaderCell:
                                     text: "LUCRO"
-                                    bold: True
                                     size_hint_x: 0.11
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
+                                AdminHeaderCell:
                                     text: "DATA DE VALIDADE"
-                                    bold: True
                                     size_hint_x: 0.15
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
+                                    col_align: "center"
 
-                                MDLabel:
-                                    text: "ACOES"
-                                    bold: True
+                                AdminHeaderCellLast:
+                                    text: "AÇÕES"
                                     size_hint_x: 0.14
-                                    halign: "center"
-                                    theme_text_color: "Custom"
-                                    text_color: app.theme_tokens['text_primary']
-                                    font_style: "Subtitle2"
-                                    font_size: sp(16)
-
-                            MDSeparator:
-                                height: dp(1)
-                                color: app.theme_tokens['divider']
+                                    col_align: "center"
 
                             RecycleView:
                                 id: product_table
@@ -316,59 +335,77 @@
                                     orientation: "vertical"
                                     spacing: 0
 
-                    MDBoxLayout:
-                        size_hint_y: None
-                        height: dp(48)
-                        padding: [dp(10), dp(4)]
-                        spacing: dp(8)
+                            MDBoxLayout:
+                                size_hint_y: None
+                                height: dp(48)
+                                padding: [dp(10), dp(4)]
 
-                        AdminActionButton:
-                            id: admin_prev_btn
-                            text: "Anterior"
-                            icon: "chevron-left"
-                            tooltip_text: "Pagina anterior"
-                            size_hint_x: None
-                            width: dp(112)
-                            md_bg_color: app.theme_tokens['card_alt']
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_primary']
-                            font_size: sp(15)
-                            disabled: True
-                            on_release: root.previous_product_page()
+                                AnchorLayout:
+                                    anchor_x: "center"
+                                    anchor_y: "center"
 
-                        MDLabel:
-                            id: admin_page_label
-                            text: "Pagina 1/1 | 0 itens"
-                            halign: "center"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_primary']
-                            font_size: sp(14)
+                                    MDBoxLayout:
+                                        size_hint: None, None
+                                        size: dp(480), dp(42)
+                                        spacing: dp(8)
 
-                        AdminActionButton:
-                            id: admin_next_btn
-                            text: "Seguinte"
-                            icon: "chevron-right"
-                            tooltip_text: "Pagina seguinte"
-                            size_hint_x: None
-                            width: dp(112)
-                            md_bg_color: app.theme_tokens['card_alt']
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['text_primary']
-                            font_size: sp(15)
-                            disabled: True
-                            on_release: root.next_product_page()
-        
+                                        AdminActionButton:
+                                            id: admin_prev_btn
+                                            text: "Anterior"
+                                            icon: "chevron-left"
+                                            tooltip_text: "Pagina anterior"
+                                            size_hint_x: None
+                                            width: dp(130)
+                                            padding: [dp(8), dp(6)]
+                                            spacing: dp(4)
+                                            md_bg_color: app.theme_tokens['card_alt']
+                                            theme_text_color: "Custom"
+                                            text_color: app.theme_tokens['text_primary']
+                                            font_size: sp(13)
+                                            disabled: True
+                                            on_release: root.previous_product_page()
+
+                                        MDLabel:
+                                            id: admin_page_label
+                                            text: "Pagina 1/1 | 0 itens"
+                                            size_hint_x: None
+                                            width: dp(204)
+                                            halign: "center"
+                                            shorten: True
+                                            shorten_from: "right"
+                                            theme_text_color: "Custom"
+                                            text_color: app.theme_tokens['text_primary']
+                                            font_size: sp(13)
+
+                                        AdminActionButton:
+                                            id: admin_next_btn
+                                            text: "Seguinte"
+                                            icon: "chevron-right"
+                                            tooltip_text: "Pagina seguinte"
+                                            size_hint_x: None
+                                            width: dp(130)
+                                            padding: [dp(8), dp(6)]
+                                            spacing: dp(4)
+                                            md_bg_color: app.theme_tokens['card_alt']
+                                            theme_text_color: "Custom"
+                                            text_color: app.theme_tokens['text_primary']
+                                            font_size: sp(13)
+                                            disabled: True
+                                            on_release: root.next_product_page()
+
         FloatLayout:
             id: ai_banner_container
             size_hint: 1, 1
             pos: 0, 0
-        
+
         DraggableTooltipFloatingActionButton:
             id: ai_button
             icon: "assets/icon/alert.png"
-            icon_size: dp(38)
-            elevation: 0
-            md_bg_color: 0, 0, 0, 0
+            icon_size: dp(28)
+            size: dp(52), dp(52)
+            radius: [dp(26)]
+            elevation: 3
+            md_bg_color: app.theme_tokens['primary']
             pos_hint: {"right": 0.965, "y": 0.04}
             hint_text: "Alertas com IA"
             on_release: root.open_ai_menu(self)
@@ -376,9 +413,11 @@
         DraggableTooltipFloatingActionButton:
             id: recommendations_button
             icon: "assets/icon/idea.ico"
-            icon_size: dp(38)
-            elevation: 0
-            md_bg_color: 0, 0, 0, 0
+            icon_size: dp(28)
+            size: dp(52), dp(52)
+            radius: [dp(26)]
+            elevation: 3
+            md_bg_color: app.theme_tokens['warning']
             pos: ai_button.x, ai_button.top + dp(10)
             hint_text: "Recomendações com IA"
             on_release: root.show_ai_recommendations(self)
@@ -402,7 +441,7 @@
                 text_color: app.theme_tokens['on_primary']
                 font_size: dp(12)
                 bold: True
-        # Badge com número de alertas
+
         MDCard:
             id: ai_badge
             size_hint: None, None

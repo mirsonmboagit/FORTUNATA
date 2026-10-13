@@ -3,11 +3,11 @@ import math
 
 from kivy.app import App
 from kivy.metrics import dp
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.label import MDLabel
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
+    NativeDialog as MDDialog, NativeFlatButton as MDFlatButton,
+    NativeLabel as MDLabel, NativeTextField as MDTextField,
+)
 
 
 MODE_LABELS = {"unit": "Unidade", "heap": "Montinho", "weight": "Kg", "sack": "Saco", "amount": "Valor"}
@@ -36,12 +36,14 @@ def make_produce_cart_item(info, mode, quantity, price):
 
 
 class ProduceSalesMixin:
-    def show_produce_dialog(self, info):
-        settings = self.db.get_produce_settings(info["id"])
+    def show_produce_dialog(self, info, settings=None):
+        if settings is None:
+            settings = self.db.get_produce_settings(info["id"])
         if not settings or settings["stock_mode"] != "SACKS":
             self.show_message("Atualize a lista de produtos e tente novamente.")
             return
         info = dict(info, stock=float(settings["sacks_available"]))
+    
         content = MDBoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(294))
         content.add_widget(MDLabel(
             text=f"{info['stock']:g} sacos disponiveis. O saldo avulso nao e medido.",

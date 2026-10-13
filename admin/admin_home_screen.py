@@ -17,15 +17,22 @@ from kivy.uix.recycleview import RecycleView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.recycleboxlayout import RecycleBoxLayout
 from kivy.uix.modalview import ModalView
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.properties import BooleanProperty, StringProperty
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.card import MDCard
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.label import MDIcon, MDLabel
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout,
+    NativeButton as MDRaisedButton,
+    NativeCard as MDCard,
+    NativeDialog as MDDialog,
+    NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton,
+    NativeIcon as MDIcon,
+    NativeIconButton as MDIconButton,
+    NativeLabel as MDLabel,
+    NativeScreen as MDScreen,
+    NativeTextField as MDTextField,
+)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -122,6 +129,7 @@ class AdminLogsDialog:
         self._render_token = 0
         self._render_event = None
         self._loading = False
+        self._clear_confirmation = None
 
     @staticmethod
     def _tokens():
@@ -150,6 +158,16 @@ class AdminLogsDialog:
                 widget.disabled = self._loading
         if self.refresh_button:
             self.refresh_button.text = "A CARREGAR..." if self._loading else "ATUALIZAR"
+
+    def close(self, *_args):
+        """Fecha o painel de forma segura, inclusive durante uma consulta."""
+        dialog = self.dialog
+        self._cancel_pending_work()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
 
     def _parse_selected_date(self):
         raw_value = str(getattr(self.date_field, "text", "") or "").strip()
@@ -183,6 +201,12 @@ class AdminLogsDialog:
                 "primary" if selected else "text_secondary",
                 [0.10, 0.35, 0.65, 1] if selected else [0.35, 0.40, 0.50, 1],
             )
+            button.md_bg_color = (
+                [*tokens.get("primary", [0.10, 0.35, 0.65, 1])[:3], 0.14]
+                if selected else [0, 0, 0, 0]
+            )
+            button.line_color = tokens.get("primary", [0.10, 0.35, 0.65, 1]) if selected else [0, 0, 0, 0]
+            button.line_width = 1 if selected else 0
         if self.dialog is not None and not self._loading:
             self.load_logs()
 
@@ -200,7 +224,46 @@ class AdminLogsDialog:
 
     def _on_dismiss(self, *_args):
         self._cancel_pending_work()
+        confirmation = self._clear_confirmation
+        self._clear_confirmation = None
+        if confirmation is not None:
+            try:
+                confirmation.dismiss()
+            except Exception:
+                pass
         self.dialog = None
+
+    def _build_filter_input(self, label, hint, size_hint_x):
+        """Campo compacto com o aspecto de input outlined do KivyMD."""
+        tokens = self._tokens()
+        shell = MDCard(
+            orientation="vertical",
+            size_hint_x=size_hint_x,
+            padding=[dp(10), dp(4), dp(10), dp(3)],
+            radius=[dp(10)],
+            elevation=0,
+            md_bg_color=tokens.get("surface", tokens.get("card", [1, 1, 1, 1])),
+            line_color=tokens.get("outline", [0.35, 0.40, 0.50, 1]),
+            line_width=1,
+        )
+        shell.add_widget(MDLabel(
+            text=f"{label.upper()}  ·  {hint}",
+            font_style="Caption",
+            font_size=dp(10),
+            size_hint_y=None,
+            height=dp(15),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_muted", tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])),
+        ))
+        field = MDTextField(
+            hint_text=hint,
+            mode="rectangle",
+            background_color=[0, 0, 0, 0],
+            foreground_color=tokens.get("text_primary", [0.15, 0.20, 0.30, 1]),
+            padding=[0, 0, 0, 0],
+        )
+        shell.add_widget(field)
+        return shell, field
 
     def show(self):
         if self.dialog is not None:
@@ -210,41 +273,55 @@ class AdminLogsDialog:
         tokens = self._tokens()
         content = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(8),
-            padding=[dp(8), dp(6), dp(8), dp(6)],
+            spacing=dp(12),
+            padding=[dp(10), dp(8), dp(10), dp(8)],
             size_hint_y=None,
-            height=dp(472),
+            height=dp(500),
         )
+
+        content.add_widget(MDLabel(
+            text="Consulte a atividade da loja com filtros rápidos por data, utilizador e perfil.",
+            font_style="Caption",
+            size_hint_y=None,
+            height=dp(26),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1]),
+        ))
 
         filter_row = MDBoxLayout(
             orientation="horizontal",
-            spacing=dp(8),
+            spacing=dp(10),
             size_hint_y=None,
-            height=dp(46),
+            height=dp(54),
         )
-        self.date_field = MDTextField(
-            hint_text="Data (DD/MM/AAAA)",
-            mode="rectangle",
-            size_hint_x=0.42,
-        )
+        date_shell, self.date_field = self._build_filter_input("Data", "DD/MM/AAAA", 0.26)
         self.date_field.bind(on_text_validate=lambda *_args: self.load_logs())
-        self.user_field = MDTextField(
-            hint_text="Utilizador",
-            mode="rectangle",
-            size_hint_x=0.28,
-        )
+        user_shell, self.user_field = self._build_filter_input("Utilizador", "Todos", 0.28)
         self.user_field.bind(on_text_validate=lambda *_args: self.load_logs())
-        self.today_button = MDFlatButton(text="HOJE", on_release=lambda *_args: self.use_today())
-        self.clear_button = MDFlatButton(text="LIMPAR", on_release=lambda *_args: self.clear_date())
+        self.today_button = MDFlatButton(
+            text="HOJE", size_hint_x=None, width=dp(68), radius=[dp(10)],
+            line_color=tokens.get("outline", [0.35, 0.40, 0.50, 1]), line_width=1,
+            on_release=lambda *_args: self.use_today(),
+        )
+        self.clear_button = MDFlatButton(
+            text="LIMPAR", size_hint_x=None, width=dp(76), radius=[dp(10)],
+            theme_text_color="Custom", text_color=tokens.get("danger", [0.82, 0.24, 0.28, 1]),
+            line_color=tokens.get("danger", [0.82, 0.24, 0.28, 1]), line_width=1,
+            on_release=lambda *_args: self.confirm_clear_logs(),
+        )
         self.refresh_button = MDRaisedButton(
             text="ATUALIZAR",
+            size_hint_x=None,
+            width=dp(116),
+            radius=[dp(10)],
+            elevation=1,
             md_bg_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
             theme_text_color="Custom",
             text_color=tokens.get("on_primary", [1, 1, 1, 1]),
             on_release=lambda *_args: self.load_logs(),
         )
-        filter_row.add_widget(self.date_field)
-        filter_row.add_widget(self.user_field)
+        filter_row.add_widget(date_shell)
+        filter_row.add_widget(user_shell)
         filter_row.add_widget(self.today_button)
         filter_row.add_widget(self.clear_button)
         filter_row.add_widget(self.refresh_button)
@@ -254,7 +331,7 @@ class AdminLogsDialog:
             orientation="horizontal",
             spacing=dp(6),
             size_hint_y=None,
-            height=dp(30),
+            height=dp(36),
         )
         role_row.add_widget(MDLabel(
             text="Perfil:",
@@ -267,6 +344,9 @@ class AdminLogsDialog:
         for label, role in (("TODOS", ""), ("ADMIN", "admin"), ("GERENTE", "manager")):
             button = MDFlatButton(
                 text=label,
+                size_hint_x=None,
+                width=dp(82 if role else 76),
+                radius=[dp(10)],
                 on_release=lambda _instance, value=role: self._set_role_filter(value),
             )
             self.role_buttons[role] = button
@@ -291,11 +371,23 @@ class AdminLogsDialog:
         content.add_widget(self.logs_list)
 
         self.dialog = MDDialog(
-            title="Logs recentes",
+            title="Atividade recente",
             type="custom",
             content_cls=content,
-            size_hint=(0.78, 0.78),
-            buttons=[MDFlatButton(text="FECHAR", on_release=lambda *_args: self.dialog.dismiss())],
+            size_hint=(0.82, 0.82),
+            buttons=[
+                MDFlatButton(
+                    text="FECHAR", size_hint_x=None, width=dp(92), radius=[dp(10)],
+                    on_release=self.close,
+                ),
+                MDRaisedButton(
+                    text="ATUALIZAR", size_hint_x=None, width=dp(116), radius=[dp(10)], elevation=1,
+                    md_bg_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
+                    theme_text_color="Custom",
+                    text_color=tokens.get("on_primary", [1, 1, 1, 1]),
+                    on_release=lambda *_args: self.load_logs(),
+                ),
+            ],
         )
         self.dialog.bind(on_dismiss=self._on_dismiss)
         self.dialog.open()
@@ -306,12 +398,87 @@ class AdminLogsDialog:
             self.date_field.text = datetime.now().strftime("%d/%m/%Y")
         self.load_logs()
 
-    def clear_date(self):
+    def reset_filters(self):
         if self.date_field is not None:
             self.date_field.text = ""
         if self.user_field is not None:
             self.user_field.text = ""
         self._set_role_filter("")
+
+    # Compatibilidade para chamadas antigas que apenas limpavam os filtros.
+    clear_date = reset_filters
+
+    def confirm_clear_logs(self):
+        if self.dialog is None or self._loading or self._clear_confirmation is not None:
+            return
+        tokens = self._tokens()
+        reference = {"dialog": None}
+
+        def cancel(*_args):
+            modal = reference.get("dialog")
+            if modal is not None:
+                modal.dismiss()
+
+        def confirm(*_args):
+            modal = reference.get("dialog")
+            if modal is not None:
+                modal.dismiss()
+            self._clear_confirmation = None
+            self.clear_logs()
+
+        confirmation = MDDialog(
+            title="Eliminar registos?",
+            text="Esta ação elimina permanentemente todos os logs visíveis para esta loja. Não pode ser desfeita.",
+            size_hint=(0.68, None),
+            height=dp(230),
+            buttons=[
+                MDFlatButton(text="CANCELAR", size_hint_x=None, width=dp(100), on_release=cancel),
+                MDRaisedButton(
+                    text="ELIMINAR", size_hint_x=None, width=dp(100),
+                    md_bg_color=tokens.get("danger", [0.82, 0.24, 0.28, 1]),
+                    theme_text_color="Custom", text_color=tokens.get("on_primary", [1, 1, 1, 1]),
+                    on_release=confirm,
+                ),
+            ],
+        )
+        reference["dialog"] = confirmation
+        self._clear_confirmation = confirmation
+        confirmation.bind(on_dismiss=lambda *_args: setattr(self, "_clear_confirmation", None))
+        confirmation.open()
+
+    def clear_logs(self):
+        """Elimina a auditoria no escopo da loja sem bloquear a interface."""
+        if self.dialog is None or self._loading:
+            return
+        self._request_token += 1
+        self._set_loading(True)
+        self._set_status("A eliminar registos de auditoria...", "danger")
+
+        def worker():
+            success = False
+            error = None
+            try:
+                with get_db() as db:
+                    success = bool(db.clear_user_logs())
+            except Exception as exc:
+                error = str(exc)
+            Clock.schedule_once(lambda _dt: self._finish_clear_logs(success, error), 0)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _finish_clear_logs(self, success, error):
+        if self.dialog is None:
+            return
+        self._set_loading(False)
+        if not success:
+            message = error or "Não foi possível eliminar os logs."
+            self._set_status(message, "danger")
+            return
+        self.logs_list.clear_widgets()
+        self.logs_list.add_widget(MDLabel(
+            text="Os registos foram eliminados.", size_hint_y=None, height=dp(38), halign="center"
+        ))
+        self._set_status("Logs eliminados com sucesso.", "success")
 
     def _fetch_logs(self, date_filter, user_filter, role_filter):
         excluded_actions = ("LOGIN", "LOGOUT")
@@ -514,6 +681,9 @@ class AdminHomeScreen(MDScreen):
         self._snapshot_loaded_at = 0.0
         self._snapshot_period_days = None
         self._snapshot_token = 0
+        self._summary_menu = None
+        self._access_menu = None
+        self._insights_menu = None
         self._clock_ev = None
         self._sales_chart = None
         self._chart_render_ev = None
@@ -542,7 +712,12 @@ class AdminHomeScreen(MDScreen):
         self._last_shortcut_signature = None
         self._last_shortcut_at = 0.0
         self._intelligence = None
+        self._theme_source = None
         self._layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
+        self._overflow_menu = None
+        self._chart_modal = None
+        self._layout_mode = "wide"
+        self._chart_collapsed = False
         super().__init__(**kwargs)
 
     def _get_intelligence(self):
@@ -560,11 +735,35 @@ class AdminHomeScreen(MDScreen):
         return self._intelligence
 
     def on_kv_post(self, base_widget):
+        self._bind_theme_updates()
         self._build_quick_actions()
         self._update_datetime_text()
         self._update_responsive_layout()
         self._init_badge(0)
         self._render_dashboard()
+        Clock.schedule_once(lambda _dt: self._bind_section_buttons(), 0)
+
+    def _bind_theme_updates(self):
+        app = App.get_running_app()
+        if app is self._theme_source:
+            return
+        if self._theme_source is not None:
+            try:
+                self._theme_source.unbind(theme_tokens=self._on_theme_tokens_changed)
+            except Exception:
+                pass
+        self._theme_source = app
+        if app is not None:
+            app.bind(theme_tokens=self._on_theme_tokens_changed)
+
+    def _on_theme_tokens_changed(self, *_args):
+        # Os cards são criados dinamicamente; invalida apenas a camada visual
+        # e reutiliza o snapshot já em memória, sem nova consulta à base.
+        self._summary_render_signature = None
+        self._alerts_render_signature = None
+        self._insights_render_signature = None
+        self._chart_render_signature = None
+        Clock.schedule_once(lambda _dt: self._render_dashboard(), 0)
 
     def on_enter(self):
         self._bind_keyboard_shortcuts()
@@ -573,8 +772,10 @@ class AdminHomeScreen(MDScreen):
         # O painel abre de imediato; a consulta já é feita numa thread e não
         # precisa de um atraso artificial nem de uma tela de bloqueio.
         self._ensure_snapshot_loaded(force=False)
+        Clock.schedule_once(lambda _dt: self._bind_section_buttons(), 0)
 
     def on_leave(self):
+        self.close_all_panels()
         self._unbind_keyboard_shortcuts()
         self._dismiss_chart_menus()
         if self._clock_ev:
@@ -812,11 +1013,18 @@ class AdminHomeScreen(MDScreen):
     def _init_badge(self, dt):
         if not hasattr(self, "ids"):
             return
+        # Badges de valor zero não são conteúdo útil e, sobretudo, não devem
+        # encobrir o resumo. A referência visual mostra apenas notificações
+        # efetivamente pendentes.
         for badge_id in ("ai_badge", "recommendations_badge"):
             badge = self.ids.get(badge_id)
             if badge is not None:
                 badge.opacity = 1
                 badge.size = (dp(26), dp(26))
+        alert_button = self.ids.get("ai_button")
+        if alert_button is not None:
+            alert_button.opacity = 1
+            alert_button.disabled = False
 
     def update_notification_badge(self, count):
         self.notification_count = max(0, int(count or 0))
@@ -825,13 +1033,14 @@ class AdminHomeScreen(MDScreen):
         if badge is None or badge_label is None:
             return
         badge_label.text = str(self.notification_count)
+        alert_button = self.ids.get("ai_button")
         if self.notification_count > 0:
             self._show_badge()
-            set_attention_shake(self.ids.get("ai_button"), True)
+            set_attention_shake(alert_button, True)
         else:
             badge.opacity = 1
             badge.size = (dp(26), dp(26))
-            set_attention_shake(self.ids.get("ai_button"), False)
+            set_attention_shake(alert_button, False)
 
     def update_recommendation_badge(self, count):
         self.recommendation_count = max(0, int(count or 0))
@@ -887,113 +1096,289 @@ class AdminHomeScreen(MDScreen):
         self.datetime_text = datetime.now().strftime("%d/%m/%Y | %H:%M")
 
     def _apply_hero_button_layout(self, fill_width):
-        button_specs = (
-            ("hero_add_button", dp(104)),
+        button = self.ids.get("hero_add_button")
+        if button is not None:
+            button.size_hint = (None, None)
+            button.size = (dp(110), dp(36))
+        hero_side = self.ids.get("hero_side")
+        if hero_side is not None:
+            hero_side.size_hint_x = 1 if fill_width else 0.38
+
+    def open_overflow_menu(self, caller=None):
+        """Menu "..." com atalhos e alertas quando o ecrã está compacto."""
+        if self._overflow_menu is not None:
+            try:
+                self._overflow_menu.dismiss()
+            except Exception:
+                pass
+            self._overflow_menu = None
+
+        items = [
+            {"text": "Adicionar produto", "on_release": lambda: self._overflow_action(self.add_product)},
+            {"text": "Atualizar painel", "on_release": lambda: self._overflow_action(self.refresh_home)},
+            {"text": "Ver grafico", "on_release": lambda: self._overflow_action(self.open_chart_modal)},
+            {"text": "Produtos", "on_release": lambda: self._overflow_action(lambda *a: self.open_products_module() if hasattr(self, "open_products_module") else self._nav_safe("admin"))},
+            {"text": "Reposicao", "on_release": lambda: self._overflow_action(lambda *a: self.open_stock_module())},
+            {"text": "Perdas", "on_release": lambda: self._overflow_action(lambda *a: self.open_losses_module())},
+            {"text": "Definicoes", "on_release": lambda: self._overflow_action(lambda *a: self.go_to_settings())},
+            {"text": "Alertas com IA", "on_release": lambda: self._overflow_action(lambda *a: self.open_ai_menu())},
+            {"text": "Recomendacoes", "on_release": lambda: self._overflow_action(lambda *a: self.show_ai_recommendations())},
+        ]
+        # Alertas prioritarios no menu se o hero os escondeu
+        if getattr(self, "_layout_mode", "wide") == "narrow":
+            items.insert(3, {"text": "Alertas prioritarios", "on_release": lambda: self._overflow_action(self.open_operational_alerts)})
+
+        caller = caller or self.ids.get("hero_more_button")
+        self._overflow_menu = MDDropdownMenu(caller=caller, items=items, width_mult=4)
+        self._overflow_menu.open()
+
+    def _overflow_action(self, callback):
+        if self._overflow_menu is not None:
+            try:
+                self._overflow_menu.dismiss()
+            except Exception:
+                pass
+            self._overflow_menu = None
+        if callable(callback):
+            Clock.schedule_once(lambda _dt: callback(), 0)
+
+    def _nav_safe(self, screen_name):
+        if self.manager and screen_name in self.manager.screen_names:
+            self.manager.current = screen_name
+
+    def open_chart_modal(self, *_args):
+        """Abre o grafico em modal a ecrã quase completo (modo compacto)."""
+        if self._chart_modal is not None:
+            try:
+                self._chart_modal.dismiss()
+            except Exception:
+                pass
+            self._chart_modal = None
+
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(14), dp(12), dp(14), dp(12)],
+            md_bg_color=tokens.get("surface", [0.1, 0.1, 0.12, 1]),
         )
-        for button_id, default_width in button_specs:
-            button = self.ids.get(button_id)
-            if button is None:
-                continue
-            if fill_width:
-                button.size_hint_x = 1
-                button.width = 0
-            else:
-                button.size_hint_x = None
-                button.width = default_width
+
+        header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(40), spacing=dp(8))
+        header.add_widget(MDLabel(
+            text="Grafico de desempenho",
+            font_style="H6",
+            bold=True,
+            theme_text_color="Custom",
+            text_color=tokens.get("text_primary", [1, 1, 1, 1]),
+        ))
+        metric_btn = MDRaisedButton(
+            text=self.chart_metric_text,
+            size_hint=(None, None),
+            size=(dp(130), dp(34)),
+            md_bg_color=tokens.get("card_alt", [0.2, 0.22, 0.28, 1]),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_primary", [1, 1, 1, 1]),
+            on_release=lambda x: self.show_chart_metric_menu(x),
+        )
+        period_btn = MDRaisedButton(
+            text=self.chart_period_text,
+            size_hint=(None, None),
+            size=(dp(100), dp(34)),
+            md_bg_color=tokens.get("card_alt", [0.2, 0.22, 0.28, 1]),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_primary", [1, 1, 1, 1]),
+            on_release=lambda x: self.show_chart_period_menu(x),
+        )
+        close_btn = MDFlatButton(
+            text="FECHAR",
+            size_hint=(None, None),
+            size=(dp(90), dp(34)),
+            on_release=lambda *_: self._close_chart_modal(),
+        )
+        header.add_widget(metric_btn)
+        header.add_widget(period_btn)
+        header.add_widget(close_btn)
+        content.add_widget(header)
+
+        chart_host = MDBoxLayout(orientation="vertical", size_hint_y=1)
+        # Reutiliza o grafico existente se ja estiver criado
+        chart = self._sales_chart
+        if chart is None:
+            self._ensure_chart_widgets()
+            chart = self._sales_chart
+        if chart is not None:
+            parent = chart.parent
+            if parent is not None:
+                parent.remove_widget(chart)
+            chart_host.add_widget(chart)
+            # Re-render
+            Clock.schedule_once(lambda _dt: self._render_chart(self._snapshot or {}), 0)
+        else:
+            chart_host.add_widget(MDLabel(
+                text="Grafico indisponivel",
+                halign="center",
+                theme_text_color="Custom",
+                text_color=tokens.get("text_secondary", [0.6, 0.6, 0.6, 1]),
+            ))
+        content.add_widget(chart_host)
+
+        modal = ModalView(
+            size_hint=(0.92, 0.88),
+            auto_dismiss=True,
+            background_color=[0, 0, 0, 0.55],
+        )
+        modal.add_widget(content)
+
+        def _on_dismiss(*_a):
+            # Devolver o grafico ao host original se o cartao estiver expandido
+            if self._sales_chart is not None:
+                host = self.ids.get("chart_canvas_host")
+                if host is not None and self._sales_chart.parent is not None:
+                    self._sales_chart.parent.remove_widget(self._sales_chart)
+                if host is not None and not self._chart_collapsed:
+                    host.add_widget(self._sales_chart)
+            self._chart_modal = None
+
+        modal.bind(on_dismiss=_on_dismiss)
+        self._chart_modal = modal
+        modal.open()
+
+    def _close_chart_modal(self):
+        if self._chart_modal is not None:
+            try:
+                self._chart_modal.dismiss()
+            except Exception:
+                pass
+            self._chart_modal = None
 
     def _update_responsive_layout(self, *_args):
+        """Ajusta hero + gráfico sem loops de layout nem altura 0 no gráfico."""
         if not self.ids:
             return
-        width = self.width or dp(1200)
+
+        width = float(self.width or 0)
+        height = float(self.height or 0)
+        if width <= 0:
+            return
+
+        if width >= dp(1180):
+            mode = "wide"
+        elif width >= dp(920):
+            mode = "medium"
+        elif width >= dp(720):
+            mode = "compact"
+        else:
+            mode = "narrow"
 
         hero_card = self.ids.get("hero_card")
-        summary_grid = self.ids.get("summary_grid")
-        summary_card = self.ids.get("summary_card")
-        alerts_grid = self.ids.get("alerts_grid")
-        alerts_card = self.ids.get("alerts_card")
-        quick_actions_grid = self.ids.get("quick_actions_grid")
-        quick_actions_card = self.ids.get("quick_actions_card")
-        insights_grid = self.ids.get("insights_grid")
-        insights_card = self.ids.get("insights_card")
         hero_content = self.ids.get("hero_content")
-        hero_actions = self.ids.get("hero_actions")
         hero_side = self.ids.get("hero_side")
-        left_col = self.ids.get("left_col")
-        right_col = self.ids.get("right_col")
+        hero_alerts_wrap = self.ids.get("hero_alerts_wrap")
+        hero_alerts_grid = self.ids.get("hero_alerts_grid")
+        hero_more = self.ids.get("hero_more_button")
+        chart_card = self.ids.get("chart_card")
+        chart_launch = self.ids.get("chart_launch_card")
+        chart_metric_btn = self.ids.get("chart_metric_btn")
+        chart_period_btn = self.ids.get("chart_period_btn")
+        summary_panel_grid = self.ids.get("summary_panel_grid")
+        access_panel_grid = self.ids.get("access_panel_grid")
+        insights_panel_grid = self.ids.get("insights_panel_grid")
 
-        if width >= dp(1280):
-            summary_cols = 4
-            side_cols = 2
-            quick_cols = 2
-            hero_orientation = "horizontal"
-            hero_side_fill = False
-            hero_height = dp(106)
-            summary_height = dp(148)
-            left_ratio, right_ratio = 0.67, 0.33
-            card_ratios = (0.30, 0.46, 0.24)
-            hero_buttons_fill = False
-        elif width >= dp(1060):
-            summary_cols = 2
-            side_cols = 2
-            quick_cols = 2
-            hero_orientation = "horizontal"
-            hero_side_fill = False
-            hero_height = dp(120)
-            summary_height = dp(242)
-            left_ratio, right_ratio = 0.61, 0.39
-            card_ratios = (0.30, 0.46, 0.24)
-            hero_buttons_fill = False
-        else:
-            summary_cols = 2
-            side_cols = 1
-            quick_cols = 2
-            hero_orientation = "vertical"
-            hero_side_fill = True
-            hero_height = dp(168)
-            summary_height = dp(242)
-            left_ratio, right_ratio = 0.57, 0.43
-            card_ratios = (0.28, 0.48, 0.24)
-            hero_buttons_fill = True
-
-        if summary_grid:
-            summary_grid.cols = summary_cols
-        if alerts_grid:
-            alerts_grid.cols = side_cols
-        if quick_actions_grid:
-            quick_actions_grid.cols = quick_cols
-        if insights_grid:
-            insights_grid.cols = side_cols
-
+        # Hero
+        hero_h = {
+            "wide": dp(72),
+            "medium": dp(72),
+            "compact": dp(78),
+            "narrow": dp(120),
+        }[mode]
         if hero_card is not None:
-            hero_card.height = hero_height
-        if summary_card is not None:
-            summary_card.height = summary_height
-        if alerts_card is not None:
-            alerts_card.size_hint_y = card_ratios[0]
-        if quick_actions_card is not None:
-            quick_actions_card.size_hint_y = card_ratios[1]
-        if insights_card is not None:
-            insights_card.size_hint_y = card_ratios[2]
+            hero_card.height = hero_h
 
-        if hero_content:
-            hero_content.orientation = hero_orientation
-            hero_content.spacing = dp(14)
-        if hero_side:
-            if hero_side_fill:
-                hero_side.size_hint_x = 1
-                hero_side.width = 0
+        if hero_content is not None:
+            hero_content.orientation = "vertical" if mode == "narrow" else "horizontal"
+            hero_content.spacing = dp(8)
+
+        show_alerts = mode != "narrow"
+        hero_highlights_wrap = self.ids.get("hero_highlights_wrap")
+        if hero_alerts_wrap is not None:
+            if show_alerts:
+                hero_alerts_wrap.size_hint_x = 0.34
+                hero_alerts_wrap.opacity = 1
+                hero_alerts_wrap.disabled = False
             else:
-                hero_side.size_hint_x = None
-                hero_side.width = dp(300)
-        if hero_actions:
-            hero_actions.orientation = "horizontal"
-            hero_actions.spacing = dp(8)
-            hero_actions.height = dp(36)
-        self._apply_hero_button_layout(hero_buttons_fill)
+                hero_alerts_wrap.size_hint_x = None
+                hero_alerts_wrap.width = 0
+                hero_alerts_wrap.opacity = 0
+                hero_alerts_wrap.disabled = True
 
-        if left_col and right_col:
-            left_col.size_hint_x = left_ratio
-            right_col.size_hint_x = right_ratio
+        if hero_highlights_wrap is not None:
+            if mode == "narrow":
+                hero_highlights_wrap.size_hint_x = None
+                hero_highlights_wrap.width = 0
+                hero_highlights_wrap.opacity = 0
+            else:
+                hero_highlights_wrap.size_hint_x = 0.30
+                hero_highlights_wrap.opacity = 1
+
+        if hero_side is not None:
+            if mode == "narrow":
+                hero_side.size_hint_x = 1
+            else:
+                hero_side.size_hint_x = 0.36
+
+        if hero_more is not None:
+            if mode in ("compact", "narrow"):
+                hero_more.opacity = 1
+                hero_more.disabled = False
+                hero_more.size = (dp(36), dp(36))
+            else:
+                hero_more.opacity = 0
+                hero_more.disabled = True
+                hero_more.size = (0, 0)
+
+        # Gráfico — sempre visível com altura fixa (ScrollView)
+        if chart_card is not None:
+            chart_card.opacity = 1
+            chart_card.disabled = False
+            chart_card.size_hint_y = None
+            avail = max(dp(300), height - dp(64) - hero_h - dp(48))
+            if mode == "narrow":
+                chart_card.height = min(avail, dp(360))
+            elif mode == "compact":
+                chart_card.height = min(avail, dp(420))
+            else:
+                chart_card.height = min(avail, dp(520))
+
+        if chart_launch is not None:
+            chart_launch.height = 0
+            chart_launch.opacity = 0
+            chart_launch.disabled = True
+
+        if chart_metric_btn is not None:
+            chart_metric_btn.width = dp(120) if mode != "wide" else dp(130)
+        if chart_period_btn is not None:
+            chart_period_btn.width = dp(92) if mode != "wide" else dp(100)
+
+        # Grids dos painéis
+        if summary_panel_grid is not None:
+            summary_panel_grid.cols = 2 if mode in ("compact", "narrow") else 4
+        if access_panel_grid is not None:
+            access_panel_grid.cols = 1 if mode == "narrow" else 2
+        if insights_panel_grid is not None:
+            insights_panel_grid.cols = 1 if mode == "narrow" else 2
+
+        # Tamanho dos overlays
+        for pid, max_w, max_h, wr, hr in (
+            ("summary_panel", 720, 280, 0.88, 0.46),
+            ("access_panel", 520, 360, 0.90, 0.55),
+            ("insights_panel", 520, 280, 0.90, 0.46),
+        ):
+            panel = self.ids.get(pid)
+            if panel is None:
+                continue
+            panel.width = min(max(dp(300), width * wr), dp(max_w))
+            panel.height = min(max(dp(200), height * hr), dp(max_h))
+
 
     def toggle_quick_actions(self, *args):
         self.quick_actions_open = not self.quick_actions_open
@@ -1089,6 +1474,7 @@ class AdminHomeScreen(MDScreen):
         top_products = snapshot.get("top_products") or []
         signature = (
             id(snapshot),
+            getattr(App.get_running_app(), "theme_style", "Light"),
             self._chart_metric,
             self._chart_period_days,
             self._snapshot_error,
@@ -1145,7 +1531,23 @@ class AdminHomeScreen(MDScreen):
             summary = snapshot.get("summary") or {}
             alerts = snapshot.get("alerts") or {}
             total_alerts = sum(int(value or 0) for value in (alerts.get("counts") or {}).values())
-            self.status_text = f"Hoje: {_format_mzn(summary.get('revenue_today'))} | Alertas ativos: {total_alerts}"
+            # Linha de estado no header: subtítulo operacional + totais
+            sub = (self.home_subtitle or "").strip()
+            totals = f"Hoje: {_format_mzn(summary.get('revenue_today'))}  ·  Alertas: {total_alerts}"
+            if sub and sub not in ("Vendas, stock e alertas.",):
+                # Preferir subtítulo rico; se for muito longo, prioriza alertas
+                if len(sub) > 72:
+                    self.status_text = f"{sub[:70]}…  ·  {totals}"
+                else:
+                    self.status_text = f"{sub}  ·  {totals}"
+            else:
+                self.status_text = totals
+
+        # Destaques elegantes no hero (não dropdown)
+        try:
+            self._render_hero_highlights(snapshot or {})
+        except Exception:
+            pass
     def _build_header_subtitle(self, snapshot):
         if self._snapshot_error:
             return "Nao foi possivel atualizar os dados agora."
@@ -1190,6 +1592,8 @@ class AdminHomeScreen(MDScreen):
         return "Sem vendas hoje."
 
     def _render_summary_cards(self, summary):
+        # snapshot parcial disponível para reabrir painéis
+
         grid = self.ids.get("summary_grid")
         if grid is None:
             return
@@ -1230,8 +1634,10 @@ class AdminHomeScreen(MDScreen):
             padding=[dp(12), dp(10), dp(12), dp(10)],
             spacing=dp(4),
             radius=[dp(12)],
-            elevation=1,
+            elevation=2,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            line_color=tokens.get("divider", [0, 0, 0, 0.12]),
+            line_width=1,
             hover_accent_color=accent,
             hover_bg_mix=0.10,
             hover_line_mix=0.26,
@@ -1248,7 +1654,7 @@ class AdminHomeScreen(MDScreen):
             elevation=0,
             md_bg_color=[accent[0], accent[1], accent[2], 0.14],
         )
-        icon_label = MDIcon(icon=icon_name, halign="center", valign="middle")
+        icon_label = MDIcon(icon=icon_name, icon_size=dp(18), halign="center", valign="middle")
         icon_label.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         _set_label_text_color(icon_label, accent)
         icon_chip.add_widget(icon_label)
@@ -1271,7 +1677,11 @@ class AdminHomeScreen(MDScreen):
 
     def _build_quick_actions(self):
         grid = self.ids.get("quick_actions_grid")
-        if grid is None or len(grid.children) > 0:
+        panel_grid = self.ids.get("access_panel_grid")
+        if grid is None and panel_grid is None:
+            return
+        # Evita duplicar no grid legado; o painel pode ser reconstruído.
+        if grid is not None and len(grid.children) > 0 and panel_grid is not None and len(panel_grid.children) > 0:
             return
 
         actions = [
@@ -1283,8 +1693,19 @@ class AdminHomeScreen(MDScreen):
             ("Utilizadores", "Acessos", "account-key-outline", "primary", self.open_users_module),
         ]
 
-        for title, subtitle, icon_name, tone, callback in actions:
-            grid.add_widget(self._build_quick_action_card(title, subtitle, icon_name, tone, callback))
+        if grid is not None and len(grid.children) == 0:
+            for title, subtitle, icon_name, tone, callback in actions:
+                grid.add_widget(self._build_quick_action_card(title, subtitle, icon_name, tone, callback))
+        if panel_grid is not None:
+            panel_grid.clear_widgets()
+            for title, subtitle, icon_name, tone, callback in actions:
+                # Cards um pouco mais altos no overlay
+                card = self._build_quick_action_card(title, subtitle, icon_name, tone, callback)
+                try:
+                    card.height = dp(64)
+                except Exception:
+                    pass
+                panel_grid.add_widget(card)
 
     def _run_quick_action(self, callback):
         if not callable(callback):
@@ -1295,6 +1716,7 @@ class AdminHomeScreen(MDScreen):
             return
         self._quick_action_last_key = key
         self._quick_action_last_at = now
+        self.close_all_panels()
         callback()
 
     def _build_quick_action_card(self, title, subtitle, icon_name, tone, callback):
@@ -1310,8 +1732,10 @@ class AdminHomeScreen(MDScreen):
             padding=[dp(10), dp(8), dp(10), dp(8)],
             spacing=dp(1),
             radius=[dp(12)],
-            elevation=1,
+            elevation=2,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            line_color=tokens.get("divider", [0, 0, 0, 0.12]),
+            line_width=1,
             hover_accent_color=accent,
             hover_bg_mix=0.10,
             hover_line_mix=0.26,
@@ -1327,7 +1751,7 @@ class AdminHomeScreen(MDScreen):
             elevation=0,
             md_bg_color=[accent[0], accent[1], accent[2], 0.14],
         )
-        icon_label = MDIcon(icon=icon_name, halign="center", valign="middle")
+        icon_label = MDIcon(icon=icon_name, icon_size=dp(17), halign="center", valign="middle")
         icon_label.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         _set_label_text_color(icon_label, accent)
         icon_chip.add_widget(icon_label)
@@ -1349,9 +1773,11 @@ class AdminHomeScreen(MDScreen):
         return card
 
     def _render_alert_cards(self, alerts):
+        hero_grid = self.ids.get("hero_alerts_grid")
         grid = self.ids.get("alerts_grid")
         meta_label = self.ids.get("alerts_meta_label")
-        if grid is None:
+        hero_title = self.ids.get("hero_alerts_title")
+        if hero_grid is None and grid is None:
             return
 
         counts = alerts.get("counts") or {}
@@ -1393,17 +1819,108 @@ class AdminHomeScreen(MDScreen):
         if not cards:
             cards = [("Sem alertas", 0, "success", "check-circle-outline", "Sem alertas neste momento.", self.refresh_home)]
 
+        priority = cards[:2]
         if meta_label:
-            meta_label.text = f"{len(cards[:2])} prioridades"
+            meta_label.text = f"{len(priority)} prioridades"
+        if hero_title is not None:
+            total = sum(c[1] for c in priority)
+            hero_title.text = (
+                "Sem alertas prioritarios" if total == 0 and priority[0][0] == "Sem alertas"
+                else f"Alertas prioritarios · {total}"
+            )
 
-        signature = (theme_style, tuple((title, count, tone, icon_name, description) for title, count, tone, icon_name, description, _callback in cards[:2]))
+        signature = (theme_style, tuple((title, count, tone, icon_name, description) for title, count, tone, icon_name, description, _callback in priority))
         if signature == self._alerts_render_signature:
             return
         self._alerts_render_signature = signature
-        grid.clear_widgets()
 
-        for title, count, tone, icon_name, description, callback in cards[:2]:
-            grid.add_widget(self._build_alert_card(title, count, tone, icon_name, description, callback))
+        if hero_grid is not None:
+            hero_grid.clear_widgets()
+            for title, count, tone, icon_name, description, callback in priority:
+                hero_grid.add_widget(
+                    self._build_hero_alert_chip(title, count, tone, icon_name, description, callback)
+                )
+
+        if grid is not None and float(getattr(grid, "height", 0) or 0) > 0:
+            grid.clear_widgets()
+            for title, count, tone, icon_name, description, callback in priority:
+                grid.add_widget(self._build_alert_card(title, count, tone, icon_name, description, callback))
+
+    def _build_hero_alert_chip(self, title, count, tone, icon_name, description, callback):
+        """Chip compacto para o hero azul (fundo translucido, texto claro)."""
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        accent = tokens.get(tone, tokens.get("primary", [0.10, 0.35, 0.65, 1]))
+
+        card = Factory.HomeButtonCard(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(36),
+            padding=[dp(8), dp(4), dp(8), dp(4)],
+            spacing=dp(6),
+            radius=[dp(10)],
+            elevation=0,
+            md_bg_color=[1, 1, 1, 0.16],
+            line_color=[1, 1, 1, 0.22],
+            line_width=1,
+            hover_accent_color=[1, 1, 1, 1],
+            hover_bg_mix=0.18,
+            hover_line_mix=0.30,
+            hover_elevation_delta=1.0,
+        )
+        card.bind(on_release=lambda *_: callback())
+
+        icon_chip = MDCard(
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
+            radius=[dp(7)],
+            elevation=0,
+            md_bg_color=[accent[0], accent[1], accent[2], 0.55],
+            pos_hint={"center_y": 0.5},
+        )
+        icon_label = MDIcon(icon=icon_name, icon_size=dp(14), halign="center", valign="middle")
+        icon_label.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        _set_label_text_color(icon_label, [1, 1, 1, 1])
+        icon_chip.add_widget(icon_label)
+
+        text_col = MDBoxLayout(orientation="vertical", spacing=0, size_hint_x=1)
+        title_label = MDLabel(
+            text=title,
+            font_style="Caption",
+            bold=True,
+            size_hint_y=None,
+            height=dp(14),
+            shorten=True,
+            shorten_from="right",
+        )
+        _set_label_text_color(title_label, [1, 1, 1, 0.98])
+        desc_label = MDLabel(
+            text=description,
+            font_style="Caption",
+            size_hint_y=None,
+            height=dp(12),
+            shorten=True,
+            shorten_from="right",
+        )
+        _set_label_text_color(desc_label, [1, 1, 1, 0.75])
+        text_col.add_widget(title_label)
+        text_col.add_widget(desc_label)
+
+        count_label = MDLabel(
+            text=str(count),
+            font_style="Caption",
+            bold=True,
+            halign="right",
+            valign="middle",
+            size_hint=(None, None),
+            size=(dp(24), dp(22)),
+        )
+        count_label.bind(size=lambda inst, value: setattr(inst, "text_size", value))
+        _set_label_text_color(count_label, [1, 1, 1, 1])
+
+        card.add_widget(icon_chip)
+        card.add_widget(text_col)
+        card.add_widget(count_label)
+        return card
 
     def _build_alert_card(self, title, count, tone, icon_name, description, callback):
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
@@ -1416,8 +1933,10 @@ class AdminHomeScreen(MDScreen):
             padding=[dp(12), dp(10), dp(12), dp(10)],
             spacing=dp(2),
             radius=[dp(12)],
-            elevation=1,
+            elevation=2,
             md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            line_color=tokens.get("divider", [0, 0, 0, 0.12]),
+            line_width=1,
             hover_accent_color=accent,
             hover_bg_mix=0.10,
             hover_line_mix=0.26,
@@ -1427,7 +1946,7 @@ class AdminHomeScreen(MDScreen):
 
         header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))
         icon_chip = MDCard(size_hint=(None, None), size=(dp(22), dp(22)), radius=[dp(8)], elevation=0, md_bg_color=[accent[0], accent[1], accent[2], 0.14])
-        icon_label = MDIcon(icon=icon_name, halign="center", valign="middle")
+        icon_label = MDIcon(icon=icon_name, icon_size=dp(17), halign="center", valign="middle")
         icon_label.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         _set_label_text_color(icon_label, accent)
         icon_chip.add_widget(icon_label)
@@ -1450,6 +1969,90 @@ class AdminHomeScreen(MDScreen):
         card.add_widget(description_label)
         return card
 
+
+    def _render_hero_highlights(self, snapshot):
+        """Pills elegantes de destaque no hero (sem dropdown)."""
+        strip = self.ids.get("hero_highlights_strip") if self.ids else None
+        if strip is None:
+            return
+        strip.clear_widgets()
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        insights = []
+        if isinstance(snapshot, dict):
+            insights = list(snapshot.get("insights") or snapshot.get("highlights") or [])
+
+        # Fallback: construir destaques a partir do resumo/alertas
+        if not insights:
+            summary = (snapshot or {}).get("summary") or {}
+            alerts = (snapshot or {}).get("alerts") or {}
+            counts = alerts.get("counts") or {}
+            top = (snapshot or {}).get("top_products") or []
+            if counts.get("expired"):
+                insights.append({"title": f"{int(counts.get('expired'))} vencidos", "icon": "calendar-remove", "tone": "danger"})
+            if counts.get("critical_stock"):
+                insights.append({"title": f"{int(counts.get('critical_stock'))} stock crítico", "icon": "alert", "tone": "warning"})
+            if summary.get("revenue_today") not in (None, 0, 0.0):
+                try:
+                    insights.append({"title": _format_mzn(summary.get("revenue_today")), "icon": "cash", "tone": "success"})
+                except Exception:
+                    pass
+            if top:
+                name = top[0].get("name") if isinstance(top[0], dict) else str(top[0])
+                insights.append({"title": str(name)[:22], "icon": "star", "tone": "info"})
+
+        if not insights:
+            # Pill neutra
+            insights = [{"title": "Sem destaques", "icon": "information-outline", "tone": "info"}]
+
+        tone_map = {
+            "danger": tokens.get("danger", [0.9, 0.3, 0.3, 1]),
+            "warning": tokens.get("warning", [0.95, 0.7, 0.2, 1]),
+            "success": tokens.get("success", [0.3, 0.75, 0.45, 1]),
+            "info": tokens.get("info", [0.35, 0.6, 0.95, 1]),
+            "primary": tokens.get("primary", [0.2, 0.45, 0.8, 1]),
+        }
+
+        for entry in insights[:2]:
+            if isinstance(entry, dict):
+                title = entry.get("title") or entry.get("label") or entry.get("text") or "Destaque"
+                icon = entry.get("icon") or "star-outline"
+                tone = entry.get("tone") or "primary"
+            else:
+                title, icon, tone = str(entry), "star-outline", "primary"
+            accent = list(tone_map.get(tone, tone_map["primary"]))
+            pill = MDCard(
+                orientation="horizontal",
+                size_hint=(1, None),
+                height=dp(34),
+                padding=[dp(8), dp(4), dp(10), dp(4)],
+                spacing=dp(6),
+                radius=[dp(17)],
+                elevation=0,
+                md_bg_color=[1, 1, 1, 0.14],
+            )
+            ic = MDIcon(
+                icon=icon,
+                font_size=dp(15),
+                size_hint_x=None,
+                width=dp(18),
+                theme_text_color="Custom",
+                text_color=accent,
+                pos_hint={"center_y": 0.5},
+            )
+            lbl = MDLabel(
+                text=str(title)[:28],
+                font_size=dp(11),
+                bold=True,
+                shorten=True,
+                shorten_from="right",
+                theme_text_color="Custom",
+                text_color=[1, 1, 1, 0.95],
+                valign="middle",
+            )
+            pill.add_widget(ic)
+            pill.add_widget(lbl)
+            strip.add_widget(pill)
+
     def _render_insights(self, snapshot):
         grid = self.ids.get("insights_grid")
         meta_label = self.ids.get("insights_meta_label")
@@ -1465,9 +2068,17 @@ class AdminHomeScreen(MDScreen):
             return
         self._insights_render_signature = signature
         grid.clear_widgets()
+        panel_grid = self.ids.get("insights_panel_grid")
+        panel_meta = self.ids.get("insights_panel_meta")
+        if panel_grid is not None:
+            panel_grid.clear_widgets()
+        if panel_meta is not None and meta_label is not None:
+            panel_meta.text = meta_label.text
 
         for title, text, icon_name, tone, callback in insights:
             grid.add_widget(self._build_insight_card(title, text, icon_name, tone, callback))
+            if panel_grid is not None:
+                panel_grid.add_widget(self._build_insight_card(title, text, icon_name, tone, callback))
 
     def _build_insight_specs(self, snapshot):
         summary = snapshot.get("summary") or {}
@@ -1511,8 +2122,10 @@ class AdminHomeScreen(MDScreen):
             padding=[dp(12), dp(10), dp(12), dp(10)],
             spacing=dp(2),
             radius=[dp(12)],
-            elevation=1,
+            elevation=2,
             md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+            line_color=tokens.get("divider", [0, 0, 0, 0.12]),
+            line_width=1,
         )
         if callback:
             card = Factory.HomeButtonCard(
@@ -1528,7 +2141,7 @@ class AdminHomeScreen(MDScreen):
 
         header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(22), spacing=dp(6))
         icon_chip = MDCard(size_hint=(None, None), size=(dp(22), dp(22)), radius=[dp(8)], elevation=0, md_bg_color=[accent[0], accent[1], accent[2], 0.14])
-        icon_label = MDIcon(icon=icon_name, halign="center", valign="middle")
+        icon_label = MDIcon(icon=icon_name, icon_size=dp(17), halign="center", valign="middle")
         icon_label.bind(size=lambda inst, value: setattr(inst, "text_size", value))
         _set_label_text_color(icon_label, accent)
         icon_chip.add_widget(icon_label)
@@ -1712,6 +2325,89 @@ class AdminHomeScreen(MDScreen):
 
         return "\n".join(lines)
 
+    def _build_sales_metric(self, label, value, accent):
+        """Pequeno cartão de KPI reutilizado pelos resumos de faturação."""
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        card = MDCard(
+            orientation="vertical", padding=[dp(10), dp(7), dp(10), dp(7)], spacing=dp(2),
+            radius=[dp(12)], elevation=0,
+            md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+        )
+        card.add_widget(MDLabel(
+            text=label.upper(), font_style="Caption", font_size=dp(10),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1]), shorten=True,
+        ))
+        card.add_widget(MDLabel(
+            text=value, bold=True, font_size=dp(15), theme_text_color="Custom",
+            text_color=accent, shorten=True, shorten_from="right",
+        ))
+        return card
+
+    def _build_today_sales_content(self, day_label, summary, revenue_only=False):
+        """Resumo visual, legível sem depender de blocos longos de texto."""
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        primary = tokens.get("primary", [0.10, 0.35, 0.65, 1])
+        success = tokens.get("success", [0.12, 0.56, 0.35, 1])
+        content = MDBoxLayout(
+            orientation="vertical", spacing=dp(10), padding=[dp(8), dp(4), dp(8), dp(4)],
+            # Ocupa a área do diálogo e deixa o espaço excedente no fim,
+            # mantendo o resumo imediatamente abaixo do título.
+            size_hint_y=1,
+        )
+        content.add_widget(MDLabel(
+            text=f"Atualizado para {day_label}", font_style="Caption", size_hint_y=None, height=dp(20),
+            theme_text_color="Custom",
+            text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1]),
+        ))
+        metrics = MDBoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(66))
+        metrics.add_widget(self._build_sales_metric("Faturação líquida", _format_mzn(summary.get("net_total") or summary.get("revenue_today") or 0), success))
+        metrics.add_widget(self._build_sales_metric("Vendas", str(int(summary.get("total_sales") or summary.get("sales_today_count") or 0)), primary))
+        metrics.add_widget(self._build_sales_metric("Itens", _format_compact_qty(summary.get("total_qty") or 0), primary))
+        content.add_widget(metrics)
+
+        details = []
+        refunded = float(summary.get("refunded_total") or 0)
+        if refunded:
+            details.append(f"Estornos processados: {_format_mzn(refunded)}")
+        top_product = summary.get("top_product") or {}
+        if top_product:
+            details.append(f"Produto com maior faturação: {top_product.get('name')} · {_format_mzn(top_product.get('net_total') or 0)}")
+        if summary.get("peak_hour"):
+            details.append(f"Período de maior movimento: {summary['peak_hour']}")
+        if not details:
+            details.append("Acompanhe a evolução das vendas no histórico completo.")
+
+        insight = MDCard(
+            orientation="vertical", padding=[dp(12), dp(10), dp(12), dp(10)], spacing=dp(5),
+            size_hint_y=None, height=dp(92 if len(details) > 1 else 70), radius=[dp(12)], elevation=0,
+            md_bg_color=tokens.get("surface", tokens.get("card_alt", [1, 1, 1, 1])),
+        )
+        insight.add_widget(MDLabel(
+            text="VISÃO RÁPIDA", bold=True, font_style="Caption", size_hint_y=None, height=dp(18),
+            theme_text_color="Custom", text_color=primary,
+        ))
+        insight.add_widget(MDLabel(
+            text="\n".join(f"• {item}" for item in details), font_style="Caption",
+            theme_text_color="Custom", text_color=tokens.get("text_primary", [0.15, 0.20, 0.30, 1]),
+        ))
+        content.add_widget(insight)
+        if not revenue_only:
+            recent = summary.get("recent_sales") or []
+            recent_text = "Ainda não há vendas registadas hoje."
+            if recent:
+                sale = recent[0]
+                recent_text = f"Última venda · {sale.get('time')} · {sale.get('product')} · {_format_mzn(sale.get('net_total') or 0)}"
+            content.add_widget(MDLabel(
+                text=recent_text, font_style="Caption", size_hint_y=None, height=dp(26),
+                shorten=True, shorten_from="right", theme_text_color="Custom",
+                text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1]),
+            ))
+        # Espaçador no final: em BoxLayout vertical mantém todos os KPIs
+        # ancorados ao topo mesmo quando o diálogo é alto.
+        content.add_widget(MDBoxLayout())
+        return content
+
     def _open_today_sales_history(self, dialog=None):
         if dialog is not None:
             try:
@@ -1750,12 +2446,14 @@ class AdminHomeScreen(MDScreen):
 
         summary = self._build_today_sales_summary(rows)
         dialog = MDDialog(
-            title="Resumo das Vendas de Hoje",
-            text=self._build_today_sales_dialog_text(day_label, summary),
+            title="Vendas de hoje",
+            type="custom",
+            content_cls=self._build_today_sales_content(day_label, summary),
+            size_hint=(0.78, 0.72),
             buttons=[
                 MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
                 MDRaisedButton(
-                    text="VER HISTORICO",
+                    text="VER HISTÓRICO",
                     on_release=lambda _x: self._open_today_sales_history(dialog),
                 ),
             ],
@@ -1892,8 +2590,6 @@ class AdminHomeScreen(MDScreen):
             messages.append(f"{name}: vencido em {expiry_date}.")
             detail_lines.append(f"{name}: stock {qty}; validade {expiry_date}.")
 
-        first = items[0] if items else {}
-
         return {
             "kind": "expiry",
             "expiry_level": "vencido",
@@ -1913,7 +2609,10 @@ class AdminHomeScreen(MDScreen):
                 ]),
             ],
             "action_buttons": [
-                self._action_button("Registar perda", lambda item=first: self.open_losses_module(product_item=item, loss_type_label="EXPIRADO", loss_type_code="EXPIRED")),
+                self._action_button(
+                    f"Registar {len(items)} perda(s)" if len(items) > 1 else "Registar perda",
+                    lambda rows=list(items): self.open_losses_module(expired_items=rows),
+                ),
             ],
         }
 
@@ -2068,7 +2767,9 @@ class AdminHomeScreen(MDScreen):
                     ("Alerta identificado", [description]),
                     ("Orientação", ["Revise o movimento e a quantidade registada antes de tomar uma decisão."]),
                 ],
-                "action_buttons": [],
+                "action_buttons": [
+                    self._action_button("VERIFICAR PERDAS", self.open_losses_module),
+                ],
             })
         return banners
 
@@ -2267,12 +2968,17 @@ class AdminHomeScreen(MDScreen):
         self._dismiss_today_sales_dialog()
         summary = (self._snapshot or {}).get("summary") or {}
         today_label = datetime.now().strftime("%d/%m/%Y")
-        revenue = _format_mzn(summary.get("revenue_today") or 0.0)
         dialog = MDDialog(
-            title="Faturacao de Hoje",
-            text=f"Data: {today_label}\nFaturacao: {revenue}",
+            title="Faturação de hoje",
+            type="custom",
+            content_cls=self._build_today_sales_content(today_label, summary, revenue_only=True),
+            size_hint=(0.70, 0.60),
             buttons=[
                 MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                MDRaisedButton(
+                    text="VER VENDAS",
+                    on_release=lambda _x: self.open_today_sales(),
+                ),
             ],
         )
         self._today_sales_dialog = dialog
@@ -2301,6 +3007,10 @@ class AdminHomeScreen(MDScreen):
         Thread(target=worker, daemon=True).start()
 
     def open_pending_approvals(self, *args):
+        # Fecha o painel de atalhos antes de abrir o fluxo. Assim o diálogo de
+        # aprovação recebe o clique e o comportamento volta a ser o mesmo da
+        # interface anterior à migração.
+        self.quick_actions_open = False
         dialog, token = self._open_home_action_loader(
             "Aprovações pendentes",
             "A carregar movimentos que aguardam validação...",
@@ -2350,6 +3060,7 @@ class AdminHomeScreen(MDScreen):
         Thread(target=worker, daemon=True).start()
 
     def open_operational_alerts(self, *args):
+        self.quick_actions_open = False
         self.show_operational_alerts_banner()
 
     def _open_home_action_loader(self, title, message):
@@ -2366,7 +3077,22 @@ class AdminHomeScreen(MDScreen):
         dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text="FECHAR", on_release=lambda *_args: dialog.dismiss())],
+            buttons=[
+                MDIconButton(
+                    icon="close",
+                    size_hint=(None, None),
+                    size=(dp(38), dp(38)),
+                    radius=[dp(19)],
+                    elevation=0,
+                    md_bg_color=(getattr(App.get_running_app(), "theme_tokens", {}) or {}).get("card_alt", [0.95, 0.96, 0.98, 1]),
+                    line_color=(getattr(App.get_running_app(), "theme_tokens", {}) or {}).get("divider", [0, 0, 0, 0.12]),
+                    line_width=1,
+                    theme_text_color="Custom",
+                    text_color=(getattr(App.get_running_app(), "theme_tokens", {}) or {}).get("text_secondary", [0.35, 0.40, 0.50, 1]),
+                    tooltip_text="Fechar",
+                    on_release=lambda *_args: dialog.dismiss(),
+                ),
+            ],
         )
 
         def clear_reference(*_args):
@@ -2384,6 +3110,62 @@ class AdminHomeScreen(MDScreen):
         dialog.title = title
         dialog.text = message
 
+    def _set_home_action_content(self, dialog, token, title, content):
+        """Mostra resultados complexos em cartões, não em texto corrido."""
+        if token != self._home_action_token or self._home_action_dialog is not dialog:
+            return
+        dialog.title = title
+        dialog.text = ""
+        dialog.type = "custom"
+        dialog.content_cls = content
+        dialog.size_hint = (None, None)
+        dialog.size = (min(dp(740), Window.width * 0.86), min(dp(560), Window.height * 0.72))
+
+    def _build_loss_metric_card(self, label, value, accent):
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        card = MDCard(
+            orientation="vertical", padding=[dp(10), dp(8), dp(10), dp(8)], spacing=dp(3),
+            radius=[dp(12)], elevation=0,
+            md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+            line_color=tokens.get("divider", [0, 0, 0, 0.12]), line_width=1,
+        )
+        card.add_widget(MDLabel(text=label.upper(), font_style="Caption", font_size=dp(10), theme_text_color="Custom", text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1]), shorten=True))
+        card.add_widget(MDLabel(text=value, bold=True, font_size=dp(15), theme_text_color="Custom", text_color=accent, shorten=True, shorten_from="right"))
+        return card
+
+    def _build_loss_metrics_content(self, metrics, start_date, end_date):
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        danger = tokens.get("danger", [0.82, 0.24, 0.28, 1])
+        primary = tokens.get("primary", [0.10, 0.35, 0.65, 1])
+        content = MDBoxLayout(orientation="vertical", spacing=dp(10), padding=[dp(4), dp(4), dp(4), dp(4)])
+        content.add_widget(MDLabel(text=f"PERÍODO ANALISADO  ·  {start_date.strftime('%d/%m/%Y')} — {end_date.strftime('%d/%m/%Y')}", font_style="Caption", size_hint_y=None, height=dp(22), theme_text_color="Custom", text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])))
+        first_row = MDBoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
+        first_row.add_widget(self._build_loss_metric_card("Custo das perdas", _format_mzn(metrics.get("total_cost") or 0), danger))
+        first_row.add_widget(self._build_loss_metric_card("Movimentos", str(int(metrics.get("loss_count") or 0)), primary))
+        first_row.add_widget(self._build_loss_metric_card("Incidência", f"{float(metrics.get('loss_percentage') or 0):.2f}%", danger))
+        content.add_widget(first_row)
+        second_row = MDBoxLayout(size_hint_y=None, height=dp(68), spacing=dp(8))
+        second_row.add_widget(self._build_loss_metric_card("Vendas no período", _format_mzn(metrics.get("total_sales") or 0), primary))
+        second_row.add_widget(self._build_loss_metric_card("Média por movimento", _format_mzn(metrics.get("avg_loss_value") or 0), primary))
+        second_row.add_widget(MDBoxLayout())
+        content.add_widget(second_row)
+        content.add_widget(MDLabel(text="DISTRIBUIÇÃO POR TIPO", bold=True, font_style="Caption", size_hint_y=None, height=dp(22), theme_text_color="Custom", text_color=primary))
+        types_box = MDBoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None, padding=[0, 0, dp(4), 0])
+        types_box.bind(minimum_height=types_box.setter("height"))
+        by_type = metrics.get("by_type") or {}
+        if not by_type:
+            types_box.add_widget(MDLabel(text="Ainda não há movimentos no período selecionado.", font_style="Caption", size_hint_y=None, height=dp(36), theme_text_color="Custom", text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])))
+        for loss_type, values in list(by_type.items())[:8]:
+            row = MDCard(orientation="horizontal", size_hint_y=None, height=dp(48), padding=[dp(12), dp(6), dp(12), dp(6)], radius=[dp(10)], elevation=0, md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]))
+            row.add_widget(MDLabel(text=str(loss_type or "OUTRA").replace("_", " ").title(), bold=True, font_style="Caption", theme_text_color="Custom", text_color=tokens.get("text_primary", [0.15, 0.20, 0.30, 1])))
+            row.add_widget(MDLabel(text=f"{int(values.get('count') or 0)} movimento(s)", font_style="Caption", halign="right", size_hint_x=0.34, theme_text_color="Custom", text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])))
+            row.add_widget(MDLabel(text=_format_mzn(values.get("total_cost") or 0), bold=True, font_style="Caption", halign="right", size_hint_x=0.30, theme_text_color="Custom", text_color=danger))
+            types_box.add_widget(row)
+        scroll = ScrollView(do_scroll_x=False, bar_width=dp(4))
+        scroll.add_widget(types_box)
+        content.add_widget(scroll)
+        return content
+
     def _show_home_loss_metrics(self, metrics, error, start_date, end_date, dialog, token):
         if token != self._home_action_token or self._home_action_dialog is not dialog:
             return
@@ -2392,6 +3174,14 @@ class AdminHomeScreen(MDScreen):
             return
 
         metrics = metrics or {}
+        self._set_home_action_content(
+            dialog,
+            token,
+            "Métricas de perdas",
+            self._build_loss_metrics_content(metrics, start_date, end_date),
+        )
+        return
+
         loss_count = int(metrics.get("loss_count") or 0)
         total_cost = _format_mzn(metrics.get("total_cost") or 0)
         total_sales = _format_mzn(metrics.get("total_sales") or 0)
@@ -2483,13 +3273,22 @@ class AdminHomeScreen(MDScreen):
             actions = MDBoxLayout(size_hint_y=None, height=dp(30), spacing=dp(8))
             approve = MDRaisedButton(
                 text="APROVAR",
+                size_hint_x=None,
+                width=dp(104),
+                radius=[dp(9)],
+                elevation=1,
                 md_bg_color=tokens.get("success", [0.2, 0.7, 0.3, 1]),
                 on_release=lambda _x, mid=movement_id: self._resolve_home_pending_approval(mid, True),
             )
             reject = MDFlatButton(
                 text="REJEITAR",
+                size_hint_x=None,
+                width=dp(104),
+                radius=[dp(9)],
                 theme_text_color="Custom",
                 text_color=tokens.get("danger", [0.9, 0.3, 0.3, 1]),
+                line_color=tokens.get("danger", [0.9, 0.3, 0.3, 1]),
+                line_width=1,
                 on_release=lambda _x, mid=movement_id: self._resolve_home_pending_approval(mid, False),
             )
             actions.add_widget(approve)
@@ -2513,10 +3312,27 @@ class AdminHomeScreen(MDScreen):
             buttons=[
                 MDRaisedButton(
                     text=f"APROVAR TODAS ({len(pending)})",
+                    size_hint_x=None,
+                    width=dp(194),
+                    radius=[dp(10)],
+                    elevation=1,
                     md_bg_color=tokens.get("success", [0.2, 0.7, 0.3, 1]),
                     on_release=lambda *_args: self._confirm_home_approve_all(len(pending)),
                 ),
-                MDFlatButton(text="FECHAR", on_release=lambda *_args: dialog.dismiss()),
+                MDIconButton(
+                    icon="close",
+                    size_hint=(None, None),
+                    size=(dp(38), dp(38)),
+                    radius=[dp(19)],
+                    elevation=0,
+                    md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+                    line_color=tokens.get("divider", [0, 0, 0, 0.12]),
+                    line_width=1,
+                    theme_text_color="Custom",
+                    text_color=tokens.get("text_secondary", [0.35, 0.40, 0.50, 1]),
+                    tooltip_text="Fechar aprovações",
+                    on_release=lambda *_args: dialog.dismiss(),
+                ),
             ],
         )
 
@@ -2948,13 +3764,38 @@ class AdminHomeScreen(MDScreen):
             0,
         )
 
-    def open_losses_module(self, *args, product_item=None, product_id=None, query=None, loss_type_label=None, loss_type_code=None):
+    def open_losses_module(self, *args, product_item=None, product_id=None, query=None, loss_type_label=None, loss_type_code=None, expired_items=None):
         if not self.manager:
             return
         screen = self._set_back_target("losses", "admin_home")
         if not screen:
             return
         self.manager.current = "losses"
+
+        if expired_items and hasattr(screen, "open_expired_batch_modal"):
+            # Lote de vencidos: usa os itens ja identificados pelo painel,
+            # sem depender de uma nova consulta que pode filtrar produtos
+            # com stock zerado.
+            mapped_items = [
+                {
+                    "id": item.get("product_id") or item.get("id"),
+                    "name": self._alert_item_name(item),
+                    "stock": item.get("stock"),
+                    "price": item.get("price") or 0,
+                    "cost": item.get("cost") or 0,
+                    "barcode": item.get("barcode"),
+                    "is_weight": bool(item.get("is_weight")),
+                    "expiry_date": item.get("date") or item.get("expiry_date"),
+                    "status": "EXPIRADO",
+                }
+                for item in expired_items
+            ]
+            Clock.schedule_once(
+                lambda dt: screen.open_expired_batch_modal(preloaded_items=mapped_items),
+                0.1,
+            )
+            return
+
         resolved_id, resolved_query = self._resolve_action_lookup(
             product_item=product_item,
             product_id=product_id,
@@ -2983,6 +3824,545 @@ class AdminHomeScreen(MDScreen):
         self.manager.current = "settings"
         if screen and hasattr(screen, "add_user"):
             Clock.schedule_once(lambda dt: screen.add_user(), 0)
+
+
+    # ------------------------------------------------------------------
+    # Painéis flutuantes (Resumo / Acessos / Destaques)
+    # ------------------------------------------------------------------
+
+    def close_all_panels(self, *_args):
+        """Fecha menus de secção e overlays legados."""
+        for attr in ("_summary_menu", "_access_menu", "_insights_menu"):
+            menu = getattr(self, attr, None)
+            if menu is not None:
+                try:
+                    menu.dismiss()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        backdrop = self.ids.get("panel_backdrop") if self.ids else None
+        if backdrop is not None:
+            backdrop.opacity = 0
+            backdrop.size = (0, 0)
+            backdrop.pos = (-10000, -10000)
+        for pid in ("summary_panel", "access_panel", "insights_panel"):
+            panel = self.ids.get(pid) if self.ids else None
+            if panel is None:
+                continue
+            Animation.cancel_all(panel)
+            panel.opacity = 0
+            panel.size = (0, 0)
+            panel.pos = (-10000, -10000)
+            panel.disabled = True
+        self._sync_section_button_styles(None)
+
+    def _dismiss_section_menus(self):
+        menu = getattr(self, "_section_dropdown", None)
+        if menu is not None:
+            try:
+                menu.dismiss()
+            except Exception:
+                pass
+            self._section_dropdown = None
+        for attr in ("_summary_menu", "_access_menu", "_insights_menu"):
+            old = getattr(self, attr, None)
+            if old is not None:
+                try:
+                    old.dismiss()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+    def _format_money_short(self, value):
+        try:
+            return format_money(float(value or 0))
+        except Exception:
+            try:
+                return format_display_value(value)
+            except Exception:
+                return str(value or "0")
+
+    def _bind_section_buttons(self, *_args):
+        mapping = (
+            ("hero_summary_btn", self.show_summary_menu),
+            ("hero_access_btn", self.show_access_menu),
+        )
+        for btn_id, handler in mapping:
+            btn = self.ids.get(btn_id) if self.ids else None
+            if btn is None:
+                continue
+            def _make(h, b):
+                return lambda *_a, _h=h, _b=b: _h(_b)
+            try:
+                btn.bind(on_release=_make(handler, btn))
+            except Exception:
+                pass
+
+    def _tone_color(self, tone):
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        key = {
+            "primary": "primary",
+            "success": "success",
+            "warning": "warning",
+            "danger": "danger",
+            "info": "info",
+        }.get(tone, "primary")
+        return list(tokens.get(key, tokens.get("primary", [0.2, 0.45, 0.8, 1])))
+
+    def _build_dropdown_row(self, icon, title, subtitle, trailing, tone, callback):
+        """Linha rica no estilo das sugestões do manager."""
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        accent = self._tone_color(tone)
+        text_primary = list(tokens.get("text_primary", [0.9, 0.9, 0.9, 1]))
+        text_secondary = list(tokens.get("text_secondary", [0.6, 0.65, 0.7, 1]))
+        divider = list(tokens.get("divider", [1, 1, 1, 0.08]))
+        card_alt = list(tokens.get("card_alt", tokens.get("surface_alt", [0.12, 0.14, 0.18, 1])))
+
+        row = MDCard(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(56),
+            padding=[dp(10), dp(8), dp(12), dp(8)],
+            spacing=dp(10),
+            radius=[dp(12)],
+            elevation=0,
+            md_bg_color=card_alt,
+            ripple_behavior=True,
+        )
+        try:
+            row.line_color = divider
+            row.line_width = 1
+        except Exception:
+            pass
+
+        # Ícone
+        icon_wrap = MDCard(
+            size_hint=(None, None),
+            size=(dp(36), dp(36)),
+            radius=[dp(10)],
+            elevation=0,
+            md_bg_color=[accent[0], accent[1], accent[2], 0.16],
+            pos_hint={"center_y": 0.5},
+        )
+        icon_w = MDIcon(
+            icon=icon or "circle-outline",
+            font_size=dp(18),
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=accent,
+        )
+        icon_w.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        icon_wrap.add_widget(icon_w)
+        row.add_widget(icon_wrap)
+
+        # Título + subtítulo
+        mid = MDBoxLayout(orientation="vertical", spacing=dp(1), size_hint_x=1)
+        title_lbl = MDLabel(
+            text=str(title or ""),
+            bold=True,
+            font_size=dp(13),
+            size_hint_y=None,
+            height=dp(20),
+            shorten=True,
+            shorten_from="right",
+            theme_text_color="Custom",
+            text_color=text_primary,
+        )
+        sub_lbl = MDLabel(
+            text=str(subtitle or ""),
+            font_size=dp(11),
+            size_hint_y=None,
+            height=dp(16),
+            shorten=True,
+            shorten_from="right",
+            theme_text_color="Custom",
+            text_color=text_secondary,
+        )
+        mid.add_widget(title_lbl)
+        mid.add_widget(sub_lbl)
+        row.add_widget(mid)
+
+        if trailing:
+            trail = MDLabel(
+                text=str(trailing),
+                bold=True,
+                font_size=dp(13),
+                size_hint_x=None,
+                width=dp(96),
+                halign="right",
+                valign="middle",
+                theme_text_color="Custom",
+                text_color=accent,
+            )
+            trail.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+            row.add_widget(trail)
+
+        if callback:
+            def _on_row_touch(inst, touch, cb=callback):
+                if inst.collide_point(*touch.pos) and touch.is_mouse_scrolling is False:
+                    if touch.grab_current is None:
+                        touch.grab(inst)
+                        return True
+                return False
+            def _on_row_up(inst, touch, cb=callback):
+                if touch.grab_current is inst:
+                    touch.ungrab(inst)
+                    if inst.collide_point(*touch.pos):
+                        cb()
+                    return True
+                return False
+            row.bind(on_touch_down=_on_row_touch, on_touch_up=_on_row_up)
+
+        return row
+
+    def _open_rich_dropdown(self, caller, title, rows, active_key=None, width=dp(340)):
+        """
+        Dropdown visual no estilo 'Sugestões de produtos':
+        card elevado, cabeçalho, linhas com ícone + título + subtítulo + valor.
+        """
+        self._dismiss_section_menus()
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        card_bg = list(tokens.get("card", [0.11, 0.13, 0.16, 1]))
+        text_primary = list(tokens.get("text_primary", [1, 1, 1, 1]))
+        text_secondary = list(tokens.get("text_secondary", [0.65, 0.7, 0.75, 1]))
+        divider = list(tokens.get("divider", [1, 1, 1, 0.1]))
+
+        # Modal transparente que fecha ao clicar fora
+        modal = ModalView(
+            auto_dismiss=True,
+            size_hint=(None, None),
+            background="",
+            background_color=(0, 0, 0, 0.35),
+            overlay_color=(0, 0, 0, 0.35),
+        )
+        # Tamanho do modal = ecrã inteiro para capturar clique fora
+        modal.size = (Window.width, Window.height)
+        modal.pos = (0, 0)
+
+        try:
+            modal.attach_to = None
+        except Exception:
+            pass
+
+        panel_h = dp(40) + len(rows) * dp(60) + dp(12)
+        panel_h = min(panel_h, min(dp(420), Window.height * 0.78))
+        panel_w = min(max(float(width), dp(280)), Window.width * 0.92)
+
+        # Sempre centrado na página
+        panel_x = (Window.width - panel_w) / 2.0
+        panel_y = (Window.height - panel_h) / 2.0
+
+        panel = MDCard(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(panel_w, panel_h),
+            radius=[dp(14)],
+            elevation=8,
+            padding=[dp(10), dp(8), dp(10), dp(10)],
+            spacing=dp(6),
+            md_bg_color=card_bg,
+            pos=(panel_x, panel_y),
+        )
+        try:
+            panel.line_color = divider
+            panel.line_width = 1
+        except Exception:
+            pass
+
+        # Cabeçalho
+        header = MDBoxLayout(size_hint_y=None, height=dp(28), spacing=dp(6))
+        header_lbl = MDLabel(
+            text=str(title),
+            font_size=dp(13),
+            bold=True,
+            theme_text_color="Custom",
+            text_color=text_secondary,
+            valign="middle",
+        )
+        header.add_widget(header_lbl)
+        panel.add_widget(header)
+
+        # Divisor
+        sep = MDBoxLayout(size_hint_y=None, height=dp(1))
+        from kivy.graphics import Color, Rectangle
+        with sep.canvas:
+            Color(rgba=divider)
+            sep._sep_rect = Rectangle(pos=sep.pos, size=sep.size)
+        sep.bind(
+            pos=lambda inst, val: setattr(inst._sep_rect, "pos", val),
+            size=lambda inst, val: setattr(inst._sep_rect, "size", val),
+        )
+        panel.add_widget(sep)
+
+        # Lista com scroll se necessário
+        scroll = ScrollView(
+            size_hint_y=1,
+            do_scroll_x=False,
+            bar_width=dp(4),
+        )
+        box = MDBoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(6),
+            padding=[0, dp(4), 0, 0],
+        )
+        box.bind(minimum_height=box.setter("height"))
+
+        def _wrap_cb(cb):
+            def _run(*_a):
+                self._dismiss_section_menus()
+                if callable(cb):
+                    try:
+                        cb()
+                    except Exception:
+                        pass
+            return _run
+
+        for row in rows:
+            box.add_widget(
+                self._build_dropdown_row(
+                    icon=row.get("icon"),
+                    title=row.get("title"),
+                    subtitle=row.get("subtitle"),
+                    trailing=row.get("trailing"),
+                    tone=row.get("tone") or "primary",
+                    callback=_wrap_cb(row.get("on_release")),
+                )
+            )
+
+        scroll.add_widget(box)
+        panel.add_widget(scroll)
+
+        # Container fullscreen — FloatLayout preserva pos absoluta do card
+        host = FloatLayout(size_hint=(1, 1))
+        panel.size_hint = (None, None)
+        panel.pos_hint = {}
+        panel.pos = (panel_x, panel_y)
+        host.add_widget(panel)
+        modal.add_widget(host)
+
+        def _on_touch(modal_inst, touch):
+            # Clique fora do panel fecha
+            if not panel.collide_point(*touch.pos):
+                modal_inst.dismiss()
+                return True
+            return False
+
+        modal.bind(on_touch_down=_on_touch)
+
+        def _on_dismiss(*_a):
+            self._section_dropdown = None
+            self._sync_section_button_styles(None)
+
+        modal.bind(on_dismiss=_on_dismiss)
+        self._section_dropdown = modal
+        modal.open()
+        self._sync_section_button_styles(active_key)
+
+        # Entrada suave
+        panel.opacity = 0
+        Animation(opacity=1, d=0.16, t="out_quad").start(panel)
+
+    def show_summary_menu(self, caller):
+        snap = getattr(self, "_snapshot", None) or {}
+        summary = (snap.get("summary") or {}) if isinstance(snap, dict) else {}
+
+        sales = self._format_money_short(summary.get("sales_total") or summary.get("today_sales") or 0)
+        tickets = summary.get("sales_count") or summary.get("tickets") or 0
+        stock_alerts = summary.get("critical_stock") or summary.get("stock_alerts") or 0
+        losses = self._format_money_short(summary.get("losses_total") or summary.get("losses") or 0)
+
+        rows = [
+            {
+                "icon": "cash-multiple",
+                "title": "Vendas de hoje",
+                "subtitle": "Total faturado no dia",
+                "trailing": sales,
+                "tone": "success",
+            },
+            {
+                "icon": "receipt-text-outline",
+                "title": "Tickets",
+                "subtitle": "Vendas concluídas",
+                "trailing": str(tickets),
+                "tone": "info",
+            },
+            {
+                "icon": "alert-outline",
+                "title": "Stock crítico",
+                "subtitle": "Produtos a repor",
+                "trailing": str(stock_alerts),
+                "tone": "warning",
+            },
+            {
+                "icon": "trending-down",
+                "title": "Perdas",
+                "subtitle": "Valor registado",
+                "trailing": losses,
+                "tone": "danger",
+            },
+            {
+                "icon": "refresh",
+                "title": "Atualizar painel",
+                "subtitle": "Recarregar indicadores",
+                "trailing": "",
+                "tone": "primary",
+                "on_release": self.refresh_home,
+            },
+        ]
+        self._open_rich_dropdown(caller, "Resumo do dia", rows, active_key="summary_panel", width=dp(360))
+
+    def show_access_menu(self, caller):
+        rows = [
+            {
+                "icon": "package-variant",
+                "title": "Produtos",
+                "subtitle": "Catálogo e preços",
+                "trailing": "Abrir",
+                "tone": "primary",
+                "on_release": self.go_to_products,
+            },
+            {
+                "icon": "package-variant-plus",
+                "title": "Reposição",
+                "subtitle": "Entrada de stock",
+                "trailing": "Abrir",
+                "tone": "warning",
+                "on_release": self.open_stock_module,
+            },
+            {
+                "icon": "alert-circle-outline",
+                "title": "Perdas",
+                "subtitle": "Quebras e ajustes",
+                "trailing": "Abrir",
+                "tone": "danger",
+                "on_release": self.open_losses_module,
+            },
+            {
+                "icon": "chart-box-outline",
+                "title": "Relatórios",
+                "subtitle": "PDFs e análises",
+                "trailing": "Abrir",
+                "tone": "info",
+                "on_release": self.open_reports,
+            },
+            {
+                "icon": "account-key-outline",
+                "title": "Utilizadores",
+                "subtitle": "Acessos e permissões",
+                "trailing": "Abrir",
+                "tone": "primary",
+                "on_release": self.open_users_module,
+            },
+            {
+                "icon": "cog-outline",
+                "title": "Definições",
+                "subtitle": "Sistema e preferências",
+                "trailing": "Abrir",
+                "tone": "primary",
+                "on_release": self.go_to_settings,
+            },
+        ]
+        self._open_rich_dropdown(caller, "Acessos rápidos", rows, active_key="access_panel", width=dp(340))
+
+    def show_insights_menu(self, caller):
+        snap = getattr(self, "_snapshot", None) or {}
+        insights = []
+        if isinstance(snap, dict):
+            insights = snap.get("insights") or snap.get("highlights") or []
+
+        rows = []
+        if not insights:
+            rows.append(
+                {
+                    "icon": "information-outline",
+                    "title": "Sem destaques",
+                    "subtitle": "Os indicadores aparecem aqui",
+                    "trailing": "",
+                    "tone": "info",
+                }
+            )
+        else:
+            tones = ("primary", "success", "warning", "info", "danger")
+            for idx, entry in enumerate(list(insights)[:8]):
+                if isinstance(entry, dict):
+                    title = entry.get("title") or entry.get("label") or "Destaque"
+                    subtitle = entry.get("subtitle") or entry.get("text") or entry.get("detail") or ""
+                    icon = entry.get("icon") or "star-outline"
+                    trailing = entry.get("value") or entry.get("trailing") or ""
+                else:
+                    title = str(entry)
+                    subtitle = ""
+                    icon = "star-outline"
+                    trailing = ""
+                rows.append(
+                    {
+                        "icon": icon,
+                        "title": str(title)[:48],
+                        "subtitle": str(subtitle)[:56],
+                        "trailing": str(trailing)[:16] if trailing else "",
+                        "tone": tones[idx % len(tones)],
+                    }
+                )
+
+        rows.append(
+            {
+                "icon": "refresh",
+                "title": "Atualizar",
+                "subtitle": "Recarregar destaques",
+                "trailing": "",
+                "tone": "primary",
+                "on_release": self.refresh_home,
+            }
+        )
+        self._open_rich_dropdown(caller, "Destaques", rows, active_key="insights_panel", width=dp(360))
+
+    def _menu_action(self, menu_attr, callback):
+        self._dismiss_section_menus()
+        if callable(callback):
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def _sync_section_button_styles(self, active_panel_id):
+        mapping = {
+            "summary_panel": "hero_summary_btn",
+            "access_panel": "hero_access_btn",
+        }
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        on_primary = list(tokens.get("on_primary", [1, 1, 1, 1]))
+        primary = list(tokens.get("primary", [0.10, 0.35, 0.65, 1]))
+        for panel_id, btn_id in mapping.items():
+            btn = self.ids.get(btn_id) if self.ids else None
+            if btn is None:
+                continue
+            active = panel_id == active_panel_id
+            try:
+                if active:
+                    btn.md_bg_color = on_primary
+                    btn.text_color = primary
+                else:
+                    btn.md_bg_color = [1, 1, 1, 0.18]
+                    btn.text_color = [1, 1, 1, 1]
+            except Exception:
+                pass
+
+    # Compatibilidade com binds antigos
+    def toggle_summary_panel(self, *_args):
+        btn = self.ids.get("hero_summary_btn") if self.ids else None
+        self.show_summary_menu(btn or self)
+
+    def toggle_access_panel(self, *_args):
+        btn = self.ids.get("hero_access_btn") if self.ids else None
+        self.show_access_menu(btn or self)
+
+    def toggle_insights_panel(self, *_args):
+        btn = self.ids.get("hero_insights_btn") if self.ids else None
+        self.show_insights_menu(btn or self)
+
+
 
     def open_user_logs(self, *args):
         if self._logs_dialog is None:

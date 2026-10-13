@@ -4,10 +4,10 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.factory import Factory
 from kivy.properties import BooleanProperty, ListProperty, NumericProperty
-from kivymd.uix.button import MDRaisedButton
-from kivymd.uix.card import MDCard
+from kivy.uix.behaviors import ButtonBehavior
+from ui.components.native_widgets import NativeButton as MDRaisedButton, NativeCard as MDCard
 
-from ui.components.tooltip_widgets import TooltipIconButton, TooltipRaisedButton
+from ui.components.tooltip_widgets import TooltipIconButton, TooltipIconTextButton, TooltipRaisedButton
 
 
 def _blend_color(base, accent, factor):
@@ -288,6 +288,12 @@ class HoverCard(HoverFeedbackBehavior, MDCard):
     pass
 
 
+class HoverButtonCard(HoverFeedbackBehavior, ButtonBehavior, MDCard):
+    """Card hover/clicável com a ordem de mixins necessária para receber toque."""
+
+    pass
+
+
 class HoverRaisedButton(HoverFeedbackBehavior, MDRaisedButton):
     pass
 
@@ -296,11 +302,17 @@ class HoverTooltipRaisedButton(HoverFeedbackBehavior, TooltipRaisedButton):
     pass
 
 
+class HoverTooltipIconTextButton(HoverFeedbackBehavior, TooltipIconTextButton):
+    pass
+
+
 class HoverTooltipIconButton(HoverFeedbackBehavior, TooltipIconButton):
     pass
 
 
 Factory.register("HoverCard", cls=HoverCard)
+Factory.register("HoverButtonCard", cls=HoverButtonCard)
 Factory.register("HoverRaisedButton", cls=HoverRaisedButton)
 Factory.register("HoverTooltipRaisedButton", cls=HoverTooltipRaisedButton)
+Factory.register("HoverTooltipIconTextButton", cls=HoverTooltipIconTextButton)
 Factory.register("HoverTooltipIconButton", cls=HoverTooltipIconButton)

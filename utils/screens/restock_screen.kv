@@ -1,359 +1,402 @@
+#:kivy 2.0
+
+<StockProductRow>:
+    orientation: "horizontal"
+    size_hint_y: None
+    height: dp(44)
+    padding: [dp(6), 0]
+    spacing: dp(4)
+    md_bg_color: app.theme_tokens.get("card_alt", [0.14, 0.16, 0.20, 1])
+    radius: [dp(8)]
+
 <RestockScreen>:
     name: "restock"
     md_bg_color: app.theme_tokens['surface']
 
     MDBoxLayout:
         orientation: "vertical"
+        spacing: 0
 
         MDTopAppBar:
             title: "Reposicao de Stock"
             md_bg_color: app.theme_tokens['primary']
             specific_text_color: app.theme_tokens['on_primary']
-            elevation: 4
-            left_action_items: [["arrow-left", lambda x: root.go_back()]]
-            right_action_items: [["refresh", lambda x: root.force_refresh()], ["history", lambda x: root.open_restock_history()]]
+            elevation: 3
+            left_action_items: [["arrow-left", lambda x: root.go_back(), "Voltar"]]
+            right_action_items: [["refresh", lambda x: root.force_refresh(), "Atualizar"], ["history", lambda x: root.open_restock_history(), "Historico"]]
 
-        ScrollView:
-            do_scroll_x: False
-            do_scroll_y: False
+        MDBoxLayout:
+            orientation: "vertical"
+            padding: [dp(12), dp(10), dp(12), dp(12)]
+            spacing: dp(10)
 
+            # --- Modo + acoes ---
             MDBoxLayout:
-                orientation: "vertical"
-                adaptive_height: True
-                padding: dp(16)
-                spacing: dp(12)
+                orientation: "horizontal"
+                size_hint_y: None
+                height: dp(42)
+                spacing: dp(8)
 
                 MDBoxLayout:
-                    orientation: "horizontal"
-                    size_hint_y: None
-                    height: dp(40)
-                    spacing: dp(8)
+                    size_hint_x: 0.48
+                    spacing: dp(6)
 
                     MDRaisedButton:
                         id: mode_in_btn
                         text: "ENTRADA"
-                        size_hint_x: 0.23
+                        size_hint_x: 0.5
                         font_size: dp(12)
+                        bold: True
+                        radius: [dp(10)]
                         on_release: root.set_mode("IN")
 
                     MDRaisedButton:
                         id: mode_out_btn
                         text: "SAIDA"
-                        size_hint_x: 0.28
+                        size_hint_x: 0.5
                         font_size: dp(12)
+                        bold: True
+                        radius: [dp(10)]
                         on_release: root.set_mode("OUT")
 
-                    MDRaisedButton:
-                        text: "MOVIMENTOS"
-                        size_hint_x: 0.44
-                        font_size: dp(12)
-                        md_bg_color: app.theme_tokens['surface_alt']
-                        text_color: app.theme_tokens['text_primary']
-                        on_release: root.open_recent_movements_modal()
-
-                MDCard:
-                    orientation: "vertical"
-                    size_hint_y: None
-                    height: dp(560)
-                    padding: [dp(12), dp(10)]
-                    spacing: dp(8)
+                MDRaisedButton:
+                    text: "VER MOVIMENTOS"
+                    size_hint_x: 0.52
+                    font_size: dp(12)
+                    bold: True
                     radius: [dp(10)]
-                    elevation: 2
-                    md_bg_color: app.theme_tokens['card']
+                    md_bg_color: app.theme_tokens['primary']
+                    text_color: app.theme_tokens['on_primary']
+                    on_release: root.open_recent_movements_modal()
+
+            # --- Tabela de produtos ---
+            MDCard:
+                orientation: "vertical"
+                size_hint_y: 1
+                padding: [dp(12), dp(10)]
+                spacing: dp(8)
+                radius: [dp(12)]
+                elevation: 1
+                md_bg_color: app.theme_tokens['card']
+
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: dp(28)
+                    spacing: dp(8)
 
                     MDLabel:
                         text: "Produtos"
                         font_style: "Subtitle1"
                         bold: True
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_primary']
+                        size_hint_x: 1
+
+                    MDLabel:
+                        id: sync_label
+                        text: ""
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+                        size_hint_x: None
+                        width: dp(120)
+                        halign: "right"
+
+                MDTextField:
+                    id: search_input
+                    hint_text: "Nome, ID ou Codigo de Barras"
+                    mode: "rectangle"
+                    size_hint_y: None
+                    height: dp(44)
+                    on_text: root.on_search(self.text)
+                    on_text_validate: root.on_search_enter()
+
+                # Cabecalho da tabela
+                MDBoxLayout:
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(30)
+                    md_bg_color: app.theme_tokens['primary']
+                    padding: [dp(6), 0]
+                    spacing: dp(4)
+                    radius: [dp(8), dp(8), 0, 0]
+
+                    MDLabel:
+                        text: "ID"
+                        size_hint_x: 0.08
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "PRODUTO"
+                        size_hint_x: 0.24
+                        halign: "left"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "STOCK"
+                        size_hint_x: 0.11
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "V/DIA"
+                        size_hint_x: 0.09
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "DIAS"
+                        size_hint_x: 0.09
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "VENC."
+                        size_hint_x: 0.13
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "ULT. ATUAL"
+                        size_hint_x: 0.14
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                    MDLabel:
+                        text: "ACAO"
+                        size_hint_x: 0.12
+                        halign: "center"
+                        bold: True
+                        font_style: "Caption"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['on_primary']
+
+                ScrollView:
+                    do_scroll_x: False
+                    size_hint_y: 1
+                    bar_width: dp(5)
+
+                    MDGridLayout:
+                        id: products_table
+                        cols: 1
                         size_hint_y: None
-                        height: dp(26)
+                        height: self.minimum_height
+                        spacing: dp(3)
+                        padding: [0, dp(2), 0, dp(2)]
+
+                # Paginacao
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: dp(40)
+                    spacing: dp(8)
+                    padding: [dp(2), 0]
+
+                    MDFlatButton:
+                        id: products_prev_btn
+                        text: "<  ANTERIOR"
+                        font_size: dp(12)
+                        on_release: root.previous_products_page()
+
+                    MDLabel:
+                        id: products_page_label
+                        text: "0 produtos"
+                        halign: "center"
+                        valign: "middle"
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens['text_secondary']
+                        bold: True
+
+                    MDFlatButton:
+                        id: products_next_btn
+                        text: "PROXIMO  >"
+                        font_size: dp(12)
+                        on_release: root.next_products_page()
+
+            # Formulario oculto (usado pelo modal)
+            MDCard:
+                id: stock_form_hidden_card
+                orientation: "vertical"
+                size_hint_y: None
+                height: 0
+                opacity: 0
+                disabled: True
+                padding: [0, 0]
+                spacing: 0
+                radius: [dp(10)]
+                elevation: 0
+                md_bg_color: app.theme_tokens['card']
+
+                MDLabel:
+                    id: form_title
+                    text: "Registo de Entrada"
+                    font_style: "Subtitle1"
+                    bold: True
+                    size_hint_y: None
+                    height: dp(26)
+
+                MDLabel:
+                    id: selected_product_label
+                    text: "Produto: --"
+                    size_hint_y: None
+                    height: dp(22)
+
+                MDLabel:
+                    id: selected_stock_label
+                    text: "Stock atual: --"
+                    size_hint_y: None
+                    height: dp(22)
+
+                MDBoxLayout:
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(52)
+                    spacing: dp(8)
 
                     MDTextField:
-                        id: search_input
-                        hint_text: "Nome, ID ou Codigo de Barras"
+                        id: qty_input
+                        hint_text: "Quantidade *"
                         mode: "rectangle"
-                        size_hint_y: None
-                        height: dp(44)
-                        on_text: root.on_search(self.text)
-                        on_text_validate: root.on_search_enter()
+                        input_filter: "float"
+                        multiline: False
+                        on_text_validate: root._advance_restock_form()
+                        text: "1"
 
-                    MDBoxLayout:
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(28)
-                        md_bg_color: app.theme_tokens['primary']
-                        padding: [dp(6), 0]
-                        spacing: dp(4)
+                    MDTextField:
+                        id: note_input
+                        hint_text: "Observacao"
+                        mode: "rectangle"
+                        multiline: False
+                        on_text_validate: root.register_movement()
 
-                        MDLabel:
-                            text: "ID"
-                            size_hint_x: 0.08
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                MDBoxLayout:
+                    id: entry_expiry_row
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(52)
+                    spacing: dp(8)
 
-                        MDLabel:
-                            text: "PRODUTO"
-                            size_hint_x: 0.24
-                            halign: "left"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                    MDTextField:
+                        id: expiry_input
+                        hint_text: "Validade do lote DD/MM/AAAA"
+                        mode: "rectangle"
+                        multiline: False
+                        on_text_validate: root._advance_restock_form()
 
-                        MDLabel:
-                            text: "STOCK"
-                            size_hint_x: 0.11
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                MDBoxLayout:
+                    id: entry_cost_row
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(52)
+                    spacing: dp(8)
 
-                        MDLabel:
-                            text: "V/DIA"
-                            size_hint_x: 0.09
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                    MDTextField:
+                        id: unit_cost_input
+                        hint_text: "Custo unitario *"
+                        mode: "rectangle"
+                        input_filter: "float"
+                        multiline: False
+                        on_text_validate: root._focus_field("note_input", select_all=True)
 
-                        MDLabel:
-                            text: "DIAS"
-                            size_hint_x: 0.09
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                MDBoxLayout:
+                    id: entry_supplier_row
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(52)
+                    spacing: dp(8)
 
-                        MDLabel:
-                            text: "VENC."
-                            size_hint_x: 0.13
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                    MDTextField:
+                        id: supplier_input
+                        hint_text: "Fornecedor (opcional)"
+                        mode: "rectangle"
 
-                        MDLabel:
-                            text: "ULT. ATUAL"
-                            size_hint_x: 0.14
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
+                    MDTextField:
+                        id: invoice_input
+                        hint_text: "N. Fatura (opcional)"
+                        mode: "rectangle"
 
-                        MDLabel:
-                            text: "ACAO"
-                            size_hint_x: 0.12
-                            halign: "center"
-                            bold: True
-                            font_style: "Caption"
-                            theme_text_color: "Custom"
-                            text_color: app.theme_tokens['on_primary']
-
-                    ScrollView:
-                        do_scroll_x: False
-                        size_hint_y: 1
-
-                        MDGridLayout:
-                            id: products_table
-                            cols: 1
-                            size_hint_y: None
-                            height: self.minimum_height
-                            spacing: dp(2)
-
-                    MDBoxLayout:
-                        size_hint_y: None
-                        height: dp(36)
-                        spacing: dp(8)
-                        padding: [dp(4), 0]
-
-                        MDFlatButton:
-                            id: products_prev_btn
-                            text: "ANTERIOR"
-                            on_release: root.previous_products_page()
-
-                        MDLabel:
-                            id: products_page_label
-                            text: "0 produtos"
-                            halign: "center"
-                            theme_text_color: "Secondary"
-
-                        MDFlatButton:
-                            id: products_next_btn
-                            text: "PRÓXIMO"
-                            on_release: root.next_products_page()
-
-                MDCard:
-                    id: stock_form_hidden_card
-                    orientation: "vertical"
+                MDBoxLayout:
+                    id: out_type_row
+                    orientation: "horizontal"
                     size_hint_y: None
                     height: 0
                     opacity: 0
                     disabled: True
-                    padding: [0, 0]
-                    spacing: 0
-                    radius: [dp(10)]
-                    elevation: 2
-                    md_bg_color: app.theme_tokens['card']
+                    spacing: dp(8)
 
-                    MDLabel:
-                        id: form_title
-                        text: "Registo de Entrada"
-                        font_style: "Subtitle1"
-                        bold: True
-                        size_hint_y: None
-                        height: dp(26)
+                    MDTextField:
+                        id: movement_type_field
+                        hint_text: "Tipo de saida"
+                        mode: "rectangle"
+                        readonly: True
+                        text: "AJUSTE"
 
-                    MDLabel:
-                        id: selected_product_label
-                        text: "Produto: --"
-                        size_hint_y: None
-                        height: dp(22)
-                        theme_text_color: "Primary"
+                    MDFlatButton:
+                        id: movement_type_btn
+                        text: "TIPO"
+                        size_hint_x: None
+                        width: dp(90)
+                        on_release: root.open_movement_type_menu()
 
-                    MDLabel:
-                        id: selected_stock_label
-                        text: "Stock atual: --"
-                        size_hint_y: None
-                        height: dp(22)
-                        theme_text_color: "Secondary"
+                MDBoxLayout:
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(52)
+                    spacing: dp(8)
 
-                    MDBoxLayout:
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(52)
-                        spacing: dp(8)
+                    MDTextField:
+                        id: entry_date_field
+                        hint_text: "Data de Entrada (automatica)"
+                        mode: "rectangle"
+                        readonly: True
+                        text: "--"
 
-                        MDTextField:
-                            id: qty_input
-                            hint_text: "Quantidade *"
-                            mode: "rectangle"
-                            input_filter: "float"
-                            multiline: False
-                            on_text_validate: root._advance_restock_form()
-                            text: "1"
+                    MDTextField:
+                        id: exit_date_field
+                        hint_text: "Data de Saida (automatica)"
+                        mode: "rectangle"
+                        readonly: True
+                        text: "--"
 
-                        MDTextField:
-                            id: note_input
-                            hint_text: "Observacao"
-                            mode: "rectangle"
-                            multiline: False
-                            on_text_validate: root.register_movement()
+                    MDTextField:
+                        id: update_day_field
+                        hint_text: "Data do Registo (automatica)"
+                        mode: "rectangle"
+                        readonly: True
+                        text: "--"
 
-                    MDBoxLayout:
-                        id: entry_expiry_row
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(52)
-                        spacing: dp(8)
+                MDBoxLayout:
+                    orientation: "horizontal"
+                    size_hint_y: None
+                    height: dp(44)
+                    spacing: dp(8)
 
-                        MDTextField:
-                            id: expiry_input
-                            hint_text: "Validade do lote DD/MM/AAAA"
-                            mode: "rectangle"
-                            multiline: False
-                            on_text_validate: root._advance_restock_form()
+                    MDFlatButton:
+                        text: "LIMPAR"
+                        on_release: root.clear_form()
 
-                    MDBoxLayout:
-                        id: entry_cost_row
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(52)
-                        spacing: dp(8)
-
-                        MDTextField:
-                            id: unit_cost_input
-                            hint_text: "Custo unitario *"
-                            mode: "rectangle"
-                            input_filter: "float"
-                            multiline: False
-                            on_text_validate: root._focus_field("note_input", select_all=True)
-
-                    MDBoxLayout:
-                        id: entry_supplier_row
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(52)
-                        spacing: dp(8)
-
-                        MDTextField:
-                            id: supplier_input
-                            hint_text: "Fornecedor (opcional)"
-                            mode: "rectangle"
-
-                        MDTextField:
-                            id: invoice_input
-                            hint_text: "N. Fatura (opcional)"
-                            mode: "rectangle"
-
-                    MDBoxLayout:
-                        id: out_type_row
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: 0
-                        opacity: 0
-                        disabled: True
-                        spacing: dp(8)
-
-                        MDTextField:
-                            id: movement_type_field
-                            hint_text: "Tipo de saida"
-                            mode: "rectangle"
-                            readonly: True
-                            text: "AJUSTE"
-
-                        MDFlatButton:
-                            id: movement_type_btn
-                            text: "TIPO"
-                            size_hint_x: None
-                            width: dp(90)
-                            on_release: root.open_movement_type_menu()
-
-                    MDBoxLayout:
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(52)
-                        spacing: dp(8)
-
-                        MDTextField:
-                            id: entry_date_field
-                            hint_text: "Data de Entrada (automatica)"
-                            mode: "rectangle"
-                            readonly: True
-                            text: "--"
-
-                        MDTextField:
-                            id: exit_date_field
-                            hint_text: "Data de Saida (automatica)"
-                            mode: "rectangle"
-                            readonly: True
-                            text: "--"
-
-                        MDTextField:
-                            id: update_day_field
-                            hint_text: "Data do Registo (automatica)"
-                            mode: "rectangle"
-                            readonly: True
-                            text: "--"
-
-                    MDBoxLayout:
-                        orientation: "horizontal"
-                        size_hint_y: None
-                        height: dp(44)
-                        spacing: dp(8)
-
-                        MDFlatButton:
-                            text: "LIMPAR"
-                            on_release: root.clear_form()
-
-                        MDRaisedButton:
-                            id: submit_btn
-                            text: "REGISTAR ENTRADA"
-                            on_release: root.register_movement()
+                    MDRaisedButton:
+                        id: submit_btn
+                        text: "REGISTAR ENTRADA"
+                        on_release: root.register_movement()

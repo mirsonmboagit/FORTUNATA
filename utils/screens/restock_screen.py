@@ -2,21 +2,21 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Thread
 from time import perf_counter
-
+from kivy.core.window import Window
+from kivy.uix.modalview import ModalView
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.scrollview import ScrollView
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.gridlayout import MDGridLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.snackbar import MDSnackbar
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
+    NativeDialog as MDDialog, NativeFlatButton as MDFlatButton,
+    NativeGridLayout as MDGridLayout, NativeIcon as MDIcon, NativeLabel as MDLabel,
+    NativeScreen as MDScreen, NativeSnackbar as MDSnackbar,
+    NativeTextField as MDTextField,
+)
 
 from database.provider import get_db
 from ui.components.loading_overlay import ScreenLoadingController
@@ -76,6 +76,7 @@ class RestockScreen(MDScreen):
         self.products = []
         self._products_page_offset = 0
         self._products_has_more = False
+        self._products_total_count = None
         self.movements = []
         self.selected_product = None
         self.current_mode = "IN"
@@ -144,6 +145,7 @@ class RestockScreen(MDScreen):
         self._loading_controller = getattr(self, "_loading_controller", None)
         # Out-type dropdown replaced with inline buttons
         self._out_type_btns = {}
+        self._modal_out_type_btns = {}
         Clock.schedule_once(self.init_screen, 0.1)
 
     @classmethod
@@ -506,22 +508,27 @@ class RestockScreen(MDScreen):
         pass
 
     def _select_out_type(self, label):
-        """Called by inline out-type buttons."""
+        """Called by inline out-type buttons (ecrã principal e/ou modal)."""
         if "movement_type_field" in self.ids:
             self.ids.movement_type_field.text = label
         if self._modal_movement_type_field:
             self._modal_movement_type_field.text = label
-        # Highlight active button
+
         tokens = self._theme_tokens()
         primary = tokens.get("primary", [0.15, 0.35, 0.65, 1])
         card = tokens.get("card", [1, 1, 1, 1])
         on_primary = tokens.get("on_primary", [1, 1, 1, 1])
         text_primary = tokens.get("text_primary", [0.2, 0.2, 0.2, 1])
+
         for btn_label, btn in self._out_type_btns.items():
             active = (btn_label == label)
             btn.md_bg_color = primary if active else card
             btn.text_color = on_primary if active else text_primary
 
+        for btn_label, btn in getattr(self, "_modal_out_type_btns", {}).items():
+            active = (btn_label == label)
+            btn.md_bg_color = primary if active else card
+            btn.text_color = on_primary if active else text_primary
     def _build_out_type_buttons(self, container):
         """Build inline out-type selector buttons and store refs."""
         self._out_type_btns = {}
@@ -543,6 +550,29 @@ class RestockScreen(MDScreen):
                 on_release=lambda _b, lbl=label: self._select_out_type(lbl),
             )
             self._out_type_btns[label] = btn
+            container.add_widget(btn)
+    def _build_modal_out_type_buttons(self, container):
+        """Botões inline de tipo de saída, dentro do modal de registo."""
+        self._modal_out_type_btns = {}
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.15, 0.35, 0.65, 1])
+        card = tokens.get("card", [1, 1, 1, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_primary = tokens.get("text_primary", [0.2, 0.2, 0.2, 1])
+        current = self.ids.movement_type_field.text if "movement_type_field" in self.ids else "AJUSTE"
+
+        for label, _code in self.OUT_TYPES:
+            active = (label == current)
+            btn = MDRaisedButton(
+                text=label,
+                md_bg_color=primary if active else card,
+                text_color=on_primary if active else text_primary,
+                size_hint=(None, None),
+                height=dp(38),
+                width=dp(118),
+                on_release=lambda _b, lbl=label: self._select_out_type(lbl),
+            )
+            self._modal_out_type_btns[label] = btn
             container.add_widget(btn)
 
     # ---------- Stock register modal ----------
@@ -621,11 +651,18 @@ class RestockScreen(MDScreen):
                 self._set_now_markers(sync_modal=False)
                 self._sync_stock_form_modal_from_hidden()
 
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.15, 0.35, 0.65, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+        card_alt = tokens.get("card_alt", [0.16, 0.19, 0.24, 1])
+
         content = MDBoxLayout(
             orientation="vertical",
             spacing=dp(8),
             size_hint_y=None,
-            height=dp(500),
+            height=dp(400),
+            padding=[0, dp(6), 0, 0],  # respiro sob a barra de título do dialog
         )
 
         form_scroll = ScrollView(do_scroll_x=False, bar_width=dp(6))
@@ -638,174 +675,188 @@ class RestockScreen(MDScreen):
         form_box.bind(minimum_height=form_box.setter("height"))
         form_scroll.add_widget(form_box)
 
-        self._modal_title_label = MDLabel(
-            text="Registo de Entrada",
-            font_style="Subtitle1",
-            bold=True,
-            size_hint_y=None,
-            height=dp(28),
-        )
-        form_box.add_widget(self._modal_title_label)
-
-        form_box.add_widget(
-            MDLabel(
-                text="Produto selecionado",
-                theme_text_color="Secondary",
-                size_hint_y=None,
-                height=dp(20),
+        def make_section_header(icon_name, text):
+            row = MDBoxLayout(size_hint_y=None, height=dp(22), spacing=dp(6))
+            row.add_widget(
+                MDIcon(
+                    icon=icon_name,
+                    theme_text_color="Custom",
+                    text_color=primary,
+                    size_hint=(None, None),
+                    size=(dp(18), dp(18)),
+                )
             )
-        )
+            row.add_widget(
+                MDLabel(
+                    text=text,
+                    bold=True,
+                    font_style="Caption",
+                    theme_text_color="Custom",
+                    text_color=muted,
+                )
+            )
+            return row
+
+        def make_section_card(height):
+            card = MDBoxLayout(
+                orientation="vertical",
+                spacing=dp(8),
+                padding=[dp(10), dp(10)],
+                size_hint_y=None,
+                height=height,
+            )
+            card.md_bg_color = card_alt
+            return card
+
+        # ── Secção: Produto selecionado ───────────────────────────────────
+        form_box.add_widget(make_section_header("package-variant-closed", "Produto"))
+        product_card = make_section_card(dp(56))
         self._modal_selected_product_label = MDLabel(
-            text="Produto: --",
+            text="--",
             size_hint_y=None,
-            height=dp(22),
-            theme_text_color="Primary",
+            height=dp(20),
+            theme_text_color="Custom",
+            text_color=foreground,
+            halign="left",
+            shorten=True,
+            shorten_from="right",
+            bold=True,
         )
-        form_box.add_widget(self._modal_selected_product_label)
         self._modal_selected_stock_label = MDLabel(
-            text="Stock atual: --",
+            text="Stock: --",
             size_hint_y=None,
-            height=dp(22),
-            theme_text_color="Secondary",
+            height=dp(18),
+            theme_text_color="Custom",
+            text_color=muted,
+            font_style="Caption",
+            halign="left",
         )
-        form_box.add_widget(self._modal_selected_stock_label)
+        product_card.add_widget(self._modal_selected_product_label)
+        product_card.add_widget(self._modal_selected_stock_label)
+        form_box.add_widget(product_card)
 
-        form_box.add_widget(
-            MDLabel(
-                text="Dados do movimento",
-                theme_text_color="Secondary",
-                size_hint_y=None,
-                height=dp(20),
-            )
-        )
-        qty_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(8))
-        self._modal_qty_input = MDTextField(
-            hint_text="Quantidade *",
-            mode="rectangle",
-            input_filter="float",
-        )
-        self._modal_note_input = MDTextField(
-            hint_text="Observacao",
-            mode="rectangle",
-        )
+        # ── Secção: Dados do movimento ─────────────────────────────────────
+        form_box.add_widget(make_section_header("clipboard-edit-outline", "DADOS DO MOVIMENTO"))
+
+        qty_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(8))
+        self._modal_qty_input = MDTextField(hint_text="Quantidade *", mode="rectangle", input_filter="float")
+        self._modal_note_input = MDTextField(hint_text="Observação", mode="rectangle")
         qty_row.add_widget(self._modal_qty_input)
         qty_row.add_widget(self._modal_note_input)
         form_box.add_widget(qty_row)
 
-        self._modal_entry_expiry_row = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(52),
-            spacing=dp(8),
-        )
-        self._modal_expiry_input = MDTextField(
-            hint_text="Validade do lote DD/MM/AAAA",
-            mode="rectangle",
-        )
+        self._modal_entry_expiry_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(8))
+        self._modal_expiry_input = MDTextField(hint_text="Validade do lote DD/MM/AAAA", mode="rectangle")
         self._modal_entry_expiry_row.add_widget(self._modal_expiry_input)
         form_box.add_widget(self._modal_entry_expiry_row)
 
-        self._modal_entry_cost_row = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(52),
-            spacing=dp(8),
-        )
-        self._modal_unit_cost_input = MDTextField(
-            hint_text="Custo unitario *",
-            mode="rectangle",
-            input_filter="float",
-        )
+        self._modal_entry_cost_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(8))
+        self._modal_unit_cost_input = MDTextField(hint_text="Custo unitário *", mode="rectangle", input_filter="float")
         self._modal_entry_cost_row.add_widget(self._modal_unit_cost_input)
         form_box.add_widget(self._modal_entry_cost_row)
 
-        self._modal_entry_supplier_row = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(52),
-            spacing=dp(8),
-        )
-        self._modal_supplier_input = MDTextField(
-            hint_text="Fornecedor (opcional)",
-            mode="rectangle",
-        )
-        self._modal_invoice_input = MDTextField(
-            hint_text="N. Fatura (opcional)",
-            mode="rectangle",
-        )
+        self._modal_entry_supplier_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(8))
+        self._modal_supplier_input = MDTextField(hint_text="Fornecedor (opcional)", mode="rectangle")
+        self._modal_invoice_input = MDTextField(hint_text="N. Fatura (opcional)", mode="rectangle")
         self._modal_entry_supplier_row.add_widget(self._modal_supplier_input)
         self._modal_entry_supplier_row.add_widget(self._modal_invoice_input)
         form_box.add_widget(self._modal_entry_supplier_row)
 
-        # Out-type: inline buttons instead of dropdown
-        self._modal_out_type_row = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(52),
-            spacing=dp(8),
+        # ── Tipo de saída — botões inline (Material Design), não texto morto ──
+        self._modal_out_type_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8))
+        self._modal_movement_type_field = MDTextField(  # mantido para compatibilidade com o resto do fluxo
+            hint_text="Tipo de saída", mode="rectangle", readonly=True, text="AJUSTE", opacity=0, disabled=True, size_hint=(None, None), size=(0, 0),
         )
-        self._modal_movement_type_field = MDTextField(
-            hint_text="Tipo de saida",
-            mode="rectangle",
-            readonly=True,
-            text="AJUSTE",
-        )
-        self._modal_out_type_row.add_widget(self._modal_movement_type_field)
+        self._build_modal_out_type_buttons(self._modal_out_type_row)
         form_box.add_widget(self._modal_out_type_row)
 
-        form_box.add_widget(
-            MDLabel(
-                text="Datas",
-                theme_text_color="Secondary",
-                size_hint_y=None,
-                height=dp(20),
-            )
-        )
-        dates_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(8))
-        self._modal_entry_date_field = MDTextField(
-            hint_text="Data de Entrada (automatica)",
-            mode="rectangle",
-            readonly=True,
-            text="--",
-        )
-        self._modal_exit_date_field = MDTextField(
-            hint_text="Data de Saida (automatica)",
-            mode="rectangle",
-            readonly=True,
-            text="--",
-        )
-        self._modal_update_day_field = MDTextField(
-            hint_text="Data do Registo (automatica)",
-            mode="rectangle",
-            readonly=True,
-            text="--",
-        )
+        # ── Secção: Datas ───────────────────────────────────────────────────
+        form_box.add_widget(make_section_header("calendar-range-outline", "Datas"))
+        dates_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(42), spacing=dp(8))
+        self._modal_entry_date_field = MDTextField(hint_text="Data de Entrada (automática)", mode="rectangle", readonly=True, text="--")
+        self._modal_exit_date_field = MDTextField(hint_text="Data de Saída (automática)", mode="rectangle", readonly=True, text="--")
+        self._modal_update_day_field = MDTextField(hint_text="Data do Registo (automática)", mode="rectangle", readonly=True, text="--")
         dates_row.add_widget(self._modal_entry_date_field)
         dates_row.add_widget(self._modal_exit_date_field)
         dates_row.add_widget(self._modal_update_day_field)
         form_box.add_widget(dates_row)
 
-        content.add_widget(form_scroll)
-
         actions_row = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8))
-        actions_row.add_widget(MDFlatButton(text="LIMPAR", on_release=lambda _btn: self.clear_form()))
+        actions_row.add_widget(
+            MDFlatButton(text="LIMPAR", theme_text_color="Custom", text_color=muted, radius=[dp(10)], on_release=lambda _btn: self.clear_form())
+        )
+        actions_row.add_widget(MDBoxLayout(size_hint_x=1))
         self._modal_submit_btn = MDRaisedButton(
             text="REGISTAR ENTRADA",
+            md_bg_color=primary,
+            size_hint=(None, None),
+            size=(dp(180), dp(40)),
+            radius=[dp(10)],
             on_release=lambda _btn: self.register_movement_from_modal(),
         )
         actions_row.add_widget(self._modal_submit_btn)
-        content.add_widget(actions_row)
 
-        dialog = MDDialog(
-            title="Registo de Stock",
-            type="custom",
-            content_cls=content,
-            size_hint=(0.86, 0.82),
-            buttons=[MDFlatButton(text="FECHAR", on_release=lambda _btn: self._dismiss_stock_form_dialog())],
+        # Cartao unico — titulo + formulario + acoes + fechar
+        card = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(16), dp(14), dp(16), dp(12)],
+            size_hint=(None, None),
+            size=(min(dp(580), Window.width - dp(32)), min(dp(520), Window.height - dp(56))),
+            pos_hint={"center_x": 0.5, "center_y": 0.5},
         )
-        self._stock_form_dialog = dialog
+        from kivy.graphics import Color, RoundedRectangle
+        with card.canvas.before:
+            Color(rgba=tokens.get("card", [0.12, 0.14, 0.18, 1]))
+            card._bg_rect = RoundedRectangle(radius=[dp(16)])
+        def _sync_card_bg(*_a):
+            card._bg_rect.pos = card.pos
+            card._bg_rect.size = card.size
+        card.bind(pos=_sync_card_bg, size=_sync_card_bg)
+
+        # Titulo DENTRO do card
+        title_bar = MDBoxLayout(size_hint_y=None, height=dp(32), spacing=dp(8))
+        self._modal_title_label = MDLabel(
+            text="Registo de Entrada",
+            bold=True,
+            font_style="H6",
+            theme_text_color="Custom",
+            text_color=foreground,
+            size_hint_x=1,
+            halign="left",
+            valign="middle",
+        )
+        title_bar.add_widget(self._modal_title_label)
+        close_btn = MDFlatButton(
+            text="FECHAR",
+            theme_text_color="Custom",
+            text_color=muted,
+            size_hint=(None, None),
+            size=(dp(90), dp(32)),
+            radius=[dp(8)],
+            on_release=lambda _btn: self._dismiss_stock_form_dialog(),
+        )
+        title_bar.add_widget(close_btn)
+        card.add_widget(title_bar)
+
+        # Conteudo scrollavel
+        content.height = dp(380)
+        content.padding = [0, 0, 0, 0]
+        content.add_widget(form_scroll)
+        card.add_widget(content)
+        card.add_widget(actions_row)
+
+        modal = ModalView(
+            size_hint=(1, 1),
+            auto_dismiss=True,
+            background_color=(0, 0, 0, 0.55),
+        )
+        modal.add_widget(card)
+        modal.bind(on_dismiss=lambda *_: setattr(self, "_stock_form_dialog", None))
+        self._stock_form_dialog = modal
         self._sync_stock_form_modal_from_hidden()
-        dialog.open()
+        modal.open()
+
 
     def _dismiss_stock_form_dialog(self):
         if self._stock_form_dialog:
@@ -877,25 +928,25 @@ class RestockScreen(MDScreen):
         self._set_modal_row_visibility(
             self._modal_entry_expiry_row,
             is_in,
-            dp(52),
+            dp(42),
             (self._modal_expiry_input,),
         )
         self._set_modal_row_visibility(
             self._modal_entry_cost_row,
             is_in,
-            dp(52),
+            dp(42),
             (self._modal_unit_cost_input,),
         )
         self._set_modal_row_visibility(
             self._modal_entry_supplier_row,
             is_in,
-            dp(52),
+            dp(42),
             (self._modal_supplier_input, self._modal_invoice_input),
         )
         self._set_modal_row_visibility(
             self._modal_out_type_row,
             not is_in,
-            dp(52),
+            dp(42),
             (self._modal_movement_type_field,),
         )
         if self.ids and "submit_btn" in self.ids:
@@ -956,22 +1007,67 @@ class RestockScreen(MDScreen):
         return rows
 
     def _request_products_page(self, reset=True, search_text="", offset=None):
-        if self._products_loading:
-            return False
         if offset is None:
             offset = 0 if reset else self._products_page_offset
+        query = str(search_text or "").strip()
+        offset = max(0, int(offset or 0))
+
+        # Se ja esta a carregar, guarda o pedido e aplica quando terminar
+        if self._products_loading:
+            self._pending_products_page = (reset, query, offset)
+            return False
+
         token = self._products_load_token + 1
         self._products_load_token = token
         self._products_loading = True
-        query = str(search_text or "").strip()
+        self._pending_products_page = None
+        self._sync_product_page_controls()
 
         def worker():
             try:
                 getter = getattr(self.db, "get_products_for_stock_control_page", None)
-                payload = getter(query, self.PRODUCTS_PAGE_SIZE, offset) if callable(getter) else {"rows": [], "has_more": False}
-            except Exception:
-                payload = {"rows": [], "has_more": False}
-            Clock.schedule_once(lambda _dt: self._apply_products_page(payload, token, offset), 0)
+                if callable(getter):
+                    payload = getter(query, self.PRODUCTS_PAGE_SIZE, offset)
+                else:
+                    # Fallback: carregar tudo e fatiar em memoria
+                    all_getter = getattr(self.db, "get_products_for_stock_control", None)
+                    if callable(all_getter):
+                        all_rows = all_getter(query) or []
+                    else:
+                        print("[restock] AVISO: db.get_products_for_stock_control_page nao existe")
+                        all_rows = []
+                    page = list(all_rows)[offset: offset + self.PRODUCTS_PAGE_SIZE]
+                    payload = {
+                        "rows": page,
+                        "has_more": (offset + self.PRODUCTS_PAGE_SIZE) < len(all_rows),
+                        "total": len(all_rows),
+                    }
+            except Exception as exc:
+                import traceback
+                print(f"[restock] ERRO ao paginar produtos (offset={offset}): {exc}")
+                traceback.print_exc()
+                payload = {"rows": [], "has_more": False, "total": 0}
+
+            if not isinstance(payload, dict):
+                rows = list(payload or [])
+                payload = {
+                    "rows": rows,
+                    "has_more": len(rows) >= self.PRODUCTS_PAGE_SIZE,
+                }
+
+            rows = list(payload.get("rows") or [])
+            if "has_more" not in payload:
+                payload["has_more"] = len(rows) >= self.PRODUCTS_PAGE_SIZE
+            # Se veio exactamente page_size, assumir que pode haver mais
+            if len(rows) >= self.PRODUCTS_PAGE_SIZE:
+                payload["has_more"] = True
+            elif len(rows) < self.PRODUCTS_PAGE_SIZE:
+                payload["has_more"] = False
+
+            Clock.schedule_once(
+                lambda _dt, p=payload, t=token, o=offset: self._apply_products_page(p, t, o),
+                0,
+            )
 
         Thread(target=worker, daemon=True).start()
         return True
@@ -982,8 +1078,9 @@ class RestockScreen(MDScreen):
         self._products_loading = False
         self.products = [self._normalize_product_row(row) for row in (payload or {}).get("rows", [])]
         self.products = [row for row in self.products if row is not None]
-        self._products_page_offset = offset
+        self._products_page_offset = max(0, int(offset or 0))
         self._products_has_more = bool((payload or {}).get("has_more"))
+        self._products_total_count = (payload or {}).get("total")
         self._expiry_alerts_by_id = self._build_expiry_alerts(self.products)
         self._last_products_loaded_at = perf_counter()
         self._show_products(self.products)
@@ -995,14 +1092,30 @@ class RestockScreen(MDScreen):
                 callback(list(self.products))
             except Exception:
                 pass
+        # Processar pagina pendente (cliques rapidos em Proximo/Anterior)
+        pending = getattr(self, "_pending_products_page", None)
+        if pending:
+            self._pending_products_page = None
+            reset, query, pend_offset = pending
+            Clock.schedule_once(
+                lambda _dt, r=reset, q=query, o=pend_offset: self._request_products_page(r, q, o),
+                0,
+            )
 
     def next_products_page(self):
-        if self._products_has_more:
-            self._request_products_page(False, self._pending_search, self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
+        if self._products_loading and not getattr(self, "_pending_products_page", None):
+            # permite enfileirar mesmo durante load
+            pass
+        if not self._products_has_more and not self._products_loading:
+            return
+        next_offset = self._products_page_offset + self.PRODUCTS_PAGE_SIZE
+        self._request_products_page(False, self._pending_search, next_offset)
 
     def previous_products_page(self):
-        if self._products_page_offset:
-            self._request_products_page(False, self._pending_search, max(0, self._products_page_offset - self.PRODUCTS_PAGE_SIZE))
+        if self._products_page_offset <= 0 and not self._products_loading:
+            return
+        prev_offset = max(0, self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
+        self._request_products_page(False, self._pending_search, prev_offset)
 
     def _sync_product_page_controls(self):
         if not self.ids:
@@ -1011,11 +1124,25 @@ class RestockScreen(MDScreen):
         if label is not None:
             start = self._products_page_offset + 1 if self.products else 0
             end = self._products_page_offset + len(self.products)
-            label.text = f"{start}-{end}" if self.products else "0 produtos"
+            total = getattr(self, "_products_total_count", None)
+            if self._products_loading:
+                label.text = "A carregar..."
+            elif self.products and total:
+                label.text = f"{start}-{end} de {total}"
+            elif self.products:
+                more = "+" if self._products_has_more else ""
+                label.text = f"{start}-{end}{more}"
+            else:
+                label.text = "0 produtos"
         prev = self.ids.get("products_prev_btn")
         nxt = self.ids.get("products_next_btn")
-        if prev is not None: prev.disabled = self._products_loading or self._products_page_offset <= 0
-        if nxt is not None: nxt.disabled = self._products_loading or not self._products_has_more
+        # Nao desativar durante loading se ha pagina pendente — evita "botao morto"
+        if prev is not None:
+            prev.disabled = self._products_page_offset <= 0 and not self._products_loading
+            prev.opacity = 0.45 if prev.disabled else 1
+        if nxt is not None:
+            nxt.disabled = (not self._products_has_more) and not self._products_loading
+            nxt.opacity = 0.45 if nxt.disabled else 1
 
     def _fetch_movements_for_restock(self, limit=200):
         end_dt = datetime.now()
@@ -1205,10 +1332,14 @@ class RestockScreen(MDScreen):
             return False
         return True
 
+    def _row_stripe_color(self, tokens, idx):
+        base = list(tokens.get("card", [0.13, 0.16, 0.20, 1]))
+        if idx % 2 == 0:
+            return [min(1.0, c + 0.035) if i < 3 else c for i, c in enumerate(base)]
+        return base
+
     def _build_stock_product_row(self, raw, idx):
         tokens = self._theme_tokens()
-        row_even = tokens.get("surface_alt", [0.97, 0.98, 0.99, 1])
-        row_odd = tokens.get("card", [1, 1, 1, 1])
         text_primary = tokens.get("text_primary", [0.2, 0.2, 0.2, 1])
         text_secondary = tokens.get("text_secondary", [0.5, 0.5, 0.5, 1])
         warning = tokens.get("warning", [0.9, 0.65, 0.1, 1])
@@ -1226,7 +1357,7 @@ class RestockScreen(MDScreen):
         stock_val = self._to_float(stock)
         avg_val = self._to_float(avg_daily)
         days_val = None if days_left is None else self._to_float(days_left)
-        bg_color = row_even if idx % 2 == 0 else row_odd
+        bg_color = self._row_stripe_color(tokens, idx)
         stock_color = text_primary
         if stock_val <= self.LOW_STOCK_THRESHOLD:
             stock_color = warning
@@ -1237,8 +1368,8 @@ class RestockScreen(MDScreen):
             product=raw,
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(36),
-            padding=[dp(6), 0],
+            height=dp(42),
+            padding=[dp(8), 0],
             spacing=dp(6),
             md_bg_color=bg_color,
         )
@@ -1252,9 +1383,15 @@ class RestockScreen(MDScreen):
         self._add_cell(row, avg_text, self.PRODUCT_COL_HINTS[3], halign="center", color=text_secondary)
         days_text = "--" if days_val is None else f"{days_val:.1f}d"
         self._add_cell(row, days_text, self.PRODUCT_COL_HINTS[4], halign="center", color=text_secondary)
+
         expiry_color = expiry_alert["color_rgba"] if expiry_alert.get("is_alert") else text_secondary
         expiry_day = self._format_dt(exp_date, with_time=False) if exp_date else "--"
-        expiry_text = f"{expiry_day} | {expiry_alert.get('short_label', '--')}" if exp_date else "Sem validade"
+        if not exp_date:
+            expiry_text = "Sem validade"
+        elif expiry_alert.get("is_alert"):
+            expiry_text = f"{expiry_day} • {expiry_alert.get('short_label', '')}"
+        else:
+            expiry_text = expiry_day
         self._add_cell(
             row, expiry_text, self.PRODUCT_COL_HINTS[5], halign="center",
             color=expiry_color, bold=bool(expiry_alert.get("is_alert")), shorten=True,
@@ -1264,13 +1401,14 @@ class RestockScreen(MDScreen):
             self.PRODUCT_COL_HINTS[6], halign="center", color=text_secondary,
         )
 
-        action = MDBoxLayout(size_hint_x=self.PRODUCT_COL_HINTS[7], size_hint_y=None, height=dp(30))
+        action = MDBoxLayout(size_hint_x=self.PRODUCT_COL_HINTS[7], size_hint_y=None, height=dp(36))
         action_btn = MDRaisedButton(
-            text="REGISTAR",
+            text="+",
             md_bg_color=success,
             text_color=on_primary,
-            size_hint=(1, None),
-            height=dp(28),
+            size_hint=(None, None),
+            size=(dp(40), dp(30)),
+            pos_hint={"center_x": 0.5},
             on_release=lambda _btn, p=raw: self.open_register_for_product(p),
         )
         action.add_widget(action_btn)
@@ -1303,7 +1441,7 @@ class RestockScreen(MDScreen):
         self.ids.qty_input.hint_text = "Quantidade de sacos" if is_sacks else "Quantidade"
         stock_text = f"{self._to_float(stock):.2f}" if is_weight else str(int(self._to_float(stock)))
         expiry_text = self._format_expiry_input(_exp) or "sem validade"
-        self.ids.selected_product_label.text = f"Produto: {name or '--'} (ID {pid}) | Validade base: {expiry_text}"
+        self.ids.selected_product_label.text = f"{name or '--'}  ·  ID {pid}  ·  Validade: {expiry_text}"
         self.ids.selected_stock_label.text = f"Stock atual: {stock_text} {unit}"
         current_price = self._to_float(_cost if is_sacks else _price)
         if current_price <= 0:
@@ -1583,23 +1721,19 @@ class RestockScreen(MDScreen):
             btn.text_color = on_primary if active else text_primary
 
     def _set_movements_filter(self, filter_key, filter_label):
-        # ── Step 1: visual feedback is INSTANT (same frame) ──────────────
+        # Passo 1: feedback visual instantâneo
         self._movements_filter_key = filter_key
         self._movements_page_index = 0
         self._update_filter_btn_styles()
 
-        self._movements_row_cache = []
-        self._refresh_movements_modal_table()
-        return
-
-        # ── Step 2: if rows already built → just toggle visibility ───────
-        if self._movements_row_cache:
-            self._apply_movements_filter_visibility()
+        # Passo 2: já temos dados carregados? só refiltra
+        if self._movements_modal_rows:
+            self._movements_row_cache = []
+            self._refresh_movements_modal_table()
             return
 
-        # ── Step 3: rows not yet built → defer heavy work one frame ──────
-        # The button is already highlighted; schedule the rest so the UI
-        # can redraw before we block on the DB query or row construction.
+        # Passo 3: ainda não há dados — adia a busca um frame para o
+        # destaque do botão já aparecer antes de bloquear na query da BD
         Clock.schedule_once(self._load_and_render_movements_deferred, 0)
 
     def _load_and_render_movements_deferred(self, _dt=None):
@@ -1844,22 +1978,82 @@ class RestockScreen(MDScreen):
             self._show_dialog("Erro", str(exc) or "Erro ao gerar PDF dos movimentos.")
 
     def _show_movements_pdf_success(self, pdf_path, printed=True):
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.12, 0.46, 0.78, 1])
+        success = tokens.get("success", [0.2, 0.7, 0.3, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+        card_alt = tokens.get("card_alt", [0.16, 0.19, 0.24, 1])
+
         filename = str(pdf_path or "").split("\\")[-1].split("/")[-1]
-        message = (
-            f"PDF enviado para impressao:\n{filename}"
-            if printed
-            else f"PDF gerado com sucesso:\n{filename}"
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(8), dp(4), 0],
+            size_hint_y=None,
         )
+        content.bind(minimum_height=content.setter("height"))
+
+        header = MDBoxLayout(size_hint_y=None, height=dp(26), spacing=dp(8))
+        header.add_widget(
+            MDLabel(
+                text=(
+                    "PDF enviado para impressão"
+                    if printed
+                    else "PDF gerado com sucesso"
+                ),
+                bold=True,
+                font_style="Body2",
+                theme_text_color="Custom",
+                text_color=foreground,
+            )
+        )
+        content.add_widget(header)
+
+        file_card = MDBoxLayout(
+            orientation="vertical",
+            padding=[dp(10), dp(8)],
+            size_hint_y=None,
+            height=dp(38),
+        )
+        file_card.md_bg_color = card_alt
+        file_label = MDLabel(
+            text=filename,
+            theme_text_color="Custom",
+            text_color=muted,
+            font_style="Caption",
+            halign="left",
+            valign="middle",
+            shorten=True,
+            shorten_from="left",
+        )
+        file_card.add_widget(file_label)
+        content.add_widget(file_card)
+
+        close_btn = MDFlatButton(
+            text="FECHAR",
+            theme_text_color="Custom",
+            text_color=muted,
+            radius=[dp(10)],
+        )
+        view_btn = MDRaisedButton(
+            text="VISUALIZAR PDF",
+            md_bg_color=primary,
+            radius=[dp(10)],
+        )
+
         dialog = MDDialog(
             title="Movimentos em PDF",
-            text=message,
-            buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda btn: dialog.dismiss()),
-                MDRaisedButton(
-                    text="VISUALIZAR PDF",
-                    on_release=lambda btn, path=pdf_path: [dialog.dismiss(), self._ensure_pdf_viewer().view_pdf(path)],
-                ),
-            ],
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(480), Window.width - dp(48)), dp(180)),
+            buttons=[close_btn, view_btn],
+        )
+        close_btn.bind(on_release=lambda _x: dialog.dismiss())
+        view_btn.bind(
+            on_release=lambda _x, path=pdf_path: [dialog.dismiss(), self._ensure_pdf_viewer().view_pdf(path)]
         )
         dialog.open()
 
@@ -1904,34 +2098,13 @@ class RestockScreen(MDScreen):
             self._add_cell(row, self._direction_label(direction), self.MOVEMENT_COL_HINTS[6], "center", direction_color, bold=True)
             self._add_cell(row, created_by or "-", self.MOVEMENT_COL_HINTS[7], "right", text_secondary, shorten=True)
 
-            # ── Delete button ───────────────────────────────────────────
+            # ── Botão eliminar ────────────────────────────────────────────
             del_cell = MDBoxLayout(
                 size_hint_x=self.MOVEMENT_COL_HINTS[8],
                 size_hint_y=None,
                 height=dp(40),
                 padding=[dp(2), dp(5)],
             )
-
-    def _change_movements_page(self, delta):
-        filtered_count = sum(
-            1 for row in self._movements_modal_rows
-            if self._movement_matches_filter(row[5] if len(row) > 5 else "", row[6] if len(row) > 6 else "")
-        )
-        next_page = self._movements_page_index + int(delta)
-        if 0 <= next_page * self.MOVEMENTS_PAGE_SIZE < filtered_count:
-            self._movements_page_index = next_page
-            self._movements_row_cache = []
-            self._refresh_movements_modal_table()
-
-    def _sync_movements_pager(self, total):
-        start = self._movements_page_index * self.MOVEMENTS_PAGE_SIZE + 1 if total else 0
-        end = min(total, start + self.MOVEMENTS_PAGE_SIZE - 1) if total else 0
-        if self._movements_page_label:
-            self._movements_page_label.text = f"{start}-{end} de {total}" if total else "0 movimentos"
-        if self._movements_prev_btn:
-            self._movements_prev_btn.disabled = self._movements_page_index <= 0
-        if self._movements_next_btn:
-            self._movements_next_btn.disabled = end >= total
             del_btn = MDRaisedButton(
                 text="ELIMINAR",
                 md_bg_color=[0.75, 0.1, 0.1, 1],
@@ -1951,6 +2124,28 @@ class RestockScreen(MDScreen):
             table.add_widget(row)
             self._movements_row_cache.append(row)
 
+
+    def _change_movements_page(self, delta):
+        filtered_count = sum(
+            1 for row in self._movements_modal_rows
+            if self._movement_matches_filter(row[5] if len(row) > 5 else "", row[6] if len(row) > 6 else "")
+        )
+        next_page = self._movements_page_index + int(delta)
+        if 0 <= next_page * self.MOVEMENTS_PAGE_SIZE < filtered_count:
+            self._movements_page_index = next_page
+            self._movements_row_cache = []
+            self._refresh_movements_modal_table()
+
+
+    def _sync_movements_pager(self, total):
+        start = self._movements_page_index * self.MOVEMENTS_PAGE_SIZE + 1 if total else 0
+        end = min(total, start + self.MOVEMENTS_PAGE_SIZE - 1) if total else 0
+        if self._movements_page_label:
+            self._movements_page_label.text = f"{start}-{end} de {total}" if total else "0 movimentos"
+        if self._movements_prev_btn:
+            self._movements_prev_btn.disabled = self._movements_page_index <= 0
+        if self._movements_next_btn:
+            self._movements_next_btn.disabled = end >= total
     # ---------- Delete movements ----------
 
     def confirm_delete_movement(self, movement_id, product_name, row_widget):
@@ -1958,32 +2153,89 @@ class RestockScreen(MDScreen):
         if movement_id is None:
             self._show_dialog("Erro", "Este movimento não tem ID e não pode ser eliminado.")
             return
+
         product_label = str(product_name or "-")
-        dialog_ref = {}
+        tokens = self._theme_tokens()
+        danger = tokens.get("danger", [0.85, 0.2, 0.2, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
 
-        def dismiss_dialog(_button):
-            dialog_ref["dialog"].dismiss()
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(4), dp(4), dp(4), 0],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
 
-        def delete_movement(_button, mid=movement_id, row=row_widget):
-            dialog_ref["dialog"].dismiss()
-            self._do_delete_movement(mid, row)
+        warning_row = MDBoxLayout(size_hint_y=None, height=dp(26), spacing=dp(8))
+        warning_row.add_widget(
+            MDIcon(
+                icon="delete-alert-outline",
+                theme_text_color="Custom",
+                text_color=danger,
+                size_hint=(None, None),
+                size=(dp(22), dp(22)),
+            )
+        )
+        warning_row.add_widget(
+            MDLabel(
+                text="Eliminar este movimento?",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=foreground,
+                font_style="Body2",
+            )
+        )
+        content.add_widget(warning_row)
+
+        product_label_widget = MDLabel(
+            text=f"Produto: {product_label}",
+            theme_text_color="Custom",
+            text_color=muted,
+            font_style="Body2",
+            halign="left",
+            size_hint_y=None,
+            height=dp(20),
+        )
+        content.add_widget(product_label_widget)
+
+        note_label = MDLabel(
+            text="Esta ação não pode ser desfeita.",
+            theme_text_color="Custom",
+            text_color=danger,
+            font_style="Caption",
+            halign="left",
+            size_hint_y=None,
+            height=dp(18),
+        )
+        content.add_widget(note_label)
+
+        cancel_btn = MDFlatButton(
+            text="CANCELAR",
+            theme_text_color="Custom",
+            text_color=muted,
+            radius=[dp(10)],
+        )
+        confirm_btn = MDRaisedButton(
+            text="ELIMINAR",
+            md_bg_color=danger,
+            radius=[dp(10)],
+        )
 
         dialog = MDDialog(
             title="Eliminar Movimento",
-            text=f"Tem a certeza que quer eliminar permanentemente o movimento de\n[b]{product_label}[/b]?\n\nEsta acção não pode ser desfeita.",
-            buttons=[
-                MDFlatButton(text="CANCELAR", on_release=dismiss_dialog),
-                MDRaisedButton(
-                    text="ELIMINAR",
-                    md_bg_color=[0.75, 0.1, 0.1, 1],
-                    text_color=[1, 1, 1, 1],
-                    on_release=delete_movement,
-                ),
-            ],
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(420), Window.width - dp(48)), dp(190)),
+            buttons=[cancel_btn, confirm_btn],
         )
-        dialog_ref["dialog"] = dialog
+        cancel_btn.bind(on_release=lambda _x: dialog.dismiss())
+        confirm_btn.bind(
+            on_release=lambda _x, mid=movement_id, row=row_widget: [dialog.dismiss(), self._do_delete_movement(mid, row)]
+        )
         dialog.open()
-
     def _do_delete_movement(self, movement_id, row_widget=None):
         """Elimina um movimento da BD e remove a sua linha do modal."""
         try:
@@ -2029,32 +2281,94 @@ class RestockScreen(MDScreen):
             return
 
         filter_label = self._get_movements_filter_label()
-        dialog_ref = {}
+        tokens = self._theme_tokens()
+        danger = tokens.get("danger", [0.85, 0.2, 0.2, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+        card_alt = tokens.get("card_alt", [0.16, 0.19, 0.24, 1])
 
-        def dismiss_dialog(_button):
-            dialog_ref["dialog"].dismiss()
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(4), dp(4), dp(4), 0],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
 
-        def delete_visible_rows(_button, rows=list(visible_rows)):
-            dialog_ref["dialog"].dismiss()
-            self._do_delete_visible_movements(rows)
+        warning_row = MDBoxLayout(size_hint_y=None, height=dp(26), spacing=dp(8))
+        warning_row.add_widget(
+            MDIcon(
+                icon="alert-circle-outline",
+                theme_text_color="Custom",
+                text_color=danger,
+                size_hint=(None, None),
+                size=(dp(22), dp(22)),
+            )
+        )
+        warning_row.add_widget(
+            MDLabel(
+                text="Esta ação não pode ser desfeita",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=danger,
+                font_style="Body2",
+            )
+        )
+        content.add_widget(warning_row)
+
+        summary_card = MDBoxLayout(
+            orientation="vertical",
+            padding=[dp(10), dp(8)],
+            spacing=dp(2),
+            size_hint_y=None,
+            height=dp(56),
+        )
+        summary_card.md_bg_color = card_alt
+        summary_card.add_widget(
+            MDLabel(
+                text=f"{count} movimento(s) serão eliminados",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=foreground,
+                font_style="Body2",
+                halign="left",
+            )
+        )
+        summary_card.add_widget(
+            MDLabel(
+                text=f"Filtro atual: {filter_label}",
+                theme_text_color="Custom",
+                text_color=muted,
+                font_style="Caption",
+                halign="left",
+            )
+        )
+        content.add_widget(summary_card)
+
+        cancel_btn = MDFlatButton(
+            text="CANCELAR",
+            theme_text_color="Custom",
+            text_color=muted,
+            radius=[dp(10)],
+        )
+        confirm_btn = MDRaisedButton(
+            text=f"ELIMINAR {count}",
+            md_bg_color=danger,
+            radius=[dp(10)],
+        )
 
         dialog = MDDialog(
             title="Eliminar Movimentos Visíveis",
-            text=(
-                f"Vai eliminar permanentemente [b]{count} movimento(s)[/b] "
-                f"com o filtro '[b]{filter_label}[/b]'.\n\nEsta acção não pode ser desfeita."
-            ),
-            buttons=[
-                MDFlatButton(text="CANCELAR", on_release=dismiss_dialog),
-                MDRaisedButton(
-                    text=f"ELIMINAR {count}",
-                    md_bg_color=[0.75, 0.1, 0.1, 1],
-                    text_color=[1, 1, 1, 1],
-                    on_release=delete_visible_rows,
-                ),
-            ],
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(440), Window.width - dp(48)), dp(220)),
+            buttons=[cancel_btn, confirm_btn],
         )
-        dialog_ref["dialog"] = dialog
+        cancel_btn.bind(on_release=lambda _x: dialog.dismiss())
+        confirm_btn.bind(
+            on_release=lambda _x, rows=list(visible_rows): [dialog.dismiss(), self._do_delete_visible_movements(rows)]
+        )
         dialog.open()
 
     def _do_delete_visible_movements(self, visible_rows):

@@ -11,18 +11,22 @@ sys.path.insert(
     str((ROOT_DIR / "pdfs").resolve())
 )
 
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.gridlayout import MDGridLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.button import MDRaisedButton, MDFlatButton
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.card import MDCard
-from kivymd.uix.list import OneLineListItem
-from kivymd.uix.card import MDSeparator
-from kivymd.uix.pickers import MDDatePicker
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout,
+    NativeButton as MDRaisedButton,
+    NativeCard as MDCard,
+    NativeDatePicker as MDDatePicker,
+    NativeDialog as MDDialog,
+    NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton,
+    NativeGridLayout as MDGridLayout,
+    NativeIcon as MDIcon,
+    NativeLabel as MDLabel,
+    NativeListItem as OneLineListItem,
+    NativeScreen as MDScreen,
+    NativeSeparator as MDSeparator,
+    NativeTextField as MDTextField,
+)
 from AI.controller import ProactiveIntelligenceController
 
 from datetime import datetime, timedelta
@@ -68,15 +72,15 @@ class DateRangeDialog(MDDialog):
         self.database = database
         content = self._create_content()
         super().__init__(
-            title="Selecionar Periodo",
+            title="Selecionar período",
             type="custom",
             content_cls=content,
             size_hint=(None, None),
-            size=(min(dp(500), Window.width * 0.85), min(dp(450), Window.height * 0.7)),
+            size=(min(dp(560), Window.width * 0.92), min(dp(520), Window.height * 0.82)),
             buttons=[
                 MDFlatButton(text="CANCELAR", on_release=lambda x: self.dismiss()),
                 MDRaisedButton(
-                    text="CONFIRMAR PERIODO",
+                    text="CONFIRMAR PERÍODO",
                     md_bg_color=_theme_color('success', (0.2, 0.65, 0.33, 1)),
                     on_release=lambda x: self.confirm(),
                 ),
@@ -116,7 +120,7 @@ class DateRangeDialog(MDDialog):
             hint_text="Data Inicial (DD/MM/AAAA)",
             mode="rectangle",
             size_hint_y=None,
-            height=dp(56),
+            height=dp(52),
         )
         main_layout.add_widget(self.start_date_field)
 
@@ -124,12 +128,12 @@ class DateRangeDialog(MDDialog):
             hint_text="Data Final (DD/MM/AAAA)",
             mode="rectangle",
             size_hint_y=None,
-            height=dp(56),
+            height=dp(52),
         )
         main_layout.add_widget(self.end_date_field)
 
         main_layout.add_widget(MDLabel(
-            text='Ou escolha um atalho:',
+            text='Ou escolha um atalho rápido:',
             font_style='Subtitle2',
             bold=True,
             halign='left',
@@ -164,8 +168,8 @@ class DateRangeDialog(MDDialog):
     def reposition(self, instance, width, height):
         if self.parent:
             self.size = (
-                min(dp(500), Window.width * 0.85),
-                min(dp(450), Window.height * 0.7),
+                min(dp(560), max(dp(300), Window.width * 0.92)),
+                min(dp(520), max(dp(300), Window.height * 0.82)),
             )
 
     def on_pre_open(self, *args):
@@ -176,6 +180,10 @@ class DateRangeDialog(MDDialog):
     def on_dismiss(self, *args):
         if hasattr(self, "_field_navigation"):
             self._field_navigation.deactivate()
+        try:
+            Window.unbind(on_resize=self.reposition)
+        except Exception:
+            pass
         return super().on_dismiss(*args)
 
     def set_today(self):
@@ -219,14 +227,40 @@ class DateRangeDialog(MDDialog):
             self._show_error("Formato invalido. Use DD/MM/AAAA\nExemplo: 01/02/2026")
 
     def _show_error(self, message):
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(6), dp(4)],
+            size_hint_y=None,
+            height=dp(100),
+        )
+        lbl = MDLabel(
+            text=str(message or ""),
+            theme_text_color="Custom",
+            text_color=_theme_color('text_secondary', (0.7, 0.72, 0.76, 1)),
+            font_style="Body2",
+            halign="left",
+            size_hint_y=None,
+            text_size=(dp(360), None),
+        )
+        lbl.bind(
+            texture_size=lambda inst, val: setattr(inst, "height", max(dp(40), val[1] + dp(4))),
+            width=lambda inst, val: setattr(inst, "text_size", (max(dp(200), val - dp(8)), None)),
+        )
+        content.add_widget(lbl)
+        content.bind(minimum_height=content.setter("height"))
         d = MDDialog(
-            title="Formato Invalido",
-            text=message,
+            title="Verifique as datas",
+            type="custom",
+            content_cls=content,
             buttons=[MDRaisedButton(
                 text="ENTENDI",
                 md_bg_color=_theme_color('danger', (0.85, 0.3, 0.3, 1)),
+                text_color=_theme_color('on_primary', (1, 1, 1, 1)),
                 on_release=lambda x: d.dismiss(),
             )],
+            size_hint=(None, None),
+            size=(min(dp(440), max(dp(300), Window.width * 0.88)), dp(220)),
         )
         d.open()
 
@@ -262,7 +296,7 @@ class ReportsScreen(MDScreen):
         "historico_vendas": "Historico de Vendas",
         "lista_de_compras": "Sugestões de Compras",
         "movimentos_stock": "Movimentos de Stock",
-        "relatorio_caixa_usuarios": "Relatorio de Caixa por Utilizador",
+        "relatorio_caixa_usuarios": "Relatório de Caixa por Utilizador",
         "relatorio_completo": "Relatorio Completo",
         "relatorio_estoque": "Relatorio de Estoque",
         "relatorio_logs": "Relatorio de Logs",
@@ -283,11 +317,11 @@ class ReportsScreen(MDScreen):
          "relatorio caixa usuarios utilizadores abertura fechamento fecho operador terminal"),
     )
     REPORT_BUTTON_LABELS = {
-        "sales_report_card": "Relatorio de Vendas",
-        "stock_report_card": "Relatorio de Estoque",
-        "profit_report_card": "Relatorio de Lucro",
-        "complete_report_card": "Relatorio Completo",
-        "cash_user_report_card": "Relatorio de Caixa por Utilizador",
+        "sales_report_card": "Vendas",
+        "stock_report_card": "Estoque",
+        "profit_report_card": "Lucro",
+        "complete_report_card": "Completo",
+        "cash_user_report_card": "Caixa por utilizador",
     }
 
     date_label = ObjectProperty(None)
@@ -382,6 +416,8 @@ class ReportsScreen(MDScreen):
         self._pdf_selector_menu = None
         self._pdf_delete_filtered_button = None
         self._pdf_load_more_button = None
+        self._pdf_dialog_body = None
+        self._pdf_dialog_scroll = None
         super().__init__(**kwargs)
         self._intelligence = ProactiveIntelligenceController(
             screen=self,
@@ -420,8 +456,22 @@ class ReportsScreen(MDScreen):
     def on_leave(self):
         self._stop_ai_polling()
         self._productivity_load_token += 1
+        self._filters_load_token += 1
+        self._pdf_list_token += 1
         self._productivity_loading = False
         self._clear_loading_overlay()
+        for menu in (self.product_menu, self.category_menu, self.seller_menu, self._pdf_selector_menu):
+            try:
+                if menu:
+                    menu.dismiss()
+            except Exception:
+                pass
+        for dialog in (self.date_dialog, self.error_dialog, self.success_dialog, self.delete_pdf_dialog, self.pdf_dialog):
+            try:
+                if dialog:
+                    dialog.dismiss()
+            except Exception:
+                pass
         for ev in ("_filters_load_ev", "_responsive_ev", "_search_ev"):
             evt = getattr(self, ev, None)
             if evt:
@@ -517,15 +567,15 @@ class ReportsScreen(MDScreen):
         if button is None:
             return
         button.disabled = self._printing_charts_busy
-        button.text = "A preparar..." if self._printing_charts_busy else "Imprimir Graficos"
+        button.text = "A preparar..." if self._printing_charts_busy else "Imprimir gráficos"
 
     @staticmethod
     def _report_config(report_kind):
         return {
-            "sales": ("sales_report_card", "sales_report", "Relatorio de vendas"),
-            "stock": ("stock_report_card", "stock_report", "Relatorio de estoque"),
-            "profit": ("profit_report_card", "profit_report", "Relatorio de lucro"),
-            "complete": ("complete_report_card", "complete_report", "Relatorio completo"),
+            "sales": ("sales_report_card", "sales_report", "Relatório de vendas"),
+            "stock": ("stock_report_card", "stock_report", "Relatório de estoque"),
+            "profit": ("profit_report_card", "profit_report", "Relatório de lucro"),
+            "complete": ("complete_report_card", "complete_report", "Relatório completo"),
         }.get(report_kind)
 
     # ------------------------------------------------------------------
@@ -539,93 +589,75 @@ class ReportsScreen(MDScreen):
 
     def _update_responsive_layout(self):
         self._responsive_ev = None
-        if not hasattr(self, "ids"):
+        if not hasattr(self, "ids") or not self.ids:
             return
-        width = self.width or Window.width or dp(1200)
+        width = float(self.width or Window.width or 1200)
+        narrow = width < dp(720)
+        medium = width < dp(980)
+
         ids = self.ids
-
-        header_card    = ids.get("header_card")
-        header_content = ids.get("header_content")
-        header_actions = ids.get("header_actions")
-        search_row     = ids.get("search_row")
-        filters_grid   = ids.get("filters_grid")
-        seller_row     = ids.get("seller_filter_row")
-        quick_range    = ids.get("quick_range_grid")
-        reports_grid   = ids.get("reports_grid")
+        reports_grid = ids.get("reports_grid")
+        quick_range = ids.get("quick_range_grid")
+        filters_grid = ids.get("filters_grid")
+        period_row = ids.get("period_row")
+        search_row = ids.get("search_row")
         filter_actions = ids.get("filter_actions")
-        print_btn      = ids.get("print_charts_button")
-        header_btns    = [ids.get(k) for k in ("hero_pdf_button", "hero_refresh_button", "hero_back_button")]
-        search_clear   = ids.get("search_clear_button")
-        filter_btns    = [ids.get("filter_reset_button"), ids.get("filter_refresh_button")]
+        content = ids.get("reports_content")
+        print_btn = ids.get("print_charts_button")
+        search_clear = ids.get("search_clear_button")
 
-        is_wide  = width >= dp(980)
-        is_mid   = width >= dp(760)
-        is_large = width >= dp(900)
-
-        if header_content:
-            header_content.orientation = "horizontal" if is_wide else "vertical"
-        if header_actions:
-            header_actions.orientation = "horizontal" if is_mid else "vertical"
-            header_actions.size_hint_x = 0.36 if is_mid else 1
-        if header_card:
-            header_card.height = dp(74) if width >= dp(1100) else (dp(118) if is_mid else dp(166))
-
-        for btn in header_btns:
-            if btn is None:
-                continue
-            if is_mid:
-                btn.size_hint_x = None
-                btn.width = dp(122)
-            else:
-                btn.size_hint_x = 1
-
-        if search_row:
-            search_row.orientation = "horizontal" if is_mid else "vertical"
-        if search_clear:
-            if is_mid:
-                search_clear.size_hint_x = None
-                search_clear.width = dp(110)
-            else:
-                search_clear.size_hint_x = 1
-
-        if filters_grid:
-            filters_grid.cols = 2 if is_large else 1
-            filters_grid.height = dp(64) if is_large else dp(136)
-        if seller_row:
-            seller_row.orientation = "horizontal" if is_mid else "vertical"
-            seller_row.height = dp(48) if is_mid else dp(76)
-        if quick_range:
-            if width >= dp(1120):
-                quick_range.cols = 5
-                quick_range.height = dp(42)
-            elif is_mid:
-                quick_range.cols = 3
-                quick_range.height = dp(92)
-            else:
-                quick_range.cols = 2
-                quick_range.height = dp(142)
-        if filter_actions:
-            filter_actions.orientation = "horizontal" if is_mid else "vertical"
-        for btn in filter_btns:
-            if btn:
-                btn.size_hint_x = 0.5 if is_mid else 1
-        if print_btn:
-            if is_mid:
-                print_btn.size_hint_x = None
-                print_btn.width = dp(190)
-            else:
-                print_btn.size_hint_x = 1
-        if reports_grid:
-            if width >= dp(1120):
-                reports_grid.cols = 5
-            elif is_mid:
-                reports_grid.cols = 3
-            else:
+        if reports_grid is not None:
+            if narrow:
+                reports_grid.cols = 1
+            elif medium:
                 reports_grid.cols = 2
+            else:
+                reports_grid.cols = 3
+            try:
+                reports_grid.height = reports_grid.minimum_height
+            except Exception:
+                pass
 
-    # ------------------------------------------------------------------
-    # Resumo de filtros
-    # ------------------------------------------------------------------
+        if quick_range is not None:
+            if narrow:
+                quick_range.cols = 2
+                quick_range.height = dp(88)
+            elif medium:
+                quick_range.cols = 3
+                quick_range.height = dp(88)
+            else:
+                quick_range.cols = 5
+                quick_range.height = dp(40)
+
+        if filters_grid is not None:
+            filters_grid.cols = 1 if narrow else 2
+            filters_grid.height = dp(140) if narrow else dp(64)
+
+        if period_row is not None:
+            period_row.orientation = "vertical" if narrow else "horizontal"
+            period_row.height = dp(96) if narrow else dp(48)
+
+        if search_row is not None:
+            search_row.orientation = "vertical" if narrow else "horizontal"
+            search_row.height = dp(100) if narrow else dp(48)
+        if search_clear is not None:
+            search_clear.size_hint_x = 1 if narrow else None
+            if not narrow:
+                search_clear.width = dp(100)
+
+        if filter_actions is not None:
+            filter_actions.orientation = "vertical" if narrow else "horizontal"
+            filter_actions.height = dp(92) if narrow else dp(42)
+
+        if content is not None:
+            pad = dp(12) if narrow else dp(16)
+            content.padding = [pad, dp(12), pad, dp(96)]
+
+        if print_btn is not None:
+            print_btn.size_hint_x = 1 if narrow else None
+            if not narrow:
+                print_btn.width = dp(180)
+
 
     def _refresh_filter_summary(self):
         if self.start_date and self.end_date:
@@ -780,16 +812,48 @@ class ReportsScreen(MDScreen):
         return kwargs
 
     def select_date_range(self, on_complete=None):
-        """Abre o calendário. Chamado APENAS por acção explícita do utilizador."""
+        """Abre o seletor de intervalo compatível com os widgets nativos da aplicação.
+
+        A implementação anterior tentava passar ``mode="range"`` para
+        ``NativeDatePicker``. Esse widget é um ``ModalView`` sem uma
+        propriedade Kivy ``mode`` e, por isso, o Kivy interrompia a aplicação
+        durante o clique em "Selecionar Período".
+
+        O ``DateRangeDialog`` já existente foi feito especificamente para
+        intervalo de datas, possui validação DD/MM/AAAA, atalhos e é
+        responsivo. Usá-lo aqui evita depender da API de outra versão do
+        DatePicker e mantém a seleção de intervalo completa.
+        """
         self._pending_report_callback = on_complete if callable(on_complete) else None
-        if self.date_dialog:
-            self.date_dialog.dismiss()
+
+        if self.date_dialog is not None:
+            try:
+                self.date_dialog.dismiss()
+            except Exception:
+                pass
             self.date_dialog = None
-        picker = MDDatePicker(**self._build_date_picker_kwargs())
-        picker.title = "Selecionar Periodo"
-        picker.bind(on_save=self._on_date_picker_save, on_cancel=self._on_date_picker_cancel)
-        self._date_picker = picker
-        picker.open()
+
+        def apply_range(start, end):
+            self.set_date_range(start, end)
+            callback = self._pending_report_callback
+            self._clear_pending_report_callback()
+            self.date_dialog = None
+            if callable(callback):
+                Clock.schedule_once(lambda _dt: callback(), 0)
+
+        dialog = DateRangeDialog(
+            callback=apply_range,
+            database=self.db,
+        )
+
+        # Reaproveita o período atualmente selecionado, quando existir.
+        if self.start_date is not None:
+            dialog.start_date_field.text = self.start_date.strftime("%d/%m/%Y")
+        if self.end_date is not None:
+            dialog.end_date_field.text = self.end_date.strftime("%d/%m/%Y")
+
+        self.date_dialog = dialog
+        dialog.open()
 
     def set_date_range(self, start, end):
         self.start_date = start
@@ -823,17 +887,190 @@ class ReportsScreen(MDScreen):
         """
         Retorna True se há período selecionado.
 
-        Se não há período, mostra um aviso amigável e NÃO abre o calendário
-        automaticamente. O utilizador deverá clicar em "Selecionar Periodo".
+        Se não há período, abre um diálogo interativo onde o utilizador pode
+        escolher o intervalo (atalhos rápidos ou período personalizado) em
+        vez de apenas ler um aviso de texto.
         """
         if not self.start_date or not self.end_date:
-            self.show_error_popup(
-                "Por favor, selecione um periodo antes de gerar o relatorio.\n\n"
-                "Use os atalhos rapidos (Hoje, 7 Dias, 30 Dias, Este Mes, Este Ano) ou\n"
-                "clique em 'Selecionar Periodo' para escolher um intervalo."
-            )
+            self._show_period_required_dialog(on_selected=on_missing_period)
             return False
         return True
+
+    def _show_period_required_dialog(self, on_selected=None):
+        """Diálogo interativo: escolher período antes de gerar o relatório."""
+        if self.error_dialog:
+            try:
+                self.error_dialog.dismiss()
+            except Exception:
+                pass
+            self.error_dialog = None
+
+        tokens_fg = _theme_color('text_primary', (0.92, 0.94, 0.97, 1))
+        tokens_muted = _theme_color('text_secondary', (0.55, 0.58, 0.63, 1))
+        icon_color = _theme_color('warning', (0.9, 0.7, 0.15, 1))
+        card_alt = _theme_color('card_alt', (0.16, 0.18, 0.22, 1))
+        warning = _theme_color('warning', (0.9, 0.55, 0.12, 1))
+        primary = _theme_color('primary', (0.15, 0.52, 0.76, 1))
+        success = _theme_color('success', (0.2, 0.65, 0.33, 1))
+        info = _theme_color('info', (0.28, 0.47, 0.84, 1))
+        on_primary = _theme_color('on_primary', (1, 1, 1, 1))
+        divider = _theme_color('divider', (1, 1, 1, 0.12))
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(6), dp(4), dp(6), dp(2)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        # Cabeçalho
+        header = MDBoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+        header.add_widget(MDIcon(
+            icon="calendar-range",
+            theme_text_color="Custom",
+            text_color=icon_color,
+            size_hint=(None, None),
+            size=(dp(24), dp(24)),
+        ))
+        header.add_widget(MDLabel(
+            text="Selecione um período",
+            bold=True,
+            font_style="Body1",
+            theme_text_color="Custom",
+            text_color=tokens_fg,
+            valign="middle",
+        ))
+        content.add_widget(header)
+
+        body = MDLabel(
+            text=(
+                "É necessário definir o intervalo de datas antes de gerar "
+                "o relatório. Escolha um atalho ou abra o seletor completo."
+            ),
+            theme_text_color="Custom",
+            text_color=tokens_muted,
+            font_style="Body2",
+            halign="left",
+            valign="top",
+            size_hint_y=None,
+            text_size=(dp(400), None),
+        )
+        body.bind(
+            texture_size=lambda inst, val: setattr(inst, "height", max(dp(40), val[1] + dp(4))),
+            width=lambda inst, val: setattr(inst, "text_size", (max(dp(200), val - dp(8)), None)),
+        )
+        content.add_widget(body)
+
+        # Separador visual
+        sep = Widget(size_hint_y=None, height=dp(1))
+        with sep.canvas:
+            from kivy.graphics import Color, Rectangle
+            Color(rgba=divider)
+            sep._rect = Rectangle(pos=sep.pos, size=sep.size)
+        sep.bind(
+            pos=lambda inst, *_: setattr(inst._rect, "pos", inst.pos),
+            size=lambda inst, *_: setattr(inst._rect, "size", inst.size),
+        )
+        content.add_widget(sep)
+
+        content.add_widget(MDLabel(
+            text="Atalhos rápidos",
+            bold=True,
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=tokens_muted,
+            size_hint_y=None,
+            height=dp(20),
+        ))
+
+        shortcuts = MDGridLayout(
+            cols=3,
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(92),
+        )
+
+        def _pick(action):
+            def _handler(_btn):
+                action()
+                dlg = getattr(self, "error_dialog", None)
+                if dlg:
+                    dlg.dismiss()
+                    self.error_dialog = None
+                if callable(on_selected):
+                    Clock.schedule_once(lambda _dt: on_selected(), 0.05)
+            return _handler
+
+        shortcut_defs = [
+            ("Hoje", warning, self.apply_today_range),
+            ("7 dias", primary, lambda: self.apply_last_days_range(7)),
+            ("30 dias", success, lambda: self.apply_last_days_range(30)),
+            ("Este mês", info, self.apply_current_month_range),
+            ("Este ano", primary, self.apply_current_year_range),
+        ]
+        for label, color, action in shortcut_defs:
+            btn = MDRaisedButton(
+                text=label,
+                size_hint_y=None,
+                height=dp(40),
+                elevation=0,
+                md_bg_color=card_alt,
+                text_color=color,
+                on_release=_pick(action),
+            )
+            shortcuts.add_widget(btn)
+        content.add_widget(shortcuts)
+
+        # Botão período personalizado
+        custom_btn = MDRaisedButton(
+            text="Período personalizado…",
+            size_hint_y=None,
+            height=dp(42),
+            elevation=0,
+            md_bg_color=primary,
+            text_color=on_primary,
+            on_release=lambda _x: self._open_custom_period_from_dialog(on_selected),
+        )
+        content.add_widget(custom_btn)
+
+        self.error_dialog = MDDialog(
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(480), max(dp(320), Window.width * 0.90)), dp(360)),
+            buttons=[
+                MDFlatButton(
+                    text="CANCELAR",
+                    text_color=tokens_muted,
+                    on_release=lambda _x: self.error_dialog.dismiss() if self.error_dialog else None,
+                ),
+            ],
+        )
+
+        def _fit(*_a):
+            try:
+                h = max(dp(320), float(content.height) + dp(90))
+                self.error_dialog.height = min(h, max(dp(280), Window.height * 0.75))
+                self.error_dialog.width = min(dp(500), max(dp(320), Window.width * 0.90))
+                content.width = self.error_dialog.width - dp(40)
+            except Exception:
+                pass
+
+        Clock.schedule_once(_fit, 0)
+        Clock.schedule_once(_fit, 0.05)
+        self.error_dialog.open()
+
+    def _open_custom_period_from_dialog(self, on_selected=None):
+        """Fecha o aviso e abre o seletor completo de datas."""
+        if self.error_dialog:
+            try:
+                self.error_dialog.dismiss()
+            except Exception:
+                pass
+            self.error_dialog = None
+        self.select_date_range(on_complete=on_selected)
 
     # ------------------------------------------------------------------
     # Filtros de produto / categoria
@@ -949,8 +1186,28 @@ class ReportsScreen(MDScreen):
             self._filters_loading = False
 
     # ------------------------------------------------------------------
-    # Menus dropdown
+    # Menus dropdown (limitados para evitar menus enormes e bloqueio da UI)
     # ------------------------------------------------------------------
+
+    MAX_DROPDOWN_ITEMS = 80
+    _DROPDOWN_OVERFLOW_HINT = "… use a pesquisa acima para filtrar"
+
+    def _menu_source(self, full_list, default_item):
+        """Limita itens apresentados sem remover a opção padrão do topo."""
+        source = list(full_list or [default_item])
+        # Remove duplicados preservando a ordem; evita menus com linhas repetidas.
+        source = list(dict.fromkeys(str(item) for item in source if str(item).strip()))
+        if default_item not in source:
+            source.insert(0, default_item)
+        if len(source) <= self.MAX_DROPDOWN_ITEMS:
+            return source
+        rest = [item for item in source if item != default_item]
+        return [default_item] + rest[:self.MAX_DROPDOWN_ITEMS - 2] + [self._DROPDOWN_OVERFLOW_HINT]
+
+    def _focus_report_search(self):
+        search = self.ids.get("report_search_input") if hasattr(self, "ids") else None
+        if search is not None:
+            Clock.schedule_once(lambda _dt: setattr(search, "focus", True), 0.05)
 
     def open_product_menu(self, item):
         self._ensure_product_menu(item)
@@ -958,10 +1215,14 @@ class ReportsScreen(MDScreen):
             self.product_menu.open()
 
     def select_product(self, product_name):
-        if hasattr(self, 'product_spinner') and self.product_spinner:
-            self.product_spinner.text = product_name
-        if self.product_menu:
-            self.product_menu.dismiss()
+        if product_name == self._DROPDOWN_OVERFLOW_HINT:
+            self._dismiss_menu("product_menu")
+            self._focus_report_search()
+            return
+        spinner = getattr(self, "product_spinner", None) or (self.ids.get("product_spinner") if hasattr(self, "ids") else None)
+        if spinner is not None:
+            spinner.text = product_name
+        self._dismiss_menu("product_menu")
         self.update_product_selection(None, product_name)
         self._refresh_filter_summary()
 
@@ -971,10 +1232,14 @@ class ReportsScreen(MDScreen):
             self.category_menu.open()
 
     def select_category(self, category_name):
-        if hasattr(self, 'category_spinner') and self.category_spinner:
-            self.category_spinner.text = category_name
-        if self.category_menu:
-            self.category_menu.dismiss()
+        if category_name == self._DROPDOWN_OVERFLOW_HINT:
+            self._dismiss_menu("category_menu")
+            self._focus_report_search()
+            return
+        spinner = getattr(self, "category_spinner", None) or (self.ids.get("category_spinner") if hasattr(self, "ids") else None)
+        if spinner is not None:
+            spinner.text = category_name
+        self._dismiss_menu("category_menu")
         self.update_category_selection(None, category_name)
         self._refresh_filter_summary()
 
@@ -984,33 +1249,44 @@ class ReportsScreen(MDScreen):
             self.seller_menu.open()
 
     def select_seller(self, seller_name):
-        if hasattr(self, 'seller_spinner') and self.seller_spinner:
-            self.seller_spinner.text = seller_name
-        if self.seller_menu:
-            self.seller_menu.dismiss()
+        if seller_name == self._DROPDOWN_OVERFLOW_HINT:
+            self._dismiss_menu("seller_menu")
+            self._focus_report_search()
+            return
+        spinner = getattr(self, "seller_spinner", None) or (self.ids.get("seller_spinner") if hasattr(self, "ids") else None)
+        if spinner is not None:
+            spinner.text = seller_name
+        self._dismiss_menu("seller_menu")
         self.update_seller_selection(None, seller_name)
         self._refresh_filter_summary()
 
+    def _dismiss_menu(self, attr_name):
+        menu = getattr(self, attr_name, None)
+        if menu is not None:
+            try:
+                menu.dismiss()
+            except Exception as exc:
+                # O menu pode já ter sido fechado pela seleção/camada nativa.
+                print(f"Aviso ao fechar menu {attr_name}: {exc}")
+        setattr(self, attr_name, None)
+        signature_name = "_" + attr_name.replace("_menu", "_menu_signature")
+        if hasattr(self, signature_name):
+            setattr(self, signature_name, ())
+
     def _invalidate_product_menu(self):
-        if self.product_menu:
-            self.product_menu.dismiss()
-            self.product_menu = None
-        self._product_menu_signature = ()
+        self._dismiss_menu("product_menu")
 
     def _invalidate_category_menu(self):
-        if self.category_menu:
-            self.category_menu.dismiss()
-            self.category_menu = None
-        self._category_menu_signature = ()
+        self._dismiss_menu("category_menu")
 
     def _invalidate_seller_menu(self):
-        if self.seller_menu:
-            self.seller_menu.dismiss()
-            self.seller_menu = None
-        self._seller_menu_signature = ()
+        self._dismiss_menu("seller_menu")
 
     def _ensure_product_menu(self, caller):
-        source = self.filtered_products_list or self.products_list or ["Todos os Produtos"]
+        source = self._menu_source(
+            self.filtered_products_list or self.products_list,
+            "Todos os Produtos",
+        )
         sig = tuple(source)
         if self.product_menu is not None and self._product_menu_signature == sig:
             self.product_menu.caller = caller
@@ -1019,14 +1295,24 @@ class ReportsScreen(MDScreen):
         self._product_menu_signature = sig
         self.product_menu = MDDropdownMenu(
             caller=caller,
-            items=[{"text": p, "viewclass": "OneLineListItem",
-                    "on_release": lambda x=p: self.select_product(x)} for p in source],
-            width_mult=4,
-            max_height=dp(300),
+            items=[{
+                "text": product,
+                "viewclass": "OneLineListItem",
+                "height": dp(42),
+                "size_hint_y": None,
+                "on_release": (lambda value=product: self.select_product(value)),
+            } for product in source],
+            # 8 unidades (~448dp): evita que os nomes dos produtos quebrem
+            # em várias linhas e mantém o menu próximo da largura do campo.
+            width_mult=8,
+            max_height=min(dp(320), max(dp(180), Window.height * 0.40)),
         )
 
     def _ensure_category_menu(self, caller):
-        source = self.filtered_categories_list or self.categories_list or ["Todas as Categorias"]
+        source = self._menu_source(
+            self.filtered_categories_list or self.categories_list,
+            "Todas as Categorias",
+        )
         sig = tuple(source)
         if self.category_menu is not None and self._category_menu_signature == sig:
             self.category_menu.caller = caller
@@ -1035,14 +1321,22 @@ class ReportsScreen(MDScreen):
         self._category_menu_signature = sig
         self.category_menu = MDDropdownMenu(
             caller=caller,
-            items=[{"text": c, "viewclass": "OneLineListItem",
-                    "on_release": lambda x=c: self.select_category(x)} for c in source],
-            width_mult=4,
-            max_height=dp(300),
+            items=[{
+                "text": category,
+                "viewclass": "OneLineListItem",
+                "height": dp(42),
+                "size_hint_y": None,
+                "on_release": (lambda value=category: self.select_category(value)),
+            } for category in source],
+            width_mult=8,
+            max_height=min(dp(320), max(dp(180), Window.height * 0.40)),
         )
 
     def _ensure_seller_menu(self, caller):
-        source = self.filtered_sellers_list or self.sellers_list or ["Todos os Vendedores"]
+        source = self._menu_source(
+            self.filtered_sellers_list or self.sellers_list,
+            "Todos os Vendedores",
+        )
         sig = tuple(source)
         if self.seller_menu is not None and self._seller_menu_signature == sig:
             self.seller_menu.caller = caller
@@ -1051,10 +1345,15 @@ class ReportsScreen(MDScreen):
         self._seller_menu_signature = sig
         self.seller_menu = MDDropdownMenu(
             caller=caller,
-            items=[{"text": s, "viewclass": "OneLineListItem",
-                    "on_release": lambda x=s: self.select_seller(x)} for s in source],
-            width_mult=4,
-            max_height=dp(300),
+            items=[{
+                "text": seller,
+                "viewclass": "OneLineListItem",
+                "height": dp(42),
+                "size_hint_y": None,
+                "on_release": (lambda value=seller: self.select_seller(value)),
+            } for seller in source],
+            width_mult=8,
+            max_height=min(dp(320), max(dp(180), Window.height * 0.40)),
         )
 
     # ------------------------------------------------------------------
@@ -1149,25 +1448,42 @@ class ReportsScreen(MDScreen):
     # Geradores de relatório (lazy import)
     # ------------------------------------------------------------------
 
+    def _ensure_report_generator(self, attr_name):
+        """Importa apenas o gerador necessário (mais rápido na 1.ª geração)."""
+        existing = getattr(self, attr_name, None)
+        if existing is not None:
+            return existing
+        mapping = {
+            "sales_report": ("pdfs.sales_report", "SalesReport"),
+            "stock_report": ("pdfs.stock_report", "StockReport"),
+            "profit_report": ("pdfs.profit_report", "ProfitReport"),
+            "complete_report": ("pdfs.complete_report", "CompleteReport"),
+            "productivity_charts_report": ("pdfs.productivity_charts_report", "ProductivityChartsReport"),
+            "cash_user_report": ("pdfs.cash_user_report", "CashUserReport"),
+        }
+        if attr_name not in mapping:
+            raise KeyError(f"Gerador desconhecido: {attr_name}")
+        mod_name, cls_name = mapping[attr_name]
+        import importlib
+        mod = importlib.import_module(mod_name)
+        instance = getattr(mod, cls_name)()
+        setattr(self, attr_name, instance)
+        return instance
+
     def _ensure_report_generators(self):
-        if self.sales_report is None:
-            from pdfs.sales_report import SalesReport
-            self.sales_report = SalesReport()
-        if self.stock_report is None:
-            from pdfs.stock_report import StockReport
-            self.stock_report = StockReport()
-        if self.profit_report is None:
-            from pdfs.profit_report import ProfitReport
-            self.profit_report = ProfitReport()
-        if self.complete_report is None:
-            from pdfs.complete_report import CompleteReport
-            self.complete_report = CompleteReport()
-        if self.productivity_charts_report is None:
-            from pdfs.productivity_charts_report import ProductivityChartsReport
-            self.productivity_charts_report = ProductivityChartsReport()
-        if self.cash_user_report is None:
-            from pdfs.cash_user_report import CashUserReport
-            self.cash_user_report = CashUserReport()
+        """Compatibilidade: carrega todos (preferir _ensure_report_generator)."""
+        for attr in (
+            "sales_report",
+            "stock_report",
+            "profit_report",
+            "complete_report",
+            "productivity_charts_report",
+            "cash_user_report",
+        ):
+            try:
+                self._ensure_report_generator(attr)
+            except Exception as exc:
+                print(f"[Reports] Falha a carregar {attr}: {exc}")
 
     def _ensure_pdf_viewer(self):
         if self.pdf_viewer is None:
@@ -1341,8 +1657,8 @@ class ReportsScreen(MDScreen):
         for badge_id in ('ai_badge', 'recommendations_badge'):
             badge = self.ids.get(badge_id)
             if badge is not None:
-                badge.opacity = 1
-                badge.size = (dp(26), dp(26))
+                badge.opacity = 0
+                badge.size = (dp(0), dp(0))
 
     def add_notification(self):
         self.notification_count += 1
@@ -1361,8 +1677,9 @@ class ReportsScreen(MDScreen):
             self._show_badge()
             set_attention_shake(self.ids.get('ai_button'), True)
         else:
-            self.ids.ai_badge.opacity = 1
-            self.ids.ai_badge.size = (dp(26), dp(26))
+            Animation.cancel_all(self.ids.ai_badge)
+            self.ids.ai_badge.opacity = 0
+            self.ids.ai_badge.size = (dp(0), dp(0))
             set_attention_shake(self.ids.get('ai_button'), False)
 
     def update_recommendation_badge(self, count):
@@ -1379,8 +1696,9 @@ class ReportsScreen(MDScreen):
             Animation(size=(dp(26), dp(26)), duration=0.25, transition='out_back').start(badge)
             set_attention_shake(self.ids.get('recommendations_button'), True)
             return
-        badge.opacity = 1
-        badge.size = (dp(26), dp(26))
+        Animation.cancel_all(badge)
+        badge.opacity = 0
+        badge.size = (dp(0), dp(0))
         set_attention_shake(self.ids.get('recommendations_button'), False)
 
     def _show_badge(self):
@@ -1435,7 +1753,7 @@ class ReportsScreen(MDScreen):
 
     def get_filtered_data(self, start_date=None, end_date=None,
                           selected_product=None, selected_category=None,
-                          selected_seller=None):
+                          selected_seller=None, skip_expiry=False):
         start_date = start_date or self.start_date
         end_date   = end_date   or self.end_date
         if not start_date or not end_date:
@@ -1471,16 +1789,15 @@ class ReportsScreen(MDScreen):
                 (df['lucro_unitario'] / df['unit_purchase_price']) * 100
             ).fillna(0)
             df['valor_total_vendas'] = df['total_sales']
-            expiry_vals = df['expiry_date'] if 'expiry_date' in df.columns else [None] * len(df)
-            alerts = [evaluate_expiry_alert(v) for v in expiry_vals]
-            df['expiry_alert_level']  = [a['level']       for a in alerts]
-            df['expiry_alert_label']  = [a['label']       for a in alerts]
-            df['expiry_alert_short']  = [a['short_label'] for a in alerts]
-            df['expiry_days_left']    = [a['days_left']   for a in alerts]
-            df['expiry_alert_color']  = [a['color_hex']   for a in alerts]
-            df['expiry_has_alert']    = [bool(a['is_alert']) for a in alerts]
-            if df['sold_stock'].sum() == 0:
-                return None
+            if (not skip_expiry) and 'expiry_date' in df.columns:
+                from utils.business.expiry_alerts import evaluate_expiry_alert
+                alerts = [evaluate_expiry_alert(v) for v in df['expiry_date']]
+                df['expiry_alert_level'] = [a.get('level') for a in alerts]
+                df['expiry_alert_label'] = [a.get('label') for a in alerts]
+                df['expiry_alert_short'] = [a.get('short_label') for a in alerts]
+                df['expiry_days_left'] = [a.get('days_left') for a in alerts]
+                df['expiry_alert_color'] = [a.get('color') for a in alerts]
+
             return df
         except Exception as e:
             print(f"Erro ao obter dados filtrados: {e}")
@@ -1514,54 +1831,148 @@ class ReportsScreen(MDScreen):
     # ------------------------------------------------------------------
 
     def _generate_report_async(self, report_kind):
+        """Carrega dados e abre pré-visualização interna (PDF só sob pedido)."""
         config = self._report_config(report_kind)
         if config is None or self._report_generation_busy:
             return
         button_id, generator_attr, report_label = config
-        if not self.validate_filters():
+        if not self.validate_filters(on_missing_period=lambda: self._generate_report_async(report_kind)):
             return
 
         start_date = self.start_date
-        end_date   = self.end_date
-        selected_product  = self.selected_product
+        end_date = self.end_date
+        selected_product = self.selected_product
         selected_category = self.selected_category
         selected_seller = self.selected_seller
         filters_dict = dict(self._get_filters_dict())
-        self._ensure_report_generators()
-        self._set_report_generation_busy(True, button_id=button_id, status_text="A gerar...")
-        self.search_status_text  = f"{report_label} em preparação..."
-        self.search_summary_text = "Os dados estão a ser processados em segundo plano."
+        self._set_report_generation_busy(True, button_id=button_id, status_text="A carregar...")
+        self.search_status_text = f"{report_label}: a carregar dados..."
+        self.search_summary_text = "A preparar a visualização interna."
 
         def worker():
             try:
                 df = self.get_filtered_data(
-                    start_date=start_date, end_date=end_date,
-                    selected_product=selected_product, selected_category=selected_category,
+                    start_date=start_date,
+                    end_date=end_date,
+                    selected_product=selected_product,
+                    selected_category=selected_category,
                     selected_seller=selected_seller,
+                    skip_expiry=True,
                 )
                 if df is None:
                     return {"status": "empty"}
-                generator = getattr(self, generator_attr, None)
-                if generator is None:
-                    raise RuntimeError("Gerador de relatório indisponível")
-                return {"status": "ok", "pdf_path": generator.generate(df, filters_dict)}
+                return {
+                    "status": "ok",
+                    "df": df,
+                    "filters": filters_dict,
+                    "kind": report_kind,
+                    "generator_attr": generator_attr,
+                    "label": report_label,
+                }
             except Exception as exc:
                 return {"status": "error", "message": str(exc)}
 
         def apply_result(result):
             self._finish_report_generation()
             status = (result or {}).get("status")
-            if status == "ok":
-                self.show_success_popup(result.get("pdf_path"))
-            elif status == "empty":
-                self.show_error_popup('Nenhum dado encontrado para os filtros selecionados')
-            else:
-                msg = (result or {}).get("message") or "Erro ao gerar relatório."
-                self.show_error_popup(f'Erro ao gerar relatorio:\n{msg}')
-                print(f"Erro detalhado: {msg}")
+            if status == "empty":
+                self.show_error_popup("Nenhum dado encontrado para os filtros selecionados")
+                return
+            if status != "ok":
+                msg = (result or {}).get("message") or "Erro ao carregar dados."
+                self.show_error_popup(f"Erro:\n{msg}")
+                return
+            self._open_report_preview(
+                kind=result["kind"],
+                df=result["df"],
+                filters=result["filters"],
+                generator_attr=result["generator_attr"],
+                label=result["label"],
+            )
 
-        Thread(target=lambda: Clock.schedule_once(
-            lambda dt, r=worker(): apply_result(r), 0), daemon=True).start()
+        def run():
+            result = worker()
+            Clock.schedule_once(lambda dt: apply_result(result), 0)
+
+        Thread(target=run, daemon=True).start()
+
+    def _open_report_preview(self, kind, df, filters, generator_attr, label):
+        """Abre pré-visualização; se o módulo faltar, exporta PDF direto."""
+        def do_export(dataframe=None):
+            self._export_preview_to_pdf(
+                generator_attr=generator_attr,
+                df=dataframe if dataframe is not None else df,
+                filters=filters,
+                label=label,
+            )
+
+        ReportDataPreview = None
+        columns_for_report = None
+        kpis_from_dataframe = None
+        for mod_path in (
+            "ui.components.report_preview",
+            "pdfs.report_preview",
+            "report_preview",
+        ):
+            try:
+                import importlib
+                mod = importlib.import_module(mod_path)
+                ReportDataPreview = getattr(mod, "ReportDataPreview", None)
+                columns_for_report = getattr(mod, "columns_for_report", None)
+                kpis_from_dataframe = getattr(mod, "kpis_from_dataframe", None)
+                if ReportDataPreview is not None:
+                    break
+            except Exception:
+                continue
+
+        if ReportDataPreview is None or columns_for_report is None:
+            # Fallback: gera PDF sem pré-visualização (ecrã continua funcional)
+            print("[Reports] report_preview indisponível — a exportar PDF direto.")
+            do_export(df)
+            return
+
+        try:
+            dlg = ReportDataPreview(
+                title=f"{label} — visualização",
+                dataframe=df,
+                columns=columns_for_report(kind),
+                kpis=kpis_from_dataframe(df) if callable(kpis_from_dataframe) else [],
+                on_export_pdf=do_export,
+            )
+            dlg.open()
+        except Exception as exc:
+            print(f"[Reports] Falha na pré-visualização: {exc}")
+            do_export(df)
+
+    def _export_preview_to_pdf(self, generator_attr, df, filters, label):
+        if self._report_generation_busy:
+            return
+        self._set_report_generation_busy(True, status_text="A exportar PDF...")
+        self.search_status_text = f"A gerar PDF: {label}..."
+
+        def worker():
+            try:
+                generator = self._ensure_report_generator(generator_attr)
+                path = generator.generate(df, filters)
+                return {"status": "ok", "pdf_path": path}
+            except Exception as exc:
+                return {"status": "error", "message": str(exc)}
+
+        def apply(result):
+            self._finish_report_generation()
+            if (result or {}).get("status") == "ok" and result.get("pdf_path"):
+                self.show_success_popup(result["pdf_path"])
+            else:
+                self.show_error_popup(
+                    (result or {}).get("message") or "Falha ao exportar PDF."
+                )
+
+        def run():
+            result = worker()
+            Clock.schedule_once(lambda dt: apply(result), 0)
+
+        Thread(target=run, daemon=True).start()
+
 
     def generate_sales_report(self):
         self._generate_report_async("sales")
@@ -1578,7 +1989,7 @@ class ReportsScreen(MDScreen):
     def generate_cash_user_report(self):
         if self._report_generation_busy:
             return
-        if not self.validate_filters():
+        if not self.validate_filters(on_missing_period=self.generate_cash_user_report):
             return
         start_date = self.start_date
         end_date   = self.end_date
@@ -1610,8 +2021,10 @@ class ReportsScreen(MDScreen):
         def apply_result(result):
             self._finish_report_generation()
             status = (result or {}).get("status")
-            if status == "ok":
+            if status == "ok" and result.get("pdf_path"):
                 self.show_success_popup(result.get("pdf_path"))
+            elif status == "ok":
+                self.show_error_popup("O relatório de caixa foi gerado, mas o caminho do PDF não foi devolvido.")
             elif status == "empty":
                 self.show_error_popup("Nao ha movimentos de caixa no periodo selecionado.")
             else:
@@ -1624,7 +2037,7 @@ class ReportsScreen(MDScreen):
     def print_productivity_charts(self):
         if self._printing_charts_busy:
             return
-        if not self.validate_filters():
+        if not self.validate_filters(on_missing_period=self.print_productivity_charts):
             return
         start_date = self.start_date
         end_date   = self.end_date
@@ -1819,6 +2232,22 @@ class ReportsScreen(MDScreen):
 
         Clock.schedule_once(lambda dt: Thread(target=worker, daemon=True).start(), 0.05)
 
+    def _update_pdf_dialog_layout(self, *args):
+        if not self._pdf_dialog_body or not self._pdf_dialog_scroll:
+            return
+        content_height = min(dp(520), max(dp(320), Window.height * 0.64))
+        scroll_height = max(dp(180), content_height - dp(154))
+        self._pdf_dialog_body.height = content_height
+        self._pdf_dialog_scroll.height = scroll_height
+
+    def _bind_pdf_dialog_layout(self):
+        try:
+            Window.unbind(on_resize=self._update_pdf_dialog_layout)
+        except Exception:
+            pass
+        Window.bind(on_resize=self._update_pdf_dialog_layout)
+        self._update_pdf_dialog_layout()
+
     def _create_pdf_list_dialog(self):
         if self.pdf_dialog:
             self.pdf_dialog.dismiss()
@@ -1896,6 +2325,8 @@ class ReportsScreen(MDScreen):
                             do_scroll_x=False, bar_width=dp(4))
         scroll.add_widget(self._pdf_list_container)
         body.add_widget(scroll)
+        self._pdf_dialog_body = body
+        self._pdf_dialog_scroll = scroll
 
         close_btn = MDFlatButton(text="FECHAR", on_release=lambda x: self._dismiss_pdf_dialog())
         self._pdf_delete_filtered_button = MDRaisedButton(
@@ -1906,12 +2337,14 @@ class ReportsScreen(MDScreen):
         )
 
         self.pdf_dialog = MDDialog(
-            title="PDFs Disponiveis",
+            title="PDFs disponíveis",
             type="custom", content_cls=body,
             size_hint=(None, None),
-            size=(min(dp(980), Window.width * 0.9), min(dp(620), Window.height * 0.76)),
+            size=(min(dp(980), Window.width * 0.92), min(dp(680), Window.height * 0.82)),
             buttons=[close_btn, self._pdf_delete_filtered_button],
         )
+        self._style_dialog(self.pdf_dialog, max_width=980, max_height=680, width_ratio=0.92, height_ratio=0.82)
+        self._bind_pdf_dialog_layout()
         self.pdf_dialog.open()
 
     def _dismiss_pdf_dialog(self):
@@ -1923,6 +2356,12 @@ class ReportsScreen(MDScreen):
             self._pdf_render_ev = None
         self._pdf_pending_items = deque()
         self._pdf_load_more_button = None
+        try:
+            Window.unbind(on_resize=self._update_pdf_dialog_layout)
+        except Exception:
+            pass
+        self._pdf_dialog_body = None
+        self._pdf_dialog_scroll = None
         if self.pdf_dialog:
             self.pdf_dialog.dismiss()
             self.pdf_dialog = None
@@ -1979,7 +2418,7 @@ class ReportsScreen(MDScreen):
         self._pdf_selector_button.disabled = not has_files
         if not has_files:
             self._pdf_type_filter = None
-            self._pdf_selector_button.text = "NENHUM PDF DISPONIVEL"
+            self._pdf_selector_button.text = "NENHUM PDF DISPONÍVEL"
             return
 
         type_filters = self._get_pdf_type_filters()
@@ -2004,7 +2443,7 @@ class ReportsScreen(MDScreen):
             caller=self._pdf_selector_button,
             items=items,
             width_mult=5,
-            max_height=dp(360),
+            max_height=min(dp(420), max(dp(200), Window.height * 0.50)),
         )
 
     def _set_pdf_selector_text(self, type_filters=None):
@@ -2225,51 +2664,176 @@ class ReportsScreen(MDScreen):
             dlg.dismiss()
             self.delete_pdf_dialog = None
 
-    def _confirm_delete_pdf(self, pdf_path):
+    def _build_confirm_content(self, message, detail="", icon_name="delete-outline"):
+        """Conteúdo legível para diálogos de confirmação (largura estável)."""
+        tokens_fg = _theme_color('text_primary', (0.92, 0.94, 0.97, 1))
+        tokens_muted = _theme_color('text_secondary', (0.55, 0.58, 0.63, 1))
+        danger = _theme_color('danger', (0.85, 0.3, 0.3, 1))
+        card_alt = _theme_color('card_alt', (0.16, 0.18, 0.22, 1))
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(4), dp(4), dp(2)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        header = MDBoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+        header.add_widget(MDIcon(
+            icon=icon_name,
+            theme_text_color="Custom",
+            text_color=danger,
+            size_hint=(None, None),
+            size=(dp(24), dp(24)),
+        ))
+        header.add_widget(MDLabel(
+            text="Confirmar eliminação",
+            bold=True,
+            font_style="Body1",
+            theme_text_color="Custom",
+            text_color=tokens_fg,
+            valign="middle",
+        ))
+        content.add_widget(header)
+
+        body = MDLabel(
+            text=str(message or ""),
+            theme_text_color="Custom",
+            text_color=tokens_muted,
+            font_style="Body2",
+            halign="left",
+            valign="top",
+            size_hint_y=None,
+            text_size=(dp(380), None),
+        )
+        body.bind(
+            texture_size=lambda inst, val: setattr(inst, "height", max(dp(36), val[1] + dp(4))),
+            width=lambda inst, val: setattr(inst, "text_size", (max(dp(240), val - dp(8)), None)),
+        )
+        content.add_widget(body)
+
+        if detail:
+            detail_card = MDCard(
+                orientation="vertical",
+                size_hint_y=None,
+                height=dp(44),
+                padding=[dp(12), dp(8)],
+                radius=[dp(10)],
+                elevation=0,
+                md_bg_color=card_alt,
+            )
+            detail_lbl = MDLabel(
+                text=str(detail),
+                theme_text_color="Custom",
+                text_color=tokens_fg,
+                font_style="Caption",
+                bold=True,
+                halign="left",
+                valign="middle",
+                shorten=True,
+                shorten_from="middle",
+            )
+            detail_lbl.bind(size=lambda inst, *_: setattr(inst, "text_size", (inst.width, None)))
+            detail_card.add_widget(detail_lbl)
+            content.add_widget(detail_card)
+
+        return content
+
+    def _open_confirm_dialog(self, content, buttons, width=dp(440), height=dp(240)):
+        """Abre diálogo de confirmação com tamanho estável e legível."""
         self._dismiss_delete_pdf_dialog()
-        filename = os.path.basename(pdf_path)
+        dlg_width = min(float(width), max(dp(320), Window.width * 0.88))
+        dlg_height = min(float(height), max(dp(200), Window.height * 0.55))
         self.delete_pdf_dialog = MDDialog(
-            title="Eliminar PDF",
-            text=f"Quer eliminar este arquivo?\n{filename}",
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(dlg_width, dlg_height),
+            buttons=buttons,
+        )
+
+        def _fit(*_a):
+            try:
+                content.width = self.delete_pdf_dialog.width - dp(40)
+                needed = max(dp(200), float(content.height) + dp(100))
+                self.delete_pdf_dialog.height = min(needed, max(dp(220), Window.height * 0.6))
+                self.delete_pdf_dialog.width = min(dp(480), max(dp(320), Window.width * 0.88))
+            except Exception:
+                pass
+
+        Clock.schedule_once(_fit, 0)
+        Clock.schedule_once(_fit, 0.05)
+        self.delete_pdf_dialog.open()
+        return self.delete_pdf_dialog
+
+    def _confirm_delete_pdf(self, pdf_path):
+        filename = os.path.basename(pdf_path)
+        content = self._build_confirm_content(
+            "Quer eliminar este arquivo? Esta ação não pode ser desfeita.",
+            detail=filename,
+            icon_name="delete-outline",
+        )
+        self._open_confirm_dialog(
+            content,
             buttons=[
-                MDFlatButton(text="CANCELAR", on_release=lambda _: self._dismiss_delete_pdf_dialog()),
+                MDFlatButton(
+                    text="CANCELAR",
+                    text_color=_theme_color('text_secondary', (0.55, 0.58, 0.63, 1)),
+                    on_release=lambda _: self._dismiss_delete_pdf_dialog(),
+                ),
                 MDRaisedButton(
                     text="ELIMINAR",
                     md_bg_color=_theme_color('danger', (0.85, 0.3, 0.3, 1)),
+                    text_color=_theme_color('on_primary', (1, 1, 1, 1)),
                     on_release=lambda _, p=pdf_path: self._delete_pdf_and_refresh(p),
                 ),
             ],
+            width=dp(440),
+            height=dp(260),
         )
-        self.delete_pdf_dialog.open()
 
     def _confirm_delete_filtered_pdfs(self):
         files = [path for path in self._pdf_filtered_files if os.path.exists(path)]
         if not files:
             self.show_error_popup("Nenhum PDF selecionado.")
             return
-        self._dismiss_delete_pdf_dialog()
         total = len(files)
         type_filters = self._get_pdf_type_filters()
         if self._pdf_type_filter in type_filters:
-            prompt = (
+            message = (
                 f"Quer apagar {total} PDF(s) filtrado(s) por "
-                f"{type_filters[self._pdf_type_filter]}?"
+                f"«{type_filters[self._pdf_type_filter]}»?"
             )
+            detail = f"{total} ficheiro(s) serão eliminados"
         else:
-            prompt = f"Quer apagar todos os {total} PDFs encontrados?"
-        self.delete_pdf_dialog = MDDialog(
-            title="Apagar PDFs",
-            text=prompt,
+            message = f"Quer apagar todos os {total} PDFs encontrados?"
+            detail = f"{total} ficheiro(s) serão eliminados"
+
+        content = self._build_confirm_content(
+            message + " Esta ação não pode ser desfeita.",
+            detail=detail,
+            icon_name="delete-sweep-outline",
+        )
+        self._open_confirm_dialog(
+            content,
             buttons=[
-                MDFlatButton(text="CANCELAR", on_release=lambda _: self._dismiss_delete_pdf_dialog()),
+                MDFlatButton(
+                    text="CANCELAR",
+                    text_color=_theme_color('text_secondary', (0.55, 0.58, 0.63, 1)),
+                    on_release=lambda _: self._dismiss_delete_pdf_dialog(),
+                ),
                 MDRaisedButton(
                     text="APAGAR",
                     md_bg_color=_theme_color('danger', (0.85, 0.3, 0.3, 1)),
+                    text_color=_theme_color('on_primary', (1, 1, 1, 1)),
                     on_release=lambda _, selected=list(files): self._delete_pdfs_and_refresh(selected),
                 ),
             ],
+            width=dp(460),
+            height=dp(270),
         )
-        self.delete_pdf_dialog.open()
 
     def _delete_pdf_and_refresh(self, pdf_path):
         self._delete_pdfs_and_refresh([pdf_path])
@@ -2335,31 +2899,166 @@ class ReportsScreen(MDScreen):
         self._ensure_pdf_viewer().view_pdf(pdf_path)
 
     # ------------------------------------------------------------------
+    # Sistema visual de dialogs
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dialog_size(max_width=620, max_height=520, width_ratio=0.90, height_ratio=0.82):
+        """Calcula dimensões seguras para dialogs em janelas de vários tamanhos."""
+        width = min(dp(max_width), max(dp(300), Window.width * width_ratio))
+        height = min(dp(max_height), max(dp(220), Window.height * height_ratio))
+        return width, height
+
+    def _style_dialog(self, dialog, max_width=620, max_height=520, width_ratio=0.90, height_ratio=0.82):
+        """Padroniza dialogs e acompanha o redimensionamento da janela."""
+        if dialog is None:
+            return None
+
+        dialog.size_hint = (None, None)
+
+        def resize(*_args):
+            try:
+                if dialog.parent is not None:
+                    dialog.size = self._dialog_size(
+                        max_width=max_width,
+                        max_height=max_height,
+                        width_ratio=width_ratio,
+                        height_ratio=height_ratio,
+                    )
+            except Exception:
+                pass
+
+        resize()
+
+        def cleanup(*_args):
+            try:
+                Window.unbind(on_resize=resize)
+            except Exception:
+                pass
+
+        dialog.bind(on_dismiss=cleanup)
+        Window.bind(on_resize=resize)
+        return dialog
+
+    @staticmethod
+    def _dialog_button(text, callback, *, primary=False, color_key='primary'):
+        button_cls = MDRaisedButton if primary else MDFlatButton
+        kwargs = {
+            'text': text,
+            'on_release': callback,
+        }
+        if primary:
+            kwargs.update({
+                'md_bg_color': _theme_color(color_key, (0.15, 0.52, 0.76, 1)),
+                'text_color': _theme_color('on_primary', (1, 1, 1, 1)),
+            })
+        else:
+            kwargs.update({
+                'text_color': _theme_color(color_key, (0.15, 0.52, 0.76, 1)),
+            })
+        return button_cls(**kwargs)
+
+    # ------------------------------------------------------------------
     # Popups de erro / sucesso
     # ------------------------------------------------------------------
+
+    def _build_message_content(self, message, icon_name="alert-circle-outline", icon_color_key="warning"):
+        """Conteudo de dialogo com texto legivel (sem quebrar por coluna)."""
+        tokens_fg = _theme_color('text_primary', (0.92, 0.94, 0.97, 1))
+        tokens_muted = _theme_color('text_secondary', (0.55, 0.58, 0.63, 1))
+        icon_color = _theme_color(icon_color_key, (0.9, 0.7, 0.15, 1))
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(4), dp(4), dp(2)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        header = MDBoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+        header.add_widget(MDIcon(
+            icon=icon_name,
+            theme_text_color="Custom",
+            text_color=icon_color,
+            size_hint=(None, None),
+            size=(dp(24), dp(24)),
+        ))
+        header.add_widget(MDLabel(
+            text="Aviso",
+            bold=True,
+            font_style="Body1",
+            theme_text_color="Custom",
+            text_color=tokens_fg,
+            valign="middle",
+        ))
+        content.add_widget(header)
+
+        body = MDLabel(
+            text=str(message or ""),
+            theme_text_color="Custom",
+            text_color=tokens_muted,
+            font_style="Body2",
+            halign="left",
+            valign="top",
+            size_hint_y=None,
+            text_size=(dp(400), None),
+        )
+        body.bind(
+            texture_size=lambda inst, val: setattr(inst, "height", max(dp(48), val[1] + dp(4))),
+            width=lambda inst, val: setattr(inst, "text_size", (max(dp(200), val - dp(8)), None)),
+        )
+        content.add_widget(body)
+        return content
 
     def show_error_popup(self, message):
         if self.error_dialog:
             self.error_dialog.dismiss()
+        content = self._build_message_content(message)
         self.error_dialog = MDDialog(
-            title="Atencao", text=message,
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(460), max(dp(320), Window.width * 0.88)), dp(240)),
             buttons=[MDRaisedButton(
                 text="ENTENDI",
                 md_bg_color=_theme_color('danger', (0.85, 0.3, 0.3, 1)),
+                text_color=_theme_color('on_primary', (1, 1, 1, 1)),
                 on_release=lambda x: self.error_dialog.dismiss(),
             )],
         )
+        # Ajusta altura ao conteudo apos abrir
+        def _fit(*_a):
+            try:
+                h = max(dp(200), float(content.height) + dp(100))
+                self.error_dialog.height = min(h, max(dp(220), Window.height * 0.7))
+                self.error_dialog.width = min(dp(480), max(dp(320), Window.width * 0.88))
+                content.width = self.error_dialog.width - dp(40)
+            except Exception:
+                pass
+        Clock.schedule_once(_fit, 0)
+        Clock.schedule_once(_fit, 0.05)
         self.error_dialog.open()
 
     def show_success_popup(self, pdf_path):
         filename = os.path.basename(pdf_path)
         if self.success_dialog:
             self.success_dialog.dismiss()
+        content = self._build_message_content(
+            f"Relatorio gerado com sucesso.\n\n{filename}",
+            icon_name="check-circle-outline",
+            icon_color_key="success",
+        )
         self.success_dialog = MDDialog(
-            title="Sucesso", text=f"Relatorio gerado:\n{filename}",
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(480), max(dp(320), Window.width * 0.88)), dp(260)),
             buttons=[
-                MDFlatButton(text="FECHAR",       on_release=lambda x: self.success_dialog.dismiss()),
-                MDFlatButton(text="IMPRIMIR PDF",  on_release=lambda x: self._print_pdf_after_generation(pdf_path)),
+                MDFlatButton(text="FECHAR", on_release=lambda x: self.success_dialog.dismiss()),
+                MDFlatButton(text="IMPRIMIR PDF", on_release=lambda x: self._print_pdf_after_generation(pdf_path)),
                 MDRaisedButton(
                     text="VISUALIZAR PDF",
                     md_bg_color=_theme_color('primary', (0.15, 0.52, 0.76, 1)),
@@ -2367,6 +3066,14 @@ class ReportsScreen(MDScreen):
                 ),
             ],
         )
+        def _fit(*_a):
+            try:
+                self.success_dialog.width = min(dp(500), max(dp(320), Window.width * 0.88))
+                self.success_dialog.height = min(dp(300), max(dp(220), float(content.height) + dp(120)))
+                content.width = self.success_dialog.width - dp(40)
+            except Exception:
+                pass
+        Clock.schedule_once(_fit, 0)
         self.success_dialog.open()
 
     def _print_pdf_after_generation(self, pdf_path):
@@ -2381,6 +3088,7 @@ class ReportsScreen(MDScreen):
                 getattr(viewer, "last_print_message", ""),
             )
 
+
     def show_pdf_print_ready_popup(self, pdf_path, message=""):
         filename = os.path.basename(pdf_path)
         if self.success_dialog:
@@ -2388,12 +3096,17 @@ class ReportsScreen(MDScreen):
         guidance = str(message or "").strip() or (
             "Abra o PDF para concluir a impressao pelo leitor disponivel."
         )
+        content = self._build_message_content(
+            f"O PDF foi preparado:\n{filename}\n\n{guidance}",
+            icon_name="printer-outline",
+            icon_color_key="info",
+        )
         self.success_dialog = MDDialog(
-            title="PDF pronto para imprimir",
-            text=(
-                f"O PDF foi preparado:\n{filename}\n\n"
-                f"{guidance}\nAbra-o para imprimir manualmente."
-            ),
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(480), max(dp(320), Window.width * 0.88)), dp(280)),
             buttons=[
                 MDFlatButton(text="FECHAR", on_release=lambda x: self.success_dialog.dismiss()),
                 MDRaisedButton(
@@ -2409,8 +3122,17 @@ class ReportsScreen(MDScreen):
         filename = os.path.basename(pdf_path)
         if self.success_dialog:
             self.success_dialog.dismiss()
+        content = self._build_message_content(
+            f"PDF preparado e enviado para impressao:\n{filename}",
+            icon_name="check-circle-outline",
+            icon_color_key="success",
+        )
         self.success_dialog = MDDialog(
-            title="Graficos enviados", text=f"PDF preparado e enviado para impressao:\n{filename}",
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(480), max(dp(320), Window.width * 0.88)), dp(240)),
             buttons=[
                 MDFlatButton(text="FECHAR", on_release=lambda x: self.success_dialog.dismiss()),
                 MDRaisedButton(
@@ -2426,8 +3148,17 @@ class ReportsScreen(MDScreen):
         filename = os.path.basename(pdf_path)
         if self.success_dialog:
             self.success_dialog.dismiss()
+        content = self._build_message_content(
+            f"Arquivo enviado para impressao:\n{filename}",
+            icon_name="printer-check",
+            icon_color_key="success",
+        )
         self.success_dialog = MDDialog(
-            title="PDF enviado", text=f"Arquivo enviado para impressao:\n{filename}",
+            title="",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(480), max(dp(320), Window.width * 0.88)), dp(240)),
             buttons=[
                 MDFlatButton(text="FECHAR", on_release=lambda x: self.success_dialog.dismiss()),
                 MDRaisedButton(
@@ -2438,6 +3169,7 @@ class ReportsScreen(MDScreen):
             ],
         )
         self.success_dialog.open()
+
 
     def _view_pdf_and_close(self, pdf_path):
         if self.success_dialog:

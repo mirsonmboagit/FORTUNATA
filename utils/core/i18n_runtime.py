@@ -138,7 +138,7 @@ def install_i18n_hooks() -> None:
     if _DIALOG_HOOKED:
         return
     try:
-        from kivymd.uix.dialog import MDDialog
+        from ui.components.native_widgets import NativeDialog as MDDialog
     except Exception:
         return
 

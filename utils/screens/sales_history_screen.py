@@ -1,5 +1,5 @@
 """
-SalesHistoryScreen — v3
+SalesHistoryScreen — v4
 
 Regras de comportamento
 ───────────────────────
@@ -7,20 +7,17 @@ Regras de comportamento
   Mostra apenas os filtros. O utilizador escolhe o filtro e carrega.
 
 • RecycleView substitui a criação manual de widgets por linha.
-  Suporta 50 000+ linhas sem atraso perceptível: apenas as linhas
-  visíveis são renderizadas (reciclagem de views, igual a RecyclerView
-  no Android).
 
 • Botão "ELIMINAR HISTÓRICO" na AppBar com confirmação em 2 passos.
 
-• _show_loading_state nunca bloqueia a UI thread (sem clear_widgets()
-  síncrono ao pressionar um botão).
+• _show_loading_state nunca bloqueia a UI thread.
 
 • Cache de cores renovado uma vez por lote, nunca por linha.
 
-• Todos os filtros (hoje, semana, mês, ano, promo, data, texto)
-  funcionam sobre o conjunto já carregado sem nova consulta ao DB
-  enquanto o cache for válido.
+• Todos os filtros funcionam sobre o conjunto já carregado sem nova
+  consulta ao DB enquanto o cache for válido.
+
+• v4: popup "Produtos da venda" redesenhado (ModalView próprio).
 """
 
 from collections import deque
@@ -31,20 +28,25 @@ from time import perf_counter
 
 from kivy.app import App
 from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle
+from kivy.core.window import Window
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty, StringProperty, ListProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.modalview import ModalView
 from kivy.uix.recycleview import RecycleView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
+    NativeDialog as MDDialog, NativeFlatButton as MDFlatButton,
+    NativeLabel as MDLabel, NativeScreen as MDScreen,
+    NativeTextField as MDTextField,
+)
 
 from database.provider import get_db
 from utils.business.sales_transactions import (
@@ -483,6 +485,56 @@ Builder.load_string("""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Helpers de UI do popup "Produtos da venda"
+# ─────────────────────────────────────────────────────────────────────────────
+def _popup_label(text, size=12, color=(1, 1, 1, 1), bold=False,
+                 halign="left", **kwargs):
+    lbl = Label(
+        text=text,
+        font_size=dp(size),
+        color=list(color),
+        bold=bold,
+        halign=halign,
+        valign="middle",
+        markup=True,
+        **kwargs,
+    )
+    lbl.bind(size=lambda w, s: setattr(w, "text_size", s))
+    return lbl
+
+
+def _popup_paint(widget, color, radius=12):
+    """Pinta um fundo arredondado atrás do widget."""
+    with widget.canvas.before:
+        Color(*color)
+        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[dp(radius)])
+    widget.bind(
+        pos=lambda w, v: setattr(rect, "pos", v),
+        size=lambda w, v: setattr(rect, "size", v),
+    )
+    return rect
+
+
+def _popup_button(text, color, width=112, height=38, enabled=True, font_size=11):
+    btn = Button(
+        text=text,
+        size_hint=(None, None),
+        size=(dp(width), dp(height)),
+        font_size=dp(font_size),
+        bold=True,
+        background_normal="",
+        background_down="",
+        background_disabled_normal="",
+        background_color=[0, 0, 0, 0],
+        color=[1, 1, 1, 1],
+        disabled_color=[1, 1, 1, 0.55],
+        disabled=not enabled,
+    )
+    _popup_paint(btn, color, radius=8)
+    return btn
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  RecycleView e view-item reutilizável
 # ─────────────────────────────────────────────────────────────────────────────
 class SaleRecycleView(RecycleView):
@@ -560,7 +612,7 @@ class SaleRowView(RecycleDataViewBehavior, MDBoxLayout):
 # ─────────────────────────────────────────────────────────────────────────────
 class SalesHistoryScreen(MDScreen):
     # ── Config ────────────────────────────────────────────────────────────────
-    ENTER_CACHE_SECONDS = 30   # cache válido por 30 s antes de precisar re-fetch
+    ENTER_CACHE_SECONDS = 30
     compact_mode = BooleanProperty(False)
 
     # Cache de cores — renovado uma vez em _display_rows, nunca por linha
@@ -578,9 +630,8 @@ class SalesHistoryScreen(MDScreen):
     }
 
     def __init__(self, db=None, **kwargs):
-        # Estado interno
-        self._all_rows          = []   # todos os rows do DB (cache)
-        self._filtered_rows     = []   # subset após filtros
+        self._all_rows          = []
+        self._filtered_rows     = []
         self._cache_valid       = False
         self._cache_at          = 0.0
         self._loading           = False
@@ -588,7 +639,7 @@ class SalesHistoryScreen(MDScreen):
         self._exporting         = False
         self._refund_in_prog    = False
         self._search_ev         = None
-        self._pending_filter    = None  # filtro a aplicar ao entrar
+        self._pending_filter    = None
         self.back_target        = "admin_home"
         self.current_filter     = None
         self.sales_history_report = None
@@ -600,7 +651,6 @@ class SalesHistoryScreen(MDScreen):
     def on_pre_enter(self, *args):
         """
         REGRA PRINCIPAL: ao entrar, NUNCA mostrar dados automaticamente.
-        Mostra o estado inicial com instrução de selecionar filtro.
         Se havia um filtro pendente (ex: chamado de outra tela), aplica-o.
         """
         pending = self._pending_filter
@@ -609,11 +659,9 @@ class SalesHistoryScreen(MDScreen):
         if pending:
             Clock.schedule_once(lambda dt, f=pending: self._apply_pending_filter(f), 0.05)
         else:
-            # Sempre começa em branco — nunca auto-carrega
             self._show_initial_state()
 
     def _show_initial_state(self):
-        """Estado inicial: sem dados, sem spinner, só instrução."""
         self._set_empty_state(
             "Selecione um filtro para ver o histórico",
             "Use Hoje, Semana, Mês, Ano, Promo ou defina um intervalo de datas.",
@@ -624,7 +672,6 @@ class SalesHistoryScreen(MDScreen):
             self.ids.rv.data = []
 
     def queue_enter_filter(self, filter_name):
-        """Chamado externamente para pré-selecionar um filtro ao entrar."""
         self._pending_filter = str(filter_name or "").strip().lower() or None
 
     def _apply_pending_filter(self, filter_name):
@@ -640,7 +687,6 @@ class SalesHistoryScreen(MDScreen):
             fn()
 
     def request_enter_refresh(self, force=False, delay=0.05):
-        """Compatibilidade: não auto-carrega, mas invalida cache se force."""
         if force:
             self._invalidate_cache()
 
@@ -796,13 +842,8 @@ class SalesHistoryScreen(MDScreen):
         minutes, seconds = divmod(max(0, int(seconds_left or 0)), 60)
         return f"Estorno: {minutes:02d}:{seconds:02d}"
 
-    # ── RecycleView: montar data list (O(n) puro, sem criar widgets) ──────────
+    # ── RecycleView: montar data list ─────────────────────────────────────────
     def _display_rows(self, rows):
-        """
-        Converte rows em lista de dicts para o RecycleView.
-        O RecycleView renderiza apenas as linhas visíveis no viewport —
-        10 000 linhas têm o mesmo custo de memória que 50 linhas visíveis.
-        """
         if "rv" not in self.ids:
             return
 
@@ -876,7 +917,7 @@ class SalesHistoryScreen(MDScreen):
                 "w_total": w_total, "w_action": w_action,
             })
 
-        self.ids.rv.data = data   # atribuição única — RecycleView faz diff interno
+        self.ids.rv.data = data
 
         if data:
             self._set_empty_state("", "", visible=False)
@@ -900,7 +941,6 @@ class SalesHistoryScreen(MDScreen):
         token = self._load_token + 1
         self._load_token = token
         self._loading    = True
-        # Mostra "A carregar…" sem clear síncrono
         self._set_empty_state("A carregar…", "Aguarde um momento.", visible=True)
         if "rv" in self.ids:
             self.ids.rv.data = []
@@ -922,7 +962,7 @@ class SalesHistoryScreen(MDScreen):
 
     def _on_rows_loaded(self, rows, error, token, cache_all):
         if token != self._load_token:
-            return  # resultado de uma query cancelada — ignora
+            return
         self._loading = False
         if error:
             self._set_empty_state("Erro ao carregar", error, visible=True)
@@ -931,7 +971,6 @@ class SalesHistoryScreen(MDScreen):
             self._all_rows    = list(rows)
             self._cache_valid = True
             self._cache_at    = perf_counter()
-        # Aplica filtro de texto se houver
         visible = self._apply_text_filter(rows)
         self._filtered_rows = visible
         self._display_rows(visible)
@@ -1109,7 +1148,6 @@ class SalesHistoryScreen(MDScreen):
 
     def apply_search_filter(self):
         if not self._cache_valid:
-            # Nenhum dado carregado ainda — não faz nada silencioso
             return
         start, end = self._get_date_inputs()
         rows = self._filter_by_date(self._all_rows, start, end)
@@ -1120,7 +1158,7 @@ class SalesHistoryScreen(MDScreen):
         self._display_rows(rows)
 
     def _on_search_text(self, text):
-        """Debounce: aplica filtro apos uma pausa curta na digitacao."""
+        """Debounce: aplica filtro após uma pausa curta na digitação."""
         if self._search_ev:
             self._search_ev.cancel()
         if not self._cache_valid:
@@ -1185,9 +1223,6 @@ class SalesHistoryScreen(MDScreen):
 
     # ── Eliminar histórico ────────────────────────────────────────────────────
     def confirm_delete_history(self):
-        """
-        Pede confirmação em 2 passos antes de eliminar todo o histórico.
-        """
         cancel_btn  = MDFlatButton(text="CANCELAR")
         confirm_btn = MDRaisedButton(
             text="SIM, ELIMINAR",
@@ -1207,7 +1242,6 @@ class SalesHistoryScreen(MDScreen):
         dialog.open()
 
     def _delete_history_step2(self, first_dialog):
-        """Segunda confirmação — digitar a palavra ELIMINAR."""
         first_dialog.dismiss()
 
         confirm_input = MDTextField(
@@ -1252,19 +1286,16 @@ class SalesHistoryScreen(MDScreen):
         def worker():
             error = None
             try:
-                # Chama o método do DB (deve existir no seu provider)
                 fn = getattr(self.db, "delete_all_sales_history", None)
                 if callable(fn):
                     fn()
                 else:
-                    # Fallback: tenta SQL direto se o provider expõe conexão
                     conn = getattr(self.db, "conn", None) or getattr(self.db, "connection", None)
                     if conn:
                         conn.execute("DELETE FROM sales")
                         conn.commit()
                     else:
                         raise RuntimeError("Método delete_all_sales_history não encontrado no provider.")
-                # Log da ação
                 app = App.get_running_app()
                 username = getattr(app, "current_user", None)
                 role     = getattr(app, "current_role", None) or "manager"
@@ -1296,101 +1327,180 @@ class SalesHistoryScreen(MDScreen):
         self._show_initial_state()
         self._show_msg("Concluído", "Histórico de vendas eliminado com sucesso.")
 
-    # ── Detalhes da transação e estorno ───────────────────────────────────────
+    # ── Popup "Produtos da venda" (redesenhado) ───────────────────────────────
     def open_transaction_dialog(self, transaction):
         items = list((transaction or {}).get("items") or [])
         if not items:
             self._show_msg("Venda", "Não foi possível obter os produtos desta venda.")
             return
 
+        # Paleta
+        C = self._C
+        BG_CARD = (0.09, 0.11, 0.15, 1)
+        BG_ROW  = (0.13, 0.16, 0.21, 1)
+        TXT_PRI = (0.95, 0.96, 0.98, 1)
+        TXT_SEC = (0.62, 0.67, 0.75, 1)
+        WARN    = (0.95, 0.62, 0.12, 1)
+        DANGER  = (0.90, 0.35, 0.35, 1)
+        OFF     = (0.30, 0.33, 0.38, 1)
+
+        # Dados da venda
         seconds_left = int((transaction or {}).get("refund_seconds_left") or 0)
-        can_refund = bool((transaction or {}).get("can_refund"))
-        seller = str((transaction or {}).get("created_by") or "").strip() or "Sistema"
-        header = MDLabel(
-            text=(
-                f"{len(items)} produto(s) · Atendente: {seller}\n"
-                f"Total: {self._fmt_cur((transaction or {}).get('net_total'))} MT\n"
-                f"{self._refund_window_text(seconds_left, can_refund)} "
-                f"(limite: {REFUND_WINDOW_MINUTES} min)"
-            ),
-            theme_text_color="Secondary",
-            size_hint_y=None,
-            height=dp(78),
+        can_refund   = bool((transaction or {}).get("can_refund"))
+        seller       = str((transaction or {}).get("created_by") or "").strip() or "Sistema"
+        code         = (transaction or {}).get("transaction_code") or f"#{items[0].get('sale_id')}"
+        net_total    = self._fmt_cur((transaction or {}).get("net_total"))
+        refund_txt   = self._refund_window_text(seconds_left, can_refund)
+        refund_color = WARN if can_refund else DANGER
+
+        # Dimensões
+        row_h    = dp(72)
+        row_gap  = dp(8)
+        header_h = dp(70)
+        footer_h = dp(52)
+        title_h  = dp(36)
+        pad      = dp(18)
+        spacing  = dp(10)
+
+        list_h   = len(items) * row_h + max(0, len(items) - 1) * row_gap
+        wanted_h = title_h + header_h + list_h + footer_h + pad * 2 + spacing * 3
+        popup_h  = min(wanted_h, Window.height * 0.88)
+        popup_w  = min(Window.width * 0.92, dp(720))
+
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(popup_w, popup_h),
+            background="",
+            background_color=[0, 0, 0, 0],
+            overlay_color=[0, 0, 0, 0.60],
+            auto_dismiss=True,
         )
-        content = MDBoxLayout(
+
+        root = BoxLayout(
             orientation="vertical",
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(390),
+            padding=[pad, pad, pad, dp(12)],
+            spacing=spacing,
         )
-        content.add_widget(header)
-        scroll = ScrollView(do_scroll_x=False, bar_width=dp(5))
-        product_list = MDBoxLayout(
-            orientation="vertical",
-            spacing=dp(6),
+        _popup_paint(root, BG_CARD, radius=16)
+
+        # Título
+        title_row = BoxLayout(size_hint_y=None, height=title_h)
+        title_row.add_widget(_popup_label("Produtos da venda", size=17, color=TXT_PRI, bold=True))
+        title_row.add_widget(_popup_label(
+            f"[b]{len(items)}[/b] item(ns)", size=12, color=TXT_SEC, halign="right",
+            size_hint_x=None, width=dp(100),
+        ))
+        root.add_widget(title_row)
+
+        # Resumo
+        header = BoxLayout(
+            orientation="horizontal",
             size_hint_y=None,
-            padding=[dp(2), dp(2), dp(2), dp(2)],
+            height=header_h,
+            padding=[dp(14), dp(8)],
+            spacing=dp(12),
+        )
+        _popup_paint(header, BG_ROW, radius=12)
+
+        def info_block(title, value, color=TXT_PRI, size_hint_x=1):
+            box = BoxLayout(orientation="vertical", spacing=dp(2), size_hint_x=size_hint_x)
+            box.add_widget(_popup_label(title, size=9, color=TXT_SEC, bold=True))
+            box.add_widget(_popup_label(
+                value, size=13, color=color, bold=True,
+                shorten=True, shorten_from="right",
+            ))
+            return box
+
+        header.add_widget(info_block("ATENDENTE", seller))
+        header.add_widget(info_block("TOTAL", f"{net_total} MT", C["success"]))
+        header.add_widget(info_block("VENDA", str(code)))
+        header.add_widget(info_block(
+            f"ESTORNO (MÁX. {REFUND_WINDOW_MINUTES} MIN)", refund_txt, refund_color,
+            size_hint_x=1.3,
+        ))
+        root.add_widget(header)
+
+        # Lista de produtos
+        scroll = ScrollView(
+            do_scroll_x=False,
+            bar_width=dp(4),
+            scroll_type=["bars", "content"],
+        )
+        product_list = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=row_gap,
+            padding=[0, 0, dp(6), 0],
         )
         product_list.bind(minimum_height=product_list.setter("height"))
         scroll.add_widget(product_list)
-        content.add_widget(scroll)
-
-        close_btn = MDFlatButton(text="FECHAR")
-        dialog = MDDialog(
-            title="Produtos da venda",
-            type="custom",
-            content_cls=content,
-            buttons=[close_btn],
-        )
-        close_btn.bind(on_release=lambda _btn: dialog.dismiss())
+        root.add_widget(scroll)
 
         for item in items:
-            available = float(item.get("available_qty") or 0.0)
-            allowed, item_seconds_left = refund_window_status(item.get("sale_date"))
+            available    = float(item.get("available_qty") or 0.0)
+            returned_qty = float(item.get("returned_qty") or 0.0)
+            allowed, _left = refund_window_status(item.get("sale_date"))
             refundable = bool(allowed and available > 0.0001)
-            row = MDBoxLayout(
+
+            row = BoxLayout(
                 orientation="horizontal",
                 size_hint_y=None,
-                height=dp(68),
-                spacing=dp(8),
-                padding=[dp(8), dp(5), dp(4), dp(5)],
+                height=row_h,
+                padding=[dp(14), dp(8)],
+                spacing=dp(10),
             )
-            returned_qty = float(item.get("returned_qty") or 0.0)
-            row.add_widget(MDLabel(
-                text=(
-                    f"[b]{item.get('product') or 'Produto'}[/b]\n"
-                    f"{self._fmt_qty(item.get('qty'))} × {self._fmt_cur(item.get('price'))} MT"
-                    + (f" · Estornado: {self._fmt_qty(returned_qty)}" if returned_qty > 0 else "")
-                ),
-                markup=True,
-                theme_text_color="Primary",
-                size_hint_x=1,
+            _popup_paint(row, BG_ROW, radius=12)
+
+            info = BoxLayout(orientation="vertical", spacing=dp(2))
+            info.add_widget(_popup_label(
+                str(item.get("product") or "Produto"),
+                size=13, color=TXT_PRI, bold=True,
+                shorten=True, shorten_from="right",
             ))
+            info.add_widget(_popup_label(
+                f"{self._fmt_qty(item.get('qty'))} × {self._fmt_cur(item.get('price'))} MT"
+                f"   =   {self._fmt_cur(item.get('total'))} MT",
+                size=11, color=TXT_SEC,
+            ))
+            if returned_qty > 0:
+                info.add_widget(_popup_label(
+                    f"Estornado: {self._fmt_qty(returned_qty)}",
+                    size=10, color=WARN,
+                ))
+            row.add_widget(info)
+
             if refundable:
-                button_text = "ESTORNAR"
-                button_color = self._C["warning"]
+                btn_text, btn_color = "ESTORNAR", WARN
             elif available <= 0.0001:
-                button_text = "ESTORNADO"
-                button_color = self._C["card_alt"]
+                btn_text, btn_color = "ESTORNADO", OFF
             else:
-                button_text = "EXPIRADO"
-                button_color = self._C["card_alt"]
-            refund_button = MDRaisedButton(
-                text=button_text,
-                size_hint_x=None,
-                width=dp(106),
-                disabled=not refundable,
-                md_bg_color=button_color,
-                elevation=0,
-                font_size=dp(10),
-            )
+                btn_text, btn_color = "EXPIRADO", OFF
+
+            btn = _popup_button(btn_text, btn_color, enabled=refundable)
             if refundable:
-                refund_button.bind(
-                    on_release=lambda _btn, sale=dict(item): self._open_transaction_item_refund(dialog, sale),
+                btn.bind(
+                    on_release=lambda _b, sale=dict(item):
+                        self._open_transaction_item_refund(popup, sale)
                 )
-            row.add_widget(refund_button)
+
+            holder = BoxLayout(orientation="vertical", size_hint_x=None, width=dp(112))
+            holder.add_widget(Widget())
+            holder.add_widget(btn)
+            holder.add_widget(Widget())
+            row.add_widget(holder)
+
             product_list.add_widget(row)
-        dialog.open()
+
+        # Rodapé
+        footer = BoxLayout(size_hint_y=None, height=footer_h, padding=[0, dp(8), 0, 0])
+        footer.add_widget(Widget())
+        close_btn = _popup_button("FECHAR", C["primary"], width=140, height=40, font_size=12)
+        close_btn.bind(on_release=lambda *_: popup.dismiss())
+        footer.add_widget(close_btn)
+        root.add_widget(footer)
+
+        popup.add_widget(root)
+        popup.open()
 
     def _open_transaction_item_refund(self, transaction_dialog, sale_data):
         transaction_dialog.dismiss()
@@ -1535,9 +1645,8 @@ class SalesHistoryScreen(MDScreen):
 
     # ── Export PDF ────────────────────────────────────────────────────────────
     def export_sales(self):
-        from kivymd.toast import toast
         if self._exporting:
-            toast("Exportação já em curso.")
+            self._show_msg("Aviso", "Exportação já em curso.")
             return
         if self._loading:
             self._show_msg("Aguarde", "Dados ainda a carregar.")
@@ -1552,7 +1661,7 @@ class SalesHistoryScreen(MDScreen):
         username = getattr(app, "current_user", None)
         role     = getattr(app, "current_role", None) or "manager"
         self._exporting = True
-        toast("A gerar PDF…")
+        self._show_msg("Exportação", "A gerar PDF…")
 
         def worker():
             res = {"status": "ok", "path": None, "error": None}

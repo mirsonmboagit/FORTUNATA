@@ -1,59 +1,66 @@
+#:kivy 2.0
+
 <ReportsPanelCard@HoverCard>:
     elevation: 1
-    radius: [dp(12)]
+    radius: [dp(14)]
     line_color: app.theme_tokens['divider']
     line_width: 1
-    hover_bg_mix: 0.06
-    hover_line_mix: 0.24
-    hover_elevation_delta: 1.6
-    hover_duration: 0.14
+    hover_bg_mix: 0.05
+    hover_line_mix: 0.22
+    hover_elevation_delta: 1.4
+    hover_duration: 0.12
     hover_accent_color: app.theme_tokens['primary']
 
 <ReportsGhostButton@HoverRaisedButton>:
+    size_hint_y: None
+    height: dp(42)
     elevation: 0
     radius: [dp(12)]
     line_color: app.theme_tokens['divider']
     line_width: 1
     press_enabled: True
-    hover_bg_mix: 0.14
+    hover_bg_mix: 0.12
     hover_line_mix: 0.22
-    hover_elevation_delta: 1.6
+    hover_elevation_delta: 1.4
     hover_duration: 0.12
 
 <ReportsAccentButton@HoverRaisedButton>:
+    size_hint_y: None
+    height: dp(42)
     radius: [dp(12)]
     line_width: 1
     press_enabled: True
     hover_bg_mix: 0.10
     hover_line_mix: 0.20
-    hover_elevation_delta: 2.4
+    hover_elevation_delta: 2.0
     hover_duration: 0.12
 
 <ReportsRangeButton@HoverRaisedButton>:
     size_hint_y: None
-    height: dp(42)
+    height: dp(40)
     elevation: 0
-    radius: [dp(12)]
+    radius: [dp(10)]
     line_color: app.theme_tokens['divider']
     line_width: 1
     press_enabled: True
-    hover_bg_mix: 0.14
-    hover_line_mix: 0.22
-    hover_elevation_delta: 1.6
+    hover_bg_mix: 0.12
+    hover_line_mix: 0.20
+    hover_elevation_delta: 1.4
     hover_duration: 0.12
+    font_size: sp(12)
 
 <ReportsReportButton@HoverRaisedButton>:
     size_hint_y: None
-    height: dp(42)
-    radius: [dp(10)]
+    height: dp(48)
+    radius: [dp(12)]
     font_size: sp(13)
     elevation: 1
     press_enabled: True
     hover_bg_mix: 0.12
-    hover_line_mix: 0.24
-    hover_elevation_delta: 2.8
+    hover_line_mix: 0.22
+    hover_elevation_delta: 2.2
     hover_duration: 0.12
-    line_width: 1.2
+    line_width: 1
 
 <ReportsScreen>:
     name: 'reports'
@@ -61,139 +68,78 @@
     product_spinner: product_spinner
     category_spinner: category_spinner
     seller_spinner: seller_spinner
+    md_bg_color: app.theme_tokens['surface']
 
     FloatLayout:
         MDBoxLayout:
             orientation: 'vertical'
-            spacing: 0
+            size_hint: 1, 1
             md_bg_color: app.theme_tokens['surface']
 
-            # ── Header ──────────────────────────────────────────────
-            MDCard:
-                id: header_card
-                size_hint_y: None
-                height: dp(74)
-                padding: [dp(25), dp(12), dp(25), dp(12)]
-                elevation: 2
-                md_bg_color: app.theme_tokens['card']
-                radius: [0, 0, 0, 0]
+            MDTopAppBar:
+                title: 'Relatorios'
+                md_bg_color: app.theme_tokens['primary']
+                specific_text_color: app.theme_tokens['on_primary']
+                elevation: 3
+                left_action_items: [["arrow-left", lambda x: root.go_back(), "Voltar"]]
+                right_action_items: [["file-pdf-box", lambda x: root.show_pdf_viewer(), "Todos os PDFs"], ["refresh", lambda x: root.refresh_screen_data(), "Atualizar"]]
 
-                MDBoxLayout:
-                    id: header_content
-                    orientation: 'horizontal'
-                    spacing: dp(20)
-
-                    MDBoxLayout:
-                        orientation: 'vertical'
-                        size_hint_x: 0.7
-                        spacing: dp(2)
-                        adaptive_height: True
-
-                        MDLabel:
-                            text: 'Relatorios'
-                            font_style: 'H5'
-                            bold: True
-                            halign: 'left'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_primary']
-                            size_hint_y: None
-                            height: dp(30)
-
-                        MDLabel:
-                            text: 'Relatorios e exportacao'
-                            font_style: 'Caption'
-                            halign: 'left'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_secondary']
-                            size_hint_y: None
-                            height: dp(20)
-
-                    MDBoxLayout:
-                        id: header_actions
-                        orientation: 'horizontal'
-                        size_hint_x: 0.3
-                        spacing: dp(10)
-                        adaptive_height: True
-
-                        ReportsGhostButton:
-                            id: hero_pdf_button
-                            text: 'Todos PDFs'
-                            size_hint_x: 0.36
-                            md_bg_color: app.theme_tokens['card']
-                            text_color: app.theme_tokens['primary']
-                            hover_accent_color: app.theme_tokens['primary']
-                            line_color: 0.15, 0.52, 0.76, 1
-                            line_width: 1.5
-                            on_release: root.show_pdf_viewer()
-
-                        ReportsGhostButton:
-                            id: hero_refresh_button
-                            text: 'Atualizar'
-                            size_hint_x: 0.32
-                            md_bg_color: app.theme_tokens['card']
-                            text_color: app.theme_tokens['info']
-                            hover_accent_color: app.theme_tokens['info']
-                            line_color: 0.28, 0.47, 0.84, 1
-                            line_width: 1.5
-                            on_release: root.refresh_screen_data()
-
-                        ReportsGhostButton:
-                            id: hero_back_button
-                            text: 'Voltar'
-                            size_hint_x: 0.26
-                            md_bg_color: app.theme_tokens['card']
-                            text_color: app.theme_tokens['danger']
-                            hover_accent_color: app.theme_tokens['danger']
-                            line_color: 0.85, 0.3, 0.3, 1
-                            line_width: 1.5
-                            on_release: root.go_back()
-
-            # ── Body ─────────────────────────────────────────────────
             ScrollView:
                 do_scroll_x: False
                 do_scroll_y: True
-                bar_width: dp(4)
+                bar_width: dp(5)
 
                 MDBoxLayout:
+                    id: reports_content
                     orientation: 'vertical'
-                    spacing: dp(16)
-                    padding: [dp(20), dp(16), dp(20), dp(20)]
+                    spacing: dp(14)
+                    padding: [dp(16), dp(14), dp(16), dp(88)]
                     size_hint_y: None
                     height: self.minimum_height
 
-                    # ── Filtros ──────────────────────────────────────
+                    # Filtros
                     ReportsPanelCard:
                         id: filters_card
                         orientation: 'vertical'
                         size_hint_y: None
                         height: self.minimum_height
                         spacing: dp(0)
-                        padding: [dp(20), dp(16), dp(20), dp(16)]
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
                         md_bg_color: app.theme_tokens['card']
                         radius: [dp(14)]
                         hover_accent_color: app.theme_tokens['info']
 
-                        MDLabel:
-                            text: 'Configurar Filtros'
-                            font_style: 'H6'
-                            bold: True
-                            halign: 'left'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_primary']
+                        MDBoxLayout:
                             size_hint_y: None
-                            height: dp(30)
+                            height: dp(28)
+                            spacing: dp(8)
+
+                            MDIcon:
+                                icon: 'filter-variant'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['primary']
+                                size_hint: None, None
+                                size: dp(22), dp(22)
+                                pos_hint: {'center_y': 0.5}
+
+                            MDLabel:
+                                text: 'Configurar filtros'
+                                font_style: 'H6'
+                                bold: True
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['text_primary']
+                                valign: 'middle'
 
                         Widget:
                             size_hint_y: None
                             height: dp(8)
 
-                        # Pesquisa
                         MDBoxLayout:
                             id: search_row
                             orientation: 'horizontal'
                             size_hint_y: None
                             height: dp(48)
-                            spacing: dp(10)
+                            spacing: dp(8)
 
                             MDTextField:
                                 id: report_search_input
@@ -207,7 +153,7 @@
                                 id: search_clear_button
                                 text: 'Limpar'
                                 size_hint_x: None
-                                width: dp(110)
+                                width: dp(100)
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['text_primary']
                                 hover_accent_color: app.theme_tokens['primary']
@@ -216,19 +162,19 @@
                         MDLabel:
                             text: root.search_status_text
                             font_style: 'Caption'
-                            halign: 'left'
                             theme_text_color: 'Custom'
                             text_color: app.theme_tokens['text_secondary']
                             text_size: self.width, None
                             size_hint_y: None
-                            height: self.texture_size[1]
+                            height: max(dp(18), self.texture_size[1])
 
                         Widget:
                             size_hint_y: None
                             height: dp(10)
 
-                        # Período
+                        # Periodo
                         MDBoxLayout:
+                            id: period_row
                             orientation: 'horizontal'
                             size_hint_y: None
                             height: dp(48)
@@ -239,10 +185,9 @@
                                 spacing: dp(2)
 
                                 MDLabel:
-                                    text: 'Periodo do Relatorio'
+                                    text: 'Periodo'
                                     font_style: 'Caption'
                                     bold: True
-                                    halign: 'left'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
                                     size_hint_y: None
@@ -252,33 +197,31 @@
                                     id: date_label
                                     text: 'Nenhum periodo selecionado'
                                     font_style: 'Body2'
-                                    halign: 'left'
                                     theme_text_color: 'Custom'
-                                    text_color: app.theme_tokens['text_secondary']
+                                    text_color: app.theme_tokens['text_primary']
                                     size_hint_y: None
                                     height: dp(22)
+                                    shorten: True
 
                             ReportsAccentButton:
-                                text: 'Selecionar Periodo'
+                                text: 'Selecionar periodo'
                                 size_hint_x: None
-                                width: dp(180)
+                                width: dp(170)
                                 md_bg_color: app.theme_tokens['warning']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.12
                                 on_release: root.select_date_range()
 
                         Widget:
                             size_hint_y: None
                             height: dp(8)
 
-                        # Atalhos de período
                         MDGridLayout:
                             id: quick_range_grid
                             cols: 5
                             spacing: dp(8)
                             size_hint_y: None
-                            height: dp(42)
+                            height: dp(40)
 
                             ReportsRangeButton:
                                 text: 'Hoje'
@@ -288,28 +231,28 @@
                                 on_release: root.apply_today_range()
 
                             ReportsRangeButton:
-                                text: '7 Dias'
+                                text: '7 dias'
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['primary']
                                 hover_accent_color: app.theme_tokens['primary']
                                 on_release: root.apply_last_days_range(7)
 
                             ReportsRangeButton:
-                                text: '30 Dias'
+                                text: '30 dias'
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['success']
                                 hover_accent_color: app.theme_tokens['success']
                                 on_release: root.apply_last_days_range(30)
 
                             ReportsRangeButton:
-                                text: 'Este Mes'
+                                text: 'Este mes'
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['info']
                                 hover_accent_color: app.theme_tokens['info']
                                 on_release: root.apply_current_month_range()
 
                             ReportsRangeButton:
-                                text: 'Este Ano'
+                                text: 'Este ano'
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['primary']
                                 hover_accent_color: app.theme_tokens['primary']
@@ -317,13 +260,12 @@
 
                         Widget:
                             size_hint_y: None
-                            height: dp(10)
+                            height: dp(12)
 
-                        # Produto / Categoria
                         MDGridLayout:
                             id: filters_grid
                             cols: 2
-                            spacing: dp(10)
+                            spacing: [dp(10), dp(10)]
                             size_hint_y: None
                             height: dp(64)
 
@@ -335,7 +277,6 @@
                                     text: 'Produto'
                                     font_style: 'Caption'
                                     bold: True
-                                    halign: 'left'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
                                     size_hint_y: None
@@ -346,6 +287,7 @@
                                     text: 'Todos os Produtos'
                                     md_bg_color: app.theme_tokens['card_alt']
                                     text_color: app.theme_tokens['text_primary']
+                                    shorten: True
                                     hover_accent_color: app.theme_tokens['primary']
                                     on_release: root.open_product_menu(self)
 
@@ -357,7 +299,6 @@
                                     text: 'Categoria'
                                     font_style: 'Caption'
                                     bold: True
-                                    halign: 'left'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
                                     size_hint_y: None
@@ -368,6 +309,7 @@
                                     text: 'Todas as Categorias'
                                     md_bg_color: app.theme_tokens['card_alt']
                                     text_color: app.theme_tokens['text_primary']
+                                    shorten: True
                                     hover_accent_color: app.theme_tokens['info']
                                     on_release: root.open_category_menu(self)
 
@@ -375,7 +317,6 @@
                             size_hint_y: None
                             height: dp(8)
 
-                        # Vendedor / Gerente
                         MDBoxLayout:
                             id: seller_filter_row
                             orientation: 'horizontal'
@@ -388,10 +329,9 @@
                                 spacing: dp(2)
 
                                 MDLabel:
-                                    text: 'Vendedor/Gerente'
+                                    text: 'Vendedor / Gerente'
                                     font_style: 'Caption'
                                     bold: True
-                                    halign: 'left'
                                     theme_text_color: 'Custom'
                                     text_color: app.theme_tokens['text_secondary']
                                     size_hint_y: None
@@ -402,6 +342,7 @@
                                     text: 'Todos os Vendedores'
                                     md_bg_color: app.theme_tokens['card_alt']
                                     text_color: app.theme_tokens['text_primary']
+                                    shorten: True
                                     hover_accent_color: app.theme_tokens['warning']
                                     on_release: root.open_seller_menu(self)
 
@@ -409,17 +350,16 @@
                             size_hint_y: None
                             height: dp(10)
 
-                        # Acções de filtro
                         MDBoxLayout:
                             id: filter_actions
                             orientation: 'horizontal'
                             size_hint_y: None
-                            height: dp(40)
+                            height: dp(42)
                             spacing: dp(10)
 
                             ReportsGhostButton:
                                 id: filter_reset_button
-                                text: 'Limpar Filtros'
+                                text: 'Limpar filtros'
                                 size_hint_x: 0.5
                                 md_bg_color: app.theme_tokens['card_alt']
                                 text_color: app.theme_tokens['text_primary']
@@ -428,92 +368,98 @@
 
                             ReportsAccentButton:
                                 id: filter_refresh_button
-                                text: 'Atualizar Dados'
+                                text: 'Atualizar dados'
                                 size_hint_x: 0.5
                                 md_bg_color: app.theme_tokens['info']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.12
                                 on_release: root.refresh_screen_data()
 
-                        Widget:
-                            size_hint_y: None
-                            height: dp(18)
+                    # Gerar relatorios
+                    ReportsPanelCard:
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: self.minimum_height
+                        padding: [dp(16), dp(14), dp(16), dp(16)]
+                        spacing: dp(8)
+                        md_bg_color: app.theme_tokens['card']
+                        radius: [dp(14)]
+                        hover_accent_color: app.theme_tokens['primary']
 
-                        MDLabel:
-                            text: 'Gerar Relatorio'
-                            font_style: 'Subtitle1'
-                            bold: True
-                            halign: 'left'
-                            theme_text_color: 'Custom'
-                            text_color: app.theme_tokens['text_primary']
+                        MDBoxLayout:
                             size_hint_y: None
                             height: dp(28)
+                            spacing: dp(8)
+
+                            MDIcon:
+                                icon: 'file-chart-outline'
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['primary']
+                                size_hint: None, None
+                                size: dp(22), dp(22)
+                                pos_hint: {'center_y': 0.5}
+
+                            MDLabel:
+                                text: 'Gerar relatorio'
+                                font_style: 'H6'
+                                bold: True
+                                theme_text_color: 'Custom'
+                                text_color: app.theme_tokens['text_primary']
+                                valign: 'middle'
 
                         MDLabel:
                             text: root.search_summary_text
                             font_style: 'Caption'
-                            halign: 'left'
                             theme_text_color: 'Custom'
                             text_color: app.theme_tokens['text_secondary']
                             size_hint_y: None
                             height: dp(20)
 
-                        Widget:
-                            size_hint_y: None
-                            height: dp(8)
-
                         MDGridLayout:
                             id: reports_grid
-                            cols: 5
-                            spacing: dp(10)
+                            cols: 2
+                            spacing: [dp(10), dp(10)]
                             size_hint_y: None
                             height: self.minimum_height
-                            adaptive_height: True
 
                             ReportsReportButton:
                                 id: sales_report_card
-                                text: 'Relatorio de Vendas'
+                                text: 'Vendas'
                                 md_bg_color: app.theme_tokens['primary']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.14
                                 on_release: root.generate_sales_report()
 
                             ReportsReportButton:
                                 id: stock_report_card
-                                text: 'Relatorio de Estoque'
+                                text: 'Estoque'
                                 md_bg_color: app.theme_tokens['success']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.14
                                 on_release: root.generate_stock_report()
 
                             ReportsReportButton:
                                 id: profit_report_card
-                                text: 'Relatorio de Lucro'
+                                text: 'Lucro'
                                 md_bg_color: app.theme_tokens['warning']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.14
                                 on_release: root.generate_profit_report()
 
                             ReportsReportButton:
                                 id: complete_report_card
-                                text: 'Relatorio Completo'
+                                text: 'Completo'
                                 md_bg_color: app.theme_tokens['info']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.14
                                 on_release: root.generate_complete_report()
 
                             ReportsReportButton:
                                 id: cash_user_report_card
-                                text: 'Caixa por Utilizador'
+                                text: 'Caixa por utilizador'
                                 md_bg_color: app.theme_tokens['badge']
                                 text_color: app.theme_tokens['on_primary']
                                 hover_accent_color: [1, 1, 1, 1]
-                                line_color: 1, 1, 1, 0.14
                                 on_release: root.generate_cash_user_report()
 
                         ReportsPanelCard:
@@ -522,9 +468,9 @@
                             height: 0
                             opacity: 0
                             disabled: True
-                            padding: [dp(16), dp(16), dp(16), dp(16)]
+                            padding: [dp(14), dp(14)]
                             md_bg_color: app.theme_tokens['card_alt']
-                            radius: [dp(8)]
+                            radius: [dp(10)]
                             hover_enabled: False
 
                             MDLabel:
@@ -533,96 +479,107 @@
                                 theme_text_color: 'Custom'
                                 text_color: app.theme_tokens['text_primary']
 
-                    # ── Imprimir gráficos ─────────────────────────────
+                    # Graficos
                     MDBoxLayout:
                         size_hint_y: None
-                        height: dp(40)
+                        height: dp(42)
                         spacing: dp(10)
 
                         ReportsAccentButton:
                             id: print_charts_button
-                            text: 'Imprimir Graficos'
+                            text: 'Imprimir graficos'
                             md_bg_color: app.theme_tokens['success']
                             text_color: app.theme_tokens['on_primary']
                             hover_accent_color: [1, 1, 1, 1]
-                            line_color: 1, 1, 1, 0.12
                             size_hint_x: None
-                            width: dp(190)
+                            width: dp(180)
                             on_release: root.print_productivity_charts()
 
                         Widget:
 
-                    # ── Dashboard de produtividade ───────────────────
                     MDBoxLayout:
                         id: productivity_dashboard_host
                         orientation: 'vertical'
-                        spacing: dp(0)
+                        spacing: 0
                         size_hint_y: None
                         height: self.minimum_height
-                        adaptive_height: True
 
-                    Widget:
-                        size_hint_y: None
-                        height: dp(20)
-
-        # ── AI FAB + badge ────────────────────────────────────────────
-        MDFloatingActionButton:
-            id: ai_button
-            icon: "assets/icon/alert.png"
-            icon_size: dp(38)
-            elevation: 0
-            md_bg_color: 0, 0, 0, 0
-            pos_hint: {"right": 0.965, "y": 0.04}
-            on_release: root.open_ai_menu(self)
-
-        MDFloatingActionButton:
-            id: recommendations_button
-            icon: "assets/icon/idea.ico"
-            icon_size: dp(38)
-            elevation: 0
-            md_bg_color: 0, 0, 0, 0
-            pos: ai_button.x, ai_button.top + dp(10)
-            on_release: root.show_ai_recommendations(self)
-
-        MDCard:
-            id: recommendations_badge
+        # FABs empilhados
+        MDBoxLayout:
+            id: reports_fab_stack
+            orientation: 'vertical'
+            spacing: dp(10)
             size_hint: None, None
-            size: dp(26), dp(26)
-            md_bg_color: app.theme_tokens['badge']
-            radius: [dp(13)]
-            elevation: 1
-            pos: recommendations_button.right - (self.width * 0.55), recommendations_button.top - (self.height * 0.45)
-            opacity: 1
+            size: dp(56), dp(122)
+            pos_hint: {'right': 0.97, 'y': 0.03}
 
-            MDLabel:
-                id: recommendations_badge_label
-                text: "0"
-                halign: "center"
-                valign: "middle"
-                theme_text_color: "Custom"
-                text_color: app.theme_tokens['on_primary']
-                font_size: dp(12)
-                bold: True
+            FloatLayout:
+                size_hint_y: None
+                height: dp(56)
 
-        MDCard:
-            id: ai_badge
-            size_hint: None, None
-            size: dp(26), dp(26)
-            md_bg_color: app.theme_tokens['badge']
-            radius: [dp(13)]
-            elevation: 1
-            pos_hint: {"right": 0.978, "y": 0.098}
-            opacity: 1
+                MDFloatingActionButton:
+                    id: recommendations_button
+                    icon: 'lightbulb-outline'
+                    icon_size: dp(24)
+                    elevation: 2
+                    md_bg_color: app.theme_tokens['card_alt']
+                    size_hint: None, None
+                    size: dp(52), dp(52)
+                    pos_hint: {'center_x': 0.5, 'center_y': 0.5}
+                    on_release: root.show_ai_recommendations(self)
 
-            MDLabel:
-                id: ai_badge_label
-                text: "0"
-                halign: "center"
-                valign: "middle"
-                theme_text_color: "Custom"
-                text_color: app.theme_tokens['on_primary']
-                font_size: dp(12)
-                bold: True
+                MDCard:
+                    id: recommendations_badge
+                    size_hint: None, None
+                    size: dp(22), dp(22)
+                    md_bg_color: app.theme_tokens['badge']
+                    radius: [dp(11)]
+                    elevation: 3
+                    pos_hint: {'right': 0.95, 'top': 0.98}
+
+                    MDLabel:
+                        id: recommendations_badge_label
+                        text: '0'
+                        halign: 'center'
+                        valign: 'middle'
+                        theme_text_color: 'Custom'
+                        text_color: app.theme_tokens['on_primary']
+                        font_size: dp(10)
+                        bold: True
+
+            FloatLayout:
+                size_hint_y: None
+                height: dp(56)
+
+                MDFloatingActionButton:
+                    id: ai_button
+                    icon: 'bell-ring-outline'
+                    icon_size: dp(24)
+                    elevation: 2
+                    md_bg_color: app.theme_tokens['primary']
+                    size_hint: None, None
+                    size: dp(52), dp(52)
+                    pos_hint: {'center_x': 0.5, 'center_y': 0.5}
+                    on_release: root.open_ai_menu(self)
+
+                MDCard:
+                    id: ai_badge
+                    size_hint: None, None
+                    size: dp(22), dp(22)
+                    md_bg_color: app.theme_tokens['badge']
+                    radius: [dp(11)]
+                    elevation: 3
+                    pos_hint: {'right': 0.95, 'top': 0.98}
+
+                    MDLabel:
+                        id: ai_badge_label
+                        text: '0'
+                        halign: 'center'
+                        valign: 'middle'
+                        theme_text_color: 'Custom'
+                        text_color: app.theme_tokens['on_primary']
+                        font_size: dp(10)
+                        bold: True
 
         FloatLayout:
             id: ai_banner_container

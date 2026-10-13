@@ -1,12 +1,12 @@
 <MobileManagerSalesScreen>:
     md_bg_color: app.theme_tokens['surface']
 
-    MDBoxLayout:
+    NativeBoxLayout:
         orientation: "vertical"
         padding: [dp(12), dp(10), dp(12), dp(10)]
         spacing: dp(8)
 
-        MDCard:
+        NativeCard:
             orientation: "horizontal"
             size_hint_y: None
             height: dp(58)
@@ -15,35 +15,35 @@
             elevation: 1
             md_bg_color: app.theme_tokens['card']
 
-            MDBoxLayout:
+            NativeBoxLayout:
                 orientation: "vertical"
 
-                MDLabel:
+                NativeLabel:
                     text: "SIGE MPE · Manager"
                     bold: True
                     font_style: "Subtitle1"
                     shorten: True
 
-                MDLabel:
+                NativeLabel:
                     text: "Atendente: " + (app.current_user or "—")
                     font_style: "Caption"
                     theme_text_color: "Secondary"
 
-            MDIconButton:
+            NativeIconButton:
                 icon: "server-network"
                 tooltip_text: "Alterar servidor"
                 on_release: root.change_connection()
 
-            MDIconButton:
+            NativeIconButton:
                 icon: "logout"
                 tooltip_text: "Terminar sessao"
                 on_release: root.request_logout()
 
-        MDBoxLayout:
+        NativeBoxLayout:
             id: page_container
             orientation: "vertical"
 
-        MDCard:
+        NativeCard:
             orientation: "horizontal"
             size_hint_y: None
             height: dp(70)
@@ -52,22 +52,22 @@
             elevation: 2
             md_bg_color: app.theme_tokens['card']
 
-            MDBoxLayout:
+            NativeBoxLayout:
                 orientation: "vertical"
 
-                MDLabel:
+                NativeLabel:
                     text: "TOTAL"
                     font_style: "Caption"
                     theme_text_color: "Secondary"
 
-                MDLabel:
+                NativeLabel:
                     text: "{:.2f} MT".format(root.total_amount)
                     bold: True
                     font_style: "H5"
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens['success']
 
-            MDRaisedButton:
+            NativeButton:
                 text: "PAGAR"
                 disabled: not root.cart_items or root.sale_in_progress
                 size_hint_x: None
@@ -75,30 +75,30 @@
                 md_bg_color: app.theme_tokens['success']
                 on_release: root.show_tab("payment")
 
-        MDBoxLayout:
+        NativeBoxLayout:
             size_hint_y: None
             height: dp(50)
             spacing: dp(6)
 
-            MDRaisedButton:
+            NativeButton:
                 text: "PROD." if root.width < dp(420) else "PRODUTOS"
                 font_size: dp(10) if root.width < dp(420) else dp(12)
                 md_bg_color: app.theme_tokens['success'] if root.active_tab == 'catalog' else app.theme_tokens['primary']
                 on_release: root.show_tab("catalog")
 
-            MDRaisedButton:
+            NativeButton:
                 text: "CAR. {}".format(int(root.cart_count)) if root.width < dp(420) else "CARRINHO ({})".format(int(root.cart_count))
                 font_size: dp(10) if root.width < dp(420) else dp(12)
                 md_bg_color: app.theme_tokens['success'] if root.active_tab == 'cart' else app.theme_tokens['primary']
                 on_release: root.show_tab("cart")
 
-            MDRaisedButton:
+            NativeButton:
                 text: "PAGAR"
                 font_size: dp(10) if root.width < dp(420) else dp(12)
                 md_bg_color: app.theme_tokens['success'] if root.active_tab == 'payment' else app.theme_tokens['primary']
                 on_release: root.show_tab("payment")
 
-            MDRaisedButton:
+            NativeButton:
                 text: "HIST." if root.width < dp(420) else "HISTORICO"
                 font_size: dp(10) if root.width < dp(420) else dp(12)
                 md_bg_color: app.theme_tokens['success'] if root.active_tab == 'history' else app.theme_tokens['primary']

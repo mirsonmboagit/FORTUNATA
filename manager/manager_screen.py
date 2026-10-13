@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
+
 import os
 import sys
 import time
 import traceback
+import sqlite3
 from collections import deque
 from datetime import datetime
 from threading import Thread
@@ -20,6 +23,7 @@ from kivy.lang import Builder
 from kivy.metrics import dp, sp
 from kivy.properties import ListProperty, NumericProperty, StringProperty
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.widget import Widget
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.gridlayout import GridLayout
@@ -28,15 +32,13 @@ from kivy.uix.scrollview import ScrollView as KivyScrollView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.textinput import TextInput
 
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton
-from kivymd.uix.card import MDCard
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.label import MDIcon, MDLabel
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.snackbar import MDSnackbar
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.tooltip import MDTooltip
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
+    NativeActionCard as MDActionCard, NativeCard as MDCard, NativeDialog as MDDialog, NativeFlatButton as MDFlatButton,
+    NativeIcon as MDIcon, NativeIconButton as MDIconButton, NativeLabel as MDLabel,
+    NativeScreen as MDScreen, NativeSnackbar as MDSnackbar,
+    NativeTextField as MDTextField, NativeTooltip as MDTooltip,
+)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -61,6 +63,7 @@ from utils.config.theme import get_theme_tokens
 from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
 from utils.config.system_identity import get_system_name
 from utils.hardware.thermal_printer import print_pdf_with_system, print_thermal_receipt
+from utils.hardware.vision import get_vision_dependencies
 from utils.business.vat import compute_vat_breakdown
 from utils.core.formatters import format_date_dmy, format_money, format_quantity, safe_float
 
@@ -175,6 +178,12 @@ def _unpack_sale_product(product):
 
 
 class QuickProductCard(MDCard):
+    """Linha da lista de sugestoes da pesquisa.
+
+    Toque na linha = adicionar 1 unidade ao carrinho. O botao de embalagem
+    so aparece nos produtos que permitem venda por embalagem.
+    """
+
     def __init__(self, product_data=None, add_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.product_data = product_data
@@ -182,6 +191,7 @@ class QuickProductCard(MDCard):
         self.details_callback = None
         self._allow_pack_sale = False
         self._is_weight = False
+        self._tap_key = f"qpc_tap_{id(self)}"
         if product_data is not None:
             self.set_product_payload(product_data, add_callback)
         Clock.schedule_once(self._apply_responsive_layout, 0)
@@ -189,118 +199,38 @@ class QuickProductCard(MDCard):
     def on_size(self, *_args):
         Clock.schedule_once(self._apply_responsive_layout, 0)
 
+    # -- toque na linha ----------------------------------------------------
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos) and not getattr(touch, "is_mouse_scrolling", False):
+            touch.ud[self._tap_key] = (touch.x, touch.y)
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        start = touch.ud.pop(self._tap_key, None)
+        handled = super().on_touch_up(touch)
+        if start is None or not self.collide_point(*touch.pos):
+            return handled
+        if abs(touch.x - start[0]) > dp(12) or abs(touch.y - start[1]) > dp(12):
+            return handled  # arrastou (scroll), nao foi um toque
+        if self.ids:
+            for button_id in ("add_pack_btn", "add_unit_btn", "view_details_btn"):
+                button = self.ids.get(button_id)
+                if button is not None and button.width > 0 and button.collide_point(*touch.pos):
+                    return handled  # o proprio botao trata o toque
+        self.on_add_unit_click()
+        return True
+
     def _apply_responsive_layout(self, *_args):
-        """Da prioridade ao nome do produto em cartoes estreitos."""
-        if not self.ids or "product_actions_row" not in self.ids:
+        if not self.ids or "add_unit_btn" not in self.ids:
             return
-
-        compact = self.width < dp(520)
-        compact_name_row = self.ids.compact_product_name_row
-        compact_name = self.ids.compact_product_name
-        compact_price = self.ids.compact_product_price
-        content_row = self.ids.product_content_row
-        icon_shell = self.ids.product_icon_shell
-        product_info = self.ids.product_info_box
-        compact_stock = self.ids.compact_stock_label
-        price_box = self.ids.product_price_box
-        actions = self.ids.product_actions_row
-        view_button = self.ids.view_product_btn
-        pack_button = self.ids.add_pack_btn
-        product_name = self.ids.product_name_label
-        product_meta = self.ids.product_meta_label
-        price_label = self.ids.product_price_label
-        product_mode = self.ids.product_mode_label
-
-        if compact:
-            self.height = dp(116)
-            self.padding = [dp(8), dp(8), dp(8), dp(8)]
-            compact_name_row.height = dp(42)
-            compact_name_row.opacity = 1
-            compact_name_row.disabled = False
-            compact_name.font_size = dp(16)
-            content_row.spacing = dp(6)
-            icon_shell.size = (0, 0)
-            icon_shell.opacity = 0
-            icon_shell.disabled = True
-            product_info.opacity = 0
-            product_info.disabled = True
-            product_info.size_hint_x = None
-            product_info.width = 0
-            compact_stock.text = getattr(self, "_compact_stock_text", "")
-            compact_stock.opacity = 1
-            compact_stock.disabled = False
-            compact_stock.size_hint_x = 1
-            price_box.width = 0
-            price_box.opacity = 0
-            price_box.disabled = True
-            actions.width = dp(138) if self._allow_pack_sale else dp(96)
-            product_name.opacity = 0
-            product_name.disabled = True
-            product_name.size_hint_y = None
-            product_name.height = 0
-            product_meta.opacity = 0
-            product_meta.disabled = True
-            product_meta.size_hint_y = None
-            product_meta.height = 0
-            product_mode.opacity = 0
-            product_mode.size_hint_y = None
-            product_mode.height = 0
-            price_label.valign = "middle"
-            view_button.size_hint_x = None
-            view_button.width = dp(42)
-            view_button.opacity = 1
-            view_button.disabled = False
-            pack_button.size_hint_x = None
-            pack_button.width = dp(42) if self._allow_pack_sale else 0
-            pack_button.opacity = 1 if self._allow_pack_sale else 0
-            pack_button.disabled = not self._allow_pack_sale
-            return
-
-        self.height = dp(94)
-        self.padding = [dp(12), dp(10), dp(12), dp(10)]
-        compact_name_row.height = 0
-        compact_name_row.opacity = 0
-        compact_name_row.disabled = True
-        content_row.spacing = dp(10)
-        icon_shell.size = (dp(50), dp(50))
-        icon_shell.opacity = 1
-        icon_shell.disabled = False
-        product_info.opacity = 1
-        product_info.disabled = False
-        product_info.size_hint_x = 1
-        product_info.width = 0
-        compact_stock.opacity = 0
-        compact_stock.disabled = True
-        compact_stock.size_hint_x = None
-        compact_stock.width = 0
-        price_box.width = dp(104)
-        price_box.opacity = 1
-        price_box.disabled = False
-        actions.width = dp(138)
-        product_name.font_size = dp(16)
-        product_name.shorten = True
-        product_name.max_lines = 1
-        product_name.text_size = (None, None)
-        product_name.opacity = 1
-        product_name.disabled = False
-        product_name.size_hint_y = 1
-        product_meta.font_size = dp(15)
-        product_meta.bold = False
-        product_meta.text = getattr(self, "_full_meta_text", product_meta.text)
-        product_meta.opacity = 1
-        product_meta.disabled = False
-        product_meta.size_hint_y = 1
-        product_mode.opacity = 1
-        product_mode.size_hint_y = 1
-        price_label.valign = "bottom"
-        view_button.size_hint_x = None
-        view_button.width = dp(42)
-        view_button.opacity = 1
-        view_button.disabled = False
-        pack_button.size_hint_x = None
-        pack_button.width = dp(42)
-        pack_button.opacity = 1 if self._allow_pack_sale else 0.28
-        pack_button.disabled = not self._allow_pack_sale
+        allowed = bool(self._allow_pack_sale)
+        pack_button = self.ids.get("add_pack_btn")
+        if pack_button is not None:
+            pack_button.size_hint = (None, None)
+            pack_button.size = (dp(38), dp(38)) if allowed else (0, 0)
+            pack_button.opacity = 1 if allowed else 0
+            pack_button.disabled = not allowed
+        self.ids.product_actions_row.width = dp(122) if allowed else dp(84)
 
     def set_product_payload(self, product_data, add_callback=None, details_callback=None):
         self.product_data = product_data
@@ -327,54 +257,39 @@ class QuickProductCard(MDCard):
         self.ids.product_icon.icon = "scale-balance" if is_weight else "package-variant-closed"
         self.ids.product_icon.text_color = colors["warning_text"] if is_weight else colors["primary_text"]
         self.ids.product_name_label.text = info["name"]
-        self.ids.compact_product_name.text = info["name"]
 
-        meta_parts = []
-        if info["stock_mode"] == "SACKS":
-            meta_parts.extend([f"{info['stock']:g} sacos", "Venda avulsa / saldo nao medido"])
-        elif is_weight:
-            meta_parts.append(f"Stock {_format_qty(info['stock'], True)}")
-            meta_parts.append("Venda por kg")
-        else:
-            meta_parts.append(f"Stock {_format_qty(info['stock'])} un")
-            meta_parts.append(f"Emb. {int(info['units_per_package'])} un" if allow_pack_sale else "Venda unitária")
-        if int(info.get("lot_count") or 1) > 1:
-            meta_parts.append(f"{int(info['lot_count'])} lotes")
-        expiry_text = _format_sale_expiry_date(info.get("expiry_date"))
-        if expiry_text:
-            meta_parts.append(f"Val. {expiry_text}")
+        # Linha secundaria: codigo de barras (como no desenho). So acrescenta
+        # informacao extra quando ela muda a forma de vender.
         barcode = str(info["barcode"] or "").strip()
+        meta_parts = []
         if barcode:
             meta_parts.append(barcode)
-        self._full_meta_text = " | ".join(meta_parts)
-        qty_text = _format_qty(info["stock"], is_weight)
-        self._compact_stock_text = f"Stock: {qty_text}" if is_weight else f"Stock: {qty_text} un"
         if info["stock_mode"] == "SACKS":
-            self._compact_stock_text = f"{info['stock']:g} sacos | Avulso"
-        self.ids.product_meta_label.text = self._full_meta_text
-        self.ids.compact_stock_label.text = self._compact_stock_text
+            meta_parts.append(f"{info['stock']:g} sacos | Venda avulsa")
+        elif is_weight:
+            meta_parts.append("Venda por kg")
+        elif not barcode:
+            meta_parts.append(f"Stock {_format_qty(info['stock'])} un")
+        if promo_active:
+            meta_parts.append("Promo")
+        self.ids.product_meta_label.text = " | ".join(meta_parts)
 
         self.ids.product_price_label.text = _format_money(unit_price)
         self.ids.product_price_label.text_color = colors["success_text"]
-        self.ids.compact_product_price.text = _format_money(unit_price)
-        self.ids.compact_product_price.text_color = colors["success_text"]
-        if info["stock_mode"] == "SACKS":
-            self.ids.product_mode_label.text = "Venda avulsa"
-        elif promo_active:
-            self.ids.product_mode_label.text = "Promo ativa"
-            self.ids.product_mode_label.text_color = colors["success_text"]
-        elif is_weight:
-            self.ids.product_mode_label.text = "Preço/kg"
-            self.ids.product_mode_label.text_color = colors["warning_text"]
-        else:
-            self.ids.product_mode_label.text = "Preço/un"
-            self.ids.product_mode_label.text_color = colors["text_secondary"]
-
-        self.ids.add_unit_btn.icon = "scale-balance" if is_weight else "plus"
-        self.ids.add_unit_btn.hint_text = "Adicionar por kg" if is_weight else "Adicionar unidade"
         self.ids.add_pack_btn.hint_text = "Adicionar embalagem"
-        self.ids.add_pack_btn.disabled = not allow_pack_sale
-        self.ids.add_pack_btn.opacity = 1 if allow_pack_sale else 0.28
+
+        add_unit_btn = self.ids.get("add_unit_btn")
+        if add_unit_btn is not None:
+            tokens = colors.get("tokens", {})
+            if is_weight:
+                add_unit_btn.icon = "scale-balance"
+                add_unit_btn.md_bg_color = tokens.get("warning", [0.90, 0.58, 0.08, 1])
+                add_unit_btn.hint_text = "Pesar e adicionar"
+            else:
+                add_unit_btn.icon = "cart-plus"
+                add_unit_btn.md_bg_color = colors["success_bg"]
+                add_unit_btn.hint_text = "Adicionar ao carrinho"
+
         self._apply_responsive_layout()
 
     def on_view_details_click(self):
@@ -461,11 +376,110 @@ class CompactActionButton(TooltipCleanupBehavior, MDTooltip, ButtonBehavior, MDB
         self._border_line.width = self.border_width
 
 
+
+
+class Glyph(Widget):
+    """Ícones desenhados em canvas (independentes da fonte de ícones)."""
+    kind = StringProperty("")
+    rgba = ListProperty([1, 1, 1, 1])
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas:
+            self._color = Color(rgba=self.rgba)
+            self._lines = [Line(points=[], width=dp(1.5), cap="round", joint="round") for _ in range(5)]
+        self.bind(pos=self._redraw, size=self._redraw, kind=self._redraw, rgba=self._redraw)
+        self._redraw()
+
+    def _shapes(self, cx, cy, u):
+        k = self.kind
+        if k == "bell":
+            return [
+                ([cx-8*u, cy-5*u, cx-6*u, cy-3*u, cx-6*u, cy+2*u, cx-4*u, cy+6*u, cx, cy+7.5*u,
+                  cx+4*u, cy+6*u, cx+6*u, cy+2*u, cx+6*u, cy-3*u, cx+8*u, cy-5*u, cx-8*u, cy-5*u], 1.5),
+                ([cx-2*u, cy-8*u, cx+2*u, cy-8*u], 1.5),
+                ([cx, cy+7.5*u, cx, cy+9*u], 1.5),
+            ]
+        if k == "bulb":
+            arc = []
+            for deg in range(235, -56, -15):
+                t = math.radians(deg)
+                arc += [cx + 6*u*math.cos(t), cy + 3*u + 6*u*math.sin(t)]
+            return [
+                (arc + [cx+3*u, cy-4.5*u, cx-3*u, cy-4.5*u, arc[0], arc[1]], 1.5),
+                ([cx-2*u, cy-7*u, cx+2*u, cy-7*u], 1.5),
+            ]
+        if k == "pause":
+            return [([cx-3.5*u, cy-6*u, cx-3.5*u, cy+6*u], 2.6),
+                    ([cx+3.5*u, cy-6*u, cx+3.5*u, cy+6*u], 2.6)]
+        if k == "play":
+            return [([cx-4*u, cy-6*u, cx-4*u, cy+6*u, cx+6*u, cy, cx-4*u, cy-6*u], 1.6)]
+        if k == "receipt":
+            return [
+                ([cx-6*u, cy+8*u, cx+6*u, cy+8*u, cx+6*u, cy-8*u, cx+4*u, cy-6*u, cx+2*u, cy-8*u,
+                  cx, cy-6*u, cx-2*u, cy-8*u, cx-4*u, cy-6*u, cx-6*u, cy-8*u, cx-6*u, cy+8*u], 1.4),
+                ([cx-3*u, cy+3*u, cx+3*u, cy+3*u], 1.4),
+                ([cx-3*u, cy-1*u, cx+3*u, cy-1*u], 1.4),
+            ]
+        if k == "store":
+            return [
+                ([cx-8*u, cy-1*u, cx-6*u, cy+7*u, cx+6*u, cy+7*u, cx+8*u, cy-1*u, cx-8*u, cy-1*u], 1.6),
+                ([cx-7*u, cy-1*u, cx-7*u, cy-8*u, cx+7*u, cy-8*u, cx+7*u, cy-1*u], 1.6),
+                ([cx-2*u, cy-8*u, cx-2*u, cy-4*u, cx+2*u, cy-4*u, cx+2*u, cy-8*u], 1.4),
+            ]
+        return []
+
+    def _redraw(self, *_args):
+        cx, cy = self.center
+        u = min(self.width, self.height) / 24.0
+        self._color.rgba = self.rgba
+        shapes = self._shapes(cx, cy, u)
+        for i, line in enumerate(self._lines):
+            if i < len(shapes):
+                line.points = shapes[i][0]
+                line.width = dp(shapes[i][1])
+            else:
+                line.points = []
+
+
+class TrashActionButton(CompactActionButton):
+    """Botão com ícone de lixo desenhado em canvas (não depende da fonte de ícones)."""
+
+    def __init__(self, glyph_color=None, **kwargs):
+        super().__init__(icon="", **kwargs)
+        self._glyph_rgba = list(glyph_color or [1, 1, 1, 1])
+        with self.canvas.after:
+            self._g_color = Color(rgba=self._glyph_rgba)
+            self._g_lid = Line(points=[], width=dp(1.5), cap="round")
+            self._g_handle = Line(points=[], width=dp(1.4), cap="round", joint="round")
+            self._g_body = Line(points=[], width=dp(1.4), cap="round", joint="round")
+            self._g_rib1 = Line(points=[], width=dp(1.2), cap="round")
+            self._g_rib2 = Line(points=[], width=dp(1.2), cap="round")
+        self.bind(pos=self._draw_glyph, size=self._draw_glyph)
+        Clock.schedule_once(self._draw_glyph, 0)
+
+    def _draw_glyph(self, *_args):
+        cx, cy = self.center_x, self.center_y
+        u = min(self.width, self.height) / 32.0
+        self._g_color.rgba = self._glyph_rgba
+        self._g_lid.points = [cx - 7*u, cy + 6*u, cx + 7*u, cy + 6*u]
+        self._g_handle.points = [
+            cx - 2.5*u, cy + 6*u, cx - 2.5*u, cy + 8.5*u,
+            cx + 2.5*u, cy + 8.5*u, cx + 2.5*u, cy + 6*u,
+        ]
+        self._g_body.points = [
+            cx - 5*u, cy + 4*u, cx - 4*u, cy - 7*u,
+            cx + 4*u, cy - 7*u, cx + 5*u, cy + 4*u,
+        ]
+        self._g_rib1.points = [cx - 1.7*u, cy + 1.5*u, cx - 1.7*u, cy - 4*u]
+        self._g_rib2.points = [cx + 1.7*u, cy + 1.5*u, cx + 1.7*u, cy - 4*u]
+
+
 class FloatingScannerPanel(MDCard):
-    min_panel_width = NumericProperty(dp(320))
-    min_panel_height = NumericProperty(dp(400))
-    drag_bar_height = NumericProperty(dp(34))
-    resize_handle_size = NumericProperty(dp(24))
+    min_panel_width = NumericProperty(dp(260))
+    min_panel_height = NumericProperty(dp(220))
+    drag_bar_height = NumericProperty(dp(30))
+    resize_handle_size = NumericProperty(dp(18))
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -517,7 +531,10 @@ class FloatingScannerPanel(MDCard):
         return touch.x >= (self.right - self.resize_handle_size) and touch.y <= (self.y + self.resize_handle_size)
 
     def _touch_in_drag_zone(self, touch):
-        return touch.y >= (self.top - self.drag_bar_height)
+        return (
+            touch.y >= (self.top - self.drag_bar_height)
+            and touch.x < (self.right - dp(64))
+        )
 
     def on_touch_down(self, touch):
         if self.disabled or self.opacity <= 0.01 or not self.collide_point(*touch.pos):
@@ -596,11 +613,34 @@ class RecycleQuickProductCard(RecycleDataViewBehavior, QuickProductCard):
         return result
 
 
+class BorderedCard(MDCard):
+    """Cartao com contorno fino desenhado por cima do fundo (ver sales_screen.kv)."""
+    edge_color = ListProperty([1, 1, 1, 0.08])
+    edge_width = NumericProperty(dp(1))
+    edge_radius = NumericProperty(dp(16))
+
+
+class SalesActionContent(AnchorLayout):
+    """Icone + texto centrados, desenhados por cima de um botao de accao."""
+    icon_name = StringProperty("")
+    glyph_kind = StringProperty("")
+    label_text = StringProperty("")
+    content_color = ListProperty([1, 1, 1, 1])
+
+
+class EmptyHint(MDBoxLayout):
+    """Dica (icone + texto) do estado vazio do carrinho."""
+    icon_name = StringProperty("")
+    hint_text = StringProperty("")
+
+
+Factory.register("Glyph", cls=Glyph)
 Factory.register("FloatingScannerPanel", cls=FloatingScannerPanel)
+Factory.register("BorderedCard", cls=BorderedCard)
+Factory.register("SalesActionContent", cls=SalesActionContent)
+Factory.register("EmptyHint", cls=EmptyHint)
 Factory.register("NoticeBannerCard", cls=NoticeBannerCard)
 Builder.load_file(os.path.join(CURRENT_DIR, "sales_screen.kv"))
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 #  ATALHOS DE TECLADO — referência completa
 # ══════════════════════════════════════════════════════════════════════════════
@@ -654,6 +694,18 @@ from manager.produce_sales import ProduceSalesMixin, MODE_LABELS
 
 
 class SalesScreen(ProduceSalesMixin, MDScreen):
+    CART_COLUMNS = {
+        "wide":   (30, 128, 52, 96, 110, 38),
+        "mid":    (26, 112, 46, 80, 92, 34),
+        "narrow": (22, 104, 40, 70, 84, 32),
+    }
+    col_num_w = NumericProperty(dp(26))
+    col_qty_w = NumericProperty(dp(112))
+    col_unit_w = NumericProperty(dp(46))
+    col_price_w = NumericProperty(dp(80))
+    col_total_w = NumericProperty(dp(92))
+    col_remove_w = NumericProperty(dp(34))
+
     PRODUCTS_PAGE_SIZE = 15
     PRODUCTS_CACHE_SECONDS = 20
     STOCK_SYNC_INTERVAL_SECONDS = 15
@@ -663,6 +715,12 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
     operator_name = StringProperty("Atendente")
     header_datetime_text = StringProperty("")
     hold_button_text = StringProperty("Suspender Venda")
+    suggestions_height = NumericProperty(0)
+
+    # Dropdown de sugestoes (alturas em dp, somadas em _update_suggestions_panel)
+    SUGGESTION_ROW_HEIGHT = 56
+    SUGGESTION_CHROME_HEIGHT = 37   # titulo compacto + divisor + margem
+    SUGGESTION_MAX_ROWS = 4
 
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
@@ -686,6 +744,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         self._search_ev = None
         self._search_feedback_hide_ev = None
         self._pending_search = ""
+        self._suggestions_dismissed_for = None
         self._qty_update_events = {}
         self._stock_poll_ev = None
         self._stock_revision = None
@@ -717,24 +776,13 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         self._scanner_keyboard_last_at = 0.0
         self._scanner_keyboard_max_gap = 0.12
         self._scanner_panel_initialized = False
+        # Scanner de vendas: mesma implementação usada no formulário de produtos.
+        # A captura é feita diretamente pelo OpenCV e a leitura pelo pyzbar
+        # através de get_vision_dependencies().
         self.scanning = False
         self.current_camera = 0
         self.camera_capture = None
-        self.camera_service = CameraService(
-            width=640,
-            height=480,
-            preview_fps=18,
-            on_started=self._on_camera_service_started,
-            on_error=self._on_camera_service_error,
-        )
-        self.scanner_service = ScannerService(
-            self.camera_service,
-            decode_scale=0.65,
-            decode_interval_seconds=0.18,
-            duplicate_cooldown_seconds=2.0,
-            on_detected=self._on_camera_service_detected,
-            on_error=self._on_camera_service_decode_error,
-        )
+        self._vision_modules = None
         self.last_barcode = None
         self.last_barcode_time = 0.0
         self.scanner_sound_success = None
@@ -769,21 +817,91 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         self._responsive_layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
         self._refresh_cart_theme_trigger = Clock.create_trigger(self._refresh_cart_theme, 0)
         self._theme_source = None
+        self._startup_tasks_scheduled = False
+        self._startup_entered = False
+        self._startup_product_ev = None
+        self._startup_snapshot_ev = None
+        self._startup_notice_ev = None
+        self._startup_cash_ev = None
+        self._startup_ai_ev = None
         Clock.schedule_once(self._post_init, 0.05)
 
     def _post_init(self, *_args):
+        # A primeira frame deve aparecer antes de qualquer consulta ou tarefa
+        # operacional. Isto evita que a janela do Windows fique "Not Responding"
+        # enquanto a tela de vendas ainda esta a ser montada.
         self._bind_theme_updates()
         self._bind_scanner_panel_ids()
         self._refresh_device_settings()
         self._refresh_header_meta()
         self._set_connection_text()
-        Clock.schedule_once(lambda _dt: self.load_scanner_sounds(), 4.0)
         self.set_payment_method("cash")
-        self.load_products()
-        self._load_operational_snapshot()
         self._update_action_states()
-        self._refresh_notice_widgets()
         self._update_responsive_layout()
+        if not self._startup_tasks_scheduled:
+            self._startup_tasks_scheduled = True
+            self._startup_product_ev = Clock.schedule_once(self._startup_load_products, 0.20)
+            self._startup_snapshot_ev = Clock.schedule_once(self._startup_load_snapshot, 0.35)
+            self._startup_notice_ev = Clock.schedule_once(lambda _dt: self._refresh_notice_widgets(), 0.50)
+            Clock.schedule_once(lambda _dt: self.load_scanner_sounds(), 4.0)
+            Clock.schedule_once(self._preload_vision_modules, 0.8)
+
+    def _startup_load_products(self, *_args):
+        self._startup_product_ev = None
+        try:
+            self.load_products()
+        except Exception:
+            traceback.print_exc()
+
+    def _startup_load_snapshot(self, *_args):
+        self._startup_snapshot_ev = None
+        try:
+            self._load_operational_snapshot()
+        except Exception:
+            traceback.print_exc()
+
+    def _startup_load_cash_and_ai(self, *_args):
+        self._startup_cash_ev = None
+        try:
+            self.ensure_cash_session()
+        except Exception:
+            traceback.print_exc()
+        if self._startup_ai_ev is None:
+            self._startup_ai_ev = Clock.schedule_once(self._startup_start_ai, 0.30)
+
+    def _startup_start_ai(self, *_args):
+        self._startup_ai_ev = None
+        try:
+            self._start_ai_polling()
+        except Exception:
+            traceback.print_exc()
+
+    def on_enter(self):
+        self._startup_entered = True
+        self._refresh_device_settings()
+        self._bind_keyboard_shortcuts()
+        self._refresh_header_meta()
+        self._start_clock()
+        # Nao repetir consultas pesadas imediatamente apos _post_init.
+        stale = (time.perf_counter() - self._last_products_refresh_at) >= self.PRODUCTS_CACHE_SECONDS
+        if not self._loaded_products or stale:
+            Clock.schedule_once(lambda _dt: self.manual_refresh_stock(silent=True), 0.45)
+        Clock.schedule_once(lambda _dt: self._load_operational_snapshot(), 0.65)
+        if self._startup_cash_ev is None:
+            self._startup_cash_ev = Clock.schedule_once(self._startup_load_cash_and_ai, 0.90)
+        app = App.get_running_app()
+        warmup = getattr(app, "warmup_screens", None) if app else None
+        if callable(warmup):
+            Clock.schedule_once(
+                lambda _dt: warmup(("sales_history", "losses", "losses_history"), delay=0.1),
+                1.20,
+            )
+        if self._physical_scanner_enabled:
+            Clock.schedule_once(
+                lambda _dt: self._focus_text_field("search_input", select_all=False),
+                0.35,
+            )
+
 
     def on_enter(self):
         self._refresh_device_settings()
@@ -811,6 +929,20 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             )
 
     def on_leave(self):
+        for attr in (
+            "_startup_product_ev",
+            "_startup_snapshot_ev",
+            "_startup_notice_ev",
+            "_startup_cash_ev",
+            "_startup_ai_ev",
+        ):
+            ev = getattr(self, attr, None)
+            if ev is not None:
+                try:
+                    ev.cancel()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
         self._unbind_keyboard_shortcuts()
         self._stop_clock()
         self._stop_stock_polling()
@@ -871,53 +1003,261 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             except Exception:
                 pass
             self._cash_dialog = None
+
         username, role, terminal_id = self._cash_identity()
         if not username:
             return
+
         try:
             session = self.db.get_open_cash_session(username, terminal_id)
         except Exception as exc:
             self.show_message(f"Nao foi possivel consultar o caixa: {exc}")
             return
+
         self._cash_session = session
+        palette = _sales_accessibility_palette()
+        text_primary = palette["text_primary"]
+        text_secondary = palette["text_secondary"]
+        tokens = palette.get("tokens", {})
+        card = list(tokens.get("card", [0.08, 0.11, 0.15, 1]))
+        card_alt = list(tokens.get("card_alt", [0.10, 0.14, 0.19, 1]))
+        divider = list(tokens.get("divider", [1, 1, 1, 0.10]))
+        primary_bg = list(palette.get("primary_bg", [0.10, 0.43, 0.76, 1]))
+        success_bg = list(palette.get("success_bg", [0.08, 0.45, 0.30, 1]))
+        danger_bg = list(palette.get("danger_bg", [0.65, 0.16, 0.22, 1]))
+
         amount_input = MDTextField(
-            hint_text="Fundo inicial (MT)" if not session else "Valor contado em dinheiro (MT)",
+            hint_text="Valor contado em dinheiro (MT)" if session else "Fundo inicial (MT)",
             text="0.00",
             input_filter="float",
             multiline=False,
+            size_hint_y=None,
+            height=dp(52),
         )
         note_input = MDTextField(
-            hint_text="Observacao" if not session else "Justificacao da diferenca (se existir)",
+            hint_text="Justificacao da diferenca (opcional)" if session else "Observacao (opcional)",
             multiline=False,
+            size_hint_y=None,
+            height=dp(52),
         )
-        content = MDBoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(150 if not session else 250))
+
+        summary = {}
+        methods = {}
         if session:
-            summary = self.db.get_cash_session_summary(session["id"]) or {}
+            try:
+                summary = self.db.get_cash_session_summary(session["id"]) or {}
+            except sqlite3.ProgrammingError as exc:
+                if "Recursive use of cursors not allowed" not in str(exc):
+                    raise
+            except Exception:
+                summary = {}
             methods = summary.get("payment_methods") or {}
-            labels = {"cash": "Dinheiro", "card": "Cartao", "mobile": "M-Pesa", "emola": "E-MOLA"}
-            lines = [
-                f"Aberto em: {summary.get('opened_at') or '-'}",
-                f"Fundo inicial: {_format_money(summary.get('opening_amount'))}",
-                f"Vendas: {_format_money(summary.get('sales_total'))} ({summary.get('transaction_count', 0)} transacoes)",
-            ]
-            lines.extend(f"{labels.get(key, key)}: {_format_money(value.get('total'))}" for key, value in methods.items())
-            lines.append(f"Dinheiro esperado: {_format_money(summary.get('expected_cash'))}")
-            content.add_widget(MDLabel(
-                text="\n".join(lines), size_hint_y=None, height=dp(115),
-                theme_text_color="Custom", text_color=_sales_accessibility_palette()["text_secondary"],
+
+        def money(value):
+            return _format_money(value or 0.0)
+
+        def info_card(icon, label, value, accent):
+            box = MDCard(
+                orientation="horizontal",
+                size_hint_y=None,
+                height=dp(76),
+                padding=[dp(12), dp(9)],
+                spacing=dp(10),
+                radius=[dp(10)],
+                elevation=0,
+                md_bg_color=card_alt,
+            )
+            icon_widget = MDIcon(
+                icon=icon,
+                size_hint=(None, None),
+                size=(dp(30), dp(30)),
+                font_size=dp(24),
+                theme_text_color="Custom",
+                text_color=accent,
+            )
+            text_box = MDBoxLayout(orientation="vertical", spacing=0)
+            text_box.add_widget(MDLabel(
+                text=label,
+                size_hint_y=None,
+                height=dp(22),
+                font_size=sp(11),
+                theme_text_color="Custom",
+                text_color=text_secondary,
+                shorten=True,
+                shorten_from="right",
             ))
-        content.add_widget(amount_input)
-        content.add_widget(note_input)
+            text_box.add_widget(MDLabel(
+                text=value,
+                size_hint_y=None,
+                height=dp(30),
+                font_size=sp(15),
+                bold=True,
+                theme_text_color="Custom",
+                text_color=text_primary,
+                shorten=True,
+                shorten_from="right",
+            ))
+            box.add_widget(icon_widget)
+            box.add_widget(text_box)
+            return box
+
+        root_content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(2), dp(4), dp(2)],
+            size_hint_y=None,
+        )
+
+        # Cabecalho visual: titulo + estado, em vez de um bloco de texto corrido.
+        header = MDCard(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(76),
+            padding=[dp(14), dp(10)],
+            spacing=dp(12),
+            radius=[dp(12)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+        header_icon = MDIcon(
+            icon="cash-register",
+            size_hint=(None, None),
+            size=(dp(42), dp(42)),
+            font_size=dp(30),
+            theme_text_color="Custom",
+            text_color=primary_bg,
+        )
+        header_text = MDBoxLayout(orientation="vertical", spacing=0)
+        header_text.add_widget(MDLabel(
+            text=f"Caixa #{session['id']}" if session else "Abrir caixa",
+            size_hint_y=None,
+            height=dp(32),
+            font_size=sp(18),
+            bold=True,
+            theme_text_color="Custom",
+            text_color=text_primary,
+        ))
+        header_text.add_widget(MDLabel(
+            text="Conferencia e fecho do movimento" if session else "Defina o fundo inicial para iniciar as vendas",
+            size_hint_y=None,
+            height=dp(22),
+            font_size=sp(11),
+            theme_text_color="Custom",
+            text_color=text_secondary,
+            shorten=True,
+            shorten_from="right",
+        ))
+        header.add_widget(header_icon)
+        header.add_widget(header_text)
+        root_content.add_widget(header)
+
+        if session:
+            # Informacao operacional distribuida em cartoes, sem texto corrido.
+            metrics = MDBoxLayout(
+                orientation="horizontal",
+                spacing=dp(8),
+                size_hint_y=None,
+                height=dp(76),
+            )
+            metrics.add_widget(info_card("calendar-clock", "ABERTO EM", str(summary.get("opened_at") or "-"), primary_bg))
+            metrics.add_widget(info_card("cash", "FUNDO INICIAL", money(summary.get("opening_amount")), success_bg))
+            metrics.add_widget(info_card("cart", "VENDAS", f"{money(summary.get('sales_total'))}  |  {int(summary.get('transaction_count') or 0)}", primary_bg))
+            metrics.add_widget(info_card("cash-check", "DINHEIRO ESPERADO", money(summary.get("expected_cash")), success_bg))
+            root_content.add_widget(metrics)
+
+            payments = MDCard(
+                orientation="vertical",
+                size_hint_y=None,
+                height=dp(92),
+                padding=[dp(12), dp(8)],
+                spacing=dp(6),
+                radius=[dp(10)],
+                elevation=0,
+                md_bg_color=card,
+            )
+            payments.add_widget(MDLabel(
+                text="VENDAS POR PAGAMENTO",
+                size_hint_y=None,
+                height=dp(20),
+                font_size=sp(10),
+                bold=True,
+                theme_text_color="Custom",
+                text_color=text_secondary,
+            ))
+            payment_row = MDBoxLayout(orientation="horizontal", spacing=dp(8), size_hint_y=None, height=dp(42))
+            payment_labels = [("cash", "Dinheiro"), ("card", "Cartao"), ("mobile", "M-Pesa"), ("emola", "E-MOLA")]
+            payment_icons = {"cash": "cash", "card": "credit-card-outline", "mobile": "cellphone", "emola": "wallet-outline"}
+            for key, label in payment_labels:
+                item = methods.get(key) or {}
+                amount = money(item.get("total"))
+                cell = MDBoxLayout(orientation="vertical", spacing=0)
+                cell.add_widget(MDLabel(text=label, size_hint_y=None, height=dp(18), font_size=sp(10), theme_text_color="Custom", text_color=text_secondary, shorten=True, shorten_from="right"))
+                cell.add_widget(MDLabel(text=amount, size_hint_y=None, height=dp(22), font_size=sp(12), bold=True, theme_text_color="Custom", text_color=text_primary, shorten=True, shorten_from="right"))
+                payment_row.add_widget(cell)
+            payments.add_widget(payment_row)
+            root_content.add_widget(payments)
+
+        form = MDCard(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(132 if session else 76),
+            padding=[dp(12), dp(10)],
+            spacing=dp(8),
+            radius=[dp(10)],
+            elevation=0,
+            md_bg_color=card,
+        )
+        form.add_widget(MDLabel(
+            text="CONFERENCIA FINAL" if session else "FUNDO DE ABERTURA",
+            size_hint_y=None,
+            height=dp(20),
+            font_size=sp(10),
+            bold=True,
+            theme_text_color="Custom",
+            text_color=text_secondary,
+        ))
+        form.add_widget(amount_input)
+        if session:
+            form.add_widget(note_input)
+        root_content.add_widget(form)
+
+        # Linha de acoes limpa: acao secundaria a esquerda e principal a direita.
+        actions = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(10),
+            size_hint_y=None,
+            height=dp(48),
+        )
         cancel_btn = MDFlatButton(text="CONTINUAR ABERTO") if session else None
         action_btn = MDRaisedButton(text="FECHAR CAIXA" if session else "ABRIR CAIXA")
+        if cancel_btn is not None:
+            cancel_btn.size_hint_x = 0.36
+            cancel_btn.theme_text_color = "Custom"
+            cancel_btn.text_color = text_secondary
+            actions.add_widget(cancel_btn)
+        else:
+            spacer = MDBoxLayout(size_hint_x=0.36)
+            actions.add_widget(spacer)
+        action_btn.size_hint_x = 0.64
+        action_btn.md_bg_color = danger_bg if session else success_bg
+        actions.add_widget(action_btn)
+        root_content.add_widget(actions)
+
+        root_content.height = sum(getattr(child, "height", 0) for child in root_content.children) + dp(12 * max(len(root_content.children) - 1, 0)) + dp(4)
+
         dialog = MDDialog(
-            title=f"Caixa #{session['id']}" if session else "Abertura de caixa obrigatoria",
+            title="",
             type="custom",
-            content_cls=content,
-            buttons=([cancel_btn, action_btn] if cancel_btn else [action_btn]),
+            content_cls=root_content,
+            buttons=[],
             auto_dismiss=not force_open,
         )
         self._cash_dialog = dialog
+        try:
+            dialog.size_hint = (0.92, None)
+            dialog.height = min(dp(610), root_content.height + dp(42))
+        except Exception:
+            pass
         if cancel_btn is not None:
             cancel_btn.bind(on_release=lambda _b: dialog.dismiss())
 
@@ -929,8 +1269,8 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             if session:
                 result = self.db.close_cash_session(session["id"], value, note_input.text, username, role)
                 if result.get("ok"):
-                    summary = result.get("summary") or {}
-                    difference = _safe_float(summary.get("difference_amount"))
+                    close_summary = result.get("summary") or {}
+                    difference = _safe_float(close_summary.get("difference_amount"))
                     dialog.dismiss()
                     self._cash_session = None
                     self.show_message(f"Caixa fechado. Diferenca: {_format_money(difference)}")
@@ -1093,6 +1433,9 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         return True
 
     def _close_transient_panels(self):
+        if self.suggestions_height > 0:
+            self._dismiss_suggestions(clear_text=True)
+            return True
         if self._recent_sales_dialog is not None:
             try:
                 self._recent_sales_dialog.dismiss()
@@ -1346,6 +1689,15 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         is_dark = colors["is_dark"]
         accent_strength = 0.28 if is_dark else 0.12
         control_strength = 0.24 if is_dark else 0.10
+
+        # Compatibilidade com versões antigas dos tokens de tema.
+        primary_text = list(colors.get("primary_text", tokens.get("info", [0.05, 0.32, 0.62, 1])))
+        success_text = list(colors.get("success_text", tokens.get("success", [0.0, 0.48, 0.28, 1])))
+        warning_text = list(colors.get("warning_text", tokens.get("warning", [0.60, 0.32, 0.03, 1])))
+        danger_text = list(colors.get("danger_text", tokens.get("danger", [0.72, 0.12, 0.17, 1])))
+        danger_bg = list(colors.get("danger_bg", tokens.get("danger", [0.78, 0.20, 0.24, 1])))
+        success_bg = list(colors.get("success_bg", tokens.get("success", [0.14, 0.55, 0.32, 1])))
+
         return {
             "row": card,
             "row_alt": card_alt,
@@ -1355,13 +1707,19 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             "weight_bg": tint([0.90, 0.58, 0.08, 1], control_strength),
             "danger_bg": tint(danger_bg, control_strength),
             "success_bg": tint(success_bg, control_strength),
-            "primary": colors["primary_text"],
-            "success": colors["success_text"],
-            "danger": colors["danger_text"],
+            "primary": primary_text,
+            "success": success_text,
+            "danger": danger_text,
+            "success_text": success_text,
+            "danger_text": danger_text,
+            "warning_text": warning_text,
             "pack": [0.80, 0.66, 1, 1] if is_dark else [0.42, 0.24, 0.68, 1],
-            "weight": colors["warning_text"],
-            "text_primary": colors["text_primary"],
-            "text_secondary": colors["text_secondary"],
+            "weight": warning_text,
+            "text_primary": colors.get("text_primary", [0.12, 0.14, 0.18, 1]),
+            "text_secondary": colors.get("text_secondary", [0.45, 0.48, 0.54, 1]),
+            "primary_bg": colors.get("primary_bg", primary_bg),
+            "on_primary": colors.get("on_primary", [1, 1, 1, 1]),
+            "divider": list(tokens.get("divider", [1, 1, 1, 0.12])),
         }
 
     def _select_cart_item(self, index):
@@ -1549,173 +1907,209 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             self._clock_ev.cancel()
             self._clock_ev = None
 
-    def _update_responsive_layout(self, *_args):
+    def scroll_payment(self, direction):
+        """Desloca o painel de pagamento sem obrigar o utilizador a arrastar a barra."""
         if not self.ids:
             return
-        header_card = self.ids.get("header_card")
-        header_content = self.ids.get("header_content")
-        brand_group = self.ids.get("brand_group")
-        header_meta_group = self.ids.get("header_meta_group")
-        header_actions = self.ids.get("header_actions")
-        connection_card = self.ids.get("connection_card")
-        notices_bar = self.ids.get("notices_bar")
-        body_shell = self.ids.get("body_shell")
-        workspace_card = self.ids.get("workspace_card")
-        cart_card = self.ids.get("cart_card")
-        summary_card = self.ids.get("summary_card")
-        action_group_anchor = self.ids.get("action_group_anchor")
-        action_group_card = self.ids.get("action_group_card")
-        bottom_actions_grid = self.ids.get("bottom_actions_grid")
-        footer_metrics_card = self.ids.get("footer_metrics_card")
-        footer_metrics_grid = self.ids.get("footer_metrics_grid")
-
-        if not body_shell or not workspace_card or not cart_card or not summary_card or not bottom_actions_grid:
+        scroll = self.ids.get("summary_scroll")
+        if scroll is None:
             return
+        try:
+            step = 0.30 if direction > 0 else -0.30
+            scroll.scroll_y = max(0.0, min(1.0, float(scroll.scroll_y) + step))
+        except Exception:
+            pass
 
+    def _update_responsive_layout(self, *_args):
+        """Adapt the POS layout to the actual available window width.
+
+        Breakpoints are intentionally conservative: the footer switches to a
+        two-tier layout before labels start colliding, and the payment panel
+        moves below the cart before its controls become cramped.
+        """
+        if not self.ids:
+            return
+        ids = self.ids
         width = float(self.width or Window.width or 0)
-        compact = width < dp(1220)
-        narrow = width < dp(820)
-        phone = width < dp(620)
+        compact = width < 1050
+        phone = width < 640
 
-        if header_card is not None:
-            header_card.height = dp(96 if phone else 104 if narrow else 72)
-        if header_content is not None:
-            header_content.orientation = "vertical" if narrow else "horizontal"
-            header_content.spacing = dp(8 if narrow else 14)
-        if brand_group is not None:
-            brand_group.size_hint_x = 1 if narrow else 0.43
-            brand_group.size_hint_y = None if narrow else 1
-            brand_group.height = dp(46) if narrow else 0
-        if header_meta_group is not None:
-            header_meta_group.size_hint_x = 1 if narrow else 0.23
-            header_meta_group.size_hint_y = None if narrow else 1
-            header_meta_group.height = dp(26 if phone else 34) if narrow else 0
-            header_meta_group.opacity = 0 if phone else 1
-            header_meta_group.disabled = phone
-        if header_actions is not None:
-            header_actions.size_hint_x = 1 if narrow else 0.34
-            header_actions.size_hint_y = None if narrow else 1
-            header_actions.height = dp(40) if narrow else 0
-            header_actions.spacing = dp(5 if compact else 8)
-        if connection_card is not None:
-            connection_card.width = dp(92 if phone else 104 if compact else 112)
+        # Header: keep metadata readable; never squeeze it into a vertical strip.
+        meta = ids.get("header_meta_group")
+        if meta is not None:
+            show_meta = width >= 1050
+            meta.width = min(dp(218), max(dp(176), width * 0.205)) if show_meta else 0
+            meta.opacity = 1 if show_meta else 0
+            meta.disabled = not show_meta
+        conn = ids.get("connection_card")
+        if conn is not None:
+            show_conn = width >= 760
+            conn.width = dp(88) if show_conn else 0
+            conn.opacity = 1 if show_conn else 0
+            conn.disabled = not show_conn
+        sub = ids.get("brand_subtitle")
+        if sub is not None:
+            sub.opacity = 1 if width >= 760 else 0
 
-        notice_cards = [
-            self.ids.get("notice_one_card"),
-            self.ids.get("notice_two_card"),
-            self.ids.get("notice_three_card"),
-        ]
-        if notices_bar is not None:
-            notices_bar.orientation = "horizontal"
-            notices_bar.spacing = dp(6 if compact else 8)
-            if phone or not self._notices_visible:
-                notices_bar.height = 0
-                notices_bar.opacity = 0
-                notices_bar.disabled = True
-            elif narrow:
-                notices_bar.height = dp(42)
-                notices_bar.opacity = 1
-                notices_bar.disabled = False
+        empty_visual = ids.get("cart_empty_visual")
+        if empty_visual is not None:
+            card_h = float(getattr(ids.get("cart_card"), "height", 0) or 0)
+            if phone:
+                vh, isz, tsz, ssz = dp(66), dp(48), sp(15), sp(9.5)
+            elif width < 1050:
+                vh, isz, tsz, ssz = dp(82), dp(58), sp(18), sp(10.5)
             else:
-                notices_bar.height = max((card.height for card in notice_cards if card is not None), default=dp(50))
-                notices_bar.opacity = 1
-                notices_bar.disabled = False
-        for card in notice_cards:
-            if card is not None:
-                card.height = dp(42 if narrow else 50)
-                card.opacity = 0 if phone or not self._notices_visible else 1
-                card.disabled = phone or not self._notices_visible
-        for row_id in ("notice_one_main_row", "notice_two_main_row", "notice_three_main_row"):
-            row = self.ids.get(row_id)
-            if row is not None:
-                row.height = dp(42 if narrow else 50)
+                vh, isz, tsz, ssz = dp(108), dp(80), sp(22), sp(12.5)
+            if card_h and card_h < dp(300):
+                vh = min(vh, max(dp(60), card_h * 0.24))
+            empty_visual.height = vh
+            icon = ids.get("cart_empty_icon")
+            if icon is not None:
+                icon.size = (isz, isz)
+                icon.font_size = max(sp(36), isz * 0.93)
+            if ids.get("cart_empty_title") is not None:
+                ids.cart_empty_title.font_size = tsz
+            if ids.get("cart_empty_subtitle") is not None:
+                ids.cart_empty_subtitle.font_size = ssz
 
-        body_shell.orientation = "vertical" if narrow else "horizontal"
-        body_shell.spacing = dp(8 if narrow or compact else 10)
-        if narrow:
-            workspace_card.size_hint_x = 1
-            cart_card.size_hint_x = 1
-            summary_card.size_hint_x = 1
-            workspace_card.size_hint_y = 0.34
-            cart_card.size_hint_y = 0.34
-            summary_card.size_hint_y = 0.32
-            workspace_card.height = 0
-            cart_card.height = 0
-            summary_card.height = 0
-        elif compact:
-            body_shell.spacing = dp(8)
-            workspace_card.size_hint_x = 0.30
-            cart_card.size_hint_x = 0.43
-            summary_card.size_hint_x = 0.27
-            for card in (workspace_card, cart_card, summary_card):
-                card.size_hint_y = 1
-                card.height = 0
-        else:
-            body_shell.spacing = dp(8)
-            workspace_card.size_hint_x = 0.31
-            cart_card.size_hint_x = 0.43
-            summary_card.size_hint_x = 0.26
-            for card in (workspace_card, cart_card, summary_card):
-                card.size_hint_y = 1
-                card.height = 0
+        body, left, summary = ids.get("body_shell"), ids.get("left_column"), ids.get("summary_card")
+        summary_w = min(max(width * 0.34, dp(286)), dp(400))
+        if body is not None and left is not None and summary is not None:
+            if width < 900:
+                body.orientation = "vertical"
+                body.spacing = dp(6)
+                left.size_hint = (1, 0.56)
+                summary.size_hint = (1, 0.44)
+            else:
+                body.orientation = "horizontal"
+                body.spacing = dp(8)
+                left.size_hint = (1, 1)
+                summary.size_hint = (None, 1)
+                summary.width = summary_w
+        pay_grid = ids.get("pay_grid")
+        if pay_grid is not None:
+            pay_grid.cols = 2 if width < 900 else (4 if summary_w >= dp(350) else 2)
 
-        bottom_actions_grid.cols = 1 if phone else 2 if narrow else 3 if compact else 5
-        for button_id in ("finalize_btn", "receipt_btn", "cancel_btn", "hold_btn", "cash_btn"):
-            button = self.ids.get(button_id)
-            if button is not None:
-                if phone:
-                    button.width = max(dp(112), self.width - dp(72))
-                elif button_id == "finalize_btn":
-                    button.width = dp(170 if narrow else 164 if compact else 176)
-                else:
-                    button.width = dp(150 if narrow else 126 if compact else 120)
-                button.height = dp(48 if compact else 50)
-                button.font_size = dp(15 if compact else 16)
-        if action_group_anchor is not None:
-            action_group_anchor.anchor_x = "center" if narrow or compact else "right"
-        if action_group_card is not None:
-            action_group_card.width = (
-                min(self.width - dp(24), bottom_actions_grid.minimum_width + dp(24))
-                if phone
-                else bottom_actions_grid.minimum_width + dp(16)
-            )
-        if footer_metrics_grid is not None:
-            footer_metrics_grid.cols = 1 if phone else 3
-        if footer_metrics_card is not None:
-            footer_metrics_card.height = dp(174 if phone else 60)
+        if self._apply_cart_columns(width) and self.cart_items:
+            self.update_cart_display()
 
-        panel = self.ids.get("scanner_preview_card")
-        if panel is not None and (self._scanner_panel_initialized or panel.opacity > 0.01):
+        # Footer: on medium/small windows use two rows of actions so each button
+        # retains a useful tap target and its icon/label cannot collide.
+        bar = ids.get("bottom_bar")
+        content = ids.get("bottom_bar_content")
+        metrics = ids.get("footer_metrics_grid")
+        actions = ids.get("bottom_actions_grid")
+        divider = ids.get("bottom_divider")
+        if bar is not None and content is not None and metrics is not None and actions is not None:
+            if width >= 1120:
+                bar.height = dp(72)
+                content.orientation = "horizontal"
+                content.spacing = dp(12)
+                metrics.cols = 3
+                metrics.row_force_default = False
+                metrics.size_hint = (0.40, 1)
+                actions.cols = 5
+                actions.row_force_default = False
+                actions.size_hint = (0.60, 1)
+                if divider is not None:
+                    divider.size_hint = (None, 1)
+                    divider.width = dp(1)
+            else:
+                metric_h = dp(44 if phone else 48)
+                action_h = dp(42 if phone else 44)
+                action_cols = 3
+                action_rows = 2
+                bar.height = metric_h + dp(8) + action_h * action_rows + dp(8) + dp(12)
+                content.orientation = "vertical"
+                content.spacing = dp(7)
+                metrics.cols = 3
+                metrics.row_force_default = True
+                metrics.row_default_height = metric_h
+                metrics.size_hint = (1, None)
+                metrics.height = metric_h
+                actions.cols = action_cols
+                actions.row_force_default = True
+                actions.row_default_height = action_h
+                actions.size_hint = (1, None)
+                actions.height = action_h * action_rows
+                if divider is not None:
+                    divider.size_hint = (None, None)
+                    divider.size = (0, 0)
+
+            # Smaller windows: trim icon footprint and text size inside metric cards.
+            for card in metrics.children:
+                for child in getattr(card, "children", []):
+                    if child.__class__.__name__ == "MDIcon":
+                        child.size = (dp(20), dp(20)) if compact else (dp(30), dp(30))
+                        child.font_size = dp(20) if compact else dp(28)
+                    elif child.__class__.__name__ == "MDBoxLayout":
+                        for label in getattr(child, "children", []):
+                            if hasattr(label, "font_size"):
+                                label.font_size = sp(11 if compact else 14) if not getattr(label, "bold", False) else sp(13 if compact else 17)
+
+        panel = ids.get("scanner_preview_card")
+        if panel is not None and (getattr(self, "_scanner_panel_initialized", False) or panel.opacity > 0.01):
             self._ensure_scanner_panel_geometry()
-        if self._notice_overlay_visible and self._notice_overlay_key:
-            Clock.schedule_once(lambda _dt, key=self._notice_overlay_key: self._position_notice_overlay(key), 0)
-        Clock.schedule_once(lambda _dt: self._refresh_notice_widgets(), 0)
 
     def _ensure_scanner_panel_geometry(self, reset=False):
+        """Dimensiona e ancora o leitor; permite o utilizador redimensionar depois.
+
+        - Tamanho inicial proporcional à janela (não fica preso a 250x190)
+        - Ao redimensionar a janela, só faz clamp se o painel sair dos limites
+        - reset=True força o tamanho/posição inicial (ao abrir o scanner)
+        """
         if not self.ids:
             return
+
         panel = self.ids.get("scanner_preview_card")
         if panel is None:
             return
 
-        if reset or not self._scanner_panel_initialized:
-            max_width = max(dp(180), self.width - dp(36))
-            max_height = max(dp(190), self.height - dp(96))
-            available_width = min(max_width, max(panel.min_panel_width, dp(380)))
-            available_height = min(max_height, max(panel.min_panel_height, dp(450)))
-            panel.size = (available_width, available_height)
+        parent = panel.parent
+        button = self.ids.get("scan_toggle_btn")
 
-            parent = panel.parent
-            parent_width = parent.width if parent is not None else self.width
-            parent_height = parent.height if parent is not None else self.height
+        # Tamanho alvo proporcional — o utilizador pode depois arrastar o handle
+        target_w = min(max(dp(250), (self.width or Window.width or 800) * 0.25), dp(360))
+        target_h = min(max(dp(210), (self.height or Window.height or 600) * 0.29), dp(300))
+
+        if reset or not getattr(self, "_scanner_panel_initialized", False):
+            panel.width = target_w
+            panel.height = target_h
+        else:
+            # Mantém o tamanho escolhido pelo utilizador, mas respeita mínimos/máximos
+            if parent is not None:
+                max_w = max(dp(160), parent.width - dp(16))
+                max_h = max(dp(170), parent.height - dp(16))
+            else:
+                max_w, max_h = dp(420), dp(380)
+            min_w = min(getattr(panel, "min_panel_width", dp(240)), max_w)
+            min_h = min(getattr(panel, "min_panel_height", dp(200)), max_h)
+            panel.width = min(max(panel.width, min_w), max_w)
+            panel.height = min(max(panel.height, min_h), max_h)
+
+        if parent is not None and button is not None and (reset or not getattr(self, "_scanner_panel_initialized", False)):
+            try:
+                bx, by = button.to_window(button.x, button.y, relative=False)
+                px, py = parent.to_widget(bx, by, relative=False)
+                panel.x = px + (button.width - panel.width) / 2.0
+                panel.y = py - panel.height - dp(8)
+                if panel.y < dp(8):
+                    panel.y = py + button.height + dp(8)
+            except Exception:
+                panel.pos = (
+                    max(dp(8), parent.width - panel.width - dp(8)),
+                    max(dp(8), parent.height - panel.height - dp(90)),
+                )
+        elif parent is not None and (reset or not getattr(self, "_scanner_panel_initialized", False)):
             panel.pos = (
-                max(dp(8), (parent_width - panel.width) / 2),
-                max(dp(8), (parent_height - panel.height) / 2),
+                max(dp(8), parent.width - panel.width - dp(8)),
+                max(dp(8), parent.height - panel.height - dp(90)),
             )
-            self._scanner_panel_initialized = True
 
         if hasattr(panel, "clamp_to_parent"):
             panel.clamp_to_parent()
+
+        self._scanner_panel_initialized = True
 
     def _ensure_pdf_viewer(self):
         if self.pdf_viewer is None:
@@ -1779,19 +2173,37 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             card.disabled = True
 
     def _set_scanner_preview_visible(self, visible):
+        """Mostra/esconde o painel do scanner de forma fiável e clicável."""
         if not self.ids:
             return
         self._bind_scanner_panel_ids()
         card = self.ids.get("scanner_preview_card")
         if card is None:
             return
+
+        visible = bool(visible)
+        Animation.cancel_all(card)
+
         if visible:
-            card.opacity = 1
             card.disabled = False
-            self._ensure_scanner_panel_geometry()
-        else:
+            self._ensure_scanner_panel_geometry(reset=not getattr(self, "_scanner_panel_initialized", False))
+            # Trazer para a frente para receber toques por cima de sugestões/overlays
+            parent = card.parent
+            if parent is not None:
+                try:
+                    parent.remove_widget(card)
+                    parent.add_widget(card)
+                except Exception:
+                    pass
             card.opacity = 0
-            card.disabled = True
+            Animation(opacity=1, d=0.16, t="out_quad").start(card)
+        else:
+            def _hide(*_a):
+                card.opacity = 0
+                card.disabled = True
+            anim = Animation(opacity=0, d=0.12, t="out_quad")
+            anim.bind(on_complete=_hide)
+            anim.start(card)
 
     def _get_scanner_panel(self):
         if not self.ids:
@@ -1935,19 +2347,71 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
     def display_products(self, products):
         if not self.ids:
             return
-        rv = self.ids.product_matches_rv
-        results_label = self.ids.product_results_label
+        rv = self.ids.get("product_matches_rv")
+        if rv is None:
+            return
         results = list(products or [])
-        results_label.text = f"{len(results)} produtos"
         rv.data = [
             {
                 "product_data": product,
-                "add_callback": self.add_to_cart,
+                "add_callback": self._add_from_suggestion,
                 "details_callback": self.show_product_details,
             }
             for product in results
         ]
+        rv.scroll_y = 1
         self._sync_products_pagination_controls(len(results))
+        self._update_suggestions_panel()
+
+    # -- dropdown "Sugestoes de produtos" --------------------------------------
+    def _update_suggestions_panel(self, *_args):
+        """Mostra o dropdown so enquanto se pesquisa e ha resultados."""
+        if not self.ids:
+            return
+        rv = self.ids.get("product_matches_rv")
+        count = len(getattr(rv, "data", None) or []) if rv is not None else 0
+        text = self._current_search_text()
+        if not text:
+            self._suggestions_dismissed_for = None
+        visible = count > 0 and bool(text) and text != self._suggestions_dismissed_for
+        if not visible:
+            self.suggestions_height = 0
+            return
+        rows = min(count, self.SUGGESTION_MAX_ROWS)
+        self.suggestions_height = dp(self.SUGGESTION_CHROME_HEIGHT + rows * self.SUGGESTION_ROW_HEIGHT)
+
+    def _dismiss_suggestions(self, clear_text=False):
+        self._suggestions_dismissed_for = self._current_search_text() or None
+        self.suggestions_height = 0
+        if clear_text and self.ids:
+            search_input = self.ids.get("search_input")
+            if search_input is not None:
+                search_input.text = ""
+            self._suggestions_dismissed_for = None
+
+    def _add_from_suggestion(self, product, sale_mode=None, source="manual"):
+        self.add_to_cart(product, sale_mode=sale_mode, source=source)
+        # Prepara a pesquisa seguinte (leitor de codigos / digitacao).
+        self._dismiss_suggestions(clear_text=True)
+        self._pending_search = ""
+        if self.ids:
+            search_input = self.ids.get("search_input")
+            if search_input is not None:
+                search_input.focus = True
+
+    def on_touch_down(self, touch):
+        # Toque fora do dropdown e da caixa de pesquisa fecha as sugestoes.
+        if self.suggestions_height > 0 and self.ids:
+            card = self.ids.get("suggestions_card")
+            field = self.ids.get("search_field_card")
+            local = self.to_local(*touch.pos)
+            inside = any(
+                widget is not None and widget.collide_point(*local)
+                for widget in (card, field)
+            )
+            if not inside:
+                self._dismiss_suggestions()
+        return super().on_touch_down(touch)
 
     def show_product_details(self, product):
         if product is None:
@@ -2068,6 +2532,12 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             self._search_ev.cancel()
         self._search_ev = Clock.schedule_once(self._dispatch_search, 0.32)
         self._update_action_states()
+        if self._pending_search.strip():
+            # Resposta imediata com o que ja esta carregado; a pesquisa na base
+            # de dados (debounce) refina logo a seguir.
+            self.display_products(self._filter_sale_products(self._loaded_products, self._pending_search))
+        else:
+            self._update_suggestions_panel()
 
     def clear_search(self):
         if not self.ids:
@@ -2264,7 +2734,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             return
         if active:
             badge.opacity = 1
-            badge.size = (dp(28), dp(28))
+            badge.size = (dp(18), dp(18))
             label.text = "..."
             if self._ai_loading_ev:
                 self._ai_loading_ev.cancel()
@@ -2296,11 +2766,11 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         label.text = str(self.notification_count)
         if self.notification_count > 0:
             badge.opacity = 1
-            badge.size = (dp(26), dp(26))
+            badge.size = (dp(18), dp(18))
             set_attention_shake(self.ids.get("ai_button"), True)
         else:
             badge.opacity = 1
-            badge.size = (dp(26), dp(26))
+            badge.size = (dp(18), dp(18))
             set_attention_shake(self.ids.get("ai_button"), False)
 
     def update_recommendation_badge(self, count):
@@ -2311,7 +2781,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             return
         label.text = str(self.recommendation_count)
         badge.opacity = 1
-        badge.size = (dp(26), dp(26))
+        badge.size = (dp(18), dp(18))
         set_attention_shake(
             self.ids.get("recommendations_button"),
             self.recommendation_count > 0,
@@ -2930,76 +3400,58 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 self.show_message("Produto indisponível.")
                 return
             info = _unpack_sale_product(product)
-            # Administrative rows may not carry the extended sale metadata.
-            settings = self.db.get_produce_settings(info["id"])
-            if settings and settings["stock_mode"] == "SACKS":
-                self.show_produce_dialog(info)
-                return
-            base_price, promo_active = _calculate_promo(product)
-            is_weight = info["is_weight"]
-            allow_pack_sale = bool(
-                info["allow_pack_sale"]
-                and info["units_per_package"]
-                and info["units_per_package"] >= 2
-                and not is_weight
-            )
-            catalog_key = info["catalog_key"]
-
-            if is_weight:
+            if info["is_weight"]:
                 self.show_weight_dialog(product)
                 return
+            self._check_produce_then_add(product, info, sale_mode, source)
+        except Exception:
+            traceback.print_exc()
+            self.show_message("Falha ao adicionar produto.")
 
-            sale_mode = sale_mode or "unit"
-            if sale_mode == "pack" and not allow_pack_sale:
-                sale_mode = "unit"
+    def _check_produce_then_add(self, product, info, sale_mode, source):
+        def worker():
+            try:
+                settings = self.db.get_produce_settings(info["id"])
+            except Exception:
+                settings = None
+            Clock.schedule_once(
+                lambda _dt: self._apply_produce_check(product, info, settings, sale_mode, source),
+                0,
+            )
+        Thread(target=worker, daemon=True).start()
 
-            if sale_mode == "pack":
-                pack_units = int(info["units_per_package"])
-                pack_price = base_price * pack_units
-                for item in self.cart_items:
-                    if item.get("catalog_key") == catalog_key and item.get("sale_mode") == "pack":
-                        next_units = _safe_float(item.get("qty_units")) + pack_units
-                        if next_units > info["stock"]:
-                            self.show_message("Estoque insuficiente.")
-                            return
-                        item["qty"] += 1
-                        item["qty_units"] = next_units
-                        item["total"] = item["qty"] * item["price"]
-                        self._request_cart_display_update()
-                        return
+    def _apply_produce_check(self, product, info, settings, sale_mode, source):
+        if settings and settings.get("stock_mode") == "SACKS":
+            self.show_produce_dialog(info, settings=settings)
+            return
+        self._add_regular_product_to_cart(product, info, sale_mode)
 
-                self.cart_items.append(
-                    {
-                        "id": info["id"],
-                        "catalog_key": catalog_key,
-                        "name": info["name"],
-                        "barcode": info["barcode"],
-                        "qty": 1,
-                        "qty_units": pack_units,
-                        "pack_units": pack_units,
-                        "price": pack_price,
-                        "unit_price": base_price,
-                        "total": pack_price,
-                        "max_stock": info["stock"],
-                        "is_weight": False,
-                        "weight_kg": 0,
-                        "sale_mode": "pack",
-                        "promo_active": promo_active,
-                        "vat_rule_code": info["vat_rule_code"],
-                        "lot_count": int(info.get("lot_count") or 1),
-                    }
-                )
-                self._request_cart_display_update()
-                return
+    def _add_regular_product_to_cart(self, product, info, sale_mode):
+        base_price, promo_active = _calculate_promo(product)
+        is_weight = info["is_weight"]
+        allow_pack_sale = bool(
+            info["allow_pack_sale"]
+            and info["units_per_package"]
+            and info["units_per_package"] >= 2
+            and not is_weight
+        )
+        catalog_key = info["catalog_key"]
 
+        sale_mode = sale_mode or "unit"
+        if sale_mode == "pack" and not allow_pack_sale:
+            sale_mode = "unit"
+
+        if sale_mode == "pack":
+            pack_units = int(info["units_per_package"])
+            pack_price = base_price * pack_units
             for item in self.cart_items:
-                if item.get("catalog_key") == catalog_key and item.get("sale_mode", "unit") == "unit":
-                    next_qty = _safe_float(item.get("qty")) + 1
-                    if next_qty > info["stock"]:
+                if item.get("catalog_key") == catalog_key and item.get("sale_mode") == "pack":
+                    next_units = _safe_float(item.get("qty_units")) + pack_units
+                    if next_units > info["stock"]:
                         self.show_message("Estoque insuficiente.")
                         return
-                    item["qty"] = next_qty
-                    item["qty_units"] = next_qty
+                    item["qty"] += 1
+                    item["qty_units"] = next_units
                     item["total"] = item["qty"] * item["price"]
                     self._request_cart_display_update()
                     return
@@ -3011,24 +3463,57 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                     "name": info["name"],
                     "barcode": info["barcode"],
                     "qty": 1,
-                    "qty_units": 1,
-                    "pack_units": None,
-                    "price": base_price,
+                    "qty_units": pack_units,
+                    "pack_units": pack_units,
+                    "price": pack_price,
                     "unit_price": base_price,
-                    "total": base_price,
+                    "total": pack_price,
                     "max_stock": info["stock"],
                     "is_weight": False,
                     "weight_kg": 0,
-                    "sale_mode": "unit",
+                    "sale_mode": "pack",
                     "promo_active": promo_active,
                     "vat_rule_code": info["vat_rule_code"],
                     "lot_count": int(info.get("lot_count") or 1),
                 }
             )
             self._request_cart_display_update()
-        except Exception:
-            traceback.print_exc()
-            self.show_message("Falha ao adicionar produto.")
+            return
+
+        for item in self.cart_items:
+            if item.get("catalog_key") == catalog_key and item.get("sale_mode", "unit") == "unit":
+                next_qty = _safe_float(item.get("qty")) + 1
+                if next_qty > info["stock"]:
+                    self.show_message("Estoque insuficiente.")
+                    return
+                item["qty"] = next_qty
+                item["qty_units"] = next_qty
+                item["total"] = item["qty"] * item["price"]
+                self._request_cart_display_update()
+                return
+
+        self.cart_items.append(
+            {
+                "id": info["id"],
+                "catalog_key": catalog_key,
+                "name": info["name"],
+                "barcode": info["barcode"],
+                "qty": 1,
+                "qty_units": 1,
+                "pack_units": None,
+                "price": base_price,
+                "unit_price": base_price,
+                "total": base_price,
+                "max_stock": info["stock"],
+                "is_weight": False,
+                "weight_kg": 0,
+                "sale_mode": "unit",
+                "promo_active": promo_active,
+                "vat_rule_code": info["vat_rule_code"],
+                "lot_count": int(info.get("lot_count") or 1),
+            }
+        )
+        self._request_cart_display_update()
 
     def show_weight_dialog(self, product, on_close=None):
         info = _unpack_sale_product(product)
@@ -3197,6 +3682,18 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         dialog.buttons[1].bind(on_release=confirm_add)
         dialog.open()
 
+
+    def _apply_cart_columns(self, width):
+        tier = "wide" if width >= 1180 else "mid" if width >= 820 else "narrow"
+        new = tuple(dp(v) for v in self.CART_COLUMNS[tier])
+        old = (self.col_num_w, self.col_qty_w, self.col_unit_w,
+               self.col_price_w, self.col_total_w, self.col_remove_w)
+        if all(abs(a - b) < 0.5 for a, b in zip(new, old)):
+            return False
+        (self.col_num_w, self.col_qty_w, self.col_unit_w,
+         self.col_price_w, self.col_total_w, self.col_remove_w) = new
+        return True
+
     def update_cart_display(self):
         if not self.ids:
             return
@@ -3223,184 +3720,172 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             else:
                 row_bg = palette["row_alt"]
 
-            row = MDCard(
+            def _cell(text,halign, width, color, font, bold=False):
+                lbl = MDLabel(
+                    text=text,halign=halign, valign="middle", bold=bold,
+                    font_size=font, theme_text_color="Custom", text_color=color,
+                    size_hint_x=None, width=width, shorten=True, shorten_from="left",
+                )
+                lbl.bind(size=lambda inst, v: setattr(inst, "text_size", v))
+                return lbl
+
+            row = MDActionCard(
                 orientation="horizontal",
                 size_hint_y=None,
-                height=dp(76),
-                padding=[dp(10), dp(7), dp(8), dp(7)],
-                spacing=dp(6),
-                radius=[dp(14)],
+                height=dp(68),
+                padding=[dp(8), dp(6), dp(6), dp(6)],
+                spacing=dp(4),
+                radius=[dp(12)],
                 elevation=0,
                 md_bg_color=row_bg,
                 ripple_behavior=True,
             )
             row.bind(on_release=lambda _w, idx=index: self._select_cart_item(idx))
 
-            # ── Coluna: nome + badge modo ──────────────────────────────
-            info_box = MDBoxLayout(
-                orientation="vertical",
-                spacing=dp(2),
-                size_hint_x=0.45,
-                padding=[0, dp(6), 0, dp(6)],
+            # 1) Nº da linha
+            row_number = _cell(str(index + 1), "center", self.col_num_w, palette["text_secondary"], dp(13), True)
+
+            # 2) Produto: miniatura + nome + código
+            product_box = MDBoxLayout(orientation="horizontal", spacing=dp(10), size_hint_x=1)
+            thumb_anchor = AnchorLayout(size_hint=(None, 1), width=dp(46), anchor_x="center", anchor_y="center")
+            thumb = MDCard(
+                size_hint=(None, None), size=(dp(44), dp(44)),
+                radius=[dp(10)], elevation=0, md_bg_color=palette["row_alt"], padding=0,
             )
+            thumb.add_widget(MDIcon(
+                icon="scale-balance" if item.get("is_weight") else "package-variant-closed",
+                halign="center", valign="middle", font_size=dp(24),
+                theme_text_color="Custom",
+                text_color=palette["weight"] if item.get("is_weight") else palette["text_primary"],
+            ))
+            thumb_anchor.add_widget(thumb)
+            product_box.add_widget(thumb_anchor)
 
             sale_mode = item.get("sale_mode", "unit")
             lot_count = int(item.get("lot_count") or 1)
-
             mode_label_map = {
-                "unit":   "Unitário",
-                "pack":   f"Emb ×{int(item.get('pack_units') or 1)}",
+                "unit": "Unitário",
+                "pack": f"Emb ×{int(item.get('pack_units') or 1)}",
                 "weight": "Por peso",
             }
             mode_text = MODE_LABELS.get(item.get("produce_sale_mode"), mode_label_map.get(sale_mode, "Venda"))
             if lot_count > 1:
                 mode_text = f"{mode_text} · {lot_count}L"
+            barcode = str(item.get("barcode") or "").strip()
+            meta = barcode or mode_text
+            if barcode and mode_text and mode_text != "Unitário":
+                meta = f"{barcode}  ·  {mode_text}"
 
-            info_box.add_widget(MDLabel(
-                text=item["name"],
+            info_box = MDBoxLayout(orientation="vertical", spacing=dp(1), padding=[0, dp(8), 0, dp(8)])
+            name_lbl = MDLabel(
+                text=str(item.get("name") or "Produto"),
                 bold=True,
+                font_size=dp(14),
                 theme_text_color="Custom",
                 text_color=palette["text_primary"],
-                font_size=dp(16),
                 shorten=True,
                 shorten_from="right",
+                valign="middle",
                 size_hint_y=None,
                 height=dp(22),
-            ))
-
-            info_box.add_widget(MDLabel(
-                text=f"{mode_text}  ·  {_format_money(item.get('price'))}",
-                font_size=dp(13),
+            )
+            # text_size só com largura (evita texto vertical letra a letra)
+            name_lbl.bind(width=lambda inst, w: setattr(inst, "text_size", (w, None)))
+            meta_lbl = MDLabel(
+                text=meta,
+                font_size=dp(11.5),
                 theme_text_color="Custom",
                 text_color=palette["text_secondary"],
-                halign="left",
-                valign="middle",
                 shorten=True,
                 shorten_from="right",
+                valign="middle",
                 size_hint_y=None,
-                height=dp(20),
-            ))
-
-            # ── Coluna: quantidade com botões ← → ──────────────────────
-            qty_box = MDBoxLayout(
-                size_hint_x=0.28,
-                spacing=dp(3),
-                padding=[dp(2), dp(12), dp(2), dp(12)],
+                height=dp(18),
             )
+            meta_lbl.bind(width=lambda inst, w: setattr(inst, "text_size", (w, None)))
+            info_box.add_widget(name_lbl)
+            info_box.add_widget(meta_lbl)
+            product_box.add_widget(info_box)
 
+            # 3) Quantidade
+            qty_box = AnchorLayout(size_hint_x=None, width=self.col_qty_w, anchor_x="center", anchor_y="center")
             if item.get("produce_sale_mode") == "amount":
-                qty_box.add_widget(MDLabel(text="Valor total", halign="center"))
+                qty_box.add_widget(_cell("Valor", "center", self.col_qty_w, palette["text_primary"], dp(13)))
             elif item.get("is_weight"):
-                qty_box.add_widget(MDLabel(
-                    text=_format_qty(item.get("weight_kg"), True),
-                    halign="center",
-                    bold=True,
-                    theme_text_color="Custom",
-                    text_color=palette["weight"],
-                    font_size=dp(16),
-                ))
+                qty_box.add_widget(_cell(_format_qty(item.get("weight_kg"), True), "center", self.col_qty_w,
+                                         palette["weight"], dp(14), True))
             else:
+                qty_controls = MDBoxLayout(
+                    orientation="horizontal", size_hint=(None, None),
+                    width=dp(104), height=dp(32), spacing=dp(4),
+                )
                 dec_btn = CompactActionButton(
-                    icon="arrow-left",
-                    size_hint=(None, None),
-                    size=(dp(32), dp(32)),
-                    radius=[dp(16)],
-                    icon_font_size=sp(15),
-                    icon_color=palette["danger"],
-                    md_bg_color=palette["danger_bg"],
-                    border_color=palette["danger"],
-                    border_width=dp(1.1),
-                    hint_text="Diminuir  [← Seta]",
+                    icon="minus", size_hint=(None, None), size=(dp(30), dp(30)),
+                    radius=[dp(8)], icon_font_size=sp(14),
+                    icon_color=palette["text_primary"], md_bg_color=palette["row_alt"],
+                    border_color=palette["divider"], border_width=dp(1),
                 )
                 dec_btn.bind(on_release=lambda _b, idx=index: self.decrease_qty(idx))
-
                 qty_input = TextInput(
                     text=(item.get("qty_text", "0") if not item.get("qty") else _format_qty(item.get("qty"))),
-                    multiline=False,
-                    input_filter="int",
-                    halign="center",
-                    foreground_color=palette["text_primary"],
-                    cursor_color=palette["success"],
-                    background_normal="",
-                    background_active="",
-                    background_color=palette["row"],
-                    padding=[dp(4), dp(5), dp(4), dp(4)],
-                    font_size=sp(15),
-                    size_hint=(None, None),
-                    width=dp(46),
-                    height=dp(32),
+                    multiline=False, input_filter="int",halign="center",
+                    foreground_color=palette["text_primary"], cursor_color=palette["success"],
+                    background_normal="", background_active="", background_color=palette["row"],
+                    padding=[dp(2), dp(7), dp(2), dp(4)], font_size=sp(14),
+                    size_hint=(None, None), width=dp(40), height=dp(30),
                 )
-                qty_input.bind(
-                    text=lambda _field, value, idx=index: self.schedule_qty_update(idx, value)
-                )
-
+                qty_input.bind(text=lambda _f, value, idx=index: self.schedule_qty_update(idx, value))
                 inc_btn = CompactActionButton(
-                    icon="arrow-right",
-                    size_hint=(None, None),
-                    size=(dp(32), dp(32)),
-                    radius=[dp(16)],
-                    icon_font_size=sp(15),
-                    icon_color=palette["success"],
-                    md_bg_color=palette["success_bg"],
-                    border_color=palette["success"],
-                    border_width=dp(1.1),
-                    hint_text="Aumentar  [→ Seta]",
+                    icon="plus", size_hint=(None, None), size=(dp(30), dp(30)),
+                    radius=[dp(8)], icon_font_size=sp(14),
+                    icon_color=palette["text_primary"], md_bg_color=palette["row_alt"],
+                    border_color=palette["divider"], border_width=dp(1),
                 )
                 inc_btn.bind(on_release=lambda _b, idx=index: self.increase_qty(idx))
+                qty_controls.add_widget(dec_btn)
+                qty_controls.add_widget(qty_input)
+                qty_controls.add_widget(inc_btn)
+                qty_box.add_widget(qty_controls)
 
-                dec_anchor = AnchorLayout(size_hint_x=None, width=dp(34), anchor_x="center", anchor_y="center")
-                dec_anchor.add_widget(dec_btn)
-                inc_anchor = AnchorLayout(size_hint_x=None, width=dp(34), anchor_x="center", anchor_y="center")
-                inc_anchor.add_widget(inc_btn)
-
-                qty_box.add_widget(dec_anchor)
-                qty_box.add_widget(qty_input)
-                qty_box.add_widget(inc_anchor)
-
-            # ── Coluna: preço unitário ─────────────────────────────────
-            # ── Coluna: total da linha ─────────────────────────────────
-            total_col = AnchorLayout(
-                size_hint_x=0.23,
-                anchor_x="right",
-                anchor_y="center",
+            # 4) Unidade (badge centrado)
+            unit = "KG" if item.get("is_weight") else ("UN" if sale_mode == "unit" else "EMB")
+            unit_anchor = AnchorLayout(size_hint_x=None, width=self.col_unit_w, anchor_x="center", anchor_y="center")
+            unit_badge = MDCard(
+                size_hint=(None, None), size=(min(self.col_unit_w - dp(4), dp(40)), dp(22)),
+                radius=[dp(8)], elevation=0,
+                md_bg_color=palette["primary_bg"] if unit != "KG" else palette["weight"],
             )
-            total_col.add_widget(MDLabel(
-                text=_format_money(item.get("total")),
-                halign="right",
-                bold=True,
-                theme_text_color="Custom",
-                text_color=palette["success"],
-                font_size=dp(16),
-                size_hint_y=None,
-                height=dp(32),
+            unit_badge.add_widget(MDLabel(
+                text=unit,halign="center", valign="middle", bold=True, font_size=dp(11.5),
+                theme_text_color="Custom", text_color=palette["on_primary"],
             ))
+            unit_anchor.add_widget(unit_badge)
 
-            # ── Botão remover ──────────────────────────────────────────
-            remove_btn = CompactActionButton(
-                icon="delete-outline",
-                size_hint=(None, None),
-                size=(dp(32), dp(32)),
-                radius=[dp(16)],
-                icon_font_size=sp(15),
-                icon_color=palette["danger"],
-                md_bg_color=palette["danger_bg"],
-                border_color=palette["danger"],
-                border_width=dp(1.0),
-                hint_text="Remover  [Del]",
+            # 5) Preço unitário  6) Subtotal
+            unit_price = _cell(_format_money(item.get("unit_price", item.get("price"))),
+                               "right", self.col_price_w, palette["text_primary"], dp(13))
+            total_label = _cell(_format_money(item.get("total")),
+                                "right", self.col_total_w, palette["success_text"], dp(14), True)
+
+            # 7) Remover — ícone de lixo desenhado
+            remove_btn = TrashActionButton(
+                glyph_color=palette.get("danger_text", [0.9, 0.3, 0.3, 1]),
+                size_hint=(None, None), size=(dp(32), dp(32)),
+                radius=[dp(9)], md_bg_color=palette["row_alt"],
+                border_color=palette.get("danger_text", palette["divider"])[:3] + [0.55],
+                border_width=dp(1),
             )
             remove_btn.bind(on_release=lambda _b, idx=index: self.remove_from_cart(idx))
-            remove_anchor = AnchorLayout(
-                size_hint_x=None,
-                width=dp(34),
-                anchor_x="center",
-                anchor_y="center",
-            )
+            remove_anchor = AnchorLayout(size_hint_x=None, width=self.col_remove_w, anchor_x="center", anchor_y="center")
             remove_anchor.add_widget(remove_btn)
 
-            row.add_widget(info_box)
+            row.add_widget(row_number)
+            row.add_widget(product_box)
             row.add_widget(qty_box)
-            row.quantity_total_label = total_col.children[0]
-            row.add_widget(total_col)
+            row.add_widget(unit_anchor)
+            row.add_widget(unit_price)
+            row.add_widget(total_label)
+            row.quantity_total_label = total_label
             row.add_widget(remove_anchor)
             cart_list.add_widget(row)
             self._cart_row_widgets.append(row)
@@ -4678,126 +5163,286 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         self.stop_scanner()
         self.manager.current = "losses"
 
-    def _on_camera_service_started(self, camera_index):
-        Clock.schedule_once(lambda _dt: self._apply_camera_service_started(camera_index), 0)
+    # -- Scanner de vendas (mesmo motor do formulário de produtos) ---------
 
-    def _apply_camera_service_started(self, camera_index):
-        if not self.scanning:
-            return
-        if self.ids:
-            self.ids.scanner_status_label.text = f"Camera {camera_index} ativa"
-        self.scanner_service.start()
+    def _preload_vision_modules(self, _dt):
+        """Carrega cv2/pyzbar em cache antes da primeira leitura."""
+        try:
+            self._load_vision_modules()
+        except Exception:
+            pass
 
-    def _on_camera_service_error(self, reason, message=None):
-        Clock.schedule_once(
-            lambda _dt: self._apply_camera_service_error(reason, message),
-            0,
-        )
-
-    def _on_camera_service_decode_error(self, message):
-        Clock.schedule_once(
-            lambda _dt: self._apply_camera_service_error("decode", message),
-            0,
-        )
-
-    def _apply_camera_service_error(self, reason, _message=None):
-        if not self.scanning:
-            return
-        self.stop_scanner()
-        if reason == "camera_missing":
-            self.set_search_feedback("Camera nao encontrada", "warning", "camera-off")
-        elif reason == "dependencies":
-            self.set_search_feedback("Scanner indisponivel neste ambiente", "danger", "camera-off")
-        else:
-            self.set_search_feedback("Erro ao iniciar o scanner", "danger", "alert-circle")
-
-    def _on_camera_service_detected(self, barcode_value):
-        Clock.schedule_once(
-            lambda _dt: self._apply_camera_service_detected(barcode_value),
-            0,
-        )
-
-    def _apply_camera_service_detected(self, barcode_value):
-        if not self.scanning:
-            return
-        if self.ids:
-            self.ids.scanner_status_label.text = "Codigo reconhecido com sucesso"
-            last_value = self.ids.get("scanner_last_value")
-            if last_value is not None:
-                last_value.text = barcode_value
-        self._lookup_barcode_async(barcode_value, source="scanner")
-
-    def toggle_scanner(self):
+    def _start_scanner(self):
         if self.scanning:
-            self.stop_scanner()
-            return
+            return True
+        if not self._ensure_scanner_dependencies():
+            return False
+
         self.scanning = True
         self._set_scanner_preview_visible(True)
         if self.ids:
-            self.ids.scan_toggle_btn.icon = "barcode-off"
-            self.ids.scan_toggle_btn.md_bg_color = [0.84, 0.24, 0.26, 1]
-            self.ids.scanner_status_label.text = "A iniciar a camera..."
+            self._bind_scanner_panel_ids()
+            status = self.ids.get("scanner_status_label")
             last_value = self.ids.get("scanner_last_value")
+            if status is not None:
+                status.text = "Scanner Ativo — a iniciar a câmara..."
             if last_value is not None:
                 last_value.text = "A aguardar leitura"
-        Clock.schedule_once(self.init_camera, 0)
 
-    def stop_scanner(self):
+        Clock.unschedule(self._update_camera)
+        Clock.schedule_interval(self._update_camera, 1.0 / 15.0)
+        return True
+
+    def toggle_scanner(self):
         if not self.scanning:
-            self._set_scanner_preview_visible(False)
-            return
-        self.scanning = False
-        Clock.unschedule(self.update_camera)
-        self.scanner_service.stop()
-        self.camera_service.stop()
-        self.release_camera()
-        self._set_scanner_preview_visible(False)
-        if self.ids:
-            self.ids.scan_toggle_btn.icon = "barcode-scan"
-            self.ids.scan_toggle_btn.md_bg_color = [0.16, 0.72, 0.46, 1]
-            status_label = self.ids.get("scanner_status_label")
-            if status_label is not None:
-                status_label.text = "Leitor parado"
+            return self._start_scanner()
+        self._stop_scanner()
+        return True
 
-    def release_camera(self):
-        self.camera_capture = None
+    def _stop_scanner(self):
+        self.scanning = False
+        Clock.unschedule(self._update_camera)
+
+        if self.camera_capture is not None:
+            try:
+                self.camera_capture.release()
+            except Exception:
+                pass
+            self.camera_capture = None
+
         if self.ids:
+            self._bind_scanner_panel_ids()
             image = self.ids.get("camera_image")
+            status = self.ids.get("scanner_status_label")
+            last_value = self.ids.get("scanner_last_value")
             if image is not None:
                 image.texture = None
+            if status is not None:
+                status.text = "Leitor parado"
+            if last_value is not None:
+                last_value.text = "A aguardar leitura"
 
-    def init_camera(self, _dt):
+        self._set_scanner_preview_visible(False)
+
+    def stop_scanner(self):
+        self._stop_scanner()
+
+    def _update_camera(self, _dt):
         if not self.scanning:
             return
-        self.last_barcode = None
-        self.last_barcode_time = 0.0
-        Clock.unschedule(self.update_camera)
-        Clock.schedule_interval(self.update_camera, 1 / 18)
-        self.camera_service.start(self.current_camera)
 
-    def update_camera(self, _dt):
-        if not self.scanning:
-            return
-        payload = self.camera_service.consume_latest_preview_payload()
-        if not payload:
-            return
-        _frame_id, width, height, buffer = payload
+        if self.camera_capture is None:
+            if not self._init_camera():
+                return
+
         try:
-            texture = Texture.create(size=(width, height), colorfmt="bgr")
-            texture.blit_buffer(buffer, colorfmt="bgr", bufferfmt="ubyte")
+            ret, frame = self.camera_capture.read()
+        except Exception as exc:
+            print(f"[Scanner] erro ao ler frame: {exc}")
+            return
+
+        if not ret or frame is None:
+            return
+
+        try:
+            self._display_frame(self._process_frame(frame))
+        except Exception as exc:
+            print(f"[Scanner] erro ao processar frame: {exc}")
+
+    def _ensure_scanner_dependencies(self):
+        try:
+            self._load_vision_modules()
+            return True
+        except Exception as exc:
+            self.scanning = False
             if self.ids:
-                image = self.ids.get("camera_image")
-                if image is not None:
-                    image.texture = texture
-        except Exception:
-            traceback.print_exc()
+                self._bind_scanner_panel_ids()
+                status = self.ids.get("scanner_status_label")
+                if status is not None:
+                    status.text = "Scanner indisponível"
+            self.play_scanner_sound(False)
+            self.set_search_feedback(
+                f"Scanner indisponível: {exc}",
+                "danger",
+                "camera-off",
+            )
+            return False
+
+    def _load_vision_modules(self):
+        if self._vision_modules is None:
+            self._vision_modules = get_vision_dependencies()
+        return self._vision_modules
+
+    def _init_camera(self):
+        try:
+            cv2, _np, _decode = self._load_vision_modules()
+
+            # Câmara 1 = webcam do computador (índice 0).
+            # Câmara 2 = webcam do telemóvel (índice 1 quando o Windows
+            # o expõe como segundo dispositivo de vídeo).
+            self.camera_capture = cv2.VideoCapture(self.current_camera)
+            self.camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+            if hasattr(cv2, "CAP_PROP_FPS"):
+                self.camera_capture.set(cv2.CAP_PROP_FPS, 15)
+
+            if not self.camera_capture.isOpened():
+                if self.camera_capture is not None:
+                    self.camera_capture.release()
+                self.camera_capture = None
+                self._set_scanner_status(
+                    f"Câmara {self.current_camera + 1} não disponível"
+                )
+                self.play_scanner_sound(False)
+                return False
+
+            self.last_barcode = None
+            self.last_barcode_time = 0.0
+            self._set_scanner_status(
+                self._camera_name(self.current_camera) + " ativa"
+            )
+            return True
+
+        except Exception as exc:
+            print(f"[Scanner] erro ao iniciar câmera: {exc}")
+            self.camera_capture = None
+            self._set_scanner_status("Erro ao iniciar a câmara")
+            self.play_scanner_sound(False)
+            return False
+
+    def _camera_name(self, camera_index=None):
+        index = self.current_camera if camera_index is None else int(camera_index)
+        if index == 0:
+            return "Câmara 1 — Computador"
+        if index == 1:
+            return "Câmara 2 — Telemóvel"
+        return f"Câmara {index + 1}"
+
+    def _set_scanner_status(self, text):
+        if not self.ids:
+            return
+        self._bind_scanner_panel_ids()
+        status = self.ids.get("scanner_status_label")
+        if status is not None:
+            status.text = str(text)
+
+    def _process_frame(self, frame):
+        cv2, np, decode = self._load_vision_modules()
+        now = time.time()
+
+        # Mesmo pré-processamento do scanner que já funciona no formulário.
+        frame = cv2.convertScaleAbs(frame, alpha=1.2, beta=10)
+        codes = decode(frame)
+
+        for code in codes:
+            try:
+                val = "".join(
+                    c for c in code.data.decode("utf-8", errors="ignore")
+                    if c.isprintable()
+                ).strip()
+
+                if not val:
+                    continue
+
+                # Evita adicionar o mesmo produto repetidamente enquanto
+                # o código permanece diante da câmera.
+                if (
+                    val == self.last_barcode
+                    and (now - self.last_barcode_time) < 2
+                ):
+                    continue
+
+                self.last_barcode = val
+                self.last_barcode_time = now
+
+                self._set_scanner_status("Código detectado")
+                if self.ids:
+                    last_value = self.ids.get("scanner_last_value")
+                    if last_value is not None:
+                        last_value.text = val
+
+                self.play_scanner_sound(True)
+
+                # Na tela de vendas, a leitura vai diretamente para o mesmo
+                # pipeline que alimenta o carrinho.
+                self._lookup_barcode_async(val, source="scanner")
+
+                # Desenha o enquadramento do código no preview.
+                polygon = getattr(code, "polygon", None)
+                if polygon is not None and len(polygon) == 4:
+                    pts = np.array(
+                        [(p.x, p.y) for p in polygon],
+                        dtype=np.int32,
+                    )
+                    cv2.polylines(
+                        frame,
+                        [pts],
+                        True,
+                        (0, 255, 0),
+                        3,
+                    )
+
+                x, y, w, h = code.rect
+                cv2.putText(
+                    frame,
+                    val,
+                    (x, max(20, y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2,
+                )
+
+            except Exception as exc:
+                print(f"[Scanner] erro no código: {exc}")
+
+        if not codes and (now - self.last_barcode_time) > 2.5:
+            self._set_scanner_status(
+                self._camera_name(self.current_camera) + " ativa — procure o código"
+            )
+
+        return frame
+
+    def _display_frame(self, frame):
+        cv2, _np, _decode = self._load_vision_modules()
+        buf = cv2.flip(frame, 0).tobytes()
+        texture = Texture.create(
+            size=(frame.shape[1], frame.shape[0]),
+            colorfmt="bgr",
+        )
+        texture.blit_buffer(
+            buf,
+            colorfmt="bgr",
+            bufferfmt="ubyte",
+        )
+
+        if self.ids:
+            self._bind_scanner_panel_ids()
+            image = self.ids.get("camera_image")
+            if image is not None:
+                image.texture = texture
 
     def switch_camera(self):
+        """Alterna entre a Câmara 1 (computador) e a Câmara 2 (telemóvel)."""
         was_active = self.scanning
-        self.stop_scanner()
-        self.current_camera = (self.current_camera + 1) % 4
+
         if was_active:
-            self.toggle_scanner()
+            self._stop_scanner()
+
+        self.current_camera = 1 if self.current_camera == 0 else 0
+        self._set_scanner_status(
+            self._camera_name(self.current_camera) + " selecionada"
+        )
+
+        if was_active:
+            Clock.schedule_once(
+                lambda _dt: self._start_scanner(),
+                0.15,
+            )
+
+    def _restart_scanner(self):
+        self._start_scanner()
 
     def _set_notice_detail(self, notice_key, title, summary, extra_lines=None):
         lines = [str(summary or "").strip()]

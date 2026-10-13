@@ -153,7 +153,7 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
 
     seller_name = _plain_text(receipt_data.get("seller_full_name") or "")
     if seller_name:
-        lines.append(_center("Foste ajudado por:", width))
+        lines.append(_center("Atendente:", width))
         lines.extend(_center(line, width) for line in _wrap_text(seller_name, width)[:2])
         lines.append("")
 

@@ -9,12 +9,15 @@ from typing import Any
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.floatlayout import FloatLayout
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.dropdownitem import MDDropDownItem
-from kivymd.uix.label import MDLabel
-from kivymd.uix.menu import MDDropdownMenu
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout,
+    NativeButton as MDRaisedButton,
+    NativeDialog as MDDialog,
+    NativeDropdownItem as MDDropDownItem,
+    NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton,
+    NativeLabel as MDLabel,
+)
 
 from utils.ai.ai_popups import build_auto_banner_data, clear_banner_container, render_auto_banners
 

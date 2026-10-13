@@ -2,8 +2,7 @@ from datetime import datetime
 
 from kivy.app import App
 from kivy.metrics import dp
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
+from ui.components.native_widgets import NativeBoxLayout as MDBoxLayout, NativeLabel as MDLabel
 from ui.components.chart_hover import MatplotlibHoverController
 from ui.components.hover_widgets import HoverCard
 

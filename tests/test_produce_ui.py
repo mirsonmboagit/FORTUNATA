@@ -7,10 +7,11 @@ import pytest
 @pytest.fixture
 def app():
     from kivy.app import App
-    from kivymd.app import MDApp
+    from ui.components.native_widgets import NativeTheme
     from utils.config.theme import get_theme_tokens
     previous = App.get_running_app()
-    instance = MDApp()
+    instance = App()
+    instance.theme_cls = NativeTheme()
     instance.theme_tokens = get_theme_tokens("Light")
     yield instance
     App._running_app = previous
@@ -44,17 +45,16 @@ def test_form_saves_sacks_without_weight(app, monkeypatch):
 
 
 def test_dialog_adds_three_pieces_without_requesting_weight(app, monkeypatch):
-    from kivymd.uix.dialog import MDDialog
-    from kivymd.uix.textfield import MDTextField
+    from ui.components.native_widgets import NativeDialog, NativeTextField
     from manager.produce_sales import ProduceSalesMixin
     dialogs = []
-    monkeypatch.setattr(MDDialog, "open", lambda dialog: dialogs.append(dialog))
+    monkeypatch.setattr(NativeDialog, "open", lambda dialog: dialogs.append(dialog))
     db = SimpleNamespace(get_produce_settings=lambda pid: {"stock_mode": "SACKS", "sacks_available": 1, "sack_weight_kg": None})
     screen = SimpleNamespace(db=db, cart_items=[], show_message=Mock(), _request_cart_display_update=Mock())
     info = {"id": 7, "name": "Cebola", "stock": 1, "unit_price": 5, "barcode": None, "vat_rule_code": "STANDARD"}
     ProduceSalesMixin.show_produce_dialog(screen, info)
     dialog = dialogs[0]
-    fields = [widget for widget in dialog.content_cls.walk() if isinstance(widget, MDTextField)]
+    fields = [widget for widget in dialog.content_cls.walk() if isinstance(widget, NativeTextField)]
     quantity = next(widget for widget in fields if widget.hint_text == "Quantidade de unidades")
     quantity.text = "3"
     dialog.buttons[2].dispatch("on_release")

@@ -12,22 +12,29 @@ from kivy.properties import (
     NumericProperty,
 )
 from kivy.clock import Clock
+from kivy.animation import Animation
 from kivy.lang import Builder
 from kivy.app import App
 from kivy.metrics import dp, sp
 from kivy.core.window import Window
 
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.card import MDCard
-from kivymd.uix.label import MDIcon, MDLabel
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDRectangleFlatIconButton
-from kivymd.uix.scrollview import MDScrollView
-from kivymd.uix.menu import MDDropdownMenu
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout,
+    NativeCard as MDCard,
+    NativeDialog as MDDialog,
+    NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton,
+    NativeIcon as MDIcon,
+    NativeIconTextButton as MDRectangleFlatIconButton,
+    NativeLabel as MDLabel,
+    NativeScreen as MDScreen,
+    NativeScrollView as MDScrollView,
+    NativeTextField as MDTextField,
+    NativeButton as MDRaisedButton,
+)
 
 from database.provider import get_db
 from licensing.offline import OfflineLicenseClient, LicenseResult, LICENSE_REQUEST_PLANS, parse_license_request
@@ -89,6 +96,12 @@ class LoginScreen(MDScreen):
     operation_status = StringProperty("")
     license_status = StringProperty("")
     allow_account_self_service = BooleanProperty(True)
+    footer_date = StringProperty("")
+    footer_creator = StringProperty("Mirson Mboa")
+    footer_email = StringProperty("mirsonmboapr@gmail.com")
+    footer_phone = StringProperty("+258 86 1174 428")
+    footer_version = StringProperty("v1.1.0")
+    footer_year = StringProperty("")
 
     DEFAULT_PASSWORDS = ["123", "123456"]
 
@@ -139,7 +152,14 @@ class LoginScreen(MDScreen):
         self._operation_token = 0
         self._language_menu = None
         self._language_bound_app = None
+        self._refresh_footer_metadata()
         self._apply_variant_defaults()
+
+    def _refresh_footer_metadata(self, *_args):
+        """Atualiza automaticamente a data e o ano exibidos no rodapé."""
+        now = datetime.now().astimezone()
+        self.footer_date = now.strftime("%d/%m/%Y")
+        self.footer_year = str(now.year)
 
     def on_kv_post(self, base_widget):
         # Sincroniza textos e layout depois que o KV termina de carregar.
@@ -154,166 +174,230 @@ class LoginScreen(MDScreen):
         Clock.schedule_once(lambda dt: self._update_register_dialog_size(), 0)
 
     def _update_responsive_layout(self):
-        if not hasattr(self, "ids") or "root_layout" not in self.ids:
+        """Landing + formulário overlay — 100% responsivo."""
+        if not hasattr(self, "ids") or "landing_layer" not in self.ids:
             return
-        compact = self.width < dp(980)
-        medium = self.width < dp(1260)
-        narrow_form = self.width < dp(760)
-        variant = (self.login_variant or "admin").strip().lower()
 
-        root_layout = self.ids.root_layout
-        hero_anchor = self.ids.hero_anchor
-        hero_column = self.ids.hero_column
-        hero_shell = self.ids.hero_shell
-        admin_preview_card = self.ids.admin_preview_card
-        manager_preview_card = self.ids.manager_preview_card
-        admin_slide_one_image = self.ids.get("admin_slide_one_image")
-        admin_slide_one_summary = self.ids.get("admin_slide_one_summary")
-        admin_slide_two_image = self.ids.get("admin_slide_two_image")
-        admin_slide_two_summary = self.ids.get("admin_slide_two_summary")
-        manager_preview_image = self.ids.get("manager_preview_image")
-        manager_preview_summary = self.ids.get("manager_preview_summary")
-        admin_highlights_grid = self.ids.admin_highlights_grid
-        divider = self.ids.divider
-        form_scroll = self.ids.form_scroll
-        form_column = self.ids.form_column
-        form_links_row = self.ids.get("form_links_row")
+        width = float(self.width or Window.width or 0)
+        height = float(self.height or Window.height or 0)
+        phone = width < dp(560)
+        narrow = width < dp(760)
+        short = height < dp(620)
+
+        brand_btn = self.ids.get("brand_btn")
+        brand_image = self.ids.get("brand_hero_mark")
+        hero_anchor = self.ids.get("hero_anchor")
+        form_column = self.ids.get("form_column")
+        footer_bar = self.ids.get("footer_bar")
+        footer_details = self.ids.get("footer_details")
+        tap_hint = self.ids.get("tap_hint")
         form_top_actions = self.ids.get("form_top_actions")
-        forgot_button = self.ids.get("forgot_button")
-        register_button = self.ids.get("register_button")
 
-        root_layout.orientation = "vertical" if compact else "horizontal"
-        root_layout.spacing = dp(14) if compact else (dp(18) if medium else dp(20))
-        root_layout.padding = (
-            [dp(14), dp(14), dp(14), dp(14)]
-            if narrow_form else
-            [dp(18), dp(16), dp(18), dp(16)]
-            if compact else
-            [dp(22), dp(18), dp(22), dp(18)]
-        )
-
-        show_admin_preview = variant == "admin"
-        show_manager_preview = variant == "manager"
-
-        if compact:
-            admin_preview_image_h = dp(120)
-            admin_preview_summary_h = dp(76)
-            manager_preview_image_h = dp(112)
-            manager_preview_summary_h = dp(76)
-        elif medium:
-            admin_preview_image_h = dp(144)
-            admin_preview_summary_h = dp(80)
-            manager_preview_image_h = dp(132)
-            manager_preview_summary_h = dp(80)
+        # Marca tipográfica nativa — sem ficheiros de imagem.
+        if phone:
+            img_w, img_h = dp(300), dp(130)
+            hero_h = dp(150)
+        elif narrow or short:
+            img_w, img_h = dp(380), dp(160)
+            hero_h = dp(180)
         else:
-            admin_preview_image_h = dp(160)
-            admin_preview_summary_h = dp(82)
-            manager_preview_image_h = dp(148)
-            manager_preview_summary_h = dp(82)
+            img_w, img_h = dp(480), dp(200)
+            hero_h = dp(220)
 
-        for image in (admin_slide_one_image, admin_slide_two_image):
-            if image is not None:
-                image.height = admin_preview_image_h
-        for summary_card in (admin_slide_one_summary, admin_slide_two_summary):
-            if summary_card is not None:
-                summary_card.height = admin_preview_summary_h
-        if manager_preview_image is not None:
-            manager_preview_image.height = manager_preview_image_h
-        if manager_preview_summary is not None:
-            manager_preview_summary.height = manager_preview_summary_h
+        if hero_anchor is not None:
+            hero_anchor.height = hero_h
+        if brand_btn is not None:
+            brand_btn.size = (img_w, img_h)
+        if brand_image is not None:
+            brand_image.size = (img_w, img_h)
 
-        if admin_highlights_grid:
-            admin_highlights_grid.cols = 1 if compact else 2
+        # Formulário
+        if form_column is not None:
+            if phone:
+                form_column.width = min(max(width - dp(24), dp(290)), dp(380))
+                form_column.height = dp(462 if short else 478)
+                form_column.padding = [dp(14), dp(12), dp(14), dp(10)]
+                form_column.spacing = dp(6)
+            elif narrow:
+                form_column.width = min(max(width - dp(40), dp(320)), dp(420))
+                form_column.height = dp(472 if short else 488)
+                form_column.padding = [dp(18), dp(14), dp(18), dp(12)]
+                form_column.spacing = dp(8)
+            else:
+                form_column.width = dp(440)
+                form_column.height = dp(500 if short else 510)
+                form_column.padding = [dp(22), dp(18), dp(22), dp(14)]
+                form_column.spacing = dp(8)
 
-        if admin_preview_card:
-            admin_preview_card.opacity = 1 if show_admin_preview else 0
-            admin_preview_card.disabled = not show_admin_preview
-            admin_preview_card.size_hint_y = None
-            admin_preview_card.height = (
-                admin_preview_image_h + admin_preview_summary_h + dp(44)
-            ) if show_admin_preview else 0
+        nature = self.ids.get("nature_fields")
+        if nature is not None:
+            nature.height = dp(164 if phone or short else 178)
 
-        if manager_preview_card:
-            manager_preview_card.opacity = 1 if show_manager_preview else 0
-            manager_preview_card.disabled = not show_manager_preview
-            manager_preview_card.size_hint_y = None
-            manager_preview_card.height = (
-                manager_preview_image_h + manager_preview_summary_h + dp(44)
-            ) if show_manager_preview else 0
-
-        hero_shell.padding = (
-            [dp(16), dp(14), dp(16), dp(14)] if compact else [dp(20), dp(18), dp(20), dp(18)] if medium else [dp(22), dp(20), dp(22), dp(20)]
-        )
-        hero_shell.spacing = dp(10) if compact else dp(12) if medium else dp(14)
-
-        if compact:
-            hero_anchor.size_hint_x = 1
-            hero_anchor.size_hint_y = None
-            hero_anchor.height = hero_column.minimum_height
-            hero_column.size_hint_x = 1
-            hero_column.size_hint_y = None
-            hero_column.height = hero_column.minimum_height
-
-            divider.opacity = 0
-            divider.size_hint_x = None
-            divider.width = 0
-
-            form_scroll.do_scroll_y = True
-            form_scroll.size_hint_x = 1
-            form_column.width = min(self.width - dp(28), dp(470))
-        else:
-            hero_anchor.size_hint_x = 0.55 if variant == "admin" else 0.51
-            hero_anchor.size_hint_y = 1
-            hero_anchor.height = 0
-            hero_column.size_hint_x = 1
-            hero_column.size_hint_y = None
-            hero_column.height = hero_column.minimum_height
-
-            divider.opacity = 1
-            divider.size_hint_x = None
-            divider.width = dp(1)
-
-            form_scroll.do_scroll_y = False
-            form_scroll.size_hint_x = 0.42 if variant == "admin" else 0.44
-            form_column.width = dp(420) if medium else (dp(440) if variant == "admin" else dp(424))
-
-        form_column.padding = (
-            [dp(20), dp(18), dp(20), dp(18)] if narrow_form else
-            [dp(24), dp(22), dp(24), dp(22)] if compact else
-            [dp(26), dp(24), dp(26), dp(24)]
-        )
-        form_column.spacing = dp(12) if compact else dp(14)
+        # Rodapé editorial premium: duas linhas no desktop e compacto no ecrã estreito.
+        if footer_bar is not None:
+            footer_bar.height = dp(112 if phone else (96 if narrow else 88))
+        if footer_details is not None:
+            footer_details.orientation = "vertical" if phone or narrow else "horizontal"
 
         if form_top_actions is not None:
-            form_top_actions.height = dp(34) if narrow_form else dp(38)
-            form_top_actions.spacing = dp(8)
+            form_top_actions.height = dp(34) if phone else dp(38)
 
-        license_actions_installed = bool(
-            getattr(self, "_license_actions_installed", False)
-        )
-        if form_links_row is not None:
-            stack_vertical = narrow_form or license_actions_installed
-            form_links_row.orientation = "vertical" if stack_vertical else "horizontal"
-            form_links_row.spacing = dp(6) if stack_vertical else dp(8)
+        if tap_hint is not None:
+            tap_hint.font_size = sp(12) if phone else sp(13)
 
-        # Os links de autoatendimento (esqueci/criar conta) ficam colapsados
-        # neste acesso unificado.
-        for button in (forgot_button, register_button):
-            if button is None:
-                continue
-            if license_actions_installed:
-                button.size_hint_x = 0
-                button.size_hint_y = None
-                button.width = 0
-                button.height = 0
-            elif narrow_form:
-                button.size_hint_x = 1
-                button.size_hint_y = None
-                button.width = 0
-            else:
-                button.size_hint_x = None
-                button.size_hint_y = None
-                button.width = dp(148)
+    def toggle_password_visibility(self, *_args):
+        """Mostra ou oculta a palavra-passe."""
+        field = self.ids.get("password_input") if self.ids else None
+        btn = self.ids.get("password_toggle") if self.ids else None
+        if field is None:
+            return
+        field.password = not bool(field.password)
+        if btn is not None:
+            try:
+                btn.icon = "eye-outline" if not field.password else "eye-off-outline"
+            except Exception:
+                pass
+
+    def open_login_form(self, *_args):
+        """Revela o formulário como se estivesse a formar-se no centro do ecrã."""
+        try:
+            if not self.ids:
+                return
+            overlay = self.ids.get("form_overlay")
+            card = self.ids.get("form_column")
+            landing = self.ids.get("landing_layer")
+            if overlay is None or card is None:
+                return
+
+            overlay.disabled = False
+            overlay.opacity = 0
+            overlay.size_hint = (1, 1)
+            overlay.pos_hint = {"x": 0, "y": 0}
+            card.disabled = False
+            card.opacity = 0
+
+            # Preparar os elementos para uma revelação sequencial, sem alterar
+            # a geometria interna dos campos (evita saltos enquanto se escreve).
+            target_size = (float(card.width), float(card.height))
+            card.size = (min(target_size[0], dp(170)), dp(76))
+            card.opacity = 0.12
+
+            staged_ids = (
+                "form_brand_row", "form_tagline", "form_license",
+                "username_field_shell", "password_field_shell", "login_button",
+                "form_links_row",
+            )
+            staged_widgets = []
+            for widget_id in staged_ids:
+                widget = self.ids.get(widget_id)
+                if widget is not None:
+                    widget.opacity = 0
+                    staged_widgets.append(widget)
+                    Animation.cancel_all(widget, "opacity")
+
+            Animation.cancel_all(overlay)
+            Animation.cancel_all(card)
+            if landing is not None:
+                Animation.cancel_all(landing)
+
+            Animation(opacity=1, d=0.25, t="out_quad").start(overlay)
+            # O cartão forma-se do centro para fora.
+            form_animation = Animation(size=target_size, opacity=1, d=0.46, t="out_back")
+            Clock.schedule_once(lambda dt: form_animation.start(card), 0.035)
+            if landing is not None:
+                Animation(opacity=0.18, d=0.32, t="out_quad").start(landing)
+
+            # Marca, texto, licença, campos e botão entram um por um.
+            for index, widget in enumerate(staged_widgets):
+                delay = 0.18 + index * 0.105
+                Clock.schedule_once(
+                    lambda dt, item=widget: Animation(
+                        opacity=1, d=0.24, t="out_quad"
+                    ).start(item),
+                    delay,
+                )
+
+            Clock.schedule_once(lambda dt: self._focus_login_field(), 0.18 + len(staged_widgets) * 0.105 + 0.10)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    def close_login_form(self, *_args):
+        """Fecha o formulário com animação."""
+        try:
+            if not self.ids:
+                return
+            overlay = self.ids.get("form_overlay")
+            card = self.ids.get("form_column")
+            landing = self.ids.get("landing_layer")
+            if overlay is None:
+                return
+
+            def _finish(*_a):
+                overlay.disabled = True
+                overlay.opacity = 0
+                # Liberta a área de toque para a landing
+                overlay.size_hint = (None, None)
+                overlay.size = (0, 0)
+                if card is not None:
+                    card.opacity = 0
+                    card.disabled = True
+                for widget_id in ("form_brand_row", "form_tagline", "form_license",
+                                  "username_field_shell", "password_field_shell",
+                                  "login_button", "form_links_row"):
+                    widget = self.ids.get(widget_id)
+                    if widget is not None:
+                        widget.opacity = 1
+
+            Animation.cancel_all(overlay)
+            if card is not None:
+                Animation.cancel_all(card)
+            if landing is not None:
+                Animation.cancel_all(landing)
+
+            anim = Animation(opacity=0, d=0.22, t="in_quad")
+            anim.bind(on_complete=lambda *a: _finish())
+            anim.start(overlay)
+            if card is not None:
+                Animation(opacity=0, d=0.18, t="in_quad").start(card)
+            if landing is not None:
+                Animation(opacity=1, d=0.25, t="out_quad").start(landing)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    def _focus_login_field(self):
+        try:
+            field = self.ids.get("username_input") if self.ids else None
+            if field is not None and not getattr(field, "disabled", False):
+                field.focus = True
+        except Exception:
+            pass
+
+    def on_touch_up(self, touch):
+        # Fallback: toque na zona da marca abre o formulário
+        try:
+            if getattr(touch, "is_mouse_scrolling", False):
+                return super().on_touch_up(touch)
+            brand = self.ids.get("brand_btn") if self.ids else None
+            overlay = self.ids.get("form_overlay") if self.ids else None
+            form_open = (
+                overlay is not None
+                and (not getattr(overlay, "disabled", True))
+                and float(getattr(overlay, "opacity", 0) or 0) > 0.4
+            )
+            if brand is not None and not form_open:
+                # Converte para coordenadas locais do botão da marca
+                lx, ly = brand.to_widget(*touch.pos)
+                if 0 <= lx <= brand.width and 0 <= ly <= brand.height:
+                    self.open_login_form()
+                    return True
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        return super().on_touch_up(touch)
+
+
 
     def _bind_app_language(self):
         app = App.get_running_app()
@@ -435,10 +519,48 @@ class LoginScreen(MDScreen):
         self._apply_variant_defaults()
         self._sync_theme_toggle_text()
         self._sync_language_button_text()
-        self.carousel_event = Clock.schedule_interval(self.next_slide, 4)
+        self.carousel_event = None
+        Clock.schedule_once(lambda dt: self._start_brand_animation(), 0.15)
+        # Garante landing visível e formulário fechado
+        Clock.schedule_once(lambda dt: self._reset_login_layers(), 0)
         Clock.schedule_once(lambda dt: self._ensure_admin_setup(), 0.05)
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0.02)
+
+    def _start_brand_animation(self):
+        """Pulsa subtilmente a marca nativa sem deslocar o layout."""
+        mark = self.ids.get("brand_hero_mark") if self.ids else None
+        if mark is None:
+            return
+        Animation.cancel_all(mark, "opacity")
+        mark.opacity = 0.90
+        pulse = Animation(opacity=1.0, duration=1.5, t="in_out_sine") + Animation(
+            opacity=0.90, duration=1.5, t="in_out_sine"
+        )
+        pulse.repeat = True
+        pulse.start(mark)
+
+    def _reset_login_layers(self):
+        if not self.ids:
+            return
+        overlay = self.ids.get("form_overlay")
+        card = self.ids.get("form_column")
+        landing = self.ids.get("landing_layer")
+        if overlay is not None:
+            overlay.opacity = 0
+            overlay.disabled = True
+            overlay.size_hint = (None, None)
+            overlay.size = (0, 0)
+        if card is not None:
+            card.opacity = 0
+            card.disabled = True
+        if landing is not None:
+            landing.opacity = 1
+
 
     def on_leave(self):
+        mark = self.ids.get("brand_hero_mark") if self.ids else None
+        if mark is not None:
+            Animation.cancel_all(mark)
         if self.carousel_event:
             self.carousel_event.cancel()
         self._operation_token += 1

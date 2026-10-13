@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from kivy.metrics import dp
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
+from ui.components.native_widgets import NativeBoxLayout, NativeLabel, NativeScreen
 
 
-class MobileLicenseRequiredScreen(MDScreen):
+class MobileLicenseRequiredScreen(NativeScreen):
     """O APK nao abre vendas enquanto nao tiver um cofre seguro equivalente."""
 
     def on_pre_enter(self, *args):
         if self.children:
             return
-        layout = MDBoxLayout(
+        layout = NativeBoxLayout(
             orientation="vertical",
             padding=dp(28),
             spacing=dp(14),
@@ -22,14 +20,14 @@ class MobileLicenseRequiredScreen(MDScreen):
             size_hint=(0.9, None),
             height=dp(230),
         )
-        layout.add_widget(MDLabel(
+        layout.add_widget(NativeLabel(
             text="Acesso movel ainda nao ativado",
             font_style="H6",
             halign="center",
             size_hint_y=None,
             height=dp(44),
         ))
-        layout.add_widget(MDLabel(
+        layout.add_widget(NativeLabel(
             text=(
                 "Para proteger as licencas e as contas dos clientes, esta versao "
                 "do APK aguarda o conector movel seguro. Use o aplicativo desktop "

@@ -58,7 +58,6 @@ for folder in ("admin", "user", "utils", "manager"):
     for kv_file in (ROOT / folder).glob("*.kv") if (ROOT / folder).exists() else []:
         datas.append((str(kv_file), folder))
 
-datas += collect_data_files("kivymd", includes=["*.kv", "fonts/*", "images/*"])
 
 # O scanner de camara carrega estas DLLs de forma dinamica. Inclui-las como
 # binarios garante que o executavel encontra o motor ZBar e o backend OpenCV.
@@ -96,7 +95,7 @@ hiddenimports = [
     "win32crypt",
 ]
 
-for package in ("kivymd", "kivy_garden"):
+for package in ("kivy_garden",):
     try:
         hiddenimports += collect_submodules(package)
     except Exception:

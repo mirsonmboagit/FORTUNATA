@@ -174,10 +174,16 @@
       "source": "Bazara",
       "source_chain": [
         "Agregado",
-        "Bazara"
-      ]
+        "Banco Local"
+      ],
+      "cost": 41.666666666666664,
+      "stock": 461.0,
+      "is_weight": 0,
+      "status": "ATIVO",
+      "quantity": "1,5L",
+      "product_id": 12
     },
-    "timestamp": "2026-09-15T16:03:03.773592"
+    "timestamp": "2026-10-05T13:03:42.064951"
   },
   "6009510805864": {
     "source": "Agregado",

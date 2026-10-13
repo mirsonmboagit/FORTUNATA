@@ -4,6 +4,7 @@ import os
 import secrets
 import sqlite3
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date
@@ -201,7 +202,16 @@ def _build_forecasts(db, days=14, limit=10):
     expiry_risk = []
     today_date = datetime.now().date()
 
-    for prod_id, name, stock, by_weight, expiry_date, sale_price, unit_purchase_price in db.cursor.fetchall():
+    for row in db.cursor.fetchall():
+        # Algumas instalações antigas podem devolver colunas adicionais.
+        # Ler por índice evita o erro "too many values to unpack".
+        prod_id = row[0]
+        name = row[1]
+        stock = row[2]
+        by_weight = row[3]
+        expiry_date = row[4]
+        sale_price = row[5]
+        unit_purchase_price = row[6]
         avg_daily = _safe_float(velocity.get(prod_id, 0.0), 0.0)
         stock_value = _safe_float(stock, 0.0)
         days_left = None
@@ -286,8 +296,11 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             os.makedirs(self.db_folder)
             print(f"Pasta '{self.db_folder}' criada!")
 
-        self.conn = None
-        self.cursor = None
+        # Cada thread recebe a sua propria conexao e o seu proprio cursor.
+        # SQLite nao permite reutilizar o mesmo cursor em operacoes concorrentes.
+        self._db_local = threading.local()
+        self._db_connections_lock = threading.RLock()
+        self._db_connections = set()
         self._configure_journal = bool(configure_journal)
         self.backup_root = str(DB_BACKUP_DIR)
         self.current_user = None
@@ -310,6 +323,66 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
         # existentes a ``sales_history``. Ela precisa existir em cada conexao,
         # inclusive nas conexoes usadas por workers.
         self._configure_sales_archive()
+
+    def _create_thread_connection(self):
+        """Cria uma conexao SQLite exclusiva para a thread atual."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
+        try:
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA foreign_keys = ON")
+            if self._configure_journal:
+                try:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                except sqlite3.Error:
+                    pass
+            for pragma in (
+                "PRAGMA synchronous = NORMAL",
+                "PRAGMA temp_store = MEMORY",
+                "PRAGMA cache_size = -20000",
+                "PRAGMA mmap_size = 134217728",
+            ):
+                try:
+                    conn.execute(pragma)
+                except sqlite3.Error:
+                    pass
+            with self._db_connections_lock:
+                self._db_connections.add(conn)
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise
+
+    @property
+    def conn(self):
+        """Conexao da thread atual, criada sob demanda."""
+        conn = getattr(self._db_local, "conn", None)
+        if conn is None:
+            conn = self._create_thread_connection()
+            self._db_local.conn = conn
+        return conn
+
+    @conn.setter
+    def conn(self, value):
+        self._db_local.conn = value
+        if value is not None:
+            with self._db_connections_lock:
+                self._db_connections.add(value)
+
+    @property
+    def cursor(self):
+        """Cursor exclusivo da thread atual."""
+        cursor = getattr(self._db_local, "cursor", None)
+        if cursor is None:
+            cursor = self.conn.cursor()
+            self._db_local.cursor = cursor
+        return cursor
+
+    @cursor.setter
+    def cursor(self, value):
+        self._db_local.cursor = value
 
     def background_connection(self):
         """Captura a sessao e abre/fecha uma conexao na thread consumidora.
@@ -334,32 +407,49 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
         return connection()
     
     def connect(self):
-        """Conectar ao banco de dados"""
+        """Conecta o banco na thread atual, sem partilhar cursor entre threads."""
         try:
-            # IMPORTANTE: Usamos o self.db_path aqui
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
-            self.cursor = self.conn.cursor()
-            self.cursor.execute("PRAGMA busy_timeout = 30000")
-            self.cursor.execute("PRAGMA foreign_keys = ON")
-            try:
-                if self._configure_journal:
-                    self.cursor.execute("PRAGMA journal_mode = WAL")
-                self.cursor.execute("PRAGMA synchronous = NORMAL")
-                self.cursor.execute("PRAGMA temp_store = MEMORY")
-                self.cursor.execute("PRAGMA cache_size = -20000")
-                self.cursor.execute("PRAGMA mmap_size = 134217728")
-            except sqlite3.Error:
-                pass
-            print(f"ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Conectado com sucesso em: {self.db_path}")
+            old_cursor = getattr(self._db_local, "cursor", None)
+            old_conn = getattr(self._db_local, "conn", None)
+            if old_cursor is not None:
+                try: old_cursor.close()
+                except Exception: pass
+            if old_conn is not None:
+                try: old_conn.close()
+                except Exception: pass
+                with self._db_connections_lock:
+                    self._db_connections.discard(old_conn)
+            self._db_local.cursor = None
+            self._db_local.conn = self._create_thread_connection()
+            self._db_local.cursor = self._db_local.conn.cursor()
+            print(f"Conectado com sucesso em: {self.db_path}")
         except (sqlite3.Error, ValueError) as e:
-            if self.conn:
-                self.conn.rollback()
-            print(f"ÃƒÂ¢Ã‚ÂÃ…â€™ Erro ao conectar: {e}")
-    
+            conn = getattr(self._db_local, "conn", None)
+            if conn is not None:
+                try: conn.rollback()
+                except sqlite3.Error: pass
+            print(f"Erro ao conectar: {e}")
+
+
     def close(self):
-        """Fechar a conexÃƒÆ’Ã‚Â£o com o banco de dados"""
-        if self.conn:
-            self.conn.close()
+        """Fecha as conexoes conhecidas desta instancia com seguranca."""
+        current_cursor = getattr(self._db_local, "cursor", None)
+        current_conn = getattr(self._db_local, "conn", None)
+        if current_cursor is not None:
+            try: current_cursor.close()
+            except Exception: pass
+        if current_conn is not None:
+            try: current_conn.close()
+            except Exception: pass
+        with self._db_connections_lock:
+            connections = list(self._db_connections)
+            self._db_connections.clear()
+        for conn in connections:
+            if conn is current_conn: continue
+            try: conn.close()
+            except Exception: pass
+        self._db_local.cursor = None
+        self._db_local.conn = None
 
     def _configure_sales_archive(self):
         """Liga o arquivo de vendas e mantem o historico transparente.
@@ -2211,16 +2301,22 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
         """Obter o espaco de dados associado ao usuario."""
         if not username:
             return None
+        read_cursor = None
         try:
-            self.cursor.execute(
+            read_cursor = self.conn.cursor()
+            read_cursor.execute(
                 "SELECT COALESCE(NULLIF(TRIM(data_owner), ''), username) FROM users WHERE username = ?",
                 (username,),
             )
-            row = self.cursor.fetchone()
+            row = read_cursor.fetchone()
             return row[0] if row else None
         except sqlite3.Error as e:
             print(f"Erro ao obter dono dos dados: {e}")
             return username
+        finally:
+            if read_cursor is not None:
+                try: read_cursor.close()
+                except Exception: pass
 
     def create_user(self, username, password, role, email=None, phone=None, data_owner=None):
         """Cria apenas gerentes; admins entram pelo provisionamento assinado."""
@@ -2963,21 +3059,29 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             return {"ok": False, "reason": "error"}
 
     def log_action(self, username, role, action, details=""):
-        """Registrar aÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do usuÃƒÆ’Ã‚Â¡rio no log do sistema"""
+        """Registra uma acao usando um cursor isolado da operacao."""
+        log_cursor = None
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self.cursor.execute(
+            owner = self._owner_value(username)
+            log_cursor = self.conn.cursor()
+            log_cursor.execute(
                 """
                 INSERT INTO user_logs (username, role, action, details, timestamp, owner_username)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (username, role, action, details, timestamp, self._owner_value(username)),
+                (username, role, action, details, timestamp, owner),
             )
             self.conn.commit()
         except sqlite3.Error as e:
             print(f"Erro ao registrar log: {e}")
-            self.conn.rollback()
-    
+            try: self.conn.rollback()
+            except sqlite3.Error: pass
+        finally:
+            if log_cursor is not None:
+                try: log_cursor.close()
+                except Exception: pass
+
     # Metodos para produtos, lotes e movimentos de stock.
     
     def _now_str(self):
@@ -8985,7 +9089,12 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
 
         low_stock = []
         daily_sales_by_product = _fetch_sales_velocity(self) if low_stock_raw else {}
-        for prod_id, name, stock, is_weight in low_stock_raw:
+        for row in low_stock_raw:
+            # Aceita linhas com colunas adicionais sem quebrar o snapshot.
+            prod_id = row[0]
+            name = row[1]
+            stock = row[2]
+            is_weight = row[3]
             daily_sales = daily_sales_by_product.get(prod_id, 0.0)
             days_left = _safe_float(stock) / max(daily_sales, 0.1) if daily_sales > 0 else 999
             low_stock.append((name, stock, is_weight, days_left, prod_id))
@@ -9014,7 +9123,12 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             "leve": [],
         }
         expiring_90 = []
-        for name, expiry_date, stock, is_by_weight in self.cursor.fetchall():
+        for row in self.cursor.fetchall():
+            # Aceita linhas com colunas adicionais sem quebrar os insights.
+            name = row[0]
+            expiry_date = row[1]
+            stock = row[2]
+            is_by_weight = row[3]
             exp_date = _parse_date(expiry_date)
             if not exp_date:
                 continue

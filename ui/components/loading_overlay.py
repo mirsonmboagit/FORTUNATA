@@ -5,9 +5,11 @@ from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.metrics import dp
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.floatlayout import FloatLayout
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.spinner import MDSpinner
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout,
+    NativeLabel as MDLabel,
+    NativeSpinner as MDSpinner,
+)
 
 
 def _theme_tokens():

@@ -26,13 +26,10 @@ from kivy.properties import (
 )
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.card import MDCard
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout, NativeButton, NativeCard, NativeDialog, NativeFlatButton,
+    NativeLabel, NativeScreen, NativeTextField,
+)
 
 from mobile.manager.runtime import get_mobile_terminal_id
 from utils.business.sales_transactions import (
@@ -157,7 +154,7 @@ def _aggregate_lots(rows) -> list[dict]:
     return list(grouped.values())
 
 
-class MobileManagerSalesScreen(MDScreen):
+class MobileManagerSalesScreen(NativeScreen):
     """Venda, pagamento, caixa e estorno de dez minutos num unico ecran."""
 
     db = ObjectProperty(None, allownone=True)
@@ -273,7 +270,7 @@ class MobileManagerSalesScreen(MDScreen):
 
     def _scroll_body(self):
         scroll = ScrollView(do_scroll_x=False, bar_width=dp(4))
-        body = MDBoxLayout(
+        body = NativeBoxLayout(
             orientation="vertical",
             spacing=dp(10),
             padding=[dp(2), dp(2), dp(2), dp(14)],
@@ -284,7 +281,7 @@ class MobileManagerSalesScreen(MDScreen):
         return scroll, body
 
     def _label(self, text, *, height=28, bold=False, color=None, font_style=None, halign="left"):
-        label = MDLabel(
+        label = NativeLabel(
             text=str(text),
             size_hint_y=None,
             height=dp(height),
@@ -307,7 +304,7 @@ class MobileManagerSalesScreen(MDScreen):
     def _button(self, text, callback, *, color=None, width=None, disabled=False):
         app = self._app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
-        button = MDRaisedButton(
+        button = NativeButton(
             text=text,
             size_hint_y=None,
             height=dp(48),
@@ -321,7 +318,7 @@ class MobileManagerSalesScreen(MDScreen):
         return button
 
     def _card(self, *, height=None, padding=(12, 12, 12, 12), spacing=8):
-        card = MDCard(
+        card = NativeCard(
             orientation="vertical",
             padding=[dp(value) for value in padding],
             spacing=dp(spacing),
@@ -348,8 +345,8 @@ class MobileManagerSalesScreen(MDScreen):
         scroll, body = self._scroll_body()
         body.add_widget(self._label("Produtos", height=34, bold=True, font_style="H6"))
 
-        search_row = MDBoxLayout(size_hint_y=None, height=dp(58), spacing=dp(8))
-        field = MDTextField(
+        search_row = NativeBoxLayout(size_hint_y=None, height=dp(58), spacing=dp(8))
+        field = NativeTextField(
             text=self.search_text,
             hint_text="Produto ou codigo do leitor",
             mode="rectangle",
@@ -378,7 +375,7 @@ class MobileManagerSalesScreen(MDScreen):
         app = self._app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
         card = self._card(height=170)
-        title_row = MDBoxLayout(size_hint_y=None, height=dp(30), spacing=dp(8))
+        title_row = NativeBoxLayout(size_hint_y=None, height=dp(30), spacing=dp(8))
         name = self._label(product["name"], height=30, bold=True)
         name.size_hint_x = 0.70
         name.shorten = True
@@ -511,9 +508,9 @@ class MobileManagerSalesScreen(MDScreen):
         if self.sale_in_progress:
             return
         available_stock = _number(product.get("stock", product.get("max_stock")))
-        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(4), dp(14), dp(2)], adaptive_height=True)
+        content = NativeBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(4), dp(14), dp(2)], adaptive_height=True)
         content.add_widget(self._paragraph(f"{product['name']}\nDisponivel: {_quantity(available_stock, True)}", color=[0.2, 0.3, 0.4, 1]))
-        field = MDTextField(
+        field = NativeTextField(
             text=_quantity(current_item.get("qty"), True).replace(" kg", "") if current_item else "",
             hint_text="Peso em kg",
             mode="rectangle",
@@ -522,9 +519,9 @@ class MobileManagerSalesScreen(MDScreen):
             height=dp(56),
         )
         content.add_widget(field)
-        cancel = MDFlatButton(text="CANCELAR")
-        confirm = MDRaisedButton(text="ADICIONAR" if current_item is None else "GUARDAR")
-        dialog = MDDialog(title="Venda por peso", type="custom", content_cls=content, buttons=[cancel, confirm])
+        cancel = NativeFlatButton(text="CANCELAR")
+        confirm = NativeButton(text="ADICIONAR" if current_item is None else "GUARDAR")
+        dialog = NativeDialog(title="Venda por peso", type="custom", content_cls=content, buttons=[cancel, confirm])
         cancel.bind(on_release=lambda *_: dialog.dismiss())
 
         def save_weight(*_args):
@@ -582,7 +579,7 @@ class MobileManagerSalesScreen(MDScreen):
 
     def _build_cart_page(self):
         scroll, body = self._scroll_body()
-        heading = MDBoxLayout(size_hint_y=None, height=dp(42))
+        heading = NativeBoxLayout(size_hint_y=None, height=dp(42))
         heading.add_widget(self._label(f"Carrinho ({int(self.cart_count)})", height=38, bold=True, font_style="H6"))
         if self.cart_items:
             app = self._app()
@@ -607,7 +604,7 @@ class MobileManagerSalesScreen(MDScreen):
         card.add_widget(title)
         details = f"{_quantity(item.get('qty'), item.get('is_weight'))} × {_money(item.get('price'))}\nTotal: {_money(_number(item.get('qty')) * _number(item.get('price')))}"
         card.add_widget(self._paragraph(details, color=tokens.get("text_secondary")))
-        controls = MDBoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        controls = NativeBoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
         if item.get("is_weight"):
             controls.add_widget(self._button("EDITAR PESO", lambda *_button, product=item, current=item: self._open_weight_dialog(product, current), width=158))
         else:
@@ -778,12 +775,12 @@ class MobileManagerSalesScreen(MDScreen):
             ))
         body.add_widget(grid)
 
-        discount = MDTextField(text=self.discount_text, hint_text="Desconto (MT)", mode="rectangle", size_hint_y=None, height=dp(56))
+        discount = NativeTextField(text=self.discount_text, hint_text="Desconto (MT)", mode="rectangle", size_hint_y=None, height=dp(56))
         discount.bind(text=lambda _field, value: self.set_discount_text(value))
         body.add_widget(discount)
 
         if self.payment_method == "cash":
-            paid = MDTextField(text=self.paid_amount_text, hint_text="Valor recebido (MT)", mode="rectangle", size_hint_y=None, height=dp(56))
+            paid = NativeTextField(text=self.paid_amount_text, hint_text="Valor recebido (MT)", mode="rectangle", size_hint_y=None, height=dp(56))
             paid.bind(text=lambda _field, value: self.set_paid_amount_text(value))
             body.add_widget(paid)
             self._payment_change_label = self._label(
@@ -819,7 +816,7 @@ class MobileManagerSalesScreen(MDScreen):
             color = tokens.get("warning")
         card = self._card(height=116)
         card.add_widget(self._label("Caixa", height=24, bold=True))
-        row = MDBoxLayout(size_hint_y=None, height=dp(58), spacing=dp(8))
+        row = NativeBoxLayout(size_hint_y=None, height=dp(58), spacing=dp(8))
         row.add_widget(self._paragraph(text, color=color))
         row.add_widget(action)
         card.add_widget(row)
@@ -844,13 +841,13 @@ class MobileManagerSalesScreen(MDScreen):
     def open_cash_dialog(self):
         if self.cash_operation_in_progress:
             return
-        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(4), dp(14), dp(2)], adaptive_height=True)
+        content = NativeBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(4), dp(14), dp(2)], adaptive_height=True)
         content.add_widget(self._paragraph("Defina o fundo inicial deste terminal. O caixa sera registado na API central."))
-        field = MDTextField(hint_text="Fundo inicial (MT)", text="0", mode="rectangle", input_filter="float", size_hint_y=None, height=dp(56))
+        field = NativeTextField(hint_text="Fundo inicial (MT)", text="0", mode="rectangle", input_filter="float", size_hint_y=None, height=dp(56))
         content.add_widget(field)
-        cancel = MDFlatButton(text="CANCELAR")
-        confirm = MDRaisedButton(text="ABRIR CAIXA")
-        dialog = MDDialog(title="Abrir caixa", type="custom", content_cls=content, buttons=[cancel, confirm])
+        cancel = NativeFlatButton(text="CANCELAR")
+        confirm = NativeButton(text="ABRIR CAIXA")
+        dialog = NativeDialog(title="Abrir caixa", type="custom", content_cls=content, buttons=[cancel, confirm])
         cancel.bind(on_release=lambda *_: dialog.dismiss())
 
         def create_cash(*_args):
@@ -1107,7 +1104,7 @@ class MobileManagerSalesScreen(MDScreen):
 
     def _build_history_page(self):
         scroll, body = self._scroll_body()
-        header = MDBoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        header = NativeBoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
         header.add_widget(self._label("Historico", height=38, bold=True, font_style="H6"))
         header.add_widget(self._button("ATUALIZAR", lambda *_: self.load_history(force=True), width=118, disabled=self.history_loading))
         body.add_widget(header)
@@ -1151,14 +1148,14 @@ class MobileManagerSalesScreen(MDScreen):
         if not items:
             return
         content_scroll = ScrollView(do_scroll_x=False)
-        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(8), dp(4), dp(8), dp(4)], size_hint_y=None)
+        content = NativeBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(8), dp(4), dp(8), dp(4)], size_hint_y=None)
         content.bind(minimum_height=content.setter("height"))
         content_scroll.add_widget(content)
         content.add_widget(self._paragraph(f"{len(items)} produto(s) · Total: {_money(transaction.get('net_total'))}"))
         for item in items:
             content.add_widget(self._build_transaction_item(item))
-        close = MDFlatButton(text="FECHAR")
-        dialog = MDDialog(title="Produtos da venda", type="custom", content_cls=content_scroll, buttons=[close])
+        close = NativeFlatButton(text="FECHAR")
+        dialog = NativeDialog(title="Produtos da venda", type="custom", content_cls=content_scroll, buttons=[close])
         close.bind(on_release=lambda *_: dialog.dismiss())
         dialog.open()
 
@@ -1183,15 +1180,15 @@ class MobileManagerSalesScreen(MDScreen):
         if not allowed or available <= 0:
             self._show_message("Estorno", "Este item ja nao pode ser estornado.")
             return
-        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(4), dp(14), dp(2)], adaptive_height=True)
+        content = NativeBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(4), dp(14), dp(2)], adaptive_height=True)
         content.add_widget(self._paragraph(f"{item.get('product')}\nMaximo: {_quantity(available)}"))
-        quantity = MDTextField(hint_text="Quantidade a estornar", text=_quantity(available), mode="rectangle", input_filter="float", size_hint_y=None, height=dp(56))
-        reason = MDTextField(hint_text="Motivo (opcional)", mode="rectangle", size_hint_y=None, height=dp(56))
+        quantity = NativeTextField(hint_text="Quantidade a estornar", text=_quantity(available), mode="rectangle", input_filter="float", size_hint_y=None, height=dp(56))
+        reason = NativeTextField(hint_text="Motivo (opcional)", mode="rectangle", size_hint_y=None, height=dp(56))
         content.add_widget(quantity)
         content.add_widget(reason)
-        cancel = MDFlatButton(text="CANCELAR")
-        confirm = MDRaisedButton(text="CONFIRMAR ESTORNO")
-        dialog = MDDialog(title="Estornar item", type="custom", content_cls=content, buttons=[cancel, confirm])
+        cancel = NativeFlatButton(text="CANCELAR")
+        confirm = NativeButton(text="CONFIRMAR ESTORNO")
+        dialog = NativeDialog(title="Estornar item", type="custom", content_cls=content, buttons=[cancel, confirm])
         cancel.bind(on_release=lambda *_: dialog.dismiss())
 
         def submit(*_args):
@@ -1229,9 +1226,9 @@ class MobileManagerSalesScreen(MDScreen):
         if self.sale_in_progress or self.cash_operation_in_progress:
             self._show_message("Operacao em curso", "Aguarde a confirmacao da operacao actual antes de sair.")
             return
-        cancel = MDFlatButton(text="CANCELAR")
-        confirm = MDRaisedButton(text="SAIR")
-        dialog = MDDialog(title="Terminar sessao", text="Pretende sair da conta do gerente neste telefone?", buttons=[cancel, confirm])
+        cancel = NativeFlatButton(text="CANCELAR")
+        confirm = NativeButton(text="SAIR")
+        dialog = NativeDialog(title="Terminar sessao", text="Pretende sair da conta do gerente neste telefone?", buttons=[cancel, confirm])
         cancel.bind(on_release=lambda *_: dialog.dismiss())
 
         def logout(*_args):
@@ -1253,9 +1250,9 @@ class MobileManagerSalesScreen(MDScreen):
         if self.sale_in_progress or self.cash_operation_in_progress:
             self._show_message("Operacao em curso", "Aguarde a confirmacao da operacao actual antes de alterar o servidor.")
             return
-        cancel = MDFlatButton(text="CANCELAR")
-        confirm = MDRaisedButton(text="ALTERAR")
-        dialog = MDDialog(
+        cancel = NativeFlatButton(text="CANCELAR")
+        confirm = NativeButton(text="ALTERAR")
+        dialog = NativeDialog(
             title="Alterar servidor",
             text="A sessao sera terminada e o carrinho actual sera limpo. Continuar?",
             buttons=[cancel, confirm],
@@ -1284,7 +1281,7 @@ class MobileManagerSalesScreen(MDScreen):
 
     @staticmethod
     def _show_message(title, message):
-        close = MDFlatButton(text="OK")
-        dialog = MDDialog(title=str(title), text=str(message), buttons=[close])
+        close = NativeFlatButton(text="OK")
+        dialog = NativeDialog(title=str(title), text=str(message), buttons=[close])
         close.bind(on_release=lambda *_: dialog.dismiss())
         dialog.open()

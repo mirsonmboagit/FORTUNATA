@@ -76,7 +76,6 @@ a = Analysis(
         "kivy",
         "kivy_deps",
         "kivy_garden",
-        "kivymd",
         "matplotlib",
         "numpy",
         "PIL",

@@ -1,8 +1,17 @@
 from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import (
+    Table,
+    TableStyle,
+    Paragraph,
+    Spacer,
+    KeepTogether,
+    HRFlowable,
+    SimpleDocTemplate,
+)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.units import inch, mm
 from reportlab.graphics.shapes import Drawing, Line, Rect, String
 from datetime import datetime
 import math
@@ -12,14 +21,34 @@ import re
 from utils.config.paths import REPORTS_DIR, resolve_path
 
 
+# ── Paleta visual limpa (fácil de ler em ecrã e impressão) ──────────────────
+_C = {
+    "ink": colors.HexColor("#1B2430"),
+    "muted": colors.HexColor("#5B6775"),
+    "soft": colors.HexColor("#8A96A3"),
+    "line": colors.HexColor("#D8DEE6"),
+    "line_strong": colors.HexColor("#B8C2CE"),
+    "surface": colors.HexColor("#F5F7FA"),
+    "surface_alt": colors.HexColor("#EEF2F6"),
+    "header_bg": colors.HexColor("#1F3A5F"),
+    "header_fg": colors.white,
+    "accent": colors.HexColor("#0F6CBD"),
+    "accent_soft": colors.HexColor("#E8F1FB"),
+    "success": colors.HexColor("#2D8B57"),
+    "warn": colors.HexColor("#E67E22"),
+    "danger": colors.HexColor("#D64545"),
+}
+
+
 class BasePDFReport:
     """
     Classe base para geração de relatórios em PDF.
-    Organiza por tipo de relatório / ano / mês,
-    valida nomes no Windows e evita sobrescrita de arquivos.
+    - Orientação horizontal (landscape) por omissão
+    - Layout limpo, legível e organizado
+    - Pastas: Relatórios/Tipo/AAAA-MM-DD/arquivo.pdf
     """
 
-    INVALID_CHARS_PATTERN = r'[<>:"/\\|?*]'  # Windows invalid chars
+    INVALID_CHARS_PATTERN = r'[<>:"/\\|?*]'
     CHART_PALETTE = (
         colors.HexColor("#0F6CBD"),
         colors.HexColor("#2D8B57"),
@@ -31,145 +60,472 @@ class BasePDFReport:
         colors.HexColor("#F4B400"),
     )
 
+    # Página em paisagem (horizontal)
+    PAGE_SIZE = landscape(A4)
+    # Margens equilibradas para não “esmagar” o conteúdo
+    MARGIN_LEFT = 16 * mm
+    MARGIN_RIGHT = 16 * mm
+    MARGIN_TOP = 14 * mm
+    MARGIN_BOTTOM = 14 * mm
+
     def __init__(self, output_dir=None):
         resolved_output_dir = output_dir or REPORTS_DIR
         self.base_output_dir = str(resolve_path(resolved_output_dir))
         self.styles = getSampleStyleSheet()
+        self._register_styles()
         self._ensure_directory(self.base_output_dir)
 
     # ─────────────────────────────────────────────
-    # 📁 GERENCIAMENTO DE DIRETÓRIOS
+    # Estilos tipográficos
     # ─────────────────────────────────────────────
+    def _register_styles(self):
+        self.styles.add(
+            ParagraphStyle(
+                name="ReportTitle",
+                fontName="Helvetica-Bold",
+                fontSize=18,
+                leading=22,
+                textColor=_C["ink"],
+                alignment=TA_LEFT,
+                spaceAfter=2,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="ReportSubtitle",
+                fontName="Helvetica",
+                fontSize=9,
+                leading=12,
+                textColor=_C["muted"],
+                alignment=TA_LEFT,
+                spaceAfter=0,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="SectionTitle",
+                fontName="Helvetica-Bold",
+                fontSize=11,
+                leading=14,
+                textColor=_C["ink"],
+                spaceBefore=10,
+                spaceAfter=6,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="BodyClean",
+                fontName="Helvetica",
+                fontSize=9,
+                leading=12,
+                textColor=_C["ink"],
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="MetaLabel",
+                fontName="Helvetica-Bold",
+                fontSize=8,
+                leading=10,
+                textColor=_C["muted"],
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="MetaValue",
+                fontName="Helvetica",
+                fontSize=8.5,
+                leading=11,
+                textColor=_C["ink"],
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="TableHeader",
+                fontName="Helvetica-Bold",
+                fontSize=8,
+                leading=10,
+                textColor=_C["header_fg"],
+                alignment=TA_LEFT,
+            )
+        )
+        # NOVO: cabeçalho alinhado à direita (colunas numéricas)
+        self.styles.add(
+            ParagraphStyle(
+                name="TableHeaderRight",
+                fontName="Helvetica-Bold",
+                fontSize=8,
+                leading=10,
+                textColor=_C["header_fg"],
+                alignment=TA_RIGHT,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="TableCell",
+                fontName="Helvetica",
+                fontSize=8,
+                leading=10,
+                textColor=_C["ink"],
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="TableCellRight",
+                fontName="Helvetica",
+                fontSize=8,
+                leading=10,
+                textColor=_C["ink"],
+                alignment=TA_RIGHT,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="FooterNote",
+                fontName="Helvetica",
+                fontSize=7.5,
+                leading=9,
+                textColor=_C["soft"],
+                alignment=TA_CENTER,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="KPIValue",
+                fontName="Helvetica-Bold",
+                fontSize=14,
+                leading=16,
+                textColor=_C["ink"],
+                alignment=TA_CENTER,
+            )
+        )
+        self.styles.add(
+            ParagraphStyle(
+                name="KPILabel",
+                fontName="Helvetica",
+                fontSize=7.5,
+                leading=9,
+                textColor=_C["muted"],
+                alignment=TA_CENTER,
+            )
+        )
+
     def _ensure_directory(self, path):
         if not os.path.exists(path):
             os.makedirs(path)
 
-    # ─────────────────────────────────────────────
-    # 🧹 LIMPEZA DE NOMES (WINDOWS SAFE)
-    # ─────────────────────────────────────────────
     def _sanitize_name(self, name: str) -> str:
-        """
-        Remove caracteres inválidos no Windows
-        """
-        name = re.sub(self.INVALID_CHARS_PATTERN, "", name)
+        name = re.sub(self.INVALID_CHARS_PATTERN, "", str(name or ""))
         return name.strip()
 
-    # ─────────────────────────────────────────────
-    # 🔁 EVITAR SOBRESCRITA DE PDF
-    # ─────────────────────────────────────────────
     def _resolve_duplicate_filename(self, directory, filename):
-        """
-        Se arquivo existir, cria nome com (1), (2), ...
-        """
         base, ext = os.path.splitext(filename)
         counter = 1
         new_filename = filename
-
         while os.path.exists(os.path.join(directory, new_filename)):
             new_filename = f"{base}({counter}){ext}"
             counter += 1
-
         return new_filename
 
-    # ─────────────────────────────────────────────
-    # 📄 CRIA NOME FINAL DO PDF
-    # ─────────────────────────────────────────────
     def _get_timestamp_filename(self, report_type: str):
-        """
-        Cria caminho final do PDF:
-        Relatórios/Tipo do Relatório/AAAA-MM-DD/arquivo.pdf
-        """
-
         now = datetime.now()
-
         safe_report_type = self._sanitize_name(report_type)
-
-        # 📅 Pasta de data completa (ÚLTIMA pasta)
         date_folder = now.strftime("%Y-%m-%d")
-
-        # ⏱️ Hora no nome do ficheiro
         time_part = now.strftime("%H-%M-%S")
-
-        # 📁 Diretório final
-        final_dir = os.path.join(
-            self.base_output_dir,
-            safe_report_type,
-            date_folder
-        )
+        final_dir = os.path.join(self.base_output_dir, safe_report_type, date_folder)
         self._ensure_directory(final_dir)
-
-        # 📄 Nome base do PDF
         base_filename = f"{safe_report_type.lower().replace(' ', '_')}_{time_part}.pdf"
         base_filename = self._sanitize_name(base_filename)
-
-        # 🔁 Evita sobrescrever ficheiros
-        final_filename = self._resolve_duplicate_filename(
-            final_dir,
-            base_filename
-        )
-
+        final_filename = self._resolve_duplicate_filename(final_dir, base_filename)
         return os.path.join(final_dir, final_filename)
 
     # ─────────────────────────────────────────────
-    # 🧾 CABEÇALHO PADRÃO
+    # Documento landscape pronto a usar
+    # ─────────────────────────────────────────────
+    def _create_document(self, filepath, title="Relatório NECTAR"):
+        """SimpleDocTemplate em orientação horizontal com margens limpas."""
+        return SimpleDocTemplate(
+            filepath,
+            pagesize=self.PAGE_SIZE,
+            leftMargin=self.MARGIN_LEFT,
+            rightMargin=self.MARGIN_RIGHT,
+            topMargin=self.MARGIN_TOP,
+            bottomMargin=self.MARGIN_BOTTOM,
+            title=title,
+            author="NECTAR",
+        )
+
+    def _usable_width(self):
+        return self.PAGE_SIZE[0] - self.MARGIN_LEFT - self.MARGIN_RIGHT
+
+    # ─────────────────────────────────────────────
+    # Cabeçalho limpo
     # ─────────────────────────────────────────────
     def _create_header(self, elements, title, report_type, filters):
-        header_style = ParagraphStyle(
-            'HeaderTitle',
-            parent=self.styles['Heading1'],
-            fontSize=26,
-            textColor=colors.HexColor('#2c3e50'),
-            spaceAfter=25,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
+        """Cabeçalho compacto: título + faixa de metadados em grelha."""
+        filters = filters or {}
+
+        # Título + tipo
+        title_block = [
+            Paragraph(str(title or "Relatório"), self.styles["ReportTitle"]),
+            Paragraph(
+                f"NECTAR  ·  {report_type}",
+                self.styles["ReportSubtitle"],
+            ),
+        ]
+        for block in title_block:
+            elements.append(block)
+
+        elements.append(Spacer(1, 6))
+        elements.append(
+            HRFlowable(
+                width="100%",
+                thickness=1.2,
+                color=_C["accent"],
+                spaceBefore=0,
+                spaceAfter=8,
+            )
         )
 
-        elements.append(Paragraph(f"<b>{title}</b>", header_style))
+        # Metadados em duas colunas (fácil de ler)
+        start = filters.get("start_date")
+        end = filters.get("end_date")
+        if hasattr(start, "strftime") and hasattr(end, "strftime"):
+            period = f"{start.strftime('%d/%m/%Y')} — {end.strftime('%d/%m/%Y')}"
+        else:
+            period = f"{start or '—'} — {end or '—'}"
 
-        info_data = [
-            ['Relatório:', report_type],
+        meta_rows = [
             [
-                'Período:',
-                f"{filters['start_date'].strftime('%d/%m/%Y')} até {filters['end_date'].strftime('%d/%m/%Y')}"
+                Paragraph("<b>Período</b>", self.styles["MetaLabel"]),
+                Paragraph(period, self.styles["MetaValue"]),
+                Paragraph("<b>Produto</b>", self.styles["MetaLabel"]),
+                Paragraph(
+                    str(filters.get("product", "Todos os produtos")),
+                    self.styles["MetaValue"],
+                ),
             ],
-            ['Produto:', filters.get('product', 'Todos os Produtos')],
-            ['Categoria:', filters.get('category', 'Todas as Categorias')],
-            ['Vendedor/Gerente:', filters.get('seller', 'Todos os Vendedores')],
-            ['Criado em:', datetime.now().strftime('%d/%m/%Y %H:%M:%S')],
+            [
+                Paragraph("<b>Categoria</b>", self.styles["MetaLabel"]),
+                Paragraph(
+                    str(filters.get("category", "Todas as categorias")),
+                    self.styles["MetaValue"],
+                ),
+                Paragraph("<b>Vendedor</b>", self.styles["MetaLabel"]),
+                Paragraph(
+                    str(filters.get("seller", "Todos os vendedores")),
+                    self.styles["MetaValue"],
+                ),
+            ],
+            [
+                Paragraph("<b>Criado em</b>", self.styles["MetaLabel"]),
+                Paragraph(
+                    datetime.now().strftime("%d/%m/%Y %H:%M"),
+                    self.styles["MetaValue"],
+                ),
+                Paragraph("<b>Tipo</b>", self.styles["MetaLabel"]),
+                Paragraph(str(report_type), self.styles["MetaValue"]),
+            ],
         ]
 
-        info_table = Table(info_data, colWidths=[2.8 * inch, 5.2 * inch])
-        info_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, -1), 11),
-            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#34495e')),
-            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#2c3e50')),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-        ]))
+        usable = self._usable_width()
+        col_w = [usable * 0.12, usable * 0.38, usable * 0.12, usable * 0.38]
+        meta = Table(meta_rows, colWidths=col_w)
+        meta.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), _C["surface"]),
+                    ("BOX", (0, 0), (-1, -1), 0.6, _C["line"]),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.3, _C["line"]),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        elements.append(meta)
+        elements.append(Spacer(1, 12))
 
-        elements.append(info_table)
-        elements.append(Spacer(1, 20))
-
-    # ─────────────────────────────────────────────
-    # 🔻 RODAPÉ PADRÃO
-    # ─────────────────────────────────────────────
-    def _create_footer(self, elements):
-        elements.append(Spacer(1, 30))
-
-        footer_style = ParagraphStyle(
-            'Footer',
-            parent=self.styles['Normal'],
-            fontSize=8,
-            textColor=colors.grey,
-            alignment=TA_CENTER
+    def _create_section_title(self, elements, text):
+        elements.append(Paragraph(str(text), self.styles["SectionTitle"]))
+        elements.append(
+            HRFlowable(
+                width="100%",
+                thickness=0.6,
+                color=_C["line_strong"],
+                spaceBefore=0,
+                spaceAfter=6,
+            )
         )
 
-        footer_text = f"Relatório criado em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
-        elements.append(Paragraph(footer_text, footer_style))
+    # ─────────────────────────────────────────────
+    # Tabela limpa (cabeçalho escuro, zebra suave)
+    # ─────────────────────────────────────────────
+    def _build_clean_table(
+        self,
+        headers,
+        rows,
+        col_widths=None,
+        numeric_cols=None,
+    ):
+        """
+        Tabela legível: header forte, linhas alternadas, padding generoso.
+
+        Colunas numéricas: cabeçalho E valores alinhados à direita
+        (o alinhamento de um Paragraph vem do estilo, não do TableStyle).
+        """
+        numeric_cols = set(numeric_cols or [])
+
+        # Cabeçalho: mesmo alinhamento que os valores da coluna
+        header_cells = [
+            Paragraph(
+                str(h),
+                self.styles["TableHeaderRight"]
+                if idx in numeric_cols
+                else self.styles["TableHeader"],
+            )
+            for idx, h in enumerate(headers)
+        ]
+        data = [header_cells]
+
+        for row in rows or []:
+            cells = []
+            for idx, cell in enumerate(row):
+                # Já é Flowable (ex.: Paragraph) — usar diretamente
+                if hasattr(cell, "wrap") and hasattr(cell, "drawOn"):
+                    cells.append(cell)
+                    continue
+                style = (
+                    self.styles["TableCellRight"]
+                    if idx in numeric_cols
+                    else self.styles["TableCell"]
+                )
+                text = "—" if cell is None else str(cell)
+                cells.append(Paragraph(text, style))
+            data.append(cells)
+
+        if col_widths is None:
+            usable = self._usable_width()
+            n = max(len(headers), 1)
+            col_widths = [usable / n] * n
+
+        table = Table(data, colWidths=col_widths, repeatRows=1)
+        style_cmds = [
+            ("BACKGROUND", (0, 0), (-1, 0), _C["header_bg"]),
+            ("TEXTCOLOR", (0, 0), (-1, 0), _C["header_fg"]),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 7.5),
+            ("FONTSIZE", (0, 1), (-1, -1), 8),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("BOX", (0, 0), (-1, -1), 0.7, _C["header_bg"]),
+            ("LINEBELOW", (0, 0), (-1, 0), 0, _C["header_bg"]),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_C["surface"], colors.white]),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.3, _C["line"]),
+        ]
+
+        for col in numeric_cols:
+            # Mais folga à direita nas colunas numéricas
+            style_cmds.append(("RIGHTPADDING", (col, 0), (col, -1), 10))
+            # E mais folga à esquerda na coluna de texto logo a seguir
+            nxt = col + 1
+            if nxt < len(headers) and nxt not in numeric_cols:
+                style_cmds.append(("LEFTPADDING", (nxt, 0), (nxt, -1), 12))
+
+        table.setStyle(TableStyle(style_cmds))
+        return table
 
     # ─────────────────────────────────────────────
-    # 🚫 MÉTODO ABSTRATO
+    # Cartões KPI (resumo no topo)
+    # ─────────────────────────────────────────────
+    def _build_kpi_row(self, kpis):
+        """
+        kpis: lista de dicts {label, value} ou tuplos (label, value)
+        Mostra até 5 indicadores lado a lado.
+        """
+        items = []
+        for item in (kpis or [])[:5]:
+            if isinstance(item, dict):
+                label = item.get("label", "")
+                value = item.get("value", "—")
+            else:
+                label = item[0] if len(item) > 0 else ""
+                value = item[1] if len(item) > 1 else "—"
+            items.append(
+                [
+                    Paragraph(str(value), self.styles["KPIValue"]),
+                    Paragraph(str(label), self.styles["KPILabel"]),
+                ]
+            )
+
+        if not items:
+            return Spacer(1, 1)
+
+        usable = self._usable_width()
+        n = len(items)
+        gap = 6
+        cell_w = (usable - gap * (n - 1)) / n
+
+        # Cada KPI é uma mini-tabela de 1 coluna
+        cells = []
+        for block in items:
+            inner = Table([block[0:1], block[1:2]], colWidths=[cell_w - 4])
+            inner.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), _C["accent_soft"]),
+                        ("BOX", (0, 0), (-1, -1), 0.6, _C["line"]),
+                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 6),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ]
+                )
+            )
+            cells.append(inner)
+
+        row = Table([cells], colWidths=[cell_w] * n)
+        row.setStyle(
+            TableStyle(
+                [
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), gap),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            )
+        )
+        return row
+
+    # ─────────────────────────────────────────────
+    # Rodapé
+    # ─────────────────────────────────────────────
+    def _create_footer(self, elements):
+        elements.append(Spacer(1, 16))
+        elements.append(
+            HRFlowable(
+                width="100%",
+                thickness=0.5,
+                color=_C["line"],
+                spaceBefore=0,
+                spaceAfter=6,
+            )
+        )
+        elements.append(
+            Paragraph(
+                f"NECTAR  ·  Relatório gerado em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}  ·  Uso interno",
+                self.styles["FooterNote"],
+            )
+        )
+
+    # ─────────────────────────────────────────────
+    # Helpers numéricos / texto
     # ─────────────────────────────────────────────
     def _to_float(self, value, default=0.0):
         try:
@@ -181,7 +537,7 @@ class BasePDFReport:
         return numeric
 
     def _truncate_text(self, value, max_len=28):
-        text = str(value or "").strip() or "Sem rotulo"
+        text = str(value or "").strip() or "Sem rótulo"
         if len(text) <= max_len:
             return text
         return text[: max_len - 3].rstrip() + "..."
@@ -196,17 +552,23 @@ class BasePDFReport:
             return str(int(numeric))
         return f"{numeric:.2f}"
 
+    # ─────────────────────────────────────────────
+    # Gráfico de barras (paisagem — mais largo)
+    # ─────────────────────────────────────────────
     def _build_bar_chart(
         self,
         title,
         items,
-        width=10.0 * inch,
-        max_items=7,
+        width=None,
+        max_items=8,
         value_formatter=None,
-        accent_color="#2c3e50",
+        accent_color="#0F6CBD",
         sort_items=True,
         empty_message="Não há dados para mostrar neste gráfico.",
     ):
+        if width is None:
+            width = self._usable_width()
+
         normalized = []
         for item in items or []:
             if isinstance(item, dict):
@@ -214,64 +576,67 @@ class BasePDFReport:
                 value = self._to_float(item.get("value"))
                 color = item.get("color")
             else:
-                label = item[0] if len(item) > 0 else "Sem rotulo"
+                label = item[0] if len(item) > 0 else "Sem rótulo"
                 value = self._to_float(item[1] if len(item) > 1 else 0)
                 color = item[2] if len(item) > 2 else None
             if color is not None and isinstance(color, str):
                 color = colors.HexColor(color)
-            normalized.append((self._truncate_text(label, 30), value, color))
+            normalized.append((self._truncate_text(label, 32), value, color))
 
         if sort_items:
             normalized.sort(key=lambda row: row[1], reverse=True)
         if max_items:
             normalized = normalized[:max_items]
 
-        title_color = colors.HexColor(accent_color) if isinstance(accent_color, str) else accent_color
+        title_color = (
+            colors.HexColor(accent_color)
+            if isinstance(accent_color, str)
+            else accent_color
+        )
         if not normalized:
-            drawing = Drawing(width, 82)
-            drawing.add(String(16, 58, title, fontName="Helvetica-Bold", fontSize=12, fillColor=title_color))
+            drawing = Drawing(width, 72)
             drawing.add(
                 String(
-                    16,
-                    34,
+                    12,
+                    48,
+                    title,
+                    fontName="Helvetica-Bold",
+                    fontSize=11,
+                    fillColor=title_color,
+                )
+            )
+            drawing.add(
+                String(
+                    12,
+                    28,
                     empty_message,
                     fontName="Helvetica",
                     fontSize=9,
-                    fillColor=colors.HexColor("#7f8c8d"),
+                    fillColor=_C["soft"],
                 )
             )
             return drawing
 
         max_value = max(max(value for _, value, _ in normalized), 1.0)
-        left_padding = 18
-        label_width = min(190, width * 0.28)
-        value_width = 104
+        left_padding = 14
+        label_width = min(200, width * 0.26)
+        value_width = 96
         chart_x = left_padding + label_width
-        chart_width = max(120, width - chart_x - value_width - 18)
-        row_height = 26
-        bar_height = 14
-        axis_y = 20
-        height = 78 + (len(normalized) * row_height)
+        chart_width = max(140, width - chart_x - value_width - 14)
+        row_height = 24
+        bar_height = 13
+        axis_y = 18
+        height = 70 + (len(normalized) * row_height)
         drawing = Drawing(width, height)
 
         drawing.add(
             String(
                 left_padding,
-                height - 18,
+                height - 16,
                 title,
                 fontName="Helvetica-Bold",
-                fontSize=12,
+                fontSize=11,
                 fillColor=title_color,
-            )
-        )
-        drawing.add(
-            String(
-                left_padding,
-                height - 32,
-                "Os valores aparecem no fim de cada barra.",
-                fontName="Helvetica",
-                fontSize=7.8,
-                fillColor=colors.HexColor("#7f8c8d"),
             )
         )
         drawing.add(
@@ -280,48 +645,49 @@ class BasePDFReport:
                 axis_y,
                 chart_x + chart_width,
                 axis_y,
-                strokeColor=colors.HexColor("#d8dee6"),
-                strokeWidth=0.8,
+                strokeColor=_C["line"],
+                strokeWidth=0.7,
             )
         )
         drawing.add(
             String(
                 chart_x,
-                axis_y - 11,
+                axis_y - 10,
                 "0",
                 fontName="Helvetica",
                 fontSize=7,
-                fillColor=colors.HexColor("#8a96a3"),
+                fillColor=_C["soft"],
             )
         )
         max_label = self._format_chart_value(max_value, value_formatter)
         drawing.add(
             String(
-                chart_x + chart_width - max(18, len(max_label) * 4),
-                axis_y - 11,
+                chart_x + chart_width - max(16, len(max_label) * 3.8),
+                axis_y - 10,
                 max_label,
                 fontName="Helvetica",
                 fontSize=7,
-                fillColor=colors.HexColor("#8a96a3"),
+                fillColor=_C["soft"],
             )
         )
 
-        first_bar_y = height - 58
+        first_bar_y = height - 52
         for index, (label, value, color) in enumerate(normalized):
             fill_color = color or self.CHART_PALETTE[index % len(self.CHART_PALETTE)]
             bar_y = first_bar_y - (index * row_height)
-            bar_width = 0 if value <= 0 else max(6, chart_width * (value / max_value))
+            bar_width = 0 if value <= 0 else max(5, chart_width * (value / max_value))
             bar_width = min(chart_width, bar_width)
 
+            # Pista de fundo
             drawing.add(
                 Rect(
                     chart_x,
                     bar_y,
                     chart_width,
                     bar_height,
-                    fillColor=colors.HexColor("#eef2f6"),
-                    strokeColor=colors.HexColor("#d8dee6"),
-                    strokeWidth=0.45,
+                    fillColor=_C["surface_alt"],
+                    strokeColor=_C["line"],
+                    strokeWidth=0.4,
                 )
             )
             if bar_width > 0:
@@ -336,33 +702,34 @@ class BasePDFReport:
                     )
                 )
 
+            # Marcador de cor + rótulo
             drawing.add(
                 Rect(
                     left_padding,
-                    bar_y + 2,
-                    10,
-                    10,
+                    bar_y + 1.5,
+                    9,
+                    9,
                     fillColor=fill_color,
                     strokeColor=fill_color,
                 )
             )
             drawing.add(
                 String(
-                    left_padding + 16,
-                    bar_y + 2,
+                    left_padding + 14,
+                    bar_y + 1.5,
                     label,
                     fontName="Helvetica-Bold",
-                    fontSize=8.5,
-                    fillColor=colors.HexColor("#2c3e50"),
+                    fontSize=8,
+                    fillColor=_C["ink"],
                 )
             )
             drawing.add(
                 String(
-                    chart_x + chart_width + 12,
-                    bar_y + 2,
+                    chart_x + chart_width + 10,
+                    bar_y + 1.5,
                     self._format_chart_value(value, value_formatter),
                     fontName="Helvetica-Bold",
-                    fontSize=8.5,
+                    fontSize=8,
                     fillColor=fill_color,
                 )
             )

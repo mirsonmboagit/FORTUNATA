@@ -101,11 +101,12 @@ class DatabasePerformanceTests(TemporaryDatabaseTestCase):
 
 def test_log_row_reuses_widgets_and_resets_text_and_theme():
     from kivy.app import App
-    from kivymd.app import MDApp
+    from ui.components.native_widgets import NativeTheme
     from admin.admin_home_screen import AdminLogsDialog, RecycledLogCard
 
     previous = App.get_running_app()
-    app = MDApp()
+    app = App()
+    app.theme_cls = NativeTheme()
     app.theme_tokens = {}
     try:
         controller = AdminLogsDialog()

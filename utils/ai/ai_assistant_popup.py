@@ -12,13 +12,12 @@ from kivy.metrics import dp
 from kivy.properties import NumericProperty, ListProperty, StringProperty
 from kivy.uix.popup import Popup
 from kivy.uix.widget import Widget
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.card import MDCard
-from kivymd.uix.label import MDLabel
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.scrollview import MDScrollView
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
+    NativeCard as MDCard, NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton, NativeLabel as MDLabel,
+    NativeScrollView as MDScrollView, NativeTextField as MDTextField,
+)
 
 from utils.ai.ai_insights import answer_management_question, can_use_ai_api, build_admin_insights
 

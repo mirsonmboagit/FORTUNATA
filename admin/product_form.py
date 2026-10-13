@@ -2,6 +2,7 @@
 import re
 import unicodedata
 from datetime import datetime
+import calendar
 from threading import Lock, Thread
 
 from kivy.uix.screenmanager import Screen
@@ -9,23 +10,30 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.image import Image
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics.texture import Texture
 from kivy.graphics import Color, RoundedRectangle
 from kivy.core.window import Window
+from kivy.uix.modalview import ModalView
 from kivy.core.audio import SoundLoader
 from kivy.clock import Clock
 from kivy.animation import Animation
 from kivy.metrics import dp, sp
 from kivy.app import App
 
-from kivymd.uix.button import MDRaisedButton, MDFlatButton
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.selectioncontrol import MDSwitch
-from kivymd.uix.card import MDCard
-from kivymd.uix.pickers import MDDatePicker
+from ui.components.native_widgets import (
+    NativeButton as MDRaisedButton,
+    NativeIcon as MDIcon,
+    NativeCard as MDCard,
+    NativeDatePicker as MDDatePicker,
+    NativeDialog as MDDialog,
+    NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton,
+    NativeSwitch as MDSwitch,
+    NativeTextField as MDTextField,
+)
 from ui.components.tooltip_widgets import (
     TooltipFlatButton,
     TooltipIconButton,
@@ -250,31 +258,45 @@ class ProductForm(Screen):
             if self.COLOR_CARD_ALT[0] > 0.45: self.COLOR_CARD_ALT = (0.20, 0.22, 0.25, 1)
 
     def _style_field(self, field):
-        field.line_color_normal = (*self.COLOR_ERROR[:3], 0.95)
-        field.line_color_focus  = (*self.COLOR_ERROR[:3], 1)
-        field.hint_text_color   = self.COLOR_ERROR
+        # Campo vazio não é erro. O visual outlined neutro aproxima-se do
+        # MDTextField e deixa o vermelho reservado à validação efetiva.
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        field.md_bg_color = tokens.get("surface_alt", self.COLOR_CARD_ALT)
+        field.radius = [dp(10)]
+        field.padding = [dp(12), dp(10), dp(12), dp(8)]
+        field.line_color_normal = tokens.get("outline", (0.45, 0.48, 0.55, 1))
+        field.line_color_focus = self.COLOR_PRIMARY
+        field.hint_text_color = self.COLOR_GRAY
+        field.foreground_color = self.COLOR_TEXT
         if hasattr(field, "cursor_color"):
-            field.cursor_color = self.COLOR_TEXT
+            field.cursor_color = self.COLOR_PRIMARY
         self._update_field_color(field, field.text)
         field.bind(text=self._update_field_color)
 
     def _update_field_color(self, field, text):
         filled = bool((text or "").strip())
-        color = self.COLOR_SUCCESS if filled else self.COLOR_ERROR
-        field.hint_text_color   = color
-        field.line_color_normal = (*color[:3], 0.95)
-        field.line_color_focus  = (*color[:3], 1)
-        field.text_color        = self.COLOR_TEXT if filled else color
-        field.text_color_normal = field.text_color
-        field.text_color_focus  = self.COLOR_TEXT if filled else color
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        neutral = tokens.get("outline", (0.45, 0.48, 0.55, 1))
+        # Uma presença discreta de sucesso apenas nos campos preenchidos;
+        # mantém o foco no azul principal e elimina o aspecto de formulário
+        # permanentemente em erro.
+        field.hint_text_color = self.COLOR_GRAY
+        field.line_color_normal = (*self.COLOR_SUCCESS[:3], 0.72) if filled else neutral
+        field.line_color_focus = self.COLOR_PRIMARY
+        field.foreground_color = self.COLOR_TEXT
+        field.text_color = self.COLOR_TEXT
+        field.text_color_normal = self.COLOR_TEXT
+        field.text_color_focus = self.COLOR_TEXT
 
     # -- Build UI -----------------------------------------------------------
     def _build_ui(self):
         main_card = MDCard(
             orientation = "vertical",
-            padding     = 0,
+            padding     = dp(10),
             spacing     = 0,
-            radius      = [0],
+            radius      = [dp(16)],
             md_bg_color = self.COLOR_CARD,
             elevation   = 0,
         )
@@ -302,15 +324,15 @@ class ProductForm(Screen):
         header = MDCard(
             orientation = "horizontal",
             size_hint_y = None,
-            height      = dp(50),
-            padding     = [dp(14), dp(6), dp(8), dp(6)],
-            radius      = [0],
-            md_bg_color = self.COLOR_CARD,
-            elevation   = 0,
+            height      = dp(58),
+            padding     = [dp(16), dp(8), dp(10), dp(8)],
+            radius      = [dp(14)],
+            md_bg_color = self.COLOR_PRIMARY,
+            elevation   = 2,
         )
         title_label = Label(
             text        = "Adicionar Produto" if not self.product else "Editar Produto",
-            color       = self.COLOR_TEXT,
+            color       = (1, 1, 1, 1),
             font_size   = sp(16),
             bold        = True,
             halign      = "left",
@@ -318,18 +340,26 @@ class ProductForm(Screen):
             size_hint_x = 0.9,
         )
         title_label.bind(size=title_label.setter("text_size"))
-        rules_btn = TooltipIconButton(
-            icon="tune-variant",
+        rules_btn = TooltipRaisedButton(
+            text="Regras",
             theme_text_color="Custom",
-            text_color=self.COLOR_PRIMARY,
-            hint_text="Definir regras comerciais e margem de lucro",
+            text_color=(1, 1, 1, 1),
+            md_bg_color=[1, 1, 1, 0.18],
+            radius=[dp(12)],
+            size_hint=(None, None),
+            size=(dp(110), dp(36)),
+            elevation=0,
+            tooltip_text="Definir regras comerciais e margem de lucro",
             on_release=lambda *_: self._open_business_rules_dialog(),
             pos_hint={"center_y": 0.5},
         )
         close_btn = TooltipIconButton(
             icon             = "arrow-left",
             theme_text_color = "Custom",
-            text_color       = self.COLOR_TEXT,
+            text_color       = (1, 1, 1, 1),
+            md_bg_color      = [1, 1, 1, 0.14],
+            radius           = [dp(18)],
+            size_hint        = (None, None), size=(dp(36), dp(36)),
             hint_text        = "Voltar ao catalogo (Esc)",
             on_release       = self.dismiss,
             pos_hint         = {"center_y": 0.5},
@@ -342,85 +372,211 @@ class ProductForm(Screen):
     # -- Camera -------------------------------------------------------------
     def _build_section_title(self, text):
         """Cabecalho reutilizavel para manter as secoes do formulario alinhadas."""
+        row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(8),
+            padding=[dp(2), 0],
+        )
+        accent = BoxLayout(
+            size_hint=(None, None),
+            size=(dp(4), dp(18)),
+            pos_hint={"center_y": 0.5},
+        )
+        with accent.canvas.before:
+            from kivy.graphics import Color, RoundedRectangle
+            Color(*self.COLOR_PRIMARY)
+            accent._accent_rect = RoundedRectangle(
+                pos=accent.pos, size=accent.size, radius=[dp(2)],
+            )
+        accent.bind(
+            pos=lambda i, *_: setattr(i._accent_rect, "pos", i.pos),
+            size=lambda i, *_: setattr(i._accent_rect, "size", i.size),
+        )
         label = Label(
             text=text,
-            size_hint_y=None,
-            height=dp(36),
             color=self.COLOR_TEXT,
             font_size=sp(16),
             bold=True,
             halign="left",
             valign="middle",
-            padding=[dp(2), 0],
         )
         label.bind(size=label.setter("text_size"))
-        return label
+        row.add_widget(accent)
+        row.add_widget(label)
+        return row
 
     def _build_camera_section(self):
-        outer = MDCard(
-            orientation = "vertical",
-            size_hint   = (None, 1),
-            width       = dp(332),
-            padding     = dp(14),
-            spacing     = dp(10),
-            radius      = [dp(12)],
-            md_bg_color = self.COLOR_CARD_ALT,
-            elevation   = 0,
+        """Painel fixo do scanner — preview, estado e botoes sempre no mesmo sitio."""
+        outer = BoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            padding=[dp(10), dp(10), dp(10), dp(10)],
+            size_hint=(None, 1),
+            width=dp(300),
         )
+        self._scanner_panel = outer
 
-        outer.add_widget(self._build_section_title("Scanner de código"))
+        # Titulo do painel
+        title = Label(
+            text="Scanner",
+            font_size=sp(14),
+            bold=True,
+            color=self.COLOR_TEXT,
+            size_hint_y=None,
+            height=dp(22),
+            halign="left",
+            valign="middle",
+        )
+        title.bind(size=title.setter("text_size"))
+        outer.add_widget(title)
 
+        # Cartao do preview (proporcao estavel)
         camera_card = MDCard(
+            orientation="vertical",
             size_hint=(1, None),
-            height=dp(300),
-            radius=[dp(10)],
-            md_bg_color=self.COLOR_PRIMARY,
-            elevation=3,
+            height=dp(240),
+            radius=[dp(14)],
+            elevation=0,
+            md_bg_color=(0.10, 0.12, 0.16, 1),
+            padding=[dp(4), dp(4), dp(4), dp(4)],
         )
         self._camera_card = camera_card
-        camera_card.bind(width=lambda inst, val: setattr(inst, "height", max(dp(220), min(val, dp(360)))))
-        self.camera_image = Image(fit_mode="contain")
-        camera_card.add_widget(self.camera_image)
+
+        preview_root = FloatLayout(size_hint=(1, 1))
+
+        self.camera_image = Image(
+            size_hint=(1, 1),
+            allow_stretch=True,
+            keep_ratio=True,
+            pos_hint={"x": 0, "y": 0},
+        )
+        preview_root.add_widget(self.camera_image)
+
+        # Placeholder escuro (so visivel com scanner parado)
+        self._camera_placeholder = BoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            size_hint=(1, 1),
+            pos_hint={"x": 0, "y": 0},
+        )
+        with self._camera_placeholder.canvas.before:
+            self._ph_bg_color = Color(0.10, 0.12, 0.16, 1)
+            self._ph_bg_rect = RoundedRectangle(radius=[dp(10)])
+
+        def _sync_ph(*_a):
+            self._ph_bg_rect.pos = self._camera_placeholder.pos
+            self._ph_bg_rect.size = self._camera_placeholder.size
+
+        self._camera_placeholder.bind(pos=_sync_ph, size=_sync_ph)
+
+        ph_icon = Label(
+            text="[  ]",
+            font_size=sp(28),
+            color=(0.45, 0.52, 0.62, 1),
+            size_hint_y=None,
+            height=dp(36),
+            halign="center",
+        )
+        try:
+            ph_icon = MDIcon(
+                icon="camera-off-outline",
+                theme_text_color="Custom",
+                text_color=(0.45, 0.52, 0.62, 1),
+                size_hint=(None, None),
+                size=(dp(36), dp(36)),
+                pos_hint={"center_x": 0.5},
+            )
+        except Exception:
+            pass
+
+        ph_text = Label(
+            text="Camara desligada\nToque no botao para iniciar",
+            font_size=sp(12),
+            color=(0.55, 0.62, 0.72, 1),
+            halign="center",
+            valign="middle",
+            size_hint_y=None,
+            height=dp(40),
+        )
+        ph_text.bind(size=ph_text.setter("text_size"))
+
+        self._camera_placeholder.add_widget(BoxLayout(size_hint_y=0.35))
+        self._camera_placeholder.add_widget(ph_icon)
+        self._camera_placeholder.add_widget(ph_text)
+        self._camera_placeholder.add_widget(BoxLayout(size_hint_y=0.35))
+        preview_root.add_widget(self._camera_placeholder)
+
+        camera_card.add_widget(preview_root)
         outer.add_widget(camera_card)
 
+        # Estado
         self.scanner_status = Label(
-            text="", size_hint_y=None, height=dp(20),
-            color=self.COLOR_GRAY, font_size=sp(12), bold=True,
-            halign="center", valign="middle",
+            text="Scanner parado",
+            size_hint_y=None,
+            height=dp(22),
+            color=self.COLOR_GRAY,
+            font_size=sp(12),
+            bold=True,
+            halign="center",
+            valign="middle",
         )
         outer.add_widget(self.scanner_status)
 
-        btn_row = BoxLayout(size_hint=(None, None), height=dp(40), width=dp(92), spacing=dp(12))
+        # Botoes centrados
+        btn_row = BoxLayout(
+            size_hint=(None, None),
+            height=dp(44),
+            width=dp(104),
+            spacing=dp(12),
+        )
         self.scan_btn = TooltipIconButton(
-            icon="barcode-scan", theme_text_color="Custom", text_color=(1,1,1,1),
-            md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(40), dp(40)),
+            icon="barcode-scan",
+            theme_text_color="Custom",
+            text_color=(1, 1, 1, 1),
+            md_bg_color=self.COLOR_PRIMARY,
+            size_hint=(None, None),
+            size=(dp(44), dp(44)),
+            radius=[dp(22)],
+            elevation=2,
             hint_text="Iniciar ou parar scanner (Alt+B)",
             on_release=self._toggle_scanner,
         )
         switch_btn = TooltipIconButton(
-            icon="camera-switch", theme_text_color="Custom", text_color=(1,1,1,1),
-            md_bg_color=self.COLOR_GRAY, size_hint=(None, None), size=(dp(40), dp(40)),
+            icon="camera-switch",
+            theme_text_color="Custom",
+            text_color=(1, 1, 1, 1),
+            md_bg_color=(0.35, 0.38, 0.45, 1),
+            size_hint=(None, None),
+            size=(dp(44), dp(44)),
+            radius=[dp(22)],
+            elevation=1,
             hint_text="Trocar camera (Alt+M)",
             on_release=self._switch_camera,
         )
         btn_row.add_widget(self.scan_btn)
         btn_row.add_widget(switch_btn)
-        wrapper = AnchorLayout(size_hint_y=None, height=dp(40))
+        wrapper = AnchorLayout(size_hint_y=None, height=dp(52))
         wrapper.add_widget(btn_row)
         outer.add_widget(wrapper)
 
         hint = Label(
-            text="Posicione o codigo de barras",
-            size_hint_y=None, height=dp(28),
-            color=self.COLOR_GRAY, font_size=sp(12), halign="center", valign="middle",
+            text="Posicione o codigo de barras na area da camara",
+            size_hint_y=None,
+            height=dp(28),
+            color=self.COLOR_GRAY,
+            font_size=sp(11),
+            halign="center",
+            valign="middle",
         )
+        hint.bind(size=hint.setter("text_size"))
         outer.add_widget(hint)
-        # Absorve a altura livre no fundo e mantem o cabecalho no topo,
-        # alinhado com a secao de informacoes.
+
+        # Espaco flexivel no fundo — mantem o bloco alinhado ao topo
         outer.add_widget(BoxLayout(size_hint_y=1))
         return outer
 
-    # -- Form ---------------------------------------------------------------
     def _build_form_section(self):
         self._create_form_fields()
 
@@ -431,7 +587,9 @@ class ProductForm(Screen):
             spacing=dp(8),
             radius=[dp(12)],
             md_bg_color=self.COLOR_CARD_ALT,
-            elevation=0,
+            line_color=(*self.COLOR_PRIMARY[:3], 0.16),
+            line_width=1,
+            elevation=1,
         )
         sec.add_widget(self._build_section_title("Informações do produto"))
 
@@ -516,12 +674,14 @@ class ProductForm(Screen):
         dropdown_btn = TooltipIconButton(
             icon="menu-down", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=1,
             hint_text="Selecionar categoria (Alt+C)",
             pos_hint={"center_y": 0.5}, on_release=self._open_category_menu,
         )
         add_cat_btn = TooltipIconButton(
             icon="plus", theme_text_color="Custom", text_color=(1,1,1,1),
             md_bg_color=self.COLOR_PRIMARY, size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=1,
             hint_text="Adicionar categoria",
             pos_hint={"center_y": 0.5}, on_release=self._show_category_form,
         )
@@ -544,6 +704,7 @@ class ProductForm(Screen):
             icon="menu-down", theme_text_color="Custom", text_color=(1, 1, 1, 1),
             md_bg_color=self.COLOR_PRIMARY,
             size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=1,
             hint_text="Selecionar criterio de IVA (Alt+I)",
             pos_hint={"center_y": 0.5}, on_release=self._open_vat_menu,
         )
@@ -583,6 +744,7 @@ class ProductForm(Screen):
         cal_btn = TooltipIconButton(
             icon="calendar", theme_text_color="Custom", text_color=self.COLOR_PRIMARY,
             size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=1,
             hint_text="Escolher validade (Alt+V)",
             pos_hint={"center_y": 0.5}, on_release=self._show_date_picker,
         )
@@ -610,13 +772,14 @@ class ProductForm(Screen):
         )
         peso_lbl.bind(size=lambda i, *_: setattr(i, "text_size", (i.width, None)))
         self.weight_state_btn = TooltipRaisedButton(
-            text="INATIVO",
+            text="○ INATIVO",
             tooltip_text="Alternar modo KG (Alt+K)",
             md_bg_color=(0.45, 0.45, 0.48, 1),
             text_color=(1, 1, 1, 1),
             font_size=sp(11),
             size_hint=(None, None),
-            size=(dp(102), dp(32)),
+            size=(dp(118), dp(34)),
+            radius=[dp(17)], elevation=1,
             on_release=self._toggle_weight_button,
         )
         self.is_sold_by_weight_switch = self.weight_state_btn
@@ -647,13 +810,14 @@ class ProductForm(Screen):
         )
         pack_lbl.bind(size=lambda i, *_: setattr(i, "text_size", (i.width, None)))
         self.pack_sale_state_btn = TooltipRaisedButton(
-            text="INATIVO",
+            text="○ INATIVO",
             tooltip_text="Alternar venda por embalagem (Alt+E)",
             md_bg_color=(0.45, 0.45, 0.48, 1),
             text_color=(1, 1, 1, 1),
             font_size=sp(11),
             size_hint=(None, None),
-            size=(dp(102), dp(32)),
+            size=(dp(118), dp(34)),
+            radius=[dp(17)], elevation=1,
             on_release=self._toggle_pack_sale_button,
         )
         self.allow_pack_sale_switch = self.pack_sale_state_btn
@@ -673,7 +837,18 @@ class ProductForm(Screen):
         self.sale_price.bind(text=self._on_sale_price_text_change)
 
         self.produce_mode_btn = TooltipRaisedButton(
-            text="Stock exato", tooltip_text="Alternar para sacos com venda avulsa, sem peso obrigatorio",
+            text="📦  Stock exato",
+            tooltip_text="Alternar para sacos com venda avulsa, sem peso obrigatorio",
+            md_bg_color=self.COLOR_CARD_ALT,
+            theme_text_color="Custom",
+            text_color=self.COLOR_TEXT,
+            font_size=self.FONT_SIZE_SM,
+            size_hint=(1, None),
+            height=self.FIELD_H,
+            radius=[dp(10)],
+            elevation=0,
+            line_color=(*self.COLOR_GRAY[:3], 0.35),
+            line_width=1,
             on_release=lambda *_: self._set_produce_mode(not self._produce_mode),
         )
         self._produce_mode = False
@@ -684,11 +859,11 @@ class ProductForm(Screen):
     # -- Price actions ------------------------------------------------------
     def _build_price_actions(self):
         layout = BoxLayout(
-            orientation="horizontal", size_hint=(1, None), height=dp(36), spacing=dp(8),
+            orientation="horizontal", size_hint=(1, None), height=dp(40), spacing=dp(8),
         )
         lbl = Label(
-            text="Desconto rapido:", color=self.COLOR_GRAY, font_size=self.FONT_SIZE_SM,
-            size_hint=(None, 1), width=dp(112), halign="left", valign="middle",
+            text="Desconto rápido:", color=self.COLOR_GRAY, font_size=self.FONT_SIZE_SM,
+            size_hint=(None, 1), width=dp(118), halign="left", valign="middle",
         )
         lbl.bind(size=lambda i, *_: setattr(i, "text_size", (i.width, None)))
         layout.add_widget(lbl)
@@ -696,19 +871,31 @@ class ProductForm(Screen):
         self._price_discount_buttons = []
         for pct in (5, 10, 15, 20):
             btn = MDFlatButton(
-                text=f"-{pct}%", theme_text_color="Custom",
+                text=f"−{pct}%", theme_text_color="Custom",
                 text_color=self.COLOR_PRIMARY, md_bg_color=self.COLOR_CARD_ALT,
-                size_hint=(None, 1), width=dp(56), font_size=self.FONT_SIZE_SM,
+                size_hint=(None, None), size=(dp(58), dp(34)), font_size=self.FONT_SIZE_SM,
+                radius=[dp(17)], line_color=(*self.COLOR_PRIMARY[:3], 0.45), line_width=1,
             )
             btn.bind(on_release=lambda _b, p=pct: self._apply_quick_discount(p))
             layout.add_widget(btn)
             self._price_discount_buttons.append(btn)
 
-        self._price_revert_btn = MDFlatButton(
-            text="Reverter", theme_text_color="Custom",
-            text_color=self.COLOR_TEXT, md_bg_color=self.COLOR_CARD_ALT,
-            size_hint=(None, 1), width=dp(80), font_size=self.FONT_SIZE_SM,
-        )
+        try:
+            self._price_revert_btn = MDFlatButton(
+                text="Reverter", icon="undo",
+                theme_text_color="Custom",
+                text_color=self.COLOR_TEXT, md_bg_color=self.COLOR_CARD_ALT,
+                size_hint=(None, None), size=(dp(110), dp(34)), font_size=self.FONT_SIZE_SM,
+                radius=[dp(17)], line_color=(*self.COLOR_GRAY[:3], 0.40), line_width=1,
+            )
+        except TypeError:
+            self._price_revert_btn = MDFlatButton(
+                text="↺  Reverter",
+                theme_text_color="Custom",
+                text_color=self.COLOR_TEXT, md_bg_color=self.COLOR_CARD_ALT,
+                size_hint=(None, None), size=(dp(110), dp(34)), font_size=self.FONT_SIZE_SM,
+                radius=[dp(17)], line_color=(*self.COLOR_GRAY[:3], 0.40), line_width=1,
+            )
         self._price_revert_btn.bind(on_release=self._restore_sale_price)
         layout.add_widget(self._price_revert_btn)
         layout.add_widget(BoxLayout(size_hint_x=1))
@@ -718,21 +905,81 @@ class ProductForm(Screen):
     # -- Action buttons -----------------------------------------------------
     def _build_action_buttons(self):
         layout = BoxLayout(
-            orientation="horizontal", size_hint=(1, None), height=self.BUTTON_H, spacing=dp(10),
+            orientation="horizontal",
+            size_hint=(1, None),
+            height=dp(48),
+            spacing=dp(12),
+            padding=[0, dp(4), 0, 0],
         )
         layout.add_widget(BoxLayout(size_hint_x=1))
-        self._cancel_btn = TooltipFlatButton(
-            text="Cancelar", theme_text_color="Custom",
-            tooltip_text="Cancelar e fechar (Esc)",
-            text_color=self.COLOR_TEXT, md_bg_color=self.COLOR_CARD_ALT,
-            font_size=self.FONT_SIZE, size_hint=(None, 1), width=dp(120), on_release=self.dismiss,
-        )
-        self._save_btn = TooltipRaisedButton(
-            text="Salvar" if self.product else "Cadastrar",
-            tooltip_text="Salvar produto (Ctrl+S ou Ctrl+Enter)",
-            md_bg_color=self.COLOR_SUCCESS, font_size=self.FONT_SIZE,
-            size_hint=(None, 1), width=dp(130), on_release=self._save_product,
-        )
+
+        save_label = "Salvar" if self.product else "Cadastrar"
+        save_icon = "content-save" if self.product else "plus-circle"
+
+        # Botões com ícone + texto (Tooltip* aceita icon quando disponível)
+        try:
+            self._cancel_btn = TooltipFlatButton(
+                text="Cancelar",
+                icon="close-circle-outline",
+                theme_text_color="Custom",
+                tooltip_text="Cancelar e fechar (Esc)",
+                text_color=self.COLOR_TEXT,
+                md_bg_color=self.COLOR_CARD_ALT,
+                font_size=self.FONT_SIZE,
+                size_hint=(None, None),
+                size=(dp(140), dp(44)),
+                radius=[dp(12)],
+                line_color=(*self.COLOR_GRAY[:3], 0.50),
+                line_width=1,
+                on_release=self.dismiss,
+            )
+        except TypeError:
+            self._cancel_btn = TooltipFlatButton(
+                text="✕  Cancelar",
+                theme_text_color="Custom",
+                tooltip_text="Cancelar e fechar (Esc)",
+                text_color=self.COLOR_TEXT,
+                md_bg_color=self.COLOR_CARD_ALT,
+                font_size=self.FONT_SIZE,
+                size_hint=(None, None),
+                size=(dp(140), dp(44)),
+                radius=[dp(12)],
+                line_color=(*self.COLOR_GRAY[:3], 0.50),
+                line_width=1,
+                on_release=self.dismiss,
+            )
+
+        try:
+            self._save_btn = TooltipRaisedButton(
+                text=save_label,
+                icon=save_icon,
+                tooltip_text="Salvar produto (Ctrl+S ou Ctrl+Enter)",
+                md_bg_color=self.COLOR_SUCCESS,
+                theme_text_color="Custom",
+                text_color=(1, 1, 1, 1),
+                font_size=self.FONT_SIZE,
+                size_hint=(None, None),
+                size=(dp(150), dp(44)),
+                radius=[dp(12)],
+                elevation=2,
+                on_release=self._save_product,
+            )
+        except TypeError:
+            prefix = "💾  " if self.product else "＋  "
+            self._save_btn = TooltipRaisedButton(
+                text=prefix + save_label,
+                tooltip_text="Salvar produto (Ctrl+S ou Ctrl+Enter)",
+                md_bg_color=self.COLOR_SUCCESS,
+                theme_text_color="Custom",
+                text_color=(1, 1, 1, 1),
+                font_size=self.FONT_SIZE,
+                size_hint=(None, None),
+                size=(dp(150), dp(44)),
+                radius=[dp(12)],
+                elevation=2,
+                on_release=self._save_product,
+            )
+
         layout.add_widget(self._cancel_btn)
         layout.add_widget(self._save_btn)
         return layout
@@ -821,70 +1068,94 @@ class ProductForm(Screen):
 
     # -- Window resize ------------------------------------------------------
     def _update_responsive_layout(self):
-        if not self._content_layout or not self._content_scroll:
+        """Layout limpo e previsivel.
+
+        wide/medium: camera | formulario (horizontal)
+        compact:     camera em cima (altura fixa) + formulario em baixo
+        """
+        if not self._content_layout:
             return
 
-        # A largura do Screen e a referencia correta. Window.width pode ser
-        # grande enquanto o formulario e apresentado numa area menor.
-        viewport_width = self.width or self._content_scroll.width or Window.width
-        compact = viewport_width < dp(980)
-        narrow = viewport_width < dp(760)
-        self._compact_layout = compact
+        viewport_width = float(self.width or Window.width or 1000)
+        viewport_height = float(self.height or Window.height or 700)
 
-        # Em janelas estreitas cada par vira uma pilha. Em larguras normais,
-        # os campos regressam automaticamente a duas colunas.
-        for form_row in self._form_rows:
+        if viewport_width >= dp(1000):
+            mode = "wide"
+        elif viewport_width >= dp(780):
+            mode = "medium"
+        else:
+            mode = "compact"
+
+        self._layout_mode = mode
+        self._compact_layout = mode == "compact"
+        narrow = mode == "compact"
+
+        # --- linhas do formulario ---
+        for form_row in getattr(self, "_form_rows", []) or []:
             form_row.orientation = "vertical" if narrow else "horizontal"
             form_row.height = dp(104) if narrow else self.ROW_H
             form_row.spacing = dp(6) if narrow else dp(8)
 
-        for custom_row in self._custom_field_rows:
+        for custom_row in getattr(self, "_custom_field_rows", []) or []:
             custom_row.orientation = "vertical" if narrow else "horizontal"
             custom_row.height = dp(104) if narrow else self.ROW_H
             custom_row.spacing = dp(6) if narrow else dp(8)
 
-        custom_row_count = (len(self._custom_field_definitions) + 1) // 2
+        custom_defs = getattr(self, "_custom_field_definitions", []) or []
+        custom_row_count = (len(custom_defs) + 1) // 2
         custom_row_height = dp(104) if narrow else self.ROW_H
-        custom_fields_height = custom_row_count * custom_row_height + max(0, custom_row_count - 1) * dp(7)
+        custom_fields_height = (
+            custom_row_count * custom_row_height + max(0, custom_row_count - 1) * dp(7)
+        )
         if hasattr(self, "_custom_fields_container"):
             self._custom_fields_container.height = custom_fields_height
         if getattr(self, "_custom_fields_section", None) is not None:
             self._custom_fields_section.height = dp(64) + custom_fields_height
-        # Altura do conteudo rolavel (sem titulo nem botoes fixos).
+
         form_height = (dp(1116) if narrow else dp(720)) + custom_fields_height
         if getattr(self, "_form_content", None) is not None:
             self._form_content.height = form_height
 
-        if compact:
+        # --- secoes principais ---
+        cam = self._camera_section
+        form = self._form_section
+
+        if mode in ("wide", "medium"):
+            self._content_layout.orientation = "horizontal"
+            self._content_layout.spacing = dp(12)
+            self._content_layout.padding = [dp(10), dp(10), dp(10), dp(10)]
+
+            cam_w = dp(300) if mode == "wide" else dp(260)
+            if cam is not None:
+                cam.size_hint = (None, 1)
+                cam.width = cam_w
+                cam.height = 0
+                cam.pos_hint = {}
+            if form is not None:
+                form.size_hint = (1, 1)
+                form.height = 0
+
+            if self._camera_card is not None:
+                # Preview quadratico dentro do painel
+                self._camera_card.height = max(dp(200), min(cam_w - dp(28), dp(280)))
+        else:
+            # compact: camera no topo com altura fixa, form preenche o resto
             self._content_layout.orientation = "vertical"
             self._content_layout.spacing = dp(8)
             self._content_layout.padding = [dp(8), dp(8), dp(8), dp(8)]
-            if self._camera_section:
-                cam_w = max(dp(260), min(viewport_width - dp(32), dp(360)))
-                self._camera_section.size_hint = (None, None)
-                self._camera_section.width = cam_w
-                self._camera_section.height = dp(250)
-                self._camera_section.pos_hint = {"center_x": 0.5}
-            if self._form_section:
-                self._form_section.size_hint = (1, 1)
-                self._form_section.height = 0
-        else:
-            self._content_layout.orientation = "horizontal"
-            self._content_layout.spacing = dp(10)
-            self._content_layout.padding = [dp(10), dp(10), dp(10), dp(10)]
-            if self._camera_section:
-                cam_w = max(dp(280), min(viewport_width * 0.32, dp(330)))
-                self._camera_section.size_hint = (None, 1)
-                self._camera_section.width = cam_w
-                self._camera_section.height = 0
-                self._camera_section.pos_hint = {}
-            if self._form_section:
-                self._form_section.size_hint = (1, 1)
-                self._form_section.height = 0
 
-        if self._camera_card and self._camera_section:
-            preview_size = self._camera_section.width - dp(24)
-            self._camera_card.height = max(dp(220), min(preview_size, dp(360)))
+            cam_h = min(dp(280), max(dp(220), viewport_height * 0.32))
+            if cam is not None:
+                cam.size_hint = (1, None)
+                cam.width = 0
+                cam.height = cam_h
+                cam.pos_hint = {}
+            if form is not None:
+                form.size_hint = (1, 1)
+                form.height = 0
+
+            if self._camera_card is not None:
+                self._camera_card.height = max(dp(160), cam_h - dp(110))
 
     def _on_window_resize(self, instance, width, height):
         self._apply_page_layout()
@@ -1348,10 +1619,16 @@ class ProductForm(Screen):
         )
         title.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
         title_row.add_widget(title)
-        manage = TooltipIconButton(
-            icon="tune-variant", theme_text_color="Custom", text_color=self.COLOR_PRIMARY,
-            hint_text="Gerir campos adicionais do formulario",
-            size_hint=(None, None), size=(dp(32), dp(32)),
+        manage = TooltipRaisedButton(
+            text="Campos",
+            theme_text_color="Custom",
+            text_color=(1, 1, 1, 1),
+            md_bg_color=self.COLOR_PRIMARY,
+            radius=[dp(10)],
+            elevation=1,
+            size_hint=(None, None),
+            size=(dp(118), dp(34)),
+            tooltip_text="Gerir campos adicionais do formulario",
             on_release=lambda *_: self._open_custom_fields_manager(),
         )
         title_row.add_widget(manage)
@@ -1408,74 +1685,329 @@ class ProductForm(Screen):
 
     @staticmethod
     def _make_switch(active=False):
-        """Evita um defeito do KivyMD ao receber ``active`` no construtor.
+        """Cria o interruptor com o estado inicial aplicado após a construção.
 
-        Em algumas versoes, a propriedade e despachada antes de o KV criar o
-        id interno ``thumb``. Definir o estado depois do construtor mantem a
-        mesma funcionalidade sem disparar essa animacao prematuramente.
+        Definir o estado depois do construtor mantém a construção previsível.
         """
         switch = MDSwitch(size_hint=(None, None), size=(dp(48), dp(36)))
         switch.active = bool(active)
         return switch
 
     def _open_custom_fields_manager(self):
-        content = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(330))
-        rows = BoxLayout(orientation="vertical", spacing=dp(5), size_hint_y=None)
+        """Um unico cartao modal: lista existente + formulario de novo campo."""
+        tokens_alt = self.COLOR_CARD_ALT
+
+        card = MDCard(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(520), dp(460)),
+            padding=[dp(18), dp(16), dp(18), dp(14)],
+            spacing=dp(10),
+            radius=[dp(16)],
+            elevation=6,
+            md_bg_color=self.COLOR_CARD,
+            pos_hint={"center_x": 0.5, "center_y": 0.5},
+        )
+
+        # Cabecalho
+        header = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(8))
+        title = Label(
+            text="Campos personalizados",
+            color=self.COLOR_TEXT,
+            font_size=sp(17),
+            bold=True,
+            halign="left",
+            valign="middle",
+        )
+        title.bind(size=title.setter("text_size"))
+        header.add_widget(title)
+
+        def _close(*_a):
+            if getattr(self, "_custom_fields_modal", None) is not None:
+                self._custom_fields_modal.dismiss()
+                self._custom_fields_modal = None
+
+        try:
+            close_x = TooltipIconButton(
+                icon="close",
+                theme_text_color="Custom",
+                text_color=self.COLOR_TEXT,
+                size_hint=(None, None),
+                size=(dp(34), dp(34)),
+                on_release=_close,
+            )
+        except Exception:
+            close_x = MDFlatButton(text="X", size_hint=(None, None), size=(dp(34), dp(34)), on_release=_close)
+        header.add_widget(close_x)
+        card.add_widget(header)
+
+        # --- Campos existentes ---
+        list_title = Label(
+            text="Campos existentes",
+            color=self.COLOR_GRAY,
+            font_size=sp(12),
+            bold=True,
+            size_hint_y=None,
+            height=dp(18),
+            halign="left",
+        )
+        list_title.bind(size=list_title.setter("text_size"))
+        card.add_widget(list_title)
+
+        rows_box = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        rows_box.bind(minimum_height=rows_box.setter("height"))
+        scroll = ScrollView(
+            size_hint=(1, None),
+            height=dp(150),
+            do_scroll_x=False,
+            bar_width=dp(4),
+        )
+        scroll.add_widget(rows_box)
+        card.add_widget(scroll)
+
+        empty_label = Label(
+            text="Nenhum campo personalizado ainda.",
+            color=self.COLOR_GRAY,
+            font_size=sp(12),
+            size_hint_y=None,
+            height=dp(40),
+            halign="center",
+            valign="middle",
+        )
+        empty_label.bind(size=empty_label.setter("text_size"))
+
+        def _action_btn(text, icon, color, callback, width=dp(96)):
+            try:
+                return TooltipFlatButton(
+                    text=text,
+                    icon=icon,
+                    theme_text_color="Custom",
+                    text_color=color,
+                    md_bg_color=(0, 0, 0, 0),
+                    size_hint=(None, None),
+                    size=(width, dp(32)),
+                    radius=[dp(8)],
+                    font_size=sp(11),
+                    on_release=callback,
+                )
+            except TypeError:
+                return MDFlatButton(
+                    text=text,
+                    theme_text_color="Custom",
+                    text_color=color,
+                    size_hint=(None, None),
+                    size=(width, dp(32)),
+                    on_release=callback,
+                )
 
         def render_rows():
-            rows.clear_widgets()
+            rows_box.clear_widgets()
             definitions = self._load_all_custom_field_definitions()
-            rows.height = max(dp(36), len(definitions) * dp(42))
+            if not definitions:
+                rows_box.add_widget(empty_label)
+                return
             for definition in definitions:
-                row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(5))
-                status = "ativo" if definition.get("active") else "inativo"
-                row.add_widget(Label(
-                    text=f"{definition['label']} ({'numero' if definition['type'] == 'NUMBER' else 'texto'}, {status})",
-                    color=self.COLOR_TEXT, halign="left", valign="middle",
-                ))
-                edit = MDFlatButton(text="Editar")
-                edit.bind(on_release=lambda _b, item=definition: self._edit_custom_field(item, render_rows))
-                toggle = MDFlatButton(text="Remover" if definition.get("active") else "Ativar")
-                toggle.bind(on_release=lambda _b, item=definition: self._toggle_custom_field(item, render_rows))
-                row.add_widget(edit)
-                row.add_widget(toggle)
-                rows.add_widget(row)
+                active = bool(definition.get("active"))
+                kind = "numero" if definition.get("type") == "NUMBER" else "texto"
+                status = "ativo" if active else "inativo"
 
-        add_label = TooltipTextField(hint_text="Novo campo (ex.: Marca)", mode="rectangle", size_hint_y=None, height=self.FIELD_H)
+                row = MDCard(
+                    orientation="horizontal",
+                    size_hint_y=None,
+                    height=dp(42),
+                    padding=[dp(10), dp(4), dp(6), dp(4)],
+                    spacing=dp(6),
+                    radius=[dp(10)],
+                    elevation=0,
+                    md_bg_color=tokens_alt,
+                )
+                try:
+                    row.add_widget(MDIcon(
+                        icon="numeric" if kind == "numero" else "form-textbox",
+                        theme_text_color="Custom",
+                        text_color=self.COLOR_SUCCESS if active else self.COLOR_GRAY,
+                        size_hint=(None, None),
+                        size=(dp(20), dp(20)),
+                        pos_hint={"center_y": 0.5},
+                    ))
+                except Exception:
+                    pass
+
+                info = BoxLayout(orientation="vertical", spacing=0, size_hint_x=1)
+                name_lbl = Label(
+                    text=str(definition.get("label") or ""),
+                    color=self.COLOR_TEXT,
+                    font_size=sp(13),
+                    bold=True,
+                    halign="left",
+                    size_hint_y=None,
+                    height=dp(16),
+                    shorten=True,
+                    shorten_from="right",
+                )
+                name_lbl.bind(size=name_lbl.setter("text_size"))
+                meta = Label(
+                    text=f"{kind} · {status}"
+                    + (" · obrigatorio" if definition.get("required") else ""),
+                    color=self.COLOR_GRAY,
+                    font_size=sp(10),
+                    halign="left",
+                    size_hint_y=None,
+                    height=dp(14),
+                )
+                meta.bind(size=meta.setter("text_size"))
+                info.add_widget(name_lbl)
+                info.add_widget(meta)
+                row.add_widget(info)
+
+                row.add_widget(_action_btn(
+                    "Editar", "pencil-outline", self.COLOR_PRIMARY,
+                    lambda _b, item=definition: self._edit_custom_field(item, render_rows),
+                    width=dp(88),
+                ))
+                if active:
+                    row.add_widget(_action_btn(
+                        "Desativar", "eye-off-outline",
+                        self.COLOR_ERROR if hasattr(self, "COLOR_ERROR") else (0.85, 0.3, 0.3, 1),
+                        lambda _b, item=definition: self._toggle_custom_field(item, render_rows),
+                        width=dp(104),
+                    ))
+                else:
+                    row.add_widget(_action_btn(
+                        "Ativar", "eye-outline", self.COLOR_SUCCESS,
+                        lambda _b, item=definition: self._toggle_custom_field(item, render_rows),
+                        width=dp(92),
+                    ))
+                rows_box.add_widget(row)
+
+        # --- Novo campo (dentro do mesmo card) ---
+        new_title = Label(
+            text="Novo campo",
+            color=self.COLOR_GRAY,
+            font_size=sp(12),
+            bold=True,
+            size_hint_y=None,
+            height=dp(18),
+            halign="left",
+        )
+        new_title.bind(size=new_title.setter("text_size"))
+        card.add_widget(new_title)
+
+        add_label = TooltipTextField(
+            hint_text="Nome do campo (ex.: Marca, Fornecedor)",
+            mode="rectangle",
+            size_hint_y=None,
+            height=self.FIELD_H,
+        )
+        card.add_widget(add_label)
+
         kind = self._make_switch(False)
         required = self._make_switch(False)
-        switches = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
-        switches.add_widget(Label(text="Campo numerico", color=self.COLOR_TEXT, halign="left"))
-        switches.add_widget(kind)
-        switches.add_widget(Label(text="Obrigatorio", color=self.COLOR_TEXT, halign="left"))
-        switches.add_widget(required)
-        add_button = MDRaisedButton(text="Adicionar campo", md_bg_color=self.COLOR_SUCCESS, size_hint_y=None, height=dp(38))
+
+        def _sw(label_text, icon_name, sw):
+            box = BoxLayout(size_hint_x=1, spacing=dp(6))
+            try:
+                box.add_widget(MDIcon(
+                    icon=icon_name,
+                    theme_text_color="Custom",
+                    text_color=self.COLOR_GRAY,
+                    size_hint=(None, None),
+                    size=(dp(18), dp(18)),
+                    pos_hint={"center_y": 0.5},
+                ))
+            except Exception:
+                pass
+            lbl = Label(
+                text=label_text,
+                color=self.COLOR_TEXT,
+                font_size=sp(12),
+                halign="left",
+                valign="middle",
+            )
+            lbl.bind(size=lbl.setter("text_size"))
+            box.add_widget(lbl)
+            box.add_widget(sw)
+            return box
+
+        switches = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(36),
+            spacing=dp(12),
+        )
+        switches.add_widget(_sw("Campo numerico", "numeric", kind))
+        switches.add_widget(_sw("Obrigatorio", "asterisk", required))
+        card.add_widget(switches)
+
+        try:
+            add_button = TooltipRaisedButton(
+                text="Adicionar campo",
+                icon="plus-circle-outline",
+                md_bg_color=self.COLOR_SUCCESS,
+                theme_text_color="Custom",
+                text_color=(1, 1, 1, 1),
+                size_hint=(1, None),
+                height=dp(42),
+                radius=[dp(12)],
+                elevation=1,
+            )
+        except TypeError:
+            add_button = MDRaisedButton(
+                text="+  Adicionar campo",
+                md_bg_color=self.COLOR_SUCCESS,
+                theme_text_color="Custom",
+                text_color=(1, 1, 1, 1),
+                size_hint=(1, None),
+                height=dp(42),
+                radius=[dp(12)],
+            )
 
         def add_field(*_args):
+            name = (add_label.text or "").strip()
+            if not name:
+                self._show_snackbar(
+                    "Indique o nome do campo.",
+                    self.COLOR_WARNING if hasattr(self, "COLOR_WARNING") else self.COLOR_GRAY,
+                )
+                return
             try:
                 from database.provider import get_db
                 db = get_db()
                 try:
-                    db.create_product_custom_field(add_label.text, "NUMBER" if kind.active else "TEXT", required.active)
+                    db.create_product_custom_field(
+                        name,
+                        "NUMBER" if kind.active else "TEXT",
+                        required.active,
+                    )
                 finally:
                     db.close()
                 add_label.text = ""
+                kind.active = False
+                required.active = False
                 self._custom_field_definitions = self._load_custom_field_definitions()
                 self._refresh_custom_fields_widgets(self._custom_field_values())
                 render_rows()
+                self._show_snackbar("Campo adicionado.", self.COLOR_SUCCESS)
             except Exception as exc:
-                self._show_snackbar(f"Nao foi possivel criar o campo: {exc}", self.COLOR_ERROR)
+                self._show_snackbar(
+                    f"Nao foi possivel criar o campo: {exc}",
+                    self.COLOR_ERROR,
+                )
 
         add_button.bind(on_release=add_field)
-        content.add_widget(rows)
-        content.add_widget(add_label)
-        content.add_widget(switches)
-        content.add_widget(add_button)
-        dialog = MDDialog(title="Campos personalizados", type="custom", content_cls=content,
-                          buttons=[MDFlatButton(text="Fechar")])
-        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        card.add_widget(add_button)
+
+        # ModalView garante que o card e o unico contentor visivel
+        modal = ModalView(
+            size_hint=(1, 1),
+            background_color=(0, 0, 0, 0.55),
+            auto_dismiss=True,
+        )
+        modal.add_widget(card)
+        modal.bind(on_dismiss=lambda *_: setattr(self, "_custom_fields_modal", None))
+        self._custom_fields_modal = modal
         render_rows()
-        dialog.open()
+        modal.open()
 
     def _load_all_custom_field_definitions(self):
         from database.provider import get_db
@@ -1504,43 +2036,170 @@ class ProductForm(Screen):
             self._show_snackbar(f"Nao foi possivel atualizar o campo: {exc}", self.COLOR_ERROR)
 
     def _edit_custom_field(self, definition, on_done):
-        content = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(130))
-        label = TooltipTextField(text=definition["label"], hint_text="Nome do campo", mode="rectangle",
-                                 size_hint_y=None, height=self.FIELD_H)
-        numeric = self._make_switch(definition["type"] == "NUMBER")
+        """Dialog compacto para editar um campo personalizado."""
+        card = MDCard(
+            orientation="vertical",
+            size_hint=(None, None),
+            size=(dp(360), dp(220)),
+            padding=[dp(16), dp(14), dp(16), dp(12)],
+            spacing=dp(10),
+            radius=[dp(14)],
+            elevation=6,
+            md_bg_color=self.COLOR_CARD,
+            pos_hint={"center_x": 0.5, "center_y": 0.5},
+        )
+
+        header = BoxLayout(size_hint_y=None, height=dp(30), spacing=dp(6))
+        header.add_widget(Label(
+            text="Editar campo",
+            color=self.COLOR_TEXT,
+            font_size=sp(15),
+            bold=True,
+            halign="left",
+            valign="middle",
+        ))
+        card.add_widget(header)
+
+        label = TooltipTextField(
+            text=definition.get("label") or "",
+            hint_text="Nome do campo",
+            mode="rectangle",
+            size_hint_y=None,
+            height=self.FIELD_H,
+        )
+        card.add_widget(label)
+
+        numeric = self._make_switch(definition.get("type") == "NUMBER")
         required = self._make_switch(bool(definition.get("required")))
-        row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
-        row.add_widget(Label(text="Numerico", color=self.COLOR_TEXT))
-        row.add_widget(numeric)
-        row.add_widget(Label(text="Obrigatorio", color=self.COLOR_TEXT))
-        row.add_widget(required)
-        content.add_widget(label)
-        content.add_widget(row)
-        dialog = MDDialog(title="Editar campo", type="custom", content_cls=content,
-                          auto_dismiss=False, buttons=[MDFlatButton(text="Cancelar"), MDRaisedButton(text="Guardar", md_bg_color=self.COLOR_SUCCESS)])
+
+        def _sw(text, icon_name, sw):
+            row = BoxLayout(size_hint_x=1, spacing=dp(6))
+            try:
+                row.add_widget(MDIcon(
+                    icon=icon_name,
+                    theme_text_color="Custom",
+                    text_color=self.COLOR_GRAY,
+                    size_hint=(None, None),
+                    size=(dp(18), dp(18)),
+                    pos_hint={"center_y": 0.5},
+                ))
+            except Exception:
+                pass
+            lbl = Label(
+                text=text,
+                color=self.COLOR_TEXT,
+                font_size=sp(12),
+                halign="left",
+                valign="middle",
+            )
+            lbl.bind(size=lbl.setter("text_size"))
+            row.add_widget(lbl)
+            row.add_widget(sw)
+            return row
+
+        switches = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(34),
+            spacing=dp(10),
+        )
+        switches.add_widget(_sw("Numerico", "numeric", numeric))
+        switches.add_widget(_sw("Obrigatorio", "asterisk", required))
+        card.add_widget(switches)
+
+        actions = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            spacing=dp(10),
+        )
+        actions.add_widget(BoxLayout(size_hint_x=1))  # spacer
+
+        try:
+            cancel_btn = TooltipFlatButton(
+                text="Cancelar",
+                icon="close",
+                theme_text_color="Custom",
+                text_color=self.COLOR_TEXT,
+                size_hint=(None, None),
+                size=(dp(110), dp(36)),
+            )
+        except TypeError:
+            cancel_btn = MDFlatButton(
+                text="Cancelar",
+                size_hint=(None, None),
+                size=(dp(110), dp(36)),
+            )
+
+        try:
+            save_btn = TooltipRaisedButton(
+                text="Guardar",
+                icon="content-save-outline",
+                md_bg_color=self.COLOR_SUCCESS,
+                theme_text_color="Custom",
+                text_color=(1, 1, 1, 1),
+                size_hint=(None, None),
+                size=(dp(120), dp(36)),
+                radius=[dp(10)],
+                elevation=1,
+            )
+        except TypeError:
+            save_btn = MDRaisedButton(
+                text="Guardar",
+                md_bg_color=self.COLOR_SUCCESS,
+                theme_text_color="Custom",
+                text_color=(1, 1, 1, 1),
+                size_hint=(None, None),
+                size=(dp(120), dp(36)),
+                radius=[dp(10)],
+            )
+
+        actions.add_widget(cancel_btn)
+        actions.add_widget(save_btn)
+        card.add_widget(actions)
+
+        modal = ModalView(
+            size_hint=(1, 1),
+            background_color=(0, 0, 0, 0.45),
+            auto_dismiss=False,
+        )
+        modal.add_widget(card)
+
+        def _dismiss(*_a):
+            modal.dismiss()
 
         def save(*_args):
+            name = (label.text or "").strip()
+            if not name:
+                self._show_snackbar("Indique o nome do campo.", self.COLOR_GRAY)
+                return
             try:
                 from database.provider import get_db
                 db = get_db()
                 try:
-                    db.update_product_custom_field(definition["id"], label.text,
-                                                   "NUMBER" if numeric.active else "TEXT", required.active,
-                                                   definition.get("active", True))
+                    db.update_product_custom_field(
+                        definition["id"],
+                        name,
+                        "NUMBER" if numeric.active else "TEXT",
+                        required.active,
+                        definition.get("active", True),
+                    )
                 finally:
                     db.close()
                 self._custom_field_definitions = self._load_custom_field_definitions()
                 self._refresh_custom_fields_widgets(self._custom_field_values())
-                dialog.dismiss()
+                modal.dismiss()
                 on_done()
             except Exception as exc:
-                self._show_snackbar(f"Nao foi possivel editar o campo: {exc}", self.COLOR_ERROR)
+                self._show_snackbar(
+                    f"Nao foi possivel editar o campo: {exc}",
+                    self.COLOR_ERROR,
+                )
 
-        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
-        dialog.buttons[1].bind(on_release=save)
-        dialog.open()
+        cancel_btn.bind(on_release=_dismiss)
+        save_btn.bind(on_release=save)
+        modal.open()
 
-    # -- Regras comerciais -------------------------------------------------
     def _load_business_rules(self):
         from database.provider import get_db
         db = get_db()
@@ -1559,37 +2218,78 @@ class ProductForm(Screen):
             self._business_rules_dialog.open()
             return
         rules = self._business_rules or {}
-        content = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(238))
-        content.add_widget(Label(
-            text="Estas regras protegem o preco tanto no formulario como na base de dados.",
-            color=self.COLOR_GRAY, font_size=sp(12), halign="left", valign="middle",
-            size_hint_y=None, height=dp(38),
-        ))
+        content = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None, height=dp(300))
+        intro = MDCard(
+            orientation="vertical", size_hint_y=None, height=dp(54), padding=[dp(12), dp(7)],
+            radius=[dp(10)], elevation=0, md_bg_color=(*self.COLOR_PRIMARY[:3], .12),
+            line_color=(*self.COLOR_PRIMARY[:3], .32), line_width=1,
+        )
+        intro_title = Label(text="Proteção automática de preço", color=self.COLOR_TEXT, bold=True,
+                            font_size=sp(13), halign="left", valign="middle", size_hint_y=None, height=dp(18))
+        intro_text = Label(
+            text="Estas regras são aplicadas no formulário e confirmadas ao guardar o produto.",
+            color=self.COLOR_GRAY, font_size=sp(11), halign="left", valign="middle",
+        )
+        for label in (intro_title, intro_text):
+            label.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
+            intro.add_widget(label)
+        content.add_widget(intro)
+
         default_margin = TooltipTextField(
-            hint_text="Margem sugerida (%)", input_filter="float", mode="rectangle",
+            hint_text="Ex.: 30", input_filter="float", mode="rectangle",
             text=str(rules.get("default_profit_margin_percent", 30)), size_hint_y=None, height=self.FIELD_H,
         )
         minimum_margin = TooltipTextField(
-            hint_text="Margem minima (%)", input_filter="float", mode="rectangle",
+            hint_text="Ex.: 0", input_filter="float", mode="rectangle",
             text=str(rules.get("minimum_profit_margin_percent", 0)), size_hint_y=None, height=self.FIELD_H,
         )
+        self._style_field(default_margin)
+        self._style_field(minimum_margin)
+        margins = BoxLayout(size_hint_y=None, height=dp(76), spacing=dp(10))
+        for title, field, hint in (
+            ("Margem sugerida", default_margin, "Percentagem usada no cálculo automático."),
+            ("Margem mínima", minimum_margin, "Limite mínimo permitido para venda."),
+        ):
+            block = BoxLayout(orientation="vertical", spacing=dp(3))
+            title_label = Label(text=title, color=self.COLOR_TEXT, bold=True, font_size=sp(12),
+                                halign="left", valign="middle", size_hint_y=None, height=dp(18))
+            title_label.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
+            field.hint_text = hint
+            block.add_widget(title_label)
+            block.add_widget(field)
+            margins.add_widget(block)
+        content.add_widget(margins)
+
         enforce = self._make_switch(bool(rules.get("enforce_minimum_margin", False)))
         negative = self._make_switch(bool(rules.get("allow_negative_margin", False)))
-        for label_text, switch in (
-            ("Bloquear preco abaixo da margem minima", enforce),
-            ("Permitir prejuizo (preco menor que custo)", negative),
+        for title, description, switch in (
+            ("Bloquear abaixo da margem mínima", "Impede preços abaixo do limite definido.", enforce),
+            ("Permitir prejuízo", "Autoriza vender por valor inferior ao custo.", negative),
         ):
-            row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(8))
-            row.add_widget(Label(text=label_text, color=self.COLOR_TEXT, halign="left", valign="middle"))
+            row = MDCard(orientation="horizontal", size_hint_y=None, height=dp(52), spacing=dp(10),
+                         padding=[dp(12), dp(6)], radius=[dp(10)], elevation=0,
+                         md_bg_color=self.COLOR_CARD_ALT)
+            copy = BoxLayout(orientation="vertical", spacing=0)
+            title_label = Label(text=title, color=self.COLOR_TEXT, bold=True, font_size=sp(12),
+                                halign="left", valign="middle")
+            description_label = Label(text=description, color=self.COLOR_GRAY, font_size=sp(10),
+                                      halign="left", valign="middle")
+            for label in (title_label, description_label):
+                label.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
+                copy.add_widget(label)
+            switch.size_hint_x = None
+            switch.width = dp(48)
+            row.add_widget(copy)
             row.add_widget(switch)
             content.add_widget(row)
-        content.add_widget(default_margin)
-        content.add_widget(minimum_margin)
 
         dialog = MDDialog(
             title="Regras comerciais do produto", type="custom", content_cls=content,
-            auto_dismiss=False,
-            buttons=[MDFlatButton(text="Cancelar"), MDRaisedButton(text="Guardar", md_bg_color=self.COLOR_SUCCESS)],
+            auto_dismiss=False, size_hint=(.78, None), height=dp(470),
+            buttons=[
+                MDFlatButton(text="CANCELAR", text_color=self.COLOR_PRIMARY, radius=[dp(10)]),
+                MDRaisedButton(text="GUARDAR REGRAS", md_bg_color=self.COLOR_SUCCESS, radius=[dp(10)]),
+            ],
         )
 
         def close_dialog(*_args):
@@ -1672,17 +2372,408 @@ class ProductForm(Screen):
         for btn in self._price_discount_buttons: btn.disabled = not can
         if self._price_revert_btn: self._price_revert_btn.disabled = self._discount_base_price is None
 
-    # -- Date picker --------------------------------------------------------
+    # -- Date picker (simples e rápido) -------------------------------------
     def _show_date_picker(self, instance):
-        d = datetime.now()
-        if self.expiry_date.text.strip():
-            try: d = datetime.strptime(self.expiry_date.text.strip(), "%d/%m/%Y")
-            except ValueError: pass
-        dp_ = MDDatePicker(year=d.year, month=d.month, day=d.day)
-        dp_.bind(on_save=lambda inst, v, r: setattr(self.expiry_date, "text", v.strftime("%d/%m/%Y")))
-        dp_.open()
+        """Popup de validade: cartao unico, campos DD/MM/AAAA, pre-visualizacao e atalhos."""
+        from datetime import timedelta
 
-    # -- Misc callbacks -----------------------------------------------------
+        current = datetime.now()
+        _partial_day = False
+        if self.expiry_date.text.strip():
+            try:
+                raw = self.expiry_date.text.strip()
+                parts = re.findall(r"\d+", raw)
+                if len(parts) >= 3:
+                    d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                    if y < 100:
+                        y += 2000
+                    if d == 0 and 1 <= m <= 12:
+                        _partial_day = True
+                        d = 1  # só para preencher o campo; partial mantém 00
+                    current = datetime(y, m, d)
+                else:
+                    current = datetime.strptime(raw, "%d/%m/%Y")
+            except ValueError:
+                pass
+
+        card_w = min(dp(420), Window.width * 0.92)
+        card_h = dp(384)
+
+        card = MDCard(
+            orientation="vertical",
+            size_hint=(1, 1),
+            padding=[dp(20), dp(16), dp(20), dp(16)],
+            spacing=dp(10),
+            radius=[dp(20)],
+            elevation=6,
+            md_bg_color=self.COLOR_CARD,
+        )
+
+        modal = ModalView(
+            size_hint=(None, None),
+            size=(card_w, card_h),
+            background="",
+            background_color=(0, 0, 0, 0),
+            overlay_color=(0, 0, 0, 0.55),
+            auto_dismiss=True,
+        )
+
+        def _close(*_a):
+            modal.dismiss()
+
+        def _digits(text):
+            return "".join(ch for ch in (text or "") if ch.isdigit())
+
+        # ---------------- Cabecalho ----------------
+        header = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(10))
+        try:
+            header.add_widget(MDIcon(
+                icon="calendar-month-outline",
+                theme_text_color="Custom",
+                text_color=self.COLOR_PRIMARY,
+                size_hint=(None, None),
+                size=(dp(26), dp(26)),
+                pos_hint={"center_y": 0.5},
+            ))
+        except Exception:
+            pass
+        title = Label(
+            text="Validade do produto",
+            color=self.COLOR_TEXT,
+            font_size=sp(17),
+            bold=True,
+            halign="left",
+            valign="middle",
+        )
+        title.bind(size=title.setter("text_size"))
+        header.add_widget(title)
+        header.add_widget(TooltipIconButton(
+            icon="close",
+            theme_text_color="Custom",
+            text_color=self.COLOR_GRAY,
+            md_bg_color=self.COLOR_CARD_ALT,
+            size_hint=(None, None),
+            size=(dp(34), dp(34)),
+            radius=[dp(17)],
+            hint_text="Fechar",
+            pos_hint={"center_y": 0.5},
+            on_release=_close,
+        ))
+        card.add_widget(header)
+
+        # ---------------- Pre-visualizacao ----------------
+        preview_box = MDCard(
+            size_hint_y=None,
+            height=dp(34),
+            radius=[dp(12)],
+            elevation=0,
+            md_bg_color=(*self.COLOR_PRIMARY[:3], 0.12),
+        )
+        preview = Label(
+            text="",
+            color=self.COLOR_PRIMARY,
+            font_size=sp(13),
+            bold=True,
+            halign="center",
+            valign="middle",
+        )
+        preview.bind(size=preview.setter("text_size"))
+        preview_box.add_widget(preview)
+        card.add_widget(preview_box)
+
+        # ---------------- Campos DIA / MES / ANO ----------------
+        def _make_col(label_text, value, placeholder, flex):
+            col = BoxLayout(orientation="vertical", spacing=dp(3), size_hint_x=flex)
+            lbl = Label(
+                text=label_text,
+                color=self.COLOR_GRAY,
+                font_size=sp(11),
+                bold=True,
+                size_hint_y=None,
+                height=dp(15),
+                halign="center",
+                valign="middle",
+            )
+            lbl.bind(size=lbl.setter("text_size"))
+            field = MDTextField(
+                text=value,
+                hint_text=placeholder,
+                input_filter="int",
+                mode="rectangle",
+                size_hint_y=None,
+                height=dp(48),
+                font_size=sp(18),
+                multiline=False,
+                halign="center",
+            )
+            self._style_field(field)
+            col.add_widget(lbl)
+            col.add_widget(field)
+            return col, field
+
+        def _slash():
+            wrap = BoxLayout(size_hint_x=None, width=dp(14), padding=[0, dp(18), 0, 0])
+            s = Label(
+                text="/",
+                color=(*self.COLOR_GRAY[:3], 0.55),
+                font_size=sp(18),
+                bold=True,
+                halign="center",
+                valign="middle",
+            )
+            s.bind(size=s.setter("text_size"))
+            wrap.add_widget(s)
+            return wrap
+
+        fields_row = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(68), spacing=dp(6),
+        )
+        day_col, day_f = _make_col(
+            "DIA",
+            ("00" if _partial_day else f"{current.day:02d}"), "DD", 0.28)
+        month_col, month_f = _make_col("MÊS", f"{current.month:02d}", "MM", 0.28)
+        year_col, year_f = _make_col("ANO", str(current.year), "AAAA", 0.44)
+        for widget in (day_col, _slash(), month_col, _slash(), year_col):
+            fields_row.add_widget(widget)
+        card.add_widget(fields_row)
+
+        # ---------------- Logica dos campos ----------------
+        def _read_date():
+            """
+            Devolve (datetime, partial).
+            partial=True quando o dia é 0/00 (só mês e ano na embalagem).
+            Nesse caso usa o último dia do mês para o cálculo de validade.
+            """
+            try:
+                d = int(_digits(day_f.text) or "0")
+                m = int(_digits(month_f.text) or "0")
+                y = int(_digits(year_f.text) or "0")
+                if y < 100:
+                    y += 2000
+                if not (1 <= m <= 12) or y < 1990 or y > 2100:
+                    return None, False
+                partial = d == 0
+                if partial:
+                    d = calendar.monthrange(y, m)[1]
+                elif not (1 <= d <= calendar.monthrange(y, m)[1]):
+                    return None, False
+                return datetime(y, m, d), partial
+            except Exception:
+                return None, False
+
+        def _refresh_preview(*_a):
+            value, partial = _read_date()
+            if value is None:
+                preview.text = "Data incompleta ou inválida"
+                preview.color = self.COLOR_GRAY
+                status.text = ""
+                return
+            delta = (value.date() - datetime.now().date()).days
+            plural = "dia" if abs(delta) == 1 else "dias"
+            if delta > 0:
+                rel, color = f"daqui a {delta} {plural}", self.COLOR_SUCCESS
+            elif delta == 0:
+                rel, color = "expira hoje", self.COLOR_WARNING
+            else:
+                rel, color = f"expirado há {-delta} {plural}", self.COLOR_ERROR
+            if partial:
+                preview.text = (
+                    f"00/{value.month:02d}/{value.year}  ·  só mês/ano  ·  "
+                    f"válido até {value.strftime('%d/%m/%Y')}  ·  {rel}"
+                )
+                status.text = "Dia 00 aceite: validade só com mês e ano."
+                status.color = self.COLOR_SUCCESS
+            else:
+                preview.text = f"{value.strftime('%d/%m/%Y')}  ·  {rel}"
+                status.text = ""
+            preview.color = color
+
+        def _on_day_text(_inst, value):
+            digits = _digits(value)
+            if len(digits) > 2:
+                day_f.text = digits[:2]
+                return
+            if len(digits) == 2:
+                Clock.schedule_once(lambda *_: setattr(month_f, "focus", True), 0)
+            _refresh_preview()
+
+        def _on_month_text(_inst, value):
+            digits = _digits(value)
+            if len(digits) > 2:
+                month_f.text = digits[:2]
+                return
+            if len(digits) == 2:
+                Clock.schedule_once(lambda *_: setattr(year_f, "focus", True), 0)
+            _refresh_preview()
+
+        def _on_year_text(_inst, value):
+            digits = _digits(value)
+            if len(digits) > 4:
+                year_f.text = digits[:4]
+                return
+            _refresh_preview()
+
+        day_f.bind(text=_on_day_text)
+        month_f.bind(text=_on_month_text)
+        year_f.bind(text=_on_year_text)
+        day_f.bind(on_text_validate=lambda *_: setattr(month_f, "focus", True))
+        month_f.bind(on_text_validate=lambda *_: setattr(year_f, "focus", True))
+
+        def _select_all(field, focused):
+            if focused:
+                Clock.schedule_once(lambda _dt: field.select_all(), 0.02)
+
+        for f in (day_f, month_f, year_f):
+            f.bind(focus=_select_all)
+
+        def _set_date(dt_value):
+            day_f.text = f"{dt_value.day:02d}"
+            month_f.text = f"{dt_value.month:02d}"
+            year_f.text = str(dt_value.year)
+
+        def _apply_offset(days=0, months=0, years=0):
+            base = datetime.now()
+            if years or months:
+                y = base.year + years
+                m = base.month + months
+                while m > 12:
+                    m -= 12
+                    y += 1
+                while m < 1:
+                    m += 12
+                    y -= 1
+                last = 31 if m == 12 else (datetime(y, m + 1, 1) - timedelta(days=1)).day
+                _set_date(datetime(y, m, min(base.day, last)) + timedelta(days=days))
+            else:
+                _set_date(base + timedelta(days=days))
+
+        # ---------------- Atalhos rapidos ----------------
+        quick_label = Label(
+            text="ATALHOS RÁPIDOS",
+            color=self.COLOR_GRAY,
+            font_size=sp(11),
+            bold=True,
+            size_hint_y=None,
+            height=dp(16),
+            halign="left",
+            valign="middle",
+        )
+        quick_label.bind(size=quick_label.setter("text_size"))
+        card.add_widget(quick_label)
+
+        def _chip(label, action):
+            chip = MDCard(
+                orientation="horizontal",
+                size_hint=(1, None),
+                height=dp(34),
+                radius=[dp(17)],
+                elevation=0,
+                md_bg_color=(*self.COLOR_PRIMARY[:3], 0.12),
+                ripple_behavior=True,
+            )
+            lbl = Label(
+                text=label,
+                color=self.COLOR_PRIMARY,
+                font_size=sp(12),
+                bold=True,
+                halign="center",
+                valign="middle",
+            )
+            lbl.bind(size=lbl.setter("text_size"))
+            chip.add_widget(lbl)
+
+            def _down(inst, touch):
+                if inst.collide_point(*touch.pos) and not touch.is_mouse_scrolling:
+                    touch.grab(inst)
+                    return True
+                return False
+
+            def _up(inst, touch, fn=action):
+                if touch.grab_current is inst:
+                    touch.ungrab(inst)
+                    if inst.collide_point(*touch.pos):
+                        fn()
+                    return True
+                return False
+
+            chip.bind(on_touch_down=_down, on_touch_up=_up)
+            return chip
+
+        for row_items in (
+            (("Hoje", lambda: _apply_offset(0)),
+             ("+30 dias", lambda: _apply_offset(30)),
+             ("+90 dias", lambda: _apply_offset(90))),
+            (("+6 meses", lambda: _apply_offset(months=6)),
+             ("+1 ano", lambda: _apply_offset(years=1)),
+             ("+2 anos", lambda: _apply_offset(years=2))),
+        ):
+            chips_row = BoxLayout(
+                orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(8),
+            )
+            for label, action in row_items:
+                chips_row.add_widget(_chip(label, action))
+            card.add_widget(chips_row)
+
+        # ---------------- Estado + acoes ----------------
+        status = Label(
+            text="",
+            color=self.COLOR_ERROR,
+            font_size=sp(11),
+            size_hint_y=None,
+            height=dp(14),
+            halign="center",
+            valign="middle",
+        )
+        status.bind(size=status.setter("text_size"))
+        card.add_widget(status)
+
+        actions = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(10),
+        )
+        cancel_btn = MDFlatButton(
+            text="Cancelar",
+            theme_text_color="Custom",
+            text_color=self.COLOR_TEXT,
+            md_bg_color=self.COLOR_CARD_ALT,
+            font_size=sp(13),
+            size_hint=(0.38, 1),
+            radius=[dp(12)],
+        )
+        apply_btn = MDRaisedButton(
+            text="Aplicar data",
+            md_bg_color=self.COLOR_PRIMARY,
+            theme_text_color="Custom",
+            text_color=(1, 1, 1, 1),
+            font_size=sp(13),
+            size_hint=(0.62, 1),
+            radius=[dp(12)],
+        )
+        actions.add_widget(cancel_btn)
+        actions.add_widget(apply_btn)
+        card.add_widget(actions)
+
+        def _confirm(*_a):
+            value, partial = _read_date()
+            if value is None:
+                status.text = "Data inválida. Verifique mês e ano (dia 00 permitido)."
+                status.color = self.COLOR_ERROR
+                return
+            if partial:
+                # Guarda 00/MM/AAAA — o save converte para o último dia do mês
+                self.expiry_date.text = f"00/{value.month:02d}/{value.year}"
+            else:
+                self.expiry_date.text = value.strftime("%d/%m/%Y")
+            _close()
+
+        cancel_btn.bind(on_release=_close)
+        apply_btn.bind(on_release=_confirm)
+        year_f.bind(on_text_validate=_confirm)
+
+        modal.add_widget(card)
+        _refresh_preview()
+        modal.open()
+        Clock.schedule_once(lambda *_: setattr(day_f, "focus", True), 0.10)
+
     def _on_description_text(self, instance, value):
         if value != value.upper():
             cur = instance.cursor
@@ -1714,7 +2805,7 @@ class ProductForm(Screen):
     def _on_weight_switch_toggle(self, instance, active):
         if not hasattr(self, "weight_state_btn"):
             return
-        self.weight_state_btn.text = "ATIVO" if active else "INATIVO"
+        self.weight_state_btn.text = "● ATIVO" if active else "○ INATIVO"
         self.weight_state_btn.md_bg_color = (
             (*self.COLOR_SUCCESS[:3], 0.95) if active else (0.45, 0.45, 0.48, 1)
         )
@@ -1739,7 +2830,7 @@ class ProductForm(Screen):
     def _on_pack_sale_toggle(self, instance, active):
         if not hasattr(self, "pack_sale_state_btn"):
             return
-        self.pack_sale_state_btn.text = "ATIVO" if active else "INATIVO"
+        self.pack_sale_state_btn.text = "● ATIVO" if active else "○ INATIVO"
         self.pack_sale_state_btn.md_bg_color = (
             (*self.COLOR_SUCCESS[:3], 0.95) if active else (0.45, 0.45, 0.48, 1)
         )
@@ -1768,10 +2859,101 @@ class ProductForm(Screen):
         self.scanning = True
         self.scan_btn.icon        = "barcode-off"
         self.scan_btn.md_bg_color = self.COLOR_ERROR
+        if getattr(self, "_camera_placeholder", None) is not None:
+            self._camera_placeholder.opacity = 0
+            self._camera_placeholder.disabled = True
         self._set_status("Scanner Ativo", self.COLOR_PRIMARY)
         Clock.unschedule(self._update_camera)
         Clock.schedule_interval(self._update_camera, 1.0 / 15.0)
         return True
+
+    def _on_scanner_launch_touch(self, instance, touch):
+        if instance.disabled or instance.opacity < 0.5:
+            return False
+        if not instance.collide_point(*touch.pos):
+            return False
+        if touch.is_mouse_scrolling:
+            return False
+        self.open_scanner_modal()
+        return True
+
+    def open_scanner_modal(self, *_args):
+        """Abre o scanner em modal quando o painel esta colapsado."""
+        if getattr(self, "_scanner_modal", None) is not None:
+            try:
+                self._scanner_modal.dismiss()
+            except Exception:
+                pass
+            self._scanner_modal = None
+
+        content = BoxLayout(
+            orientation="vertical",
+            spacing=dp(10),
+            padding=[dp(14), dp(12), dp(14), dp(12)],
+            md_bg_color=self.COLOR_CARD,
+        )
+        header = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
+        header.add_widget(Label(
+            text="Scanner de codigo de barras",
+            font_size=sp(16), bold=True, color=self.COLOR_TEXT,
+            halign="left", valign="middle",
+        ))
+        close_btn = TooltipIconButton(
+            icon="close", theme_text_color="Custom", text_color=self.COLOR_TEXT,
+            size_hint=(None, None), size=(dp(36), dp(36)),
+            on_release=lambda *_: self._close_scanner_modal(),
+        )
+        header.add_widget(close_btn)
+        content.add_widget(header)
+
+        # Reutilizar o painel expandido se existir
+        expanded = getattr(self, "_scanner_expanded", None)
+        host = BoxLayout(orientation="vertical", size_hint=(1, 1))
+        if expanded is not None:
+            parent = expanded.parent
+            if parent is not None:
+                parent.remove_widget(expanded)
+            expanded.opacity = 1
+            expanded.disabled = False
+            expanded.size_hint = (1, 1)
+            host.add_widget(expanded)
+        content.add_widget(host)
+
+        modal = ModalView(
+            size_hint=(0.92, 0.88),
+            auto_dismiss=True,
+            background_color=[0, 0, 0, 0.55],
+        )
+        modal.add_widget(content)
+
+        def _on_dismiss(*_a):
+            if expanded is not None:
+                if expanded.parent is not None:
+                    expanded.parent.remove_widget(expanded)
+                panel = getattr(self, "_scanner_panel", None) or self._camera_section
+                if panel is not None and not getattr(self, "_scanner_collapsed", False):
+                    panel.add_widget(expanded)
+                elif panel is not None:
+                    # Mantem no painel mas oculto ate expandir de novo
+                    expanded.opacity = 0
+                    expanded.disabled = True
+                    if expanded.parent is None:
+                        panel.add_widget(expanded)
+            self._scanner_modal = None
+            # Se estava a digitalizar, continua; senao deixa parado
+            self._update_responsive_layout()
+
+        modal.bind(on_dismiss=_on_dismiss)
+        self._scanner_modal = modal
+        modal.open()
+
+    def _close_scanner_modal(self):
+        if getattr(self, "_scanner_modal", None) is not None:
+            try:
+                self._scanner_modal.dismiss()
+            except Exception:
+                pass
+            self._scanner_modal = None
 
     def _toggle_scanner(self, instance):
         if not self.scanning:
@@ -1783,12 +2965,15 @@ class ProductForm(Screen):
         self.scanning = False
         self.scan_btn.icon        = "barcode-scan"
         self.scan_btn.md_bg_color = self.COLOR_PRIMARY
-        self._set_status("Inativo", self.COLOR_GRAY)
+        self._set_status("Scanner parado", self.COLOR_GRAY)
         Clock.unschedule(self._update_camera)
         if self.camera_capture:
             self.camera_capture.release()
             self.camera_capture = None
         self.camera_image.texture = None
+        if getattr(self, "_camera_placeholder", None) is not None:
+            self._camera_placeholder.opacity = 1
+            self._camera_placeholder.disabled = False
 
     def _update_camera(self, dt):
         if not self.scanning: return
@@ -1918,24 +3103,28 @@ class ProductForm(Screen):
     def _save_product(self, instance):
         raw = self.barcode_input.text.strip()
         barcode = "".join(c for c in raw if c.isprintable()).strip() if raw else None
+        # Cadastro manual SEMPRE permitido.
+        # Se a API externa não encontrou o código, o utilizador preenche os
+        # campos e grava na mesma — produtos locais / sem catálogo online.
         if (
             self.product is None
             and barcode
-            and barcode == self._barcode_context
-            and self._barcode_lookup_status in {"pending", "not_found"}
+            and self._barcode_lookup_status == "pending"
         ):
-            message = "Produto nao encontrado" if self._barcode_lookup_status == "not_found" else "A procurar o produto..."
-            self._set_status(message, self.COLOR_ERROR if self._barcode_lookup_status == "not_found" else self.COLOR_WARNING)
-            self._show_snackbar(message, self.COLOR_ERROR if self._barcode_lookup_status == "not_found" else self.COLOR_WARNING)
+            # Ainda a procurar: não bloqueia o save, só informa.
+            self._set_status("A gravar mesmo com pesquisa em curso…", self.COLOR_WARNING)
+        if not self._validate_fields():
             return
-        if not self._validate_fields(): return
         expiry = self._process_expiry_date()
-        if expiry is False: return
+        if expiry is False:
+            return
+        # Limpa estado de lookup para não interferir em cadastros seguintes
+        self._barcode_lookup_status = None
         self._save_to_database(barcode, expiry, self.is_sold_by_weight_switch.active)
 
     def _set_produce_mode(self, enabled):
         self._produce_mode = bool(enabled)
-        self.produce_mode_btn.text = "Venda avulsa - sacos" if enabled else "Stock exato"
+        self.produce_mode_btn.text = "🛒  Venda avulsa - sacos" if enabled else "📦  Stock exato"
         self.sack_weight_input.disabled = not enabled
         if enabled:
             self._set_weight_state(False)
@@ -1996,16 +3185,61 @@ class ProductForm(Screen):
         return True
 
     def _process_expiry_date(self):
-        text = self.expiry_date.text.strip()
-        if not text: return None
-        try: return datetime.strptime(text, "%d/%m/%Y").strftime("%Y-%m-%d")
-        except ValueError:
-            self._show_snackbar("Data invalida! Use DD/MM/AAAA", self.COLOR_ERROR)
+        """
+        Aceita:
+          - DD/MM/AAAA completo
+          - 00/MM/AAAA (só mês e ano — comum em embalagens)
+        Dia 00 → grava o último dia do mês (validade até ao fim desse mês).
+        """
+        text = (self.expiry_date.text or "").strip()
+        if not text:
+            return None
+
+        digits = re.findall(r"\d+", text)
+        if len(digits) < 2:
+            self._show_snackbar("Data inválida! Use DD/MM/AAAA ou 00/MM/AAAA", self.COLOR_ERROR)
+            return False
+
+        try:
+            if len(digits) == 2:
+                # MM/AAAA
+                day, month, year = 0, int(digits[0]), int(digits[1])
+            else:
+                day, month, year = int(digits[0]), int(digits[1]), int(digits[2])
+            if year < 100:
+                year += 2000
+            if not (1 <= month <= 12) or year < 1990 or year > 2100:
+                raise ValueError("mês/ano")
+            if day == 0:
+                day = calendar.monthrange(year, month)[1]
+            elif not (1 <= day <= calendar.monthrange(year, month)[1]):
+                raise ValueError("dia")
+            return f"{year:04d}-{month:02d}-{day:02d}"
+        except Exception:
+            self._show_snackbar(
+                "Data inválida! Use DD/MM/AAAA (dia 00 = só mês/ano)",
+                self.COLOR_ERROR,
+            )
             return False
 
     def _save_to_database(self, barcode, expiry, is_sold_by_weight):
-        from database.provider import get_db
-        db = get_db()
+        # Usar a mesma sessão/dono do ecrã admin — senão o produto fica com
+        # owner_username=SYSTEM e desaparece da pesquisa e da venda.
+        db = getattr(self.admin_screen, "db", None)
+        if db is None:
+            from database.provider import get_db
+            db = get_db()
+            admin_db = getattr(self.admin_screen, "db", None)
+            if admin_db is not None and hasattr(db, "set_active_user"):
+                try:
+                    db.set_active_user(
+                        getattr(admin_db, "current_user", None),
+                        getattr(admin_db, "current_role", None),
+                    )
+                    if getattr(admin_db, "current_data_owner", None):
+                        db.current_data_owner = admin_db.current_data_owner
+                except Exception as exc:
+                    print(f"[ProductForm] Não foi possível sincronizar dono: {exc}")
         package_quantity = self.package_quantity.text.strip() or None
         allow_pack_sale = bool(getattr(self.allow_pack_sale_switch, "active", False))
         vat_rule_code = self._selected_vat_rule_code or DEFAULT_VAT_RULE_CODE
@@ -2098,7 +3332,13 @@ class ProductForm(Screen):
             self.admin_screen.load_products(force=True)
         except Exception as e:
             self._show_snackbar(f"Erro ao salvar produto: {e}", self.COLOR_ERROR)
-        finally: db.close()
+        finally:
+            # Não fechar a conexão partilhada do admin_screen
+            if db is not getattr(self.admin_screen, "db", None):
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def _clear_fields(self, preserve_barcode=False, barcode_value=None):
         fields = [self.sku_input, self.expiry_date, self.description,

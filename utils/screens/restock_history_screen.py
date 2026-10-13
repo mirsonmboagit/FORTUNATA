@@ -11,9 +11,7 @@ from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty
 from kivy.uix.widget import Widget
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
+from ui.components.native_widgets import NativeBoxLayout, NativeCard, NativeLabel, NativeScreen
 
 from database.provider import get_db
 
@@ -27,13 +25,11 @@ def _theme_color(name, fallback):
     return tokens.get(name, fallback)
 
 
-class RestockHistoryScreen(MDScreen):
+class RestockHistoryScreen(NativeScreen):
     ENTER_CACHE_SECONDS = 5
     compact_mode = BooleanProperty(False)
 
     def __init__(self, db=None, **kwargs):
-        super().__init__(**kwargs)
-        self.db = db or get_db()
         self._render_ev = None
         self._pending_rows = deque()
         self._render_index = 0
@@ -43,6 +39,8 @@ class RestockHistoryScreen(MDScreen):
         self._last_loaded_at = 0.0
         self._load_token = 0
         self.back_target = "restock"
+        super().__init__(**kwargs)
+        self.db = db or get_db()
         self._layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
 
     def on_kv_post(self, base_widget):
@@ -300,7 +298,7 @@ class RestockHistoryScreen(MDScreen):
         else:
             date_hint, product_hint, qty_hint, unit_hint, total_hint, user_hint = 0.16, 0.34, 0.10, 0.14, 0.14, 0.12
 
-        line = MDBoxLayout(
+        line = NativeCard(
             size_hint_y=None,
             height=dp(48),
             padding=[dp(16), dp(8)],
@@ -308,7 +306,7 @@ class RestockHistoryScreen(MDScreen):
             md_bg_color=bg,
         )
 
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=date_str,
             size_hint_x=date_hint,
             halign="left",
@@ -316,7 +314,7 @@ class RestockHistoryScreen(MDScreen):
             theme_text_color="Custom",
             text_color=text_secondary,
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=str(product),
             size_hint_x=product_hint,
             halign="left",
@@ -326,7 +324,7 @@ class RestockHistoryScreen(MDScreen):
             shorten=True,
             shorten_from="right",
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=qty_str,
             size_hint_x=qty_hint,
             halign="center",
@@ -335,7 +333,7 @@ class RestockHistoryScreen(MDScreen):
             text_color=text_secondary,
         ))
         if not self.compact_mode:
-            line.add_widget(MDLabel(
+            line.add_widget(NativeLabel(
                 text=unit_cost_str,
                 size_hint_x=unit_hint,
                 halign="right",
@@ -343,7 +341,7 @@ class RestockHistoryScreen(MDScreen):
                 theme_text_color="Custom",
                 text_color=text_secondary,
             ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=total_cost_str,
             size_hint_x=total_hint,
             halign="right",
@@ -351,7 +349,7 @@ class RestockHistoryScreen(MDScreen):
             theme_text_color="Custom",
             text_color=_theme_color("success", [0.2, 0.7, 0.3, 1]),
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=created_by or "N/A",
             size_hint_x=user_hint,
             halign="right",
@@ -362,7 +360,7 @@ class RestockHistoryScreen(MDScreen):
             shorten_from="right",
         ))
 
-        container = MDBoxLayout(
+        container = NativeBoxLayout(
             orientation="vertical",
             size_hint_y=None,
             height=dp(49),

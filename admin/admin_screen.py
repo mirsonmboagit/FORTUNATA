@@ -11,6 +11,7 @@ from kivy.metrics import dp, sp
 from kivy.uix.modalview import ModalView
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.app import App
 from kivy.graphics import Color, Line, RoundedRectangle
@@ -19,15 +20,19 @@ from collections import deque
 from threading import Thread
 import time
 from datetime import datetime, timedelta
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
-from kivymd.uix.card import MDCard
-from kivymd.uix.gridlayout import MDGridLayout
-from kivymd.uix.label import MDIcon, MDLabel
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.snackbar import MDSnackbar
-from kivymd.uix.textfield import MDTextField
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout,
+    NativeButton as MDRaisedButton,
+    NativeCard as MDCard,
+    NativeDialog as MDDialog,
+    NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton,
+    NativeGridLayout as MDGridLayout,
+    NativeIcon as MDIcon,
+    NativeLabel as MDLabel,
+    NativeSnackbar as MDSnackbar,
+    NativeTextField as MDTextField,
+)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -270,10 +275,28 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         self.palette = {}
         self._base_bg_color = [1, 1, 1, 1]
         self._hover_active = False
+        # Linha horizontal inferior da linha
+        with self.canvas.after:
+            self._row_line_color = Color(0.5, 0.55, 0.62, 0.28)
+            self._row_hline = Line(points=[], width=1)
+        self.bind(pos=self._sync_row_hline, size=self._sync_row_hline)
         self._build_cells()
 
-    def _make_cell(self, width_hint, align="center"):
+    def _sync_row_hline(self, *_args):
+        y = self.y + 0.5
+        self._row_hline.points = [self.x, y, self.right, y]
+
+    def _make_cell(self, width_hint, align="center", with_divider=True):
         cell = MDBoxLayout(size_hint_x=width_hint, padding=[dp(5), 0])
+        if with_divider:
+            with cell.canvas.after:
+                cell._div_color = Color(0.5, 0.55, 0.62, 0.22)
+                cell._div_line = Line(points=[], width=1)
+            def _sync_div(*_a, c=cell):
+                # linha vertical à direita da célula (altura total)
+                x = c.right - 0.5
+                c._div_line.points = [x, c.y, x, c.top]
+            cell.bind(pos=_sync_div, size=_sync_div)
         label = MDLabel(
             halign=align,
             valign="middle",
@@ -289,6 +312,13 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
 
     def _build_cells(self):
         sequence_cell = FloatLayout(size_hint_x=COL_HINTS[0])
+        with sequence_cell.canvas.after:
+            sequence_cell._div_color = Color(0.5, 0.55, 0.62, 0.22)
+            sequence_cell._div_line = Line(points=[], width=1)
+        def _sync_seq_div(*_a, c=sequence_cell):
+            x = c.right - 0.5
+            c._div_line.points = [x, c.y, x, c.top]
+        sequence_cell.bind(pos=_sync_seq_div, size=_sync_seq_div)
         self.sequence_label = MDLabel(
             halign="center", valign="middle", theme_text_color="Custom", bold=True,
             font_size=sp(16), size_hint=(1, 1), pos_hint={"x": 0, "y": 0},
@@ -309,15 +339,18 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         self.profit_label = self._make_cell(COL_HINTS[6])
         self.expiry_label = self._make_cell(COL_HINTS[7])
 
-        actions_cell = MDBoxLayout(size_hint_x=COL_HINTS[8], padding=[dp(4), 0], spacing=dp(4))
-        self.detail_button = TooltipIconButton(icon="information", icon_size=sp(23), hint_text="Ver detalhes")
-        self.edit_button = TooltipIconButton(icon="pencil", icon_size=sp(23), hint_text="Editar produto")
-        self.delete_button = TooltipIconButton(icon="delete", icon_size=sp(23), hint_text="Eliminar produto")
+        actions_cell = AnchorLayout(size_hint_x=COL_HINTS[8], anchor_x="center", anchor_y="center")
+        actions = MDBoxLayout(size_hint=(None, None), size=(dp(124), dp(36)), spacing=dp(8))
+        action_size = {"size_hint": (None, None), "size": (dp(36), dp(36)), "radius": [dp(18)], "elevation": 0}
+        self.detail_button = TooltipIconButton(icon="information", icon_size=sp(19), hint_text="Ver detalhes", **action_size)
+        self.edit_button = TooltipIconButton(icon="pencil", icon_size=sp(19), hint_text="Editar produto", **action_size)
+        self.delete_button = TooltipIconButton(icon="delete", icon_size=sp(19), hint_text="Eliminar produto", **action_size)
         self.detail_button.bind(on_release=self._show_details)
         self.edit_button.bind(on_release=self._edit_product)
         self.delete_button.bind(on_release=self._delete_product)
         for button in (self.detail_button, self.edit_button, self.delete_button):
-            actions_cell.add_widget(button)
+            actions.add_widget(button)
+        actions_cell.add_widget(actions)
         self.add_widget(actions_cell)
 
     def refresh_view_attrs(self, rv, index, data):
@@ -459,7 +492,7 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
 
 class AdminScreen(Screen):
     LOSS_METRICS_LOOKBACK_DAYS = 365
-    PRODUCTS_PAGE_SIZE = 15
+    PRODUCTS_PAGE_SIZE = 7
     product_table = ObjectProperty(None)
     search_input = ObjectProperty(None)
     category_spinner = ObjectProperty(None)
@@ -481,7 +514,7 @@ class AdminScreen(Screen):
         self._manual_categories = set()
         self._filter_ev = None
         self._pending_search = ""
-        self._compact_layout = None
+        self._compact_layout = None  # "wide" | "medium" | "narrow"
 
         self.swing_event = None
         self.notification_count = 0
@@ -908,16 +941,31 @@ class AdminScreen(Screen):
         self._render_current_product_page()
 
     def _update_responsive_layout(self, width=None):
+        """Adapta a barra de ferramentas e a tabela a diferentes larguras.
+
+        Breakpoints (com estrutura de 2 linhas no KV):
+          - wide     (>= 1100): textos completos
+          - medium   (820-1099): textos curtos
+          - narrow   (< 820): textos mínimos / prioridade a ícones
+        """
         if not self.ids:
             return
-        width = width or Window.width
-        compact = width < dp(900)
-        if compact == getattr(self, "_compact_layout", None):
+        width = float(width or Window.width or 0)
+
+        if width >= dp(1100):
+            mode = "wide"
+        elif width >= dp(820):
+            mode = "medium"
+        else:
+            mode = "narrow"
+
+        if mode == getattr(self, "_compact_layout", None):
             return
-        self._compact_layout = compact
+        self._compact_layout = mode
 
         toolbar_card = self.ids.get("toolbar_card")
-        toolbar_row = self.ids.get("toolbar_row")
+        search_row = self.ids.get("toolbar_search_row")
+        actions_row = self.ids.get("toolbar_actions_row")
         search_input = self.ids.get("search_input")
         category_spinner = self.ids.get("category_spinner")
         filter_btn = self.ids.get("filter_btn")
@@ -925,53 +973,139 @@ class AdminScreen(Screen):
         add_btn = self.ids.get("add_btn")
         archived_btn = self.ids.get("archived_btn")
         shopping_list_btn = self.ids.get("shopping_list_btn")
+        inventory_btn = self.ids.get("inventory_btn")
 
-        if not toolbar_card or not toolbar_row:
+        if not toolbar_card:
             return
 
-        if compact:
-            toolbar_row.orientation = "vertical"
-            toolbar_row.spacing = dp(8)
-            toolbar_card.padding = [dp(12), dp(10)]
+        label_map = {
+            "wide": {
+                "category": "Todas as Categorias",
+                "refresh": "Atualizar",
+                "add": "Adicionar",
+                "archived": "Arquivados",
+                "shopping": "Sugestões de Compras",
+                "inventory": "Inventário",
+            },
+            "medium": {
+                "category": "Categorias",
+                "refresh": "Atualizar",
+                "add": "Adicionar",
+                "archived": "Arquivados",
+                "shopping": "Compras",
+                "inventory": "Inventário",
+            },
+            "narrow": {
+                "category": "Categorias",
+                "refresh": "Atualizar",
+                "add": "Novo",
+                "archived": "Arquivo",
+                "shopping": "Compras",
+                "inventory": "Stock",
+            },
+        }
+        labels = label_map[mode]
 
-            if search_input:
-                search_input.size_hint_x = 1
-            if category_spinner:
-                category_spinner.size_hint_x = 1
-            if filter_btn:
-                filter_btn.size_hint_x = 1
-            if refresh_btn:
-                refresh_btn.size_hint_x = 1
-            if add_btn:
-                add_btn.size_hint_x = 1
-            if archived_btn:
-                archived_btn.size_hint_x = 1
-            if shopping_list_btn:
-                shopping_list_btn.size_hint_x = 1
+        def _set_text(widget, value):
+            if widget is None:
+                return
+            try:
+                widget.text = value
+            except Exception:
+                pass
 
-            toolbar_card.height = toolbar_row.minimum_height + dp(16)
+        _set_text(category_spinner, labels["category"])
+        _set_text(refresh_btn, labels["refresh"])
+        _set_text(add_btn, labels["add"])
+        _set_text(archived_btn, labels["archived"])
+        _set_text(shopping_list_btn, labels["shopping"])
+        _set_text(inventory_btn, labels["inventory"])
+        if filter_btn is not None:
+            try:
+                filter_btn.text = ""
+            except Exception:
+                pass
+
+        row_h = dp(46)
+        gap = dp(8)
+        pad_y = dp(10) * 2
+
+        if search_row is not None:
+            search_row.height = row_h
+            search_row.spacing = dp(8)
+        if actions_row is not None:
+            actions_row.height = row_h
+            actions_row.spacing = dp(6 if mode == "narrow" else 8)
+
+        # Proporções da linha de pesquisa
+        if search_input is not None:
+            search_input.size_hint_x = 0.58 if mode == "wide" else (0.55 if mode == "medium" else 0.50)
+        if category_spinner is not None:
+            category_spinner.size_hint_x = 0.32 if mode == "wide" else (0.35 if mode == "medium" else 0.38)
+        if filter_btn is not None:
+            filter_btn.size_hint_x = None
+            filter_btn.width = dp(46)
+
+        # Proporções da linha de ações (somam ~1.0)
+        if mode == "wide":
+            hints = (0.16, 0.16, 0.16, 0.30, 0.18)
+        elif mode == "medium":
+            hints = (0.18, 0.18, 0.18, 0.24, 0.18)
         else:
-            toolbar_row.orientation = "horizontal"
-            toolbar_row.spacing = dp(10)
-            toolbar_card.padding = [dp(16), dp(10)]
+            hints = (0.20, 0.18, 0.18, 0.22, 0.18)
 
-            if search_input:
-                search_input.size_hint_x = 0.29
-            if category_spinner:
-                category_spinner.size_hint_x = 0.18
-            if filter_btn:
-                filter_btn.size_hint_x = None
-                filter_btn.width = dp(48)
-            if refresh_btn:
-                refresh_btn.size_hint_x = 0.12
-            if add_btn:
-                add_btn.size_hint_x = 0.13
-            if archived_btn:
-                archived_btn.size_hint_x = 0.13
-            if shopping_list_btn:
-                shopping_list_btn.size_hint_x = 0.18
+        for btn, hint in zip(
+            (refresh_btn, add_btn, archived_btn, shopping_list_btn, inventory_btn),
+            hints,
+        ):
+            if btn is None:
+                continue
+            btn.size_hint_x = hint
+            btn.size_hint_y = None
+            btn.height = row_h
 
-            toolbar_card.height = max(dp(70), self.height * 0.08)
+        toolbar_card.padding = [
+            dp(14 if mode != "narrow" else 10),
+            dp(10 if mode != "narrow" else 8),
+        ]
+        toolbar_card.size_hint_y = None
+        toolbar_card.height = row_h * 2 + gap + pad_y
+
+        # Tabela: largura mínima + scroll horizontal
+        table_scroll_content = self.ids.get("table_scroll_content")
+        if table_scroll_content is not None:
+            min_table_w = {
+                "wide": dp(980),
+                "medium": dp(920),
+                "narrow": dp(860),
+            }[mode]
+            try:
+                table_scroll_content.width = max(float(self.width or 0), float(min_table_w))
+            except Exception:
+                pass
+
+        # Paginação compacta em ecrãs estreitos
+        prev_btn = self.ids.get("admin_prev_btn")
+        next_btn = self.ids.get("admin_next_btn")
+        page_label = self.ids.get("admin_page_label")
+        if mode == "narrow":
+            if prev_btn is not None:
+                prev_btn.width = dp(108)
+                _set_text(prev_btn, "Ant.")
+            if next_btn is not None:
+                next_btn.width = dp(108)
+                _set_text(next_btn, "Seg.")
+            if page_label is not None:
+                page_label.width = dp(150)
+        else:
+            if prev_btn is not None:
+                prev_btn.width = dp(130)
+                _set_text(prev_btn, "Anterior")
+            if next_btn is not None:
+                next_btn.width = dp(130)
+                _set_text(next_btn, "Seguinte")
+            if page_label is not None:
+                page_label.width = dp(204)
 
     # ------------------------------------------------------------------
     # Sistema de Notificações e Animação de Abanar
@@ -1666,19 +1800,96 @@ class AdminScreen(Screen):
         )
 
     def _show_pdf_success(self, pdf_path):
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.12, 0.46, 0.78, 1])
+        success = tokens.get("success", [0.2, 0.7, 0.3, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+        foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
+        card_alt = tokens.get("card_alt", [0.16, 0.19, 0.24, 1])
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(8), dp(4), 0],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        header = MDBoxLayout(size_hint_y=None, height=dp(26), spacing=dp(8))
+        header.add_widget(
+            MDIcon(
+                icon="check-circle-outline",
+                theme_text_color="Custom",
+                text_color=success,
+                size_hint=(None, None),
+                size=(dp(20), dp(20)),
+            )
+        )
+        header.add_widget(
+            MDLabel(
+                text="Arquivo criado com sucesso",
+                bold=True,
+                font_style="Body2",
+                theme_text_color="Custom",
+                text_color=foreground,
+            )
+        )
+        content.add_widget(header)
+
+        path_card = MDCard(
+            orientation="vertical",
+            padding=[dp(10), dp(8)],
+            size_hint_y=None,
+            radius=[dp(8)],
+            elevation=0,
+            md_bg_color=card_alt,
+        )
+        path_card.bind(minimum_height=path_card.setter("height"))
+        path_label = MDLabel(
+            text=str(pdf_path or ""),
+            theme_text_color="Custom",
+            text_color=muted,
+            font_style="Caption",
+            halign="left",
+            valign="top",
+            size_hint_y=None,
+        )
+        self._bind_wrapped_label_height(path_label, min_height=dp(18))
+        path_card.add_widget(path_label)
+        content.add_widget(path_card)
+
+        def _sync_dialog_height(*_args):
+            dialog.height = min(
+                max(dp(190), header.height + path_card.height + dp(120)),
+                Window.height * 0.6,
+            )
+
+        path_card.bind(height=_sync_dialog_height)
+
+        close_btn = MDFlatButton(
+            text="FECHAR",
+            theme_text_color="Custom",
+            text_color=muted,
+            radius=[dp(10)],
+        )
+        open_btn = MDRaisedButton(
+            text="ABRIR PDF",
+            md_bg_color=primary,
+            radius=[dp(10)],
+        )
+
         dialog = MDDialog(
             title="PDF Gerado",
-            text=f"Arquivo criado em:\n{pdf_path}",
-            buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
-                MDRaisedButton(
-                    text="ABRIR PDF",
-                    on_release=lambda _x: self._open_pdf(dialog, pdf_path),
-                ),
-            ],
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(560), Window.width - dp(48)), dp(190)),
+            buttons=[close_btn, open_btn],
         )
+        close_btn.bind(on_release=lambda _x: dialog.dismiss())
+        open_btn.bind(on_release=lambda _x: self._open_pdf(dialog, pdf_path))
+        _sync_dialog_height()
         dialog.open()
-
     def _open_pdf(self, dialog, pdf_path):
         dialog.dismiss()
         self._ensure_pdf_viewer().view_pdf(pdf_path)
@@ -2299,8 +2510,27 @@ class AdminScreen(Screen):
         self._request_products_page(reset=True, search_text="")
 
     def refresh_products_panel(self):
-        self.load_products(force=True)
-        self.show_snackbar("A atualizar lista de produtos...")
+        """Repõe a gestão de produtos ao estado padrão e recarrega os dados."""
+        if self._filter_ev:
+            self._filter_ev.cancel()
+            self._filter_ev = None
+        self._filter_token += 1
+        self._pending_search = ""
+        self._products_page_offset = 0
+        self.filter_mode = 0
+        if self.category_menu:
+            self.category_menu.dismiss()
+        if self.category_spinner is not None:
+            self.category_spinner.text = "Todas as Categorias"
+        if self.search_input is not None and self.search_input.text:
+            # A regra KV agenda o filtro ao mudar o texto; cancelamo-lo logo
+            # abaixo para que o refresh use apenas o estado padrão.
+            self.search_input.text = ""
+        if self._filter_ev:
+            self._filter_ev.cancel()
+            self._filter_ev = None
+        self._request_products_page(reset=True, search_text="", force=True)
+        self.show_snackbar("Tela atualizada e filtros repostos.")
 
     # ------------------------------------------------------------------
     # Data loading — paged and server-filtered, matching the Manager flow.
@@ -3315,11 +3545,13 @@ class AdminScreen(Screen):
         add_row_cell(cell)
 
         cell = self._make_product_cell(8, row_h, row_bg_color, border_color)
-        action_layout = MDBoxLayout(spacing=dp(4), padding=[dp(4), 0])
+        action_anchor = AnchorLayout(anchor_x="center", anchor_y="center")
+        action_layout = MDBoxLayout(size_hint=(None, None), size=(dp(124), dp(36)), spacing=dp(8))
         action_layout.add_widget(self.create_detail_button(product, tokens=action_tokens))
         action_layout.add_widget(self.create_edit_button(product, tokens=action_tokens))
         action_layout.add_widget(self.create_delete_button(product, tokens=action_tokens))
-        cell.add_widget(action_layout)
+        action_anchor.add_widget(action_layout)
+        cell.add_widget(action_anchor)
         add_row_cell(cell)
         self._bind_product_row_hover(row_cells, row_bg_color, palette)
 
@@ -3346,29 +3578,60 @@ class AdminScreen(Screen):
             self.show_snackbar("Produto nao encontrado")
             return False
 
-        self.dialog = MDDialog(
-            title="Confirmar Eliminação",
-            text=(
-                "Produtos com vendas ou movimentos serão arquivados e removidos do catálogo. "
-                "Produtos sem histórico serão eliminados definitivamente."
-            ),
-            buttons=[
-                MDFlatButton(
-                    text="NAO",
-                    theme_text_color="Custom",
-                    text_color=[0.3, 0.3, 0.3, 1],
-                    on_release=lambda x: self.dialog.dismiss()
-                ),
-                MDRaisedButton(
-                    text="SIM",
-                    md_bg_color=[0.9, 0.3, 0.3, 1],
-                    on_release=lambda x, pid=normalized_id: self.confirm_delete(pid)
-                ),
-            ],
+        tokens = self._theme_tokens()
+        danger = tokens.get("danger", [0.9, 0.3, 0.3, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.58, 0.63, 1])
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            padding=[dp(4), dp(8), dp(4), 0],
+            size_hint_y=None,
         )
+        content.bind(minimum_height=content.setter("height"))
+
+        description = MDLabel(
+            text=(
+                "Produtos com vendas ou movimentos serão arquivados e removidos "
+                "do catálogo. Produtos sem histórico serão eliminados definitivamente."
+            ),
+            theme_text_color="Custom",
+            text_color=muted,
+            font_style="Body2",
+            halign="left",
+            valign="top",
+            size_hint_y=None,
+        )
+        self._bind_wrapped_label_height(description, min_height=dp(40))
+        content.add_widget(description)
+
+        cancel_btn = MDFlatButton(
+            text="NÃO",
+            theme_text_color="Custom",
+            text_color=muted,
+            radius=[dp(10)],
+        )
+        confirm_btn = MDRaisedButton(
+            text="SIM, ELIMINAR",
+            md_bg_color=danger,
+            radius=[dp(10)],
+        )
+
+        dialog = MDDialog(
+            title="Confirmar Eliminação",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(420), Window.width - dp(48)), dp(170)),
+            buttons=[cancel_btn, confirm_btn],
+        )
+        cancel_btn.bind(on_release=lambda _x: dialog.dismiss())
+        confirm_btn.bind(on_release=lambda _x, pid=normalized_id: self.confirm_delete(pid))
+        dialog.bind(on_dismiss=lambda *_: setattr(self, "dialog", None))
+
+        self.dialog = dialog
         self.dialog.open()
         return True
-
     def _handle_group_lot_menu_choice(self, group_product, lot_row, requested_action="select"):
         self._dismiss_lot_menu()
         selected_lot_id = self._normalize_product_id(lot_row[0] if lot_row else None)
@@ -3455,7 +3718,8 @@ class AdminScreen(Screen):
             theme_text_color="Custom",
             text_color=tokens.get("info", [0.1, 0.3, 0.9, 1]),
             md_bg_color=tokens.get("card_alt", [0.92, 0.95, 1, 1]),
-            icon_size=sp(20),
+            icon_size=sp(19), size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=0,
             hint_text="Ver detalhes",
         )
         btn.product_data = product
@@ -3471,7 +3735,8 @@ class AdminScreen(Screen):
             theme_text_color="Custom",
             text_color=tokens.get("success", [0.1, 0.65, 0.2, 1]),
             md_bg_color=tokens.get("card_alt", [0.92, 1, 0.92, 1]),
-            icon_size=sp(20),
+            icon_size=sp(19), size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=0,
             hint_text="Editar produto",
         )
         btn.product_data = product
@@ -3490,7 +3755,8 @@ class AdminScreen(Screen):
             theme_text_color="Custom",
             text_color=tokens.get("danger", [0.9, 0.2, 0.2, 1]),
             md_bg_color=tokens.get("card_alt", [1, 0.92, 0.92, 1]),
-            icon_size=sp(20),
+            icon_size=sp(19), size_hint=(None, None), size=(dp(36), dp(36)),
+            radius=[dp(18)], elevation=0,
             hint_text="Eliminar produto",
         )
         btn.product_data = product
@@ -3540,41 +3806,67 @@ class AdminScreen(Screen):
         foreground = tokens.get("text_primary", [0.92, 0.94, 0.97, 1])
         muted = tokens.get("text_secondary", [0.62, 0.67, 0.73, 1])
         surface = tokens.get("surface", [0.12, 0.14, 0.17, 1])
+        surface_alt = tokens.get("card_alt", [0.15, 0.18, 0.23, 1])
         danger = tokens.get("danger", [0.95, 0.36, 0.32, 1])
         search = MDTextField(hint_text="Pesquisar nome, codigo de barras ou ID", multiline=False,
                              mode="rectangle", icon_right="magnify", size_hint_y=None, height=dp(56))
-        rows = MDBoxLayout(orientation="vertical", spacing=dp(10), padding=[0, dp(4), dp(10), dp(4)], size_hint_y=None)
+        search.md_bg_color = surface_alt
+        search.foreground_color = foreground
+        search.hint_text_color = muted
+        search.line_color_focus = primary
+        rows = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[0, dp(2), dp(8), dp(2)], size_hint_y=None)
         rows.bind(minimum_height=rows.setter("height"))
-        list_height = max(dp(150), min(dp(380), Window.height - dp(370)))
+        def archive_list_height():
+            # Duas fichas são suficientes para leitura imediata; o restante
+            # continua disponível por scroll, sem abrir um modal gigante.
+            visible = min(max(len(products or []), 1), 2)
+            return max(dp(156), min(dp(250), visible * dp(116) + dp(8)))
+
+        list_height = archive_list_height()
         scroll = ScrollView(size_hint_y=None, height=list_height, do_scroll_x=False, bar_width=dp(4))
         scroll.add_widget(rows)
-        content = MDBoxLayout(orientation="vertical", spacing=dp(14), size_hint_y=None, height=list_height + dp(190))
-        summary = MDLabel(text="Recupere produtos com o stock e o historico preservados.",
-                          theme_text_color="Custom", text_color=muted, font_style="Body2",
-                          size_hint_y=None, height=dp(38))
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=list_height + dp(164))
+        summary = MDCard(orientation="vertical", size_hint_y=None, height=dp(46), padding=[dp(12), dp(5)],
+                         radius=[dp(10)], elevation=0, md_bg_color=[*primary[:3], .12],
+                         line_color=[*primary[:3], .30], line_width=1)
+        summary_title = MDLabel(text="Arquivo de produtos", bold=True, font_style="Body2",
+                                theme_text_color="Custom", text_color=foreground,
+                                size_hint_y=None, height=dp(18), halign="left", valign="middle")
+        summary_text = MDLabel(text="Restaure itens mantendo stock e histórico. A validade é verificada automaticamente.",
+                               theme_text_color="Custom", text_color=muted, font_style="Caption",
+                               halign="left", valign="middle")
+        for label in (summary_title, summary_text):
+            label.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
+            summary.add_widget(label)
         content.add_widget(summary)
+        search.height = dp(50)
         content.add_widget(search)
         content.add_widget(scroll)
-        navigation = MDBoxLayout(size_hint_y=None, height=dp(42))
-        previous = MDFlatButton(text="ANTERIOR")
+        navigation = MDBoxLayout(size_hint_y=None, height=dp(36))
+        previous = MDFlatButton(text="ANTERIOR", text_color=primary, radius=[dp(10)])
         counter = MDLabel(halign="center", font_style="Caption", theme_text_color="Custom", text_color=muted)
-        following = MDFlatButton(text="SEGUINTE")
+        following = MDFlatButton(text="SEGUINTE", text_color=primary, radius=[dp(10)])
         for widget in (previous, counter, following):
             navigation.add_widget(widget)
         content.add_widget(navigation)
-        close = MDFlatButton(text="FECHAR")
+        close = MDFlatButton(text="FECHAR", text_color=primary, radius=[dp(10)])
         dialog = MDDialog(title="Produtos arquivados", type="custom", content_cls=content,
                           size_hint=(None, None), width=min(dp(920), Window.width - dp(48)),
                           radius=[dp(18)] * 4, buttons=[close])
         def resize_archive_dialog(*_):
             dialog.width = min(dp(920), Window.width - dp(48))
-            scroll.height = max(dp(150), min(dp(380), Window.height - dp(370)))
-            content.height = scroll.height + dp(190)
+            scroll.height = archive_list_height()
+            content.height = scroll.height + dp(164)
             dialog.update_height()
+            if dialog._is_open:
+                render()
         Window.unbind(on_resize=dialog.update_width)
         Window.bind(on_resize=resize_archive_dialog)
         dialog.bind(on_dismiss=lambda *_: Window.unbind(on_resize=resize_archive_dialog))
         close.bind(on_release=lambda *_: dialog.dismiss())
+        # O MDDialog original calculava a altura antes de abrir. Sem este
+        # passo, o ModalView nativo inicia nos 260dp e corta o topo do arquivo.
+        resize_archive_dialog()
         page = {"index": 0}
 
         def restore(item):
@@ -3610,15 +3902,18 @@ class AdminScreen(Screen):
             pages = max(1, (len(filtered) + 19) // 20)
             page["index"] = min(page["index"], pages - 1)
             rows.clear_widgets()
+            compact_rows = dialog.width < dp(650)
             for item in filtered[page["index"] * 20:(page["index"] + 1) * 20]:
-                row = MDCard(orientation="horizontal", size_hint_y=None, spacing=dp(20),
-                             padding=dp(16), radius=[dp(12)] * 4, elevation=0, md_bg_color=surface)
-                details = MDBoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
-                details.bind(minimum_height=details.setter("height"))
+                row = MDCard(orientation="vertical" if compact_rows else "horizontal", size_hint_y=None,
+                             height=dp(164) if compact_rows else dp(116), spacing=dp(10) if compact_rows else dp(14),
+                             padding=[dp(14), dp(10)], radius=[dp(12)], elevation=0, md_bg_color=surface,
+                             line_color=[*primary[:3], .16], line_width=1)
+                details = MDBoxLayout(orientation="vertical", spacing=dp(2))
                 def add_line(text, color, style="Body2", bold=False, box=details):
                     label = MDLabel(text=text, theme_text_color="Custom", text_color=color,
-                                    font_style=style, bold=bold, size_hint_y=None, shorten=False)
-                    label.bind(texture_size=lambda widget, value: setattr(widget, "height", value[1]))
+                                    font_style=style, bold=bold, size_hint_y=None, height=dp(18),
+                                    shorten=True, shorten_from="right", halign="left", valign="middle")
+                    label.bind(size=lambda widget, *_: setattr(widget, "text_size", (widget.width, None)))
                     box.add_widget(label)
                 add_line(str(item['description']), foreground, "Subtitle1", True)
                 unit = "kg" if item.get("is_sold_by_weight") else "un."
@@ -3635,9 +3930,11 @@ class AdminScreen(Screen):
                 if expired:
                     add_line("Ao restaurar, permanece bloqueado para venda por validade.", danger, "Caption")
                 row.add_widget(details)
-                details.bind(height=lambda widget, height, card=row: setattr(card, "height", max(dp(130), height + dp(32))))
-                row.height = max(dp(130), details.height + dp(32))
-                button = MDRaisedButton(text="RESTAURAR", pos_hint={"center_y": 0.5},
+                button = MDRaisedButton(text="RESTAURAR",
+                                        size_hint=(1, None) if compact_rows else (None, None),
+                                        size=(dp(142), dp(40) if compact_rows else dp(42)),
+                                        radius=[dp(10)], elevation=1,
+                                        pos_hint={} if compact_rows else {"center_y": 0.5},
                                         md_bg_color=primary, theme_text_color="Custom",
                                         text_color=tokens.get("on_primary", [1, 1, 1, 1]))
                 button.bind(on_release=lambda _, selected=item: restore(selected))
@@ -4221,33 +4518,37 @@ class AdminScreen(Screen):
 
         items = list((payload or {}).get("items") or [])
         summary = (payload or {}).get("summary") or {}
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.12, 0.46, 0.78, 1])
+        foreground = tokens.get("text_primary", [0.15, 0.18, 0.24, 1])
+        muted = tokens.get("text_secondary", [0.35, 0.39, 0.46, 1])
+        card_alt = tokens.get("card_alt", [0.94, 0.96, 0.98, 1])
         content = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(10),
-            padding=[dp(4), dp(2), dp(4), 0],
-            size_hint_y=None,
+            spacing=dp(12),
+            padding=[dp(2), dp(2), dp(2), 0],
+            size_hint_y=1,
         )
-        content.bind(minimum_height=content.setter("height"))
 
         source_label = "IA + procura" if summary.get("ai_used") else "Procura analisada"
         api_count = int(summary.get("api_product_count") or 0)
         api_label = f" | APIs: {api_count} produtos" if api_count else ""
-        total_text = (
-            f"{len(items)} produtos | Total estimado: "
-            f"{self._format_shopping_money(summary.get('total_investment'))} | "
-            f"{source_label}{api_label}"
-        )
-        content.add_widget(
-            MDLabel(
-                text=total_text,
-                size_hint_y=None,
-                height=dp(24),
-                halign="left",
-                bold=True,
-                theme_text_color="Custom",
-                text_color=self._theme_tokens().get("text_primary", [0.15, 0.18, 0.24, 1]),
-            )
-        )
+        overview = MDBoxLayout(size_hint_y=None, height=dp(72), spacing=dp(8))
+
+        def metric_card(title, value, accent):
+            card = MDCard(orientation="vertical", padding=[dp(10), dp(8)], radius=[dp(10)], elevation=0,
+                          md_bg_color=card_alt, line_color=[*accent[:3], .30], line_width=1)
+            card.add_widget(MDLabel(text=title.upper(), font_style="Caption", theme_text_color="Custom",
+                                    text_color=muted, size_hint_y=None, height=dp(18)))
+            card.add_widget(MDLabel(text=value, bold=True, font_style="Body2", theme_text_color="Custom",
+                                    text_color=accent, halign="left", valign="middle"))
+            return card
+
+        urgency = int(summary.get("critical_count") or 0)
+        overview.add_widget(metric_card("Itens a repor", str(len(items)), primary))
+        overview.add_widget(metric_card("Custo estimado", self._format_shopping_money(summary.get("total_investment")), primary))
+        overview.add_widget(metric_card("Prioridade", f"{urgency} crítica(s)" if urgency else source_label, tokens.get("danger", primary) if urgency else primary))
+        content.add_widget(overview)
         if not items:
             empty_label = MDLabel(
                 text=(
@@ -4263,7 +4564,7 @@ class AdminScreen(Screen):
             )
             empty_label.bind(size=lambda instance, value: setattr(instance, "text_size", value))
             content.add_widget(empty_label)
-            close_btn = MDFlatButton(text="FECHAR")
+            close_btn = MDFlatButton(text="FECHAR", text_color=primary, radius=[dp(10)])
             dialog = MDDialog(
                 title="Sugestoes de Compras",
                 type="custom",
@@ -4282,36 +4583,64 @@ class AdminScreen(Screen):
             self._shopping_list_dialog = dialog
             dialog.open()
             return
-        content.add_widget(self._build_shopping_preview_row(header=True))
+        table_title = MDLabel(text="Itens sugeridos", bold=True, font_style="Body2", theme_text_color="Custom",
+                              text_color=foreground, size_hint_y=None, height=dp(22))
+        content.add_widget(table_title)
 
+        visible_items = min(max(len(items), 1), 3)
+        list_height = max(dp(150), min(dp(300), visible_items * dp(86) + max(0, visible_items - 1) * dp(8)))
         scroll = ScrollView(
             do_scroll_x=False,
             do_scroll_y=True,
             size_hint_y=None,
-            height=min(dp(360), max(dp(150), Window.height * 0.42)),
+            height=list_height,
             bar_width=dp(6),
         )
         rows_box = MDBoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            spacing=0,
+            spacing=dp(8),
         )
         rows_box.bind(minimum_height=rows_box.setter("height"))
-        for idx, item in enumerate(items):
-            rows_box.add_widget(self._build_shopping_preview_row(item=item, index=idx))
+        for item in items:
+            unit = (item or {}).get("unit") or "UN"
+            item_card = MDCard(orientation="vertical", size_hint_y=None, height=dp(86),
+                               padding=[dp(12), dp(8)], spacing=dp(4), radius=[dp(10)], elevation=0,
+                               md_bg_color=card_alt, line_color=[*primary[:3], .16], line_width=1)
+            item_card.add_widget(MDLabel(text=(item or {}).get("name") or "Produto", bold=True,
+                                         font_style="Body2", theme_text_color="Custom", text_color=foreground,
+                                         shorten=True, shorten_from="right", halign="left", valign="middle",
+                                         size_hint_y=None, height=dp(20)))
+            values = MDBoxLayout(size_hint_y=None, height=dp(34), spacing=dp(8))
+            for title, value in (
+                ("QUANTIDADE", self._format_shopping_qty((item or {}).get("needed_qty"), unit)),
+                ("PREÇO UNIT.", self._format_shopping_money((item or {}).get("unit_cost"))),
+                ("TOTAL", self._format_shopping_money((item or {}).get("purchase_cost"))),
+            ):
+                metric = MDBoxLayout(orientation="vertical")
+                metric.add_widget(MDLabel(text=title, font_style="Caption", theme_text_color="Custom", text_color=muted))
+                metric.add_widget(MDLabel(text=value, bold=True, font_style="Caption", theme_text_color="Custom",
+                                          text_color=primary if title == "TOTAL" else foreground, halign="left"))
+                values.add_widget(metric)
+            item_card.add_widget(values)
+            rows_box.add_widget(item_card)
         scroll.add_widget(rows_box)
         content.add_widget(scroll)
 
+        dialog_height = min(dp(600), max(dp(430), list_height + dp(292)))
         dialog = MDDialog(
             title="Sugestoes de Compras",
             type="custom",
             content_cls=content,
             size_hint=(None, None),
-            size=(min(dp(760), Window.width * 0.92), min(dp(560), Window.height * 0.88)),
+            size=(min(dp(760), Window.width * 0.92), min(dialog_height, Window.height * 0.88)),
             buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda _btn: dialog.dismiss()),
+                MDFlatButton(text="FECHAR", text_color=primary, radius=[dp(10)],
+                             on_release=lambda _btn: dialog.dismiss()),
                 MDRaisedButton(
                     text="GERAR PDF",
+                    md_bg_color=primary,
+                    radius=[dp(10)],
                     on_release=lambda _btn, data=payload: self.generate_shopping_list_pdf(
                         payload=data,
                         dialog=dialog,
@@ -4561,27 +4890,65 @@ class AdminScreen(Screen):
 
     def show_physical_inventory_history(self):
         rows = self.db.list_physical_inventories(limit=100) or []
-        container = MDBoxLayout(orientation="vertical", spacing=dp(7), size_hint_y=None)
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.12, 0.46, 0.78, 1])
+        foreground = tokens.get("text_primary", [0.15, 0.18, 0.24, 1])
+        muted = tokens.get("text_secondary", [0.35, 0.39, 0.46, 1])
+        card_alt = tokens.get("card_alt", [0.94, 0.96, 0.98, 1])
+        status_colors = {
+            "COUNTING": tokens.get("warning", primary),
+            "COMPLETED": tokens.get("success", primary),
+            "CANCELLED": tokens.get("danger", primary),
+        }
+        container = MDBoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
         container.bind(minimum_height=container.setter("height"))
         if not rows:
-            container.add_widget(MDLabel(text="Nenhum inventario registado.", halign="center", size_hint_y=None, height=dp(50)))
+            container.add_widget(MDLabel(text="Ainda não há inventários registados.", halign="center",
+                                         theme_text_color="Custom", text_color=muted,
+                                         size_hint_y=None, height=dp(72)))
         status_labels = {"COUNTING": "Em contagem", "COMPLETED": "Concluido", "CANCELLED": "Cancelado"}
         for item in rows:
             finished_at = item.get("completed_at") or item.get("cancelled_at") or "-"
-            container.add_widget(MDLabel(
-                text=(
-                    f"#{item.get('id')}  {item.get('name')}  -  {status_labels.get(item.get('status'), item.get('status'))}\n"
-                    f"Inicio: {item.get('started_at')} | Fim: {finished_at} | "
-                    f"Contados: {item.get('counted_items', 0)}/{item.get('total_items', 0)} | "
-                    f"Divergencias: {item.get('divergent_items', 0)}"
-                ),
-                size_hint_y=None, height=dp(58), theme_text_color="Secondary",
-            ))
-        scroll = ScrollView(size_hint_y=None, height=dp(430), do_scroll_x=False)
+            status = str(item.get("status") or "").upper()
+            accent = status_colors.get(status, primary)
+            card = MDCard(orientation="vertical", size_hint_y=None, height=dp(104), spacing=dp(5),
+                          padding=[dp(12), dp(9)], radius=[dp(10)], elevation=0,
+                          md_bg_color=card_alt, line_color=[*accent[:3], .28], line_width=1)
+            header = MDBoxLayout(size_hint_y=None, height=dp(20), spacing=dp(8))
+            header.add_widget(MDLabel(text=f"#{item.get('id')}  {item.get('name') or 'Inventário'}", bold=True,
+                                      shorten=True, shorten_from="right", theme_text_color="Custom",
+                                      text_color=foreground, halign="left"))
+            header.add_widget(MDLabel(text=status_labels.get(status, status or "-"), bold=True,
+                                      size_hint_x=None, width=dp(102), halign="right", theme_text_color="Custom",
+                                      text_color=accent, font_style="Caption"))
+            card.add_widget(header)
+            period = MDLabel(text=f"Início: {item.get('started_at') or '-'}   •   Fim: {finished_at}",
+                             size_hint_y=None, height=dp(18), shorten=True, shorten_from="right",
+                             theme_text_color="Custom", text_color=muted, font_style="Caption")
+            card.add_widget(period)
+            metrics = MDBoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+            for label, value, color in (
+                ("CONTADOS", f"{item.get('counted_items', 0)}/{item.get('total_items', 0)}", primary),
+                ("DIVERGÊNCIAS", str(item.get('divergent_items', 0)), tokens.get("danger", primary)),
+            ):
+                metric = MDBoxLayout(orientation="horizontal", spacing=dp(5))
+                metric.add_widget(MDLabel(text=label, font_style="Caption", theme_text_color="Custom", text_color=muted))
+                metric.add_widget(MDLabel(text=value, bold=True, font_style="Caption", theme_text_color="Custom", text_color=color))
+                metrics.add_widget(metric)
+            card.add_widget(metrics)
+            container.add_widget(card)
+        visible_rows = min(max(len(rows), 1), 3)
+        list_height = max(dp(104), min(dp(328), visible_rows * dp(104) + max(0, visible_rows - 1) * dp(8)))
+        scroll = ScrollView(size_hint_y=None, height=list_height, do_scroll_x=False, bar_width=dp(4))
         scroll.add_widget(container)
-        close_btn = MDFlatButton(text="FECHAR")
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=1)
+        content.add_widget(scroll)
+        close_btn = MDFlatButton(text="FECHAR", text_color=primary, radius=[dp(10)])
+        dialog_height = min(dp(520), max(dp(260), list_height + dp(150)))
         dialog = MDDialog(
-            title="Historico de inventarios", type="custom", content_cls=scroll,
+            title="Histórico de inventários", type="custom", content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(760), Window.width - dp(48)), min(dialog_height, Window.height * .86)),
             buttons=[close_btn],
         )
         close_btn.bind(on_release=lambda _b: dialog.dismiss())
@@ -4589,34 +4956,61 @@ class AdminScreen(Screen):
 
     def _show_physical_inventory_workspace(self, inventory):
         inventory_id = int(inventory.get("id"))
-        summary_label = MDLabel(size_hint_y=None, height=dp(58), theme_text_color="Secondary")
-        search_input = MDTextField(hint_text="Pesquisar produto ou ID", multiline=False)
-        results = MDBoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.12, 0.46, 0.78, 1])
+        foreground = tokens.get("text_primary", [0.15, 0.18, 0.24, 1])
+        muted = tokens.get("text_secondary", [0.35, 0.39, 0.46, 1])
+        card_alt = tokens.get("card_alt", [0.94, 0.96, 0.98, 1])
+
+        summary_card = MDBoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
+        summary_values = {}
+        for key, title, accent in (
+            ("counted", "CONTADOS", primary),
+            ("pending", "PENDENTES", tokens.get("warning", primary)),
+            ("divergent", "DIVERGÊNCIAS", tokens.get("danger", primary)),
+        ):
+            metric = MDCard(orientation="vertical", padding=[dp(10), dp(7)], radius=[dp(10)], elevation=0,
+                            md_bg_color=card_alt, line_color=[*accent[:3], .28], line_width=1)
+            metric.add_widget(MDLabel(text=title, font_style="Caption", theme_text_color="Custom",
+                                      text_color=muted, size_hint_y=None, height=dp(17)))
+            value = MDLabel(bold=True, font_style="Body2", theme_text_color="Custom", text_color=accent)
+            metric.add_widget(value)
+            summary_values[key] = value
+            summary_card.add_widget(metric)
+
+        search_input = MDTextField(hint_text="Pesquisar produto ou ID", multiline=False,
+                                   icon_right="magnify", size_hint_y=None, height=dp(50))
+        search_input.md_bg_color = card_alt
+        search_input.foreground_color = foreground
+        search_input.hint_text_color = muted
+        search_input.line_color_focus = primary
+        results = MDBoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
         results.bind(minimum_height=results.setter("height"))
-        scroll = ScrollView(size_hint_y=None, height=dp(390), do_scroll_x=False)
+        scroll = ScrollView(size_hint_y=None, height=dp(264), do_scroll_x=False, bar_width=dp(4))
         scroll.add_widget(results)
-        content = MDBoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None, height=dp(500))
-        content.add_widget(summary_label)
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(2), dp(34), dp(2), 0],
+                              size_hint_y=None, height=dp(428))
+        content.add_widget(summary_card)
         content.add_widget(search_input)
         content.add_widget(scroll)
-        refresh_btn = MDFlatButton(text="PESQUISAR")
-        cancel_btn = MDFlatButton(text="CANCELAR INVENTARIO")
-        finish_btn = MDRaisedButton(text="CONCLUIR")
-        close_btn = MDFlatButton(text="FECHAR")
+        refresh_btn = MDFlatButton(text="PESQUISAR", text_color=primary, radius=[dp(10)])
+        cancel_btn = MDFlatButton(text="CANCELAR INVENTÁRIO", text_color=tokens.get("danger", primary), radius=[dp(10)])
+        finish_btn = MDRaisedButton(text="CONCLUIR", md_bg_color=primary, radius=[dp(10)])
+        close_btn = MDFlatButton(text="FECHAR", text_color=primary, radius=[dp(10)])
         dialog = MDDialog(
             title=f"Inventario #{inventory_id} - {inventory.get('name') or ''}",
             type="custom", content_cls=content,
+            size_hint=(None, None),
+            size=(min(dp(900), Window.width - dp(48)), min(dp(570), Window.height - dp(48))),
             buttons=[close_btn, refresh_btn, cancel_btn, finish_btn],
         )
         close_btn.bind(on_release=lambda _b: dialog.dismiss())
 
         def refresh(*_args):
             summary = self.db.get_physical_inventory_summary(inventory_id) or {}
-            summary_label.text = (
-                f"Contados: {summary.get('counted_items', 0)}/{summary.get('total_items', 0)}   |   "
-                f"Pendentes: {summary.get('pending_items', 0)}   |   "
-                f"Com divergencia: {summary.get('divergent_items', 0)}"
-            )
+            summary_values["counted"].text = f"{summary.get('counted_items', 0)} / {summary.get('total_items', 0)}"
+            summary_values["pending"].text = str(summary.get('pending_items', 0))
+            summary_values["divergent"].text = str(summary.get('divergent_items', 0))
             rows = self.db.get_physical_inventory_items(
                 inventory_id, query=search_input.text, limit=100,
             ) or []
@@ -4625,14 +5019,18 @@ class AdminScreen(Screen):
                 results.add_widget(MDLabel(text="Nenhum produto encontrado.", halign="center", size_hint_y=None, height=dp(48)))
                 return
             for item in rows:
-                row = MDBoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8), padding=[dp(6), 0])
+                row = MDCard(orientation="horizontal", size_hint_y=None, height=dp(76), spacing=dp(12),
+                             padding=[dp(12), dp(8)], radius=[dp(10)], elevation=0, md_bg_color=card_alt,
+                             line_color=[*primary[:3], .16], line_width=1)
                 counted = item.get("counted_qty")
                 count_text = "Pendente" if counted is None else f"Contado: {counted:g} {item.get('unit')} | Dif.: {float(item.get('difference_qty') or 0):+g}"
                 row.add_widget(MDLabel(
                     text=f"{item.get('product_name')}\nSistema: {float(item.get('snapshot_qty') or 0):g} {item.get('unit')} | {count_text}",
-                    theme_text_color="Primary", size_hint_x=0.78,
+                    theme_text_color="Custom", text_color=foreground, size_hint_x=1,
+                    halign="left", valign="middle",
                 ))
-                count_btn = MDRaisedButton(text="CONTAR", size_hint_x=None, width=dp(92))
+                count_btn = MDRaisedButton(text="CONTAR", size_hint=(None, None), size=(dp(98), dp(40)),
+                                           radius=[dp(10)], md_bg_color=primary, pos_hint={"center_y": .5})
                 count_btn.bind(on_release=lambda _b, selected=dict(item): open_count(selected))
                 row.add_widget(count_btn)
                 results.add_widget(row)

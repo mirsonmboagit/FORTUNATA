@@ -11,11 +11,10 @@ from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty
 from kivy.uix.widget import Widget
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
+from ui.components.native_widgets import (
+    NativeBoxLayout, NativeButton, NativeCard, NativeDialog, NativeFlatButton,
+    NativeLabel, NativeScreen,
+)
 from database.provider import get_db
 from utils.screens.reports_screen import DateRangeDialog
 from utils.config.paths import resolve_path, temp_path
@@ -39,7 +38,7 @@ LOSS_LABELS = {
 }
 
 
-class LossesHistoryScreen(MDScreen):
+class LossesHistoryScreen(NativeScreen):
     ENTER_CACHE_SECONDS = 5
     compact_mode = BooleanProperty(False)
 
@@ -314,7 +313,6 @@ class LossesHistoryScreen(MDScreen):
             return datetime.fromisoformat(str(value))
         except Exception:
             return None
-
     def _create_loss_row(self, row, index, theme=None):
         if isinstance(row, dict):
             created_at = row.get("created_at")
@@ -328,8 +326,13 @@ class LossesHistoryScreen(MDScreen):
             created_by = row.get("created_by")
             evidence_id = row.get("evidence_id")
         else:
-            created_at, product, movement_type, qty, unit, total_cost, total_price, reason, created_by = row
-            evidence_id = None
+            row = tuple(row)
+            if len(row) < 10:
+                row = row + (None,) * (10 - len(row))
+            (
+                created_at, product, movement_type, qty, unit,
+                total_cost, total_price, reason, created_by, evidence_id,
+            ) = row[:10]
         theme = theme or {
             "bg_even": _theme_color("surface_alt", [0.98, 0.99, 1, 1]),
             "bg_odd": _theme_color("card", [1, 1, 1, 1]),
@@ -364,7 +367,7 @@ class LossesHistoryScreen(MDScreen):
         else:
             date_hint, product_hint, type_hint, qty_hint, cost_hint, user_hint, evidence_hint = 0.14, 0.30, 0.14, 0.10, 0.12, 0.12, 0.08
 
-        line = MDBoxLayout(
+        line = NativeCard(
             size_hint_y=None,
             height=dp(48),
             padding=[dp(16), dp(8)],
@@ -372,7 +375,7 @@ class LossesHistoryScreen(MDScreen):
             md_bg_color=bg,
         )
 
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=date_str,
             size_hint_x=date_hint,
             halign="left",
@@ -380,7 +383,7 @@ class LossesHistoryScreen(MDScreen):
             theme_text_color="Custom",
             text_color=text_secondary,
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=str(product),
             size_hint_x=product_hint,
             halign="left",
@@ -390,7 +393,7 @@ class LossesHistoryScreen(MDScreen):
             shorten=True,
             shorten_from="right",
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=label,
             size_hint_x=type_hint,
             halign="center",
@@ -398,7 +401,7 @@ class LossesHistoryScreen(MDScreen):
             theme_text_color="Custom",
             text_color=text_secondary,
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=qty_str,
             size_hint_x=qty_hint,
             halign="center",
@@ -406,7 +409,7 @@ class LossesHistoryScreen(MDScreen):
             theme_text_color="Custom",
             text_color=text_secondary,
         ))
-        line.add_widget(MDLabel(
+        line.add_widget(NativeLabel(
             text=cost_str,
             size_hint_x=cost_hint,
             halign="right",
@@ -415,7 +418,7 @@ class LossesHistoryScreen(MDScreen):
             text_color=theme["danger"],
         ))
         if not self.compact_mode:
-            line.add_widget(MDLabel(
+            line.add_widget(NativeLabel(
                 text=created_by or "N/A",
                 size_hint_x=user_hint,
                 halign="right",
@@ -427,16 +430,21 @@ class LossesHistoryScreen(MDScreen):
             ))
 
         if movement_type == "DAMAGE" and evidence_id:
-            line.add_widget(MDFlatButton(
+            evidence_payload = {
+                "evidence_id": evidence_id,
+                "reason": reason,
+                "note": row.get("note") if isinstance(row, dict) else None,
+            }
+            line.add_widget(NativeFlatButton(
                 text="FOTO",
                 size_hint_x=evidence_hint,
                 font_size=dp(10),
-                on_release=lambda _x, item=dict(row): self.open_damage_evidence(item),
+                on_release=lambda _x, item=evidence_payload: self.open_damage_evidence(item),
             ))
         else:
             line.add_widget(Widget(size_hint_x=evidence_hint))
 
-        container = MDBoxLayout(
+        container = NativeBoxLayout(
             orientation="vertical",
             size_hint_y=None,
             height=dp(49),
@@ -481,26 +489,26 @@ class LossesHistoryScreen(MDScreen):
         if not result.get("ok"):
             self._show_simple_dialog("Evidencia", result.get("message") or "Falha ao abrir evidencia.")
             return
-        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=dp(6))
+        content = NativeBoxLayout(orientation="vertical", spacing=dp(8), padding=dp(6))
         content.add_widget(Image(
             source=result["preview_path"], allow_stretch=True, keep_ratio=True,
             size_hint_y=None, height=dp(230),
         ))
-        content.add_widget(MDLabel(
+        content.add_widget(NativeLabel(
             text=f"Motivo registado: {(row or {}).get('reason') or '—'}",
             size_hint_y=None, height=dp(24), font_size=dp(11),
         ))
         note = str((row or {}).get("note") or "").strip()
         if note:
-            content.add_widget(MDLabel(
+            content.add_widget(NativeLabel(
                 text=f"Observacao: {note}",
                 size_hint_y=None, height=dp(32), font_size=dp(11),
             ))
-        dialog = MDDialog(
+        dialog = NativeDialog(
             title="Foto do produto danificado",
             type="custom",
             content_cls=content,
-            buttons=[MDFlatButton(text="Fechar", on_release=lambda _x: dialog.dismiss())],
+            buttons=[NativeFlatButton(text="Fechar", on_release=lambda _x: dialog.dismiss())],
         )
         dialog.open()
 
@@ -548,12 +556,12 @@ class LossesHistoryScreen(MDScreen):
         self._show_pdf_success((result or {}).get("path"))
 
     def _show_pdf_success(self, pdf_path):
-        dialog = MDDialog(
+        dialog = NativeDialog(
             title="PDF Gerado",
             text=f"Arquivo criado em:\n{pdf_path}",
             buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(
+                NativeFlatButton(text="FECHAR", on_release=lambda x: dialog.dismiss()),
+                NativeButton(
                     text="ABRIR",
                     md_bg_color=_theme_color("info", (0.15, 0.45, 0.75, 1)),
                     on_release=lambda x: self._open_pdf(dialog, pdf_path),
@@ -567,9 +575,9 @@ class LossesHistoryScreen(MDScreen):
         self._ensure_pdf_viewer().view_pdf(pdf_path)
 
     def _show_simple_dialog(self, title, message):
-        dialog = MDDialog(
+        dialog = NativeDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text="OK", on_release=lambda x: dialog.dismiss())],
+            buttons=[NativeFlatButton(text="OK", on_release=lambda x: dialog.dismiss())],
         )
         dialog.open()

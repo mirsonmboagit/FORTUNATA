@@ -10,7 +10,7 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.properties import BooleanProperty, ObjectProperty, StringProperty
-from kivymd.uix.screen import MDScreen
+from ui.components.native_widgets import NativeScreen
 
 from database.client import DatabaseClient
 from utils.config.app_config import save_remote_connection
@@ -24,7 +24,7 @@ except Exception:
 Builder.load_file(str(KV_PATH))
 
 
-class MobileConnectionScreen(MDScreen):
+class MobileConnectionScreen(NativeScreen):
     """Ecran que testa a API antes de guardar a configuracao no telefone."""
 
     endpoint_field = ObjectProperty(None)

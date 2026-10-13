@@ -6,23 +6,18 @@ import webbrowser
 from collections import Counter
 from datetime import datetime
 from threading import Thread
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import (
-    MDRaisedButton,
-    MDFlatButton,
-    MDRectangleFlatButton,
-    MDRectangleFlatIconButton,
-    MDIconButton,
+from ui.components.native_widgets import (
+    NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
+    NativeCard as MDCard, NativeCheckbox as MDCheckbox,
+    NativeDialog as MDDialog, NativeDropdownMenu as MDDropdownMenu,
+    NativeFlatButton as MDFlatButton, NativeIcon as MDIcon,
+    NativeIconButton as MDIconButton, NativeIconTextButton as MDRectangleFlatIconButton,
+    NativeLabel as MDLabel, NativeListItem as OneLineListItem,
+    NativeListItem as TwoLineListItem, NativeProgressBar as MDProgressBar,
+    NativeScreen as MDScreen, NativeScrollView as MDScrollView,
+    NativeSwitch as MDSwitch, NativeTextField as MDTextField,
 )
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.label import MDLabel, MDIcon
-from kivymd.uix.card import MDCard
-from kivymd.uix.list import TwoLineListItem, OneLineListItem
-from kivymd.uix.selectioncontrol import MDCheckbox, MDSwitch
-from kivymd.uix.menu import MDDropdownMenu
-from kivymd.uix.progressbar import MDProgressBar
+MDRectangleFlatButton = MDFlatButton
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -49,6 +44,250 @@ from utils.hardware.thermal_printer import (
     print_thermal_receipt,
 )
 from kivy.lang import Builder
+
+
+class StyledSettingsDialog(MDDialog):
+    """Dialogo base: altura ajustada ao conteudo, contraste e redimensionamento."""
+
+    _CHROME = 96  # titulo + margens + barra de botoes (dp)
+
+    def __init__(self, *args, **kwargs):
+        self._explicit_height = "height" in kwargs
+        self._explicit_width = "width" in kwargs
+        self._explicit_size_hint = "size_hint" in kwargs
+        # Nunca deixar size_hint_y=1 engolir o ecran sem controlo
+        if not self._explicit_size_hint and "size_hint_y" not in kwargs:
+            kwargs.setdefault("size_hint_y", None)
+        if not self._explicit_width and "size_hint_x" not in kwargs:
+            kwargs.setdefault("size_hint_x", None)
+        super().__init__(*args, **kwargs)
+
+        if getattr(self, "type", None) == "custom":
+            if not self._explicit_width and not getattr(self, "width", None):
+                self.width = self._preferred_width()
+            # Sempre agendar fit — mesmo com height explicita (pode estar desatualizada)
+            Clock.schedule_once(self._fit_custom_content, 0)
+            Clock.schedule_once(self._fit_custom_content, 0.05)
+            Clock.schedule_once(self._fit_custom_content, 0.15)
+            self.bind(on_pre_open=lambda *_: Clock.schedule_once(self._fit_custom_content, 0))
+            self.bind(on_open=lambda *_: Clock.schedule_once(self._fit_custom_content, 0.02))
+            try:
+                Window.bind(on_resize=self._on_window_resize)
+            except Exception:
+                pass
+
+        if hasattr(self, "radius"):
+            self.radius = [dp(16), dp(16), dp(16), dp(16)]
+        if hasattr(self, "elevation"):
+            self.elevation = 8
+        self._apply_theme_colors()
+        self._style_buttons()
+
+    def _theme(self):
+        try:
+            app = App.get_running_app()
+            return getattr(app, "theme_tokens", {}) if app else {}
+        except Exception:
+            return {}
+
+    def _apply_theme_colors(self):
+        tokens = self._theme()
+        if hasattr(self, "md_bg_color"):
+            try:
+                self.md_bg_color = tokens.get("card", [0.08, 0.11, 0.16, 1])
+            except Exception:
+                pass
+
+    def _style_buttons(self):
+        """Garante contraste legivel nos botoes do dialogo."""
+        tokens = self._theme()
+        primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_secondary = tokens.get("text_secondary", [0.70, 0.74, 0.80, 1])
+        buttons = getattr(self, "buttons", None) or []
+        for btn in buttons:
+            try:
+                # Raised / fill
+                if hasattr(btn, "md_bg_color") and getattr(btn, "md_bg_color", None):
+                    # so forca se parecer o default fraco
+                    pass
+                # Flat: texto com cor primaria legivel
+                if btn.__class__.__name__ in ("NativeFlatButton", "MDFlatButton") or "Flat" in btn.__class__.__name__:
+                    if hasattr(btn, "theme_text_color"):
+                        btn.theme_text_color = "Custom"
+                    if hasattr(btn, "text_color"):
+                        btn.text_color = primary
+            except Exception:
+                pass
+
+    def _preferred_width(self):
+        return min(dp(680), max(dp(360), Window.width - dp(48)))
+
+    def _preferred_max_height(self):
+        return max(dp(240), Window.height - dp(56))
+
+    def _on_window_resize(self, *_args):
+        Clock.schedule_once(self._fit_custom_content, 0)
+
+    def _content_height(self, content):
+        try:
+            h = float(getattr(content, "height", 0) or 0)
+            mh = float(getattr(content, "minimum_height", 0) or 0)
+            return max(h, mh)
+        except Exception:
+            return 0.0
+
+    def _fit_custom_content(self, *_args):
+        """Ajusta o cartao ao conteudo sem deixar formularios sair do dialogo."""
+        if getattr(self, "type", None) != "custom":
+            return
+        content = getattr(self, "content_cls", None)
+        if content is None:
+            return
+
+        # Forcar recalculo de minimum_height em layouts adaptativos
+        try:
+            if hasattr(content, "minimum_height"):
+                # trigger bind
+                content.height = max(float(content.minimum_height or 0), float(content.height or 0))
+        except Exception:
+            pass
+
+        content_height = self._content_height(content)
+        if content_height <= 1:
+            Clock.schedule_once(self._fit_custom_content, 0.08)
+            return
+
+        chrome = dp(self._CHROME)
+        min_height = dp(200)
+        max_height = self._preferred_max_height()
+        target = content_height + chrome
+
+        # Se o conteudo for muito alto, limita e deixa o ScrollView (se existir) rolar
+        self.height = min(max(target, min_height), max_height)
+
+        if not self._explicit_width:
+            self.width = self._preferred_width()
+
+        try:
+            content.width = max(dp(260), self.width - dp(36))
+        except Exception:
+            pass
+
+        # Se houver ScrollView como content, dar-lhe altura util
+        try:
+            from kivy.uix.scrollview import ScrollView as _SV
+            if isinstance(content, _SV) or content.__class__.__name__ in ("ScrollView", "NativeScrollView", "MDScrollView"):
+                inner = content.children[0] if content.children else None
+                usable = max(dp(120), self.height - chrome)
+                content.height = usable
+                if inner is not None and hasattr(inner, "height"):
+                    # inner mantem minimum_height; scroll cuida do resto
+                    pass
+        except Exception:
+            pass
+
+    def dismiss(self, *args, **kwargs):
+        try:
+            Window.unbind(on_resize=self._on_window_resize)
+        except Exception:
+            pass
+        return super().dismiss(*args, **kwargs)
+
+
+# Todos os popups desta tela passam a usar o mesmo acabamento.
+MDDialog = StyledSettingsDialog
+
+
+def compact_message_dialog(title, message, buttons=None, width=None):
+    """Dialogo compacto type=custom — evita texto fora do cartao."""
+    tokens = {}
+    try:
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+    except Exception:
+        pass
+    text_primary = tokens.get("text_primary", [0.90, 0.92, 0.95, 1])
+    primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
+
+    content = MDBoxLayout(
+        orientation="vertical",
+        spacing=dp(6),
+        padding=[dp(12), dp(8), dp(12), dp(4)],
+        size_hint_y=None,
+    )
+    content.bind(minimum_height=content.setter("height"))
+    label = MDLabel(
+        text=str(message or ""),
+        theme_text_color="Custom",
+        text_color=text_primary,
+        size_hint_y=None,
+        font_size="13sp",
+    )
+    label.bind(
+        width=lambda inst, _w: setattr(inst, "text_size", (inst.width, None)),
+        texture_size=lambda inst, size: setattr(inst, "height", max(dp(24), size[1])),
+    )
+    content.add_widget(label)
+
+    dlg_w = width or min(dp(400), max(dp(280), Window.width - dp(40)))
+    # altura estimada
+    dlg_h = min(dp(220), max(dp(150), Window.height * 0.28))
+
+    if buttons is None:
+        buttons = [MDFlatButton(text="OK", theme_text_color="Custom", text_color=primary)]
+
+    dialog = MDDialog(
+        title=str(title or ""),
+        type="custom",
+        content_cls=content,
+        size_hint=(None, None),
+        width=dlg_w,
+        height=dlg_h,
+        auto_dismiss=False,
+        buttons=buttons,
+    )
+    # bind OK to dismiss if default
+    for b in buttons:
+        if getattr(b, "text", "") in ("OK", "Fechar", "FECHAR") and not getattr(b, "on_release", None):
+            b.bind(on_release=lambda *_: dialog.dismiss())
+    return dialog
+
+
+def compact_confirm_dialog(title, message, on_confirm, confirm_text="Iniciar", cancel_text="Cancelar"):
+    """Confirmacao compacta com texto dentro do cartao."""
+    tokens = {}
+    try:
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+    except Exception:
+        pass
+    primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
+    dialog_holder = [None]
+
+    def _cancel(*_):
+        if dialog_holder[0]:
+            dialog_holder[0].dismiss()
+
+    def _ok(*_):
+        if dialog_holder[0]:
+            dialog_holder[0].dismiss()
+        if callable(on_confirm):
+            on_confirm()
+
+    buttons = [
+        MDFlatButton(text=cancel_text, theme_text_color="Custom", text_color=primary, on_release=_cancel),
+        MDRaisedButton(text=confirm_text, size_hint=(None, None), size=(dp(110), dp(36)), on_release=_ok),
+    ]
+    dialog_holder[0] = compact_message_dialog(title, message, buttons=buttons)
+    # refit height a bit taller for 2 buttons
+    try:
+        dialog_holder[0].height = min(dp(240), max(dp(160), Window.height * 0.30))
+    except Exception:
+        pass
+    return dialog_holder[0]
+
+
 from utils.business.security_questions import QUESTIONS
 from utils.business.email_service import save_smtp_settings
 from utils.business.vat import VAT_RULES, DEFAULT_VAT_RULE_CODE, describe_vat_choice
@@ -378,31 +617,31 @@ class SmtpSettingsDialog:
             )
             help_banner = MDCard(
                 orientation="horizontal",
-                padding=[dp(12), dp(8)],
-                spacing=dp(10),
+                padding=[dp(10), dp(6)],
+                spacing=dp(8),
                 size_hint_y=None,
-                height=dp(92),
-                radius=[dp(12)],
+                height=dp(64),
+                radius=[dp(10)],
                 elevation=0,
-                md_bg_color=[0.91, 0.95, 1, 1],
+                md_bg_color=[0.12, 0.18, 0.28, 1],
             )
             help_banner.add_widget(MDIcon(
                 icon="information-outline",
                 theme_text_color="Custom",
-                text_color=[0.10, 0.38, 0.75, 1],
+                text_color=[0.45, 0.70, 1.0, 1],
                 size_hint_x=None,
-                width=dp(28),
+                width=dp(24),
             ))
-            help_text = MDBoxLayout(orientation="vertical", spacing=dp(2))
+            help_text = MDBoxLayout(orientation="vertical", spacing=dp(0))
             help_text.add_widget(MDLabel(
-                text="Gmail: ative a verificacao em duas etapas e crie uma senha de aplicacao.",
-                theme_text_color="Custom", text_color=[0.12, 0.18, 0.28, 1],
-                font_style="Caption", size_hint_y=None, height=dp(34),
+                text="Gmail: 2FA + senha de aplicacao.",
+                theme_text_color="Custom", text_color=[0.85, 0.88, 0.92, 1],
+                font_style="Caption", size_hint_y=None, height=dp(20),
             ))
             help_text.add_widget(MDFlatButton(
-                text="ABRIR SENHAS DO GOOGLE",
-                theme_text_color="Custom", text_color=[0.10, 0.38, 0.75, 1],
-                size_hint_x=None, width=dp(220), size_hint_y=None, height=dp(34),
+                text="Senhas Google",
+                theme_text_color="Custom", text_color=[0.45, 0.70, 1.0, 1],
+                size_hint_x=None, width=dp(140), size_hint_y=None, height=dp(28),
                 on_release=lambda *_: webbrowser.open("https://myaccount.google.com/apppasswords"),
             ))
             help_banner.add_widget(help_text)
@@ -461,6 +700,9 @@ class SmtpSettingsDialog:
                 title="Configurar envio de e-mail",
                 type="custom",
                 content_cls=content,
+                width=min(dp(520), max(dp(340), Window.width - dp(32))),
+                height=min(dp(480), max(dp(320), Window.height - dp(56))),
+                size_hint=(None, None),
                 auto_dismiss=False,
                 buttons=[
                     MDFlatButton(text="CANCELAR", on_release=self.dismiss),
@@ -534,6 +776,9 @@ class RecoveryCodesDialog:
         self.dialog = MDDialog(
             title="Codigos de emergencia",
             type="custom", content_cls=content, auto_dismiss=False,
+            width=min(dp(420), max(dp(300), Window.width - dp(32))),
+            height=min(dp(280), max(dp(220), Window.height - dp(56))),
+            size_hint=(None, None),
             buttons=[MDFlatButton(text="FECHAR", on_release=self.dismiss)],
         )
         self.dialog.open()
@@ -578,83 +823,56 @@ class ChangeAdminDataDialog:
         if not self.dialog:
             content = MDBoxLayout(
                 orientation='vertical',
-                spacing=dp(15),
-                padding=dp(20),
-                adaptive_height=True
-            )
-
-            content.add_widget(MDLabel(
-                text='Atualize suas credenciais de acesso',
-                theme_text_color='Secondary',
+                spacing=dp(6),
+                padding=[dp(12), dp(6), dp(12), dp(4)],
                 size_hint_y=None,
-                height=dp(30)
-            ))
-
-            self.current_username = MDTextField(
-                hint_text='Usuario Atual',
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56)
+                adaptive_height=True,
             )
-            content.add_widget(self.current_username)
+            content.bind(minimum_height=content.setter("height"))
 
-            self.new_username = MDTextField(
-                hint_text='Novo Usuario (opcional)',
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56)
-            )
-            content.add_widget(self.new_username)
+            def _field(hint, password=False):
+                f = MDTextField(
+                    hint_text=hint,
+                    mode='rectangle',
+                    password=password,
+                    size_hint_y=None,
+                    height=dp(44),
+                    font_size="13sp",
+                )
+                content.add_widget(f)
+                return f
 
-            self.new_email = MDTextField(
-                hint_text='Novo e-mail de recuperacao (opcional)',
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56)
-            )
-            content.add_widget(self.new_email)
-
-            self.current_password = MDTextField(
-                hint_text='Senha Atual',
-                password=True,
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56)
-            )
-            content.add_widget(self.current_password)
-
-            self.new_password = MDTextField(
-                hint_text='Nova Senha (opcional)',
-                password=True,
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56)
-            )
-            content.add_widget(self.new_password)
-
-            self.confirm_password = MDTextField(
-                hint_text='Confirmar Nova Senha',
-                password=True,
-                mode='rectangle',
-                size_hint_y=None,
-                height=dp(56)
-            )
-            content.add_widget(self.confirm_password)
+            self.current_username = _field('Utilizador atual')
+            self.new_username = _field('Novo utilizador (opcional)')
+            self.new_email = _field('Novo e-mail (opcional)')
+            self.current_password = _field('Palavra-passe atual', password=True)
+            self.new_password = _field('Nova palavra-passe (opcional)', password=True)
+            self.confirm_password = _field('Confirmar nova palavra-passe', password=True)
 
             self.dialog = MDDialog(
-                title='Alterar Dados do Administrador',
+                title='Credenciais do administrador',
                 type='custom',
                 content_cls=content,
+                width=min(dp(420), max(dp(300), Window.width - dp(32))),
+                height=min(dp(400), max(dp(280), Window.height - dp(56))),
+                size_hint=(None, None),
+                auto_dismiss=False,
                 buttons=[
                     MDFlatButton(
                         text='CANCELAR',
-                        on_release=self.dismiss
+                        theme_text_color='Custom',
+                        text_color=[0.35, 0.55, 0.90, 1],
+                        size_hint=(None, None),
+                        height=dp(36),
+                        on_release=self.dismiss,
                     ),
                     MDRaisedButton(
                         text='SALVAR',
-                        on_release=self.save_changes
-                    )
-                ]
+                        size_hint=(None, None),
+                        size=(dp(110), dp(36)),
+                        on_release=self.save_changes,
+                    ),
+                ],
             )
             self._field_navigation = FormKeyboardController(
                 host=self.dialog,
@@ -854,7 +1072,7 @@ class AddUserDialog:
                 hint_text='Nome de Usuário',
                 mode='rectangle',
                 size_hint_y=None,
-                height=dp(56)
+                height=dp(52)
             )
             content.add_widget(self.username)
 
@@ -862,7 +1080,7 @@ class AddUserDialog:
                 hint_text='E-mail de recuperacao',
                 mode='rectangle',
                 size_hint_y=None,
-                height=dp(56)
+                height=dp(52)
             )
             content.add_widget(self.email)
 
@@ -871,7 +1089,7 @@ class AddUserDialog:
                 password=True,
                 mode='rectangle',
                 size_hint_y=None,
-                height=dp(56)
+                height=dp(52)
             )
             content.add_widget(self.password)
 
@@ -882,15 +1100,19 @@ class AddUserDialog:
                 orientation='horizontal',
                 spacing=dp(10),
                 size_hint_y=None,
-                height=dp(56)
+                height=dp(44)
             )
             role_box.add_widget(MDLabel(
-                text='Função:',
-                size_hint_x=0.3
+                text='Função',
+                size_hint_x=None,
+                width=dp(90),
+                font_style='Caption',
+                theme_text_color='Secondary'
             ))
             self.role_manager_btn = MDRectangleFlatButton(
                 text='Gerente',
-                size_hint_x=0.7,
+                size_hint_x=None,
+                width=dp(180),
                 disabled=True,
             )
             self.role_manager_btn.md_bg_color = (0.2, 0.5, 0.8, 1)
@@ -904,20 +1126,25 @@ class AddUserDialog:
                 orientation='horizontal',
                 spacing=dp(10),
                 size_hint_y=None,
-                height=dp(56)
+                height=dp(44)
             )
             access_box.add_widget(MDLabel(
-                text='Dados:',
-                size_hint_x=0.3
+                text='Dados',
+                size_hint_x=None,
+                width=dp(90),
+                font_style='Caption',
+                theme_text_color='Secondary'
             ))
             self.access_own_btn = MDRectangleFlatButton(
-                text='Proprios',
-                size_hint_x=0.35,
+                text='Próprios',
+                size_hint_x=None,
+                width=dp(150),
                 on_release=lambda x: self.select_data_scope('own')
             )
             self.access_shared_btn = MDRectangleFlatButton(
                 text='Empresa atual',
-                size_hint_x=0.35,
+                size_hint_x=None,
+                width=dp(150),
                 on_release=lambda x: self.select_data_scope('shared')
             )
             access_box.add_widget(self.access_own_btn)
@@ -926,9 +1153,12 @@ class AddUserDialog:
             self.select_data_scope('shared')
             
             self.dialog = MDDialog(
-                title='Adicionar Novo Usuário',
+                title='Adicionar novo utilizador',
                 type='custom',
                 content_cls=content,
+                width=min(dp(480), max(dp(320), Window.width - dp(32))),
+                height=min(dp(440), max(dp(300), Window.height - dp(56))),
+                size_hint=(None, None),
                 buttons=[
                     MDFlatButton(
                         text='CANCELAR',
@@ -938,8 +1168,8 @@ class AddUserDialog:
                         text='CRIAR',
                         on_release=self.save_user
                     )
-                ]
-            )
+                ],
+            auto_dismiss=False)
             self._field_navigation = FormKeyboardController(
                 host=self.dialog,
                 fields=[self.username, self.email, self.password],
@@ -1095,7 +1325,8 @@ class SecurityQuestionsDialog:
                 title='Perguntas de Recuperacao',
                 type='custom',
                 content_cls=content,
-                size_hint=(0.9, None),
+                size_hint=(None, None),
+                width=dp(620),
                 height=dp(560),
                 buttons=[
                     MDFlatButton(
@@ -1106,8 +1337,8 @@ class SecurityQuestionsDialog:
                         text='SALVAR',
                         on_release=self.save_answers
                     )
-                ]
-            )
+                ],
+            auto_dismiss=False)
             self._field_navigation = FormKeyboardController(
                 host=self.dialog,
                 fields=[self.username, *self.answer_fields],
@@ -1157,11 +1388,13 @@ class SecurityQuestionsDialog:
             self.show_message('Erro', f'Erro ao salvar: {str(e)}')
 
     def show_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
-        ).open()
+            buttons=[MDFlatButton(text='OK')],
+        )
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.open()
 class DeleteManagerDialog:
     # Dialogo para remover contas de gerente.
     def __init__(self):
@@ -1227,6 +1460,9 @@ class DeleteManagerDialog:
                 title='Excluir Gerente',
                 type='custom',
                 content_cls=content,
+                size_hint=(None, None),
+                width=dp(560),
+                height=dp(360),
                 buttons=[
                     MDFlatButton(
                         text='CANCELAR',
@@ -1237,8 +1473,8 @@ class DeleteManagerDialog:
                         md_bg_color=(0.9, 0.3, 0.3, 1),
                         on_release=self.delete_manager
                     )
-                ]
-            )
+                ],
+            auto_dismiss=False)
         
         self.dialog.open()
     
@@ -1279,11 +1515,13 @@ class DeleteManagerDialog:
             self.show_message('Erro', f'Erro: {str(e)}')
     
     def show_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
-        ).open()
+            buttons=[MDFlatButton(text='OK')],
+        )
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.open()
 
 
 class SystemLogsDialog:
@@ -1552,21 +1790,26 @@ class SystemLogsDialog:
         
     def show(self):
         tokens = self._theme_tokens()
+        primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
+        danger = tokens.get("danger", [0.90, 0.30, 0.30, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_primary = tokens.get("text_primary", [0.92, 0.94, 0.96, 1])
+
         content = MDBoxLayout(
             orientation='vertical',
-            spacing=dp(8),
-            padding=dp(8),
-            adaptive_height=True,
-            md_bg_color=tokens.get("surface", [0.96, 0.96, 0.98, 1])
+            spacing=dp(6),
+            padding=[dp(10), dp(6), dp(10), dp(6)],
+            size_hint_y=None,
         )
-        
+        content.bind(minimum_height=content.setter("height"))
+
+        # Filtros — sempre dentro do card
         filter_box = MDBoxLayout(
             orientation='horizontal',
-            spacing=dp(8),
+            spacing=dp(6),
             size_hint_y=None,
-            height=dp(42)
+            height=dp(36),
         )
-        
         self.user_filter = self._build_filter_spinner(
             self._ALL_USERS_LABEL,
             filter_name="user",
@@ -1581,59 +1824,63 @@ class SystemLogsDialog:
 
         role_box = MDBoxLayout(
             orientation='horizontal',
-            spacing=dp(8),
+            spacing=dp(6),
             size_hint_y=None,
-            height=dp(34)
+            height=dp(28),
         )
         role_label = self._make_label(
             text='Somente gerente',
-            color=tokens.get("text_primary", [0.15, 0.20, 0.30, 1]),
+            color=text_primary,
         )
         role_label.size_hint_x = None
-        role_label.width = dp(128)
-        self.manager_only = MDCheckbox(active=False)
-        self.manager_only.selected_color = tokens.get("primary", [0.10, 0.35, 0.65, 1])
-        self.manager_only.unselected_color = tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])
-        self.manager_only.disabled_color = tokens.get("text_muted", [0.55, 0.60, 0.70, 1])
+        role_label.width = dp(120)
+        self.manager_only = MDCheckbox(active=False, size_hint=(None, None), size=(dp(28), dp(28)))
+        try:
+            self.manager_only.selected_color = primary
+            self.manager_only.unselected_color = tokens.get("text_secondary", [0.5, 0.55, 0.6, 1])
+        except Exception:
+            pass
         self.manager_only.bind(active=self._on_filter_selected)
         role_box.add_widget(role_label)
         role_box.add_widget(self.manager_only)
-        role_box.add_widget(self._make_label(""))
+        role_box.add_widget(MDLabel(text="", size_hint_x=1))
         content.add_widget(role_box)
 
         btn_row = MDBoxLayout(
             orientation='horizontal',
-            spacing=dp(8),
+            spacing=dp(6),
             size_hint_y=None,
-            height=dp(36)
+            height=dp(32),
         )
-        
         search_btn = MDRaisedButton(
             text='ATUALIZAR',
-            size_hint_y=None,
-            height=dp(36),
-            md_bg_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
+            size_hint=(None, None),
+            size=(dp(100), dp(32)),
+            font_size="11sp",
+            md_bg_color=primary,
             theme_text_color='Custom',
-            text_color=tokens.get("on_primary", [1, 1, 1, 1]),
-            on_release=lambda x: self.load_logs()
+            text_color=on_primary,
+            on_release=lambda x: self.load_logs(),
         )
         export_btn = MDRectangleFlatButton(
-            text='EXPORTAR PDF',
-            size_hint_y=None,
-            height=dp(36),
+            text='PDF',
+            size_hint=(None, None),
+            size=(dp(72), dp(32)),
+            font_size="11sp",
             theme_text_color='Custom',
-            text_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
-            line_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
-            on_release=lambda x: self.export_logs_pdf()
+            text_color=primary,
+            line_color=primary,
+            on_release=lambda x: self.export_logs_pdf(),
         )
         clear_btn = MDRectangleFlatButton(
-            text='LIMPAR LOGS',
-            size_hint_y=None,
-            height=dp(36),
+            text='LIMPAR',
+            size_hint=(None, None),
+            size=(dp(80), dp(32)),
+            font_size="11sp",
             theme_text_color='Custom',
-            text_color=tokens.get("danger", [0.90, 0.30, 0.30, 1]),
-            line_color=tokens.get("danger", [0.90, 0.30, 0.30, 1]),
-            on_release=lambda x: self._confirm_clear_logs()
+            text_color=danger,
+            line_color=danger,
+            on_release=lambda x: self._confirm_clear_logs(),
         )
         self.search_btn = search_btn
         self.export_btn = export_btn
@@ -1641,10 +1888,12 @@ class SystemLogsDialog:
         btn_row.add_widget(search_btn)
         btn_row.add_widget(export_btn)
         btn_row.add_widget(clear_btn)
+        btn_row.add_widget(MDLabel(text="", size_hint_x=1))
         content.add_widget(btn_row)
-        
-        from kivymd.uix.scrollview import MDScrollView
-        scroll = MDScrollView(size_hint=(1, None), height=dp(300))
+
+        # Lista com altura responsiva (nao fixa enorme)
+        list_h = min(dp(280), max(dp(160), Window.height * 0.38))
+        scroll = MDScrollView(size_hint=(1, None), height=list_h)
         
         self.logs_list = MDBoxLayout(
             orientation='vertical',
@@ -1656,16 +1905,23 @@ class SystemLogsDialog:
         scroll.add_widget(self.logs_list)
         content.add_widget(scroll)
         
+        dlg_w = min(dp(560), max(dp(340), Window.width - dp(32)))
+        dlg_h = min(dp(460), max(dp(300), Window.height - dp(56)))
         self.dialog = MDDialog(
             title='Logs do Sistema',
             type='custom',
             content_cls=content,
-            size_hint=(0.78, 0.78),
+            size_hint=(None, None),
+            width=dlg_w,
+            height=dlg_h,
+            auto_dismiss=False,
             buttons=[
                 MDFlatButton(
                     text='FECHAR',
                     theme_text_color='Custom',
-                    text_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
+                    text_color=primary,
+                    size_hint=(None, None),
+                    height=dp(36),
                     on_release=lambda x: self.dialog.dismiss()
                 )
             ]
@@ -2226,7 +2482,7 @@ class EnhancedSystemLogsDialog:
                     on_release=lambda _x: self.dialog.dismiss(),
                 )
             ],
-        )
+        auto_dismiss=False)
 
         self._refresh_active_filters_label()
         self._update_summary_cards([])
@@ -3002,7 +3258,7 @@ class ScreenSizeDialog:
             
             content.add_widget(MDLabel(
                 text='Escolha ou personalize a resolução',
-                theme_text_color='Secondary',
+                theme_text_color='Custom',
                 size_hint_y=None,
                 height=dp(30)
             ))
@@ -3033,7 +3289,7 @@ class ScreenSizeDialog:
             
             content.add_widget(MDLabel(
                 text='Ou personalize:',
-                theme_text_color='Secondary',
+                theme_text_color='Custom',
                 size_hint_y=None,
                 height=dp(30)
             ))
@@ -3060,21 +3316,37 @@ class ScreenSizeDialog:
             custom_box.add_widget(self.height_input)
             content.add_widget(custom_box)
             
+            tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+            primary = tokens.get("primary", [0.20, 0.55, 0.95, 1])
+            text_sec = tokens.get("text_secondary", [0.70, 0.74, 0.80, 1])
+            # Legibilidade dos rotulos
+            for child in content.walk():
+                if isinstance(child, MDLabel) and getattr(child, "theme_text_color", "") == "Custom":
+                    if not getattr(child, "text_color", None) or child.text_color == [1, 1, 1, 1]:
+                        try:
+                            child.text_color = text_sec
+                        except Exception:
+                            pass
             self.dialog = MDDialog(
-                title='Dimensões da Tela',
+                title='Dimensões da tela',
                 type='custom',
                 content_cls=content,
+                width=min(dp(400), max(dp(300), Window.width - dp(32))),
+                height=min(dp(380), max(dp(280), Window.height - dp(56))),
+                size_hint=(None, None),
                 buttons=[
                     MDFlatButton(
                         text='CANCELAR',
+                        theme_text_color='Custom',
+                        text_color=primary,
                         on_release=self.dismiss
                     ),
                     MDRaisedButton(
                         text='APLICAR',
                         on_release=self.apply_custom
                     )
-                ]
-            )
+                ],
+            auto_dismiss=False)
             self._field_navigation = FormKeyboardController(
                 host=self.dialog,
                 fields=[self.width_input, self.height_input],
@@ -3122,11 +3394,13 @@ class ScreenSizeDialog:
         self.dialog.dismiss()
     
     def show_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())]
-        ).open()
+            buttons=[MDFlatButton(text='OK')],
+        )
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.open()
 
 
 class SystemStatusDialog:
@@ -3137,23 +3411,54 @@ class SystemStatusDialog:
         self.content = None
 
     def show(self):
+        # O conteúdo é atualizado depois de o diálogo abrir. Um MDDialog
+        # custom não recalcula de forma fiável a altura quando o conteúdo
+        # cresce, por isso usamos uma área de scroll com altura controlada.
         self.content = MDBoxLayout(
             orientation='vertical',
             spacing=dp(12),
-            padding=[dp(18), dp(8), dp(18), dp(4)],
+            padding=[dp(20), dp(12), dp(20), dp(12)],
+            size_hint_y=None,
             adaptive_height=True,
         )
+        self.content.bind(minimum_height=self.content.setter('height'))
+
+        scroll = ScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            size_hint=(1, None),
+            height=dp(350),
+            bar_width=dp(4),
+            scroll_type=['bars', 'content'],
+        )
+        scroll.add_widget(self.content)
+
         self._render_loading()
+        tokens = getattr(App.get_running_app(), "theme_tokens", {})
+        primary = tokens.get("primary", [0.20, 0.55, 0.95, 1])
         self.dialog = MDDialog(
-            title='Estado do Sistema',
+            title='Estado do sistema',
             type='custom',
-            content_cls=self.content,
+            content_cls=scroll,
+            size_hint=(None, None),
+            width=min(dp(420), max(dp(300), Window.width - dp(32))),
+            height=min(dp(440), max(dp(280), Window.height - dp(56))),
             buttons=[
-                MDFlatButton(text='FECHAR', on_release=lambda _x: self.dialog.dismiss()),
-                MDFlatButton(text='CRIAR BACKUP', on_release=lambda _x: self.create_backup()),
+                MDFlatButton(
+                    text='FECHAR',
+                    theme_text_color='Custom',
+                    text_color=primary,
+                    on_release=lambda _x: self.dialog.dismiss(),
+                ),
+                MDFlatButton(
+                    text='CRIAR BACKUP',
+                    theme_text_color='Custom',
+                    text_color=primary,
+                    on_release=lambda _x: self.create_backup(),
+                ),
                 MDRaisedButton(text='ATUALIZAR', on_release=lambda _x: self.refresh()),
             ],
-        )
+        auto_dismiss=False)
         self.dialog.open()
         Clock.schedule_once(lambda _dt: self.refresh(), 0.1)
 
@@ -3177,7 +3482,7 @@ class SystemStatusDialog:
         self.content.clear_widgets()
         self.content.add_widget(MDLabel(
             text='A criar backup verificado da base de dados...',
-            theme_text_color='Secondary',
+            theme_text_color='Custom',
             size_hint_y=None,
             height=dp(32),
         ))
@@ -3206,7 +3511,7 @@ class SystemStatusDialog:
         self.content.clear_widgets()
         self.content.add_widget(MDLabel(
             text=message,
-            theme_text_color='Primary' if ok else 'Error',
+            theme_text_color='Custom' if ok else 'Error',
             size_hint_y=None,
             height=dp(72),
             text_size=(dp(520), None),
@@ -3219,7 +3524,7 @@ class SystemStatusDialog:
         self.content.clear_widgets()
         self.content.add_widget(MDLabel(
             text='A verificar base de dados, backups e logs...',
-            theme_text_color='Secondary',
+            theme_text_color='Custom',
             size_hint_y=None,
             height=dp(32),
         ))
@@ -3251,11 +3556,13 @@ class SystemStatusDialog:
         alerts = status.get('alerts') or []
 
         if alerts:
+            tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
             self.content.add_widget(MDLabel(
                 text='Alertas operacionais',
                 font_style='Subtitle2',
                 bold=True,
-                theme_text_color='Primary',
+                theme_text_color='Custom',
+                text_color=tokens.get("text_primary", [0.92, 0.94, 0.96, 1]),
                 size_hint_y=None,
                 height=dp(28),
             ))
@@ -3277,10 +3584,12 @@ class SystemStatusDialog:
         for label, value in rows:
             self.content.add_widget(self._row(label, value))
 
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
         self.content.add_widget(MDLabel(
             text=f"Gerado em {status.get('generated_at') or '-'}",
             font_style='Caption',
-            theme_text_color='Secondary',
+            theme_text_color='Custom',
+            text_color=tokens.get("text_secondary", [0.65, 0.70, 0.76, 1]),
             size_hint_y=None,
             height=dp(24),
         ))
@@ -3307,28 +3616,45 @@ class SystemStatusDialog:
         return box
 
     def _row(self, label, value):
-        box = MDBoxLayout(
-            orientation='vertical',
-            spacing=dp(2),
+        tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
+        muted = tokens.get("text_secondary", [0.65, 0.70, 0.76, 1])
+        primary_text = tokens.get("text_primary", [0.92, 0.94, 0.96, 1])
+        card_alt = tokens.get("card_alt", [0.12, 0.16, 0.22, 1])
+        box = MDCard(
+            orientation='horizontal',
             size_hint_y=None,
-            height=dp(48),
+            height=dp(40),
+            padding=[dp(10), dp(6), dp(10), dp(6)],
+            radius=[dp(8)],
+            elevation=0,
+            md_bg_color=card_alt,
         )
-        box.add_widget(MDLabel(
+        left = MDLabel(
             text=str(label),
             font_style='Caption',
-            theme_text_color='Secondary',
-            size_hint_y=None,
-            height=dp(18),
-        ))
-        box.add_widget(MDLabel(
+            theme_text_color='Custom',
+            text_color=muted,
+            size_hint_x=0.42,
+            halign='left',
+            valign='middle',
+            shorten=True,
+        )
+        left.bind(size=left.setter('text_size'))
+        right = MDLabel(
             text=str(value),
             font_style='Body2',
-            theme_text_color='Primary',
-            size_hint_y=None,
-            height=dp(24),
+            bold=True,
+            theme_text_color='Custom',
+            text_color=primary_text,
+            size_hint_x=0.58,
+            halign='right',
+            valign='middle',
             shorten=True,
-            shorten_from='center',
-        ))
+            shorten_from='left',
+        )
+        right.bind(size=right.setter('text_size'))
+        box.add_widget(left)
+        box.add_widget(right)
         return box
 
     @staticmethod
@@ -3518,6 +3844,294 @@ class AdminSettingsScreen(MDScreen):
         self._background_task_title = ""
         self._set_loading_overlay("settings_task", False)
 
+    # ------------------------------------------------------------------
+    # Menus compactos da tela de definicoes
+    # ------------------------------------------------------------------
+    def _open_settings_section_dialog(self, title, subtitle, actions, width=dp(480)):
+        """Popup de categoria compacto: tudo dentro do card, botoes pequenos."""
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
+        card_alt = tokens.get("card_alt", [0.12, 0.16, 0.22, 1])
+        text_primary = tokens.get("text_primary", [0.95, 0.96, 0.97, 1])
+        text_secondary = tokens.get("text_secondary", [0.68, 0.72, 0.78, 1])
+        danger = tokens.get("danger", [0.85, 0.28, 0.32, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        outline = tokens.get("outline", [0.30, 0.36, 0.44, 1])
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(4),
+            padding=[dp(10), dp(4), dp(10), dp(6)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        if subtitle:
+            content.add_widget(MDLabel(
+                text=subtitle,
+                font_style="Caption",
+                theme_text_color="Custom",
+                text_color=text_secondary,
+                size_hint_y=None,
+                height=dp(22),
+                shorten=True,
+                shorten_from="right",
+            ))
+
+        for item in actions:
+            is_danger = bool(item.get("danger"))
+            row = MDBoxLayout(
+                orientation="horizontal",
+                spacing=dp(8),
+                size_hint_y=None,
+                height=dp(52),
+                padding=[dp(8), dp(4), dp(6), dp(4)],
+            )
+            try:
+                row.md_bg_color = card_alt
+            except Exception:
+                pass
+
+            accent = MDCard(
+                size_hint=(None, None),
+                size=(dp(3), dp(32)),
+                radius=[dp(2)],
+                elevation=0,
+                md_bg_color=danger if is_danger else primary,
+            )
+            row.add_widget(accent)
+
+            text_box = MDBoxLayout(orientation="vertical", spacing=dp(0), size_hint_x=1)
+            text_box.add_widget(MDLabel(
+                text=item.get("title", ""),
+                font_style="Body1",
+                bold=True,
+                theme_text_color="Custom",
+                text_color=text_primary,
+                size_hint_y=None,
+                height=dp(20),
+                shorten=True,
+                shorten_from="right",
+            ))
+            text_box.add_widget(MDLabel(
+                text=item.get("subtitle", ""),
+                font_style="Caption",
+                theme_text_color="Custom",
+                text_color=text_secondary,
+                size_hint_y=None,
+                height=dp(18),
+                shorten=True,
+                shorten_from="right",
+            ))
+            row.add_widget(text_box)
+
+            btn_label = item.get("button") or ("Apagar" if is_danger else "Abrir")
+            button = MDRaisedButton(
+                text=btn_label,
+                size_hint=(None, None),
+                size=(dp(84), dp(32)),
+                font_size="12sp",
+            )
+            try:
+                button.md_bg_color = danger if is_danger else primary
+                button.theme_text_color = "Custom"
+                button.text_color = on_primary
+                button.radius = [dp(8)]
+                button.elevation = 0
+            except Exception:
+                pass
+            callback = item.get("callback")
+            button.bind(on_release=lambda _btn, cb=callback: self._run_settings_section_action(cb))
+            row.add_widget(button)
+            content.add_widget(row)
+
+        n = max(1, len(actions or []))
+        # Altura justa: subtitulo + linhas + chrome do dialogo
+        body_h = (dp(24) if subtitle else 0) + n * dp(56) + dp(8)
+        max_h = max(dp(220), Window.height - dp(72))
+        dialog_h = min(body_h + dp(96), max_h)
+        dialog_w = min(width, max(dp(320), Window.width - dp(32)))
+
+        dialog = MDDialog(
+            title=title,
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            width=dialog_w,
+            height=dialog_h,
+            auto_dismiss=False,
+            buttons=[
+                MDFlatButton(
+                    text="FECHAR",
+                    theme_text_color="Custom",
+                    text_color=primary,
+                    size_hint=(None, None),
+                    height=dp(36),
+                    on_release=lambda _x: dialog.dismiss(),
+                )
+            ],
+        )
+        dialog.open()
+        return dialog
+
+    def _run_settings_section_action(self, callback, dialog_getter=None):
+        """Executa a acao sem fechar o dialogo de categoria (pai)."""
+        # O popup filho abre por cima; o pai permanece ate o utilizador
+        # premir FECHAR. Fechar o pai aqui fazia os dialogos "colapsarem".
+        try:
+            if callable(callback):
+                callback()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+
+    def open_quick_preferences(self):
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(14), dp(8), dp(14), dp(10)], size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+        def add_switch(icon_name, title, subtitle, value, callback):
+            row=MDBoxLayout(orientation="horizontal", spacing=dp(12), size_hint_y=None, height=dp(58), padding=[dp(8),dp(6),dp(8),dp(6)])
+            row.add_widget(MDIcon(icon=icon_name, size_hint=(None,None), size=(dp(34),dp(34)), font_size=dp(21), theme_text_color="Custom", text_color=tokens.get("primary",[.1,.4,.8,1])))
+            box=MDBoxLayout(orientation="vertical", spacing=dp(1))
+            box.add_widget(MDLabel(text=title,font_style="Subtitle1",bold=True,size_hint_y=None,height=dp(24),theme_text_color="Custom",text_color=tokens.get("text_primary",[1,1,1,1])))
+            box.add_widget(MDLabel(text=subtitle,font_style="Caption",size_hint_y=None,height=dp(20),theme_text_color="Custom",text_color=tokens.get("text_secondary",[.6,.6,.6,1])))
+            row.add_widget(box)
+            sw=MDSwitch(active=bool(value),size_hint=(None,None),size=(dp(44),dp(28)))
+            sw.bind(active=callback)
+            row.add_widget(sw)
+            content.add_widget(row)
+        add_switch("brightness-6","Modo escuro","Altera o tema da aplicação.",self.dark_theme_enabled,self.toggle_theme)
+        add_switch("bell-ring-outline","Avisos ativos","Monitorização automática de alertas.",self.monitor_enabled,self.toggle_smart_monitor)
+        add_switch("bell-outline","Avisos automáticos","Mostra avisos quando existem novidades.",self.auto_banners_enabled,self.toggle_auto_banners)
+        add_switch("api","Apoio externo","Permite utilizar a integração de apoio configurada.",self.api_ai_enabled,self.toggle_ai)
+        language_btn=MDRectangleFlatIconButton(text=f"Idioma · {self.language_label}",icon="translate",size_hint_y=None,height=dp(44),md_bg_color=tokens.get("card_alt",[.12,.16,.22,1]),text_color=tokens.get("text_primary",[1,1,1,1]),icon_color=tokens.get("primary",[.1,.4,.8,1]),line_color=tokens.get("divider",[1,1,1,.12]),line_width=1)
+        language_btn.bind(on_release=lambda btn:self.open_language_menu(btn))
+        content.add_widget(language_btn)
+        dialog=MDDialog(title="Preferências rápidas",type="custom",content_cls=content,size_hint=(None,None),width=min(dp(560),max(dp(380),Window.width-dp(40))),height=dp(430),buttons=[MDFlatButton(text="FECHAR",on_release=lambda _x:dialog.dismiss())], auto_dismiss=False)
+        dialog.open()
+
+    def open_pos_settings(self):
+        tokens = getattr(App.get_running_app(), "theme_tokens", {})
+        content = MDBoxLayout(orientation="vertical", spacing=dp(8), padding=[dp(16), dp(8), dp(16), dp(10)], size_hint_y=None)
+        content.bind(minimum_height=content.setter("height"))
+
+        def add_switch(title, subtitle, value, callback):
+            row = MDBoxLayout(orientation="horizontal", spacing=dp(12), size_hint_y=None, height=dp(58))
+            box = MDBoxLayout(orientation="vertical")
+            box.add_widget(MDLabel(text=title, font_style="Subtitle1", bold=True, size_hint_y=None, height=dp(24), theme_text_color="Custom", text_color=tokens.get("text_primary", [1,1,1,1])))
+            box.add_widget(MDLabel(text=subtitle, font_style="Caption", size_hint_y=None, height=dp(22), theme_text_color="Custom", text_color=tokens.get("text_secondary", [.6,.6,.6,1])))
+            switch = MDSwitch(active=bool(value), size_hint=(None, None), size=(dp(48), dp(30)))
+            switch.bind(active=callback)
+            row.add_widget(box); row.add_widget(switch); content.add_widget(row)
+
+        add_switch("Leitura física", "Aceita leitores USB que enviam código e Enter.", self.physical_scanner_enabled, self.toggle_physical_scanner)
+        add_switch("Impressão automática", "Imprime o recibo após uma venda.", self.receipt_auto_print, self.toggle_receipt_auto_print)
+        printer = MDRectangleFlatIconButton(text=f"Impressora · {self.receipt_printer_name}", icon="printer", size_hint_y=None, height=dp(44), md_bg_color=tokens.get("card_alt", [.12,.16,.22,1]), text_color=tokens.get("text_primary", [1,1,1,1]), icon_color=tokens.get("primary", [.1,.4,.8,1]), line_color=tokens.get("divider", [1,1,1,.12]), line_width=1)
+        printer.bind(on_release=lambda _btn: self.open_printer_settings())
+        content.add_widget(printer)
+        paper = MDLabel(text=f"Largura do papel: {self.receipt_paper_width_mm} mm", font_style="Caption", size_hint_y=None, height=dp(24), theme_text_color="Custom", text_color=tokens.get("text_secondary", [.6,.6,.6,1]))
+        content.add_widget(paper)
+        dialog = MDDialog(title="Dispositivos POS", type="custom", content_cls=content, size_hint=(None,None), width=min(dp(560), max(dp(360), Window.width-dp(40))), height=dp(350), buttons=[MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss())], auto_dismiss=False)
+        dialog.open()
+
+    def open_language_settings_dialog(self):
+        tokens = getattr(App.get_running_app(), "theme_tokens", {})
+        primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
+        card_alt = tokens.get("card_alt", [0.14, 0.17, 0.22, 1])
+        on_primary = tokens.get("on_primary", [1, 1, 1, 1])
+        text_primary = tokens.get("text_primary", [0.92, 0.93, 0.95, 1])
+
+        content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(6),
+            padding=[dp(12), dp(8), dp(12), dp(6)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        dialog = [None]
+
+        for option in language_options():
+            code = option["code"]
+            selected = code == self.language_code
+            btn = MDRaisedButton(
+                text=f"{option['native_name']}  ({option['short']})",
+                size_hint_y=None,
+                height=dp(40),
+                size_hint_x=1,
+                md_bg_color=primary if selected else card_alt,
+                font_size="13sp",
+            )
+            try:
+                btn.radius = [dp(20)]
+                btn.elevation = 0
+                btn.theme_text_color = "Custom"
+                btn.text_color = on_primary if selected else text_primary
+            except Exception:
+                pass
+            btn.bind(on_release=lambda _x, selected_code=code: (
+                self._select_language(selected_code),
+                dialog[0].dismiss() if dialog[0] else None,
+            ))
+            content.add_widget(btn)
+
+        n = max(1, len(language_options()))
+        body = dp(8) + n * dp(46) + dp(6)
+        dialog[0] = MDDialog(
+            title="Idioma",
+            type="custom",
+            content_cls=content,
+            size_hint=(None, None),
+            width=min(dp(300), max(dp(250), Window.width - dp(40))),
+            height=min(body + dp(96), Window.height - dp(64)),
+            auto_dismiss=False,
+            buttons=[
+                MDFlatButton(
+                    text="FECHAR",
+                    theme_text_color="Custom",
+                    text_color=primary,
+                    size_hint=(None, None),
+                    height=dp(34),
+                    on_release=lambda _x: dialog[0].dismiss(),
+                )
+            ],
+        )
+        dialog[0].open()
+
+    def open_system_settings(self):
+        return self._open_settings_section_dialog("Sistema", "Ferramentas gerais para manutenção e acompanhamento.", [
+            {"title":"Nome do sistema", "subtitle":self.system_name, "callback":self.open_system_name_settings, "icon":"store"},
+            {"title":"Idioma", "subtitle":self.language_label, "callback":self.open_language_settings_dialog, "icon":"translate"},
+            {"title":"Logs do sistema", "subtitle":"Histórico de ações, exportação e limpeza.", "callback":self.view_system_logs, "icon":"text-box-search"},
+            {"title":"Estado do sistema", "subtitle":"Base de dados, API, backups e últimos logs.", "callback":self.view_system_status, "icon":"server"},
+            {"title":"Ajustar janela", "subtitle":"Alterar rapidamente largura e altura da aplicação.", "callback":self.change_screen_size, "icon":"monitor-screenshot"},
+        ])
+
+    def open_security_settings(self):
+        return self._open_settings_section_dialog("Acesso e segurança", "Gestão de utilizadores e credenciais sensíveis.", [
+            {"title":"Adicionar utilizador", "subtitle":"Criar novos acessos para admin ou manager.", "callback":self.add_user, "icon":"account-plus"},
+            {"title":"Dados do administrador", "subtitle":"Alterar e-mail ou palavra-passe.", "callback":self.change_admin_data, "icon":"account-edit"},
+            {"title":"Perguntas de recuperação", "subtitle":"Configurar perguntas para recuperação de acesso.", "callback":self.configure_security_questions, "icon":"help-circle-outline"},
+            {"title":"Envio de e-mail", "subtitle":"Configurar a conta SMTP desta instalação.", "callback":self.configure_email_sender, "icon":"email-send-outline"},
+            {"title":"Códigos de emergência", "subtitle":"Gerar códigos para recuperação sem e-mail.", "callback":self.generate_recovery_codes, "icon":"key-chain-variant"},
+            {"title":"Apagar gerente", "subtitle":"Remover um acesso de gerente.", "callback":self.delete_manager, "danger":True, "icon":"account-remove", "button":"Apagar"},
+        ])
+
+    def open_integrations_settings(self):
+        return self._open_settings_section_dialog("Integrações e cache", "Ferramentas de integração, sincronização e códigos de barras.", [
+            {"title":"Apoio externo", "subtitle":"Gerir chave e modelo da integração externa.", "callback":self.open_gemini_settings, "icon":"key-variant"},
+            {"title":"Cache Bazara", "subtitle":"Atualizar o pré-carregamento principal.", "callback":self.prefill_bazara_cache, "icon":"database-sync"},
+            {"title":"Reset Bazara", "subtitle":"Limpar e reconstruir o cache.", "callback":self.reset_bazara_cache, "danger":True, "icon":"database-refresh", "button":"Reset"},
+            {"title":"Backfill de barcodes", "subtitle":"Procurar códigos em falta nos dados importados.", "callback":self.backfill_bazara_barcodes, "icon":"barcode-scan"},
+            {"title":"Gerador de barcodes", "subtitle":"Criar códigos em PDF ou atribuir a produtos.", "callback":self.open_barcode_generator, "icon":"barcode"},
+            {"title":"Cache Open Food Facts", "subtitle":"Guardar dados para utilização offline.", "callback":self.prefill_openfoodfacts_cache, "icon":"food-apple-outline"},
+        ])
+
+    def open_fiscal_settings(self):
+        self.open_vat_settings()
+
     def go_back(self):
         if not self.manager:
             return
@@ -3526,7 +4140,11 @@ class AdminSettingsScreen(MDScreen):
 
     def _apply_responsive_layout(self, *args):
         width = float(self.width or Window.width or 0)
+        narrow = width < dp(720)
+        medium = width < dp(1100)
+
         grid_cols = {
+            "settings_menu_grid": 1 if narrow else (2 if medium else 3),
             "hero_signal_grid": 4 if width >= dp(1260) else 2 if width >= dp(780) else 1,
             "prefs_grid": 4 if width >= dp(1240) else 2 if width >= dp(860) else 1,
             "devices_grid": 3 if width >= dp(1120) else 2 if width >= dp(760) else 1,
@@ -3540,6 +4158,25 @@ class AdminSettingsScreen(MDScreen):
             grid = self.ids.get(grid_id)
             if grid is not None:
                 grid.cols = cols
+                # Forcar recálculo de altura
+                try:
+                    grid.height = grid.minimum_height
+                except Exception:
+                    pass
+
+        content = self.ids.get("settings_content")
+        if content is not None:
+            pad_x = dp(12) if narrow else dp(16)
+            content.padding = [pad_x, dp(12), pad_x, dp(96)]
+            content.spacing = dp(12) if narrow else dp(14)
+
+        hero = self.ids.get("settings_hero")
+        if hero is not None:
+            hero.height = dp(120) if narrow else dp(108)
+
+        fab_stack = self.ids.get("settings_fab_stack")
+        if fab_stack is not None:
+            fab_stack.pos_hint = {"right": 0.98 if narrow else 0.97, "y": 0.025}
 
         hero_content = self.ids.get("hero_content")
         hero_actions = self.ids.get("hero_actions")
@@ -3549,7 +4186,8 @@ class AdminSettingsScreen(MDScreen):
         if hero_actions is not None:
             hero_actions.orientation = "vertical" if width >= dp(980) else "horizontal"
             hero_actions.size_hint_x = None if width >= dp(980) else 1
-            hero_actions.width = dp(260) if width >= dp(980) else 0
+            hero_actions.width = dp(260) if width >= dp(980) else hero_actions.width
+
 
     def _enable_api_toggle(self, dt):
         self._api_toggle_ready = True
@@ -3637,15 +4275,29 @@ class AdminSettingsScreen(MDScreen):
             adaptive_height=True,
         )
         content.add_widget(self._system_name_field)
+        tokens = getattr(App.get_running_app(), "theme_tokens", {})
+        primary = tokens.get("primary", [0.15, 0.45, 0.85, 1])
         self._system_name_dialog = MDDialog(
             title="Nome do sistema",
             type="custom",
             content_cls=content,
+            size_hint=(None, None),
+            width=min(dp(480), max(dp(340), Window.width - dp(48))),
+            # altura inicial; StyledSettingsDialog ajusta ao conteudo
+            height=dp(220),
             buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda _x: self._system_name_dialog.dismiss()),
-                MDRaisedButton(text="Guardar", on_release=lambda _x: self.save_system_name_from_dialog()),
+                MDFlatButton(
+                    text="Cancelar",
+                    theme_text_color="Custom",
+                    text_color=primary,
+                    on_release=lambda _x: self._system_name_dialog.dismiss(),
+                ),
+                MDRaisedButton(
+                    text="Guardar",
+                    on_release=lambda _x: self.save_system_name_from_dialog(),
+                ),
             ],
-        )
+        auto_dismiss=False)
         self._system_name_dialog.open()
 
     def save_system_name_from_dialog(self):
@@ -3713,13 +4365,15 @@ class AdminSettingsScreen(MDScreen):
             if auto_toggle is not None and auto_toggle.active != self.receipt_auto_print:
                 auto_toggle.active = self.receipt_auto_print
 
-    def toggle_physical_scanner(self, enabled):
+    def toggle_physical_scanner(self, *args):
+        enabled = bool(args[-1]) if args else False
         if not getattr(self, "_device_toggle_ready", True):
             return
         save_device_settings(physical_scanner_enabled=bool(enabled))
         self._sync_device_settings_state()
 
-    def toggle_receipt_auto_print(self, enabled):
+    def toggle_receipt_auto_print(self, *args):
+        enabled = bool(args[-1]) if args else False
         if not getattr(self, "_device_toggle_ready", True):
             return
         save_device_settings(receipt_auto_print=bool(enabled))
@@ -3808,7 +4462,7 @@ class AdminSettingsScreen(MDScreen):
                 MDFlatButton(text="Testar", on_release=lambda _x: self.test_receipt_printer()),
                 MDRaisedButton(text="Salvar", on_release=lambda _x: self._save_printer_settings_from_dialog()),
             ],
-        )
+        auto_dismiss=False)
         self._printer_settings_dialog.open()
 
     def _save_printer_settings_from_dialog(self, close_dialog=True, silent=False):
@@ -4062,11 +4716,14 @@ class AdminSettingsScreen(MDScreen):
                 title="Configurar apoio externo",
                 type="custom",
                 content_cls=content,
+                size_hint=(None, None),
+                width=dp(620),
+                height=dp(430),
                 buttons=[
                     MDFlatButton(text="Cancelar", on_release=lambda _x: self._gemini_settings_dialog.dismiss()),
                     MDRaisedButton(text="Salvar", on_release=lambda _x: self._save_gemini_settings()),
                 ],
-            )
+            auto_dismiss=False)
 
         env_values = self._read_env_values()
         current_key = str(env_values.get("GEMINI_API_KEY") or "").strip()
@@ -4142,7 +4799,7 @@ class AdminSettingsScreen(MDScreen):
             field.helper_text_mode = "persistent"
         return field
 
-    def _build_vat_rule_editor(self, rule):
+    def _build_vat_rule_editor(self, rule):  # compact fields
         app = App.get_running_app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
         code = str(rule.get("code") or DEFAULT_VAT_RULE_CODE).strip().upper()
@@ -4154,11 +4811,11 @@ class AdminSettingsScreen(MDScreen):
             orientation="vertical",
             size_hint_y=None,
             adaptive_height=True,
-            padding=[dp(12), dp(12), dp(12), dp(12)],
-            spacing=dp(10),
-            radius=[dp(14)],
+            padding=[dp(8), dp(8), dp(8), dp(8)],
+            spacing=dp(6),
+            radius=[dp(10)],
             elevation=0,
-            md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
+            md_bg_color=tokens.get("card_alt", [0.12, 0.15, 0.20, 1]),
         )
         card.bind(minimum_height=card.setter("height"))
 
@@ -4166,11 +4823,11 @@ class AdminSettingsScreen(MDScreen):
             orientation="vertical",
             size_hint_y=None,
             adaptive_height=True,
-            padding=[dp(10), dp(10), dp(10), dp(10)],
-            spacing=dp(4),
-            radius=[dp(12)],
+            padding=[dp(8), dp(6), dp(8), dp(6)],
+            spacing=dp(2),
+            radius=[dp(8)],
             elevation=0,
-            md_bg_color=tokens.get("card", [1, 1, 1, 1]),
+            md_bg_color=tokens.get("card", [0.10, 0.13, 0.18, 1]),
         )
         header_card.bind(minimum_height=header_card.setter("height"))
 
@@ -4321,8 +4978,8 @@ class AdminSettingsScreen(MDScreen):
         self._vat_rule_form_rows = []
         # Mantem o editor confortavel em ecras grandes, sem transforma-lo num
         # painel de largura total. Os cartoes continuam acessiveis pela rolagem.
-        dialog_height = min(Window.height * 0.82, dp(650))
-        dialog_width = min(dp(1040), max(dp(300), Window.width - dp(48)))
+        dialog_height = min(Window.height * 0.72, dp(480))
+        dialog_width = min(dp(560), max(dp(300), Window.width - dp(32)))
         content_height = max(dp(280), dialog_height - dp(120))
         wrapper = MDBoxLayout(
             orientation="vertical",
@@ -4400,7 +5057,7 @@ class AdminSettingsScreen(MDScreen):
                 MDFlatButton(text="Cancelar", on_release=lambda _x: dialog.dismiss()),
                 MDRaisedButton(text="Salvar", on_release=lambda _x: self._save_vat_rules_from_dialog(dialog)),
             ],
-        )
+        auto_dismiss=False)
         self._vat_settings_dialog = dialog
         dialog.open()
 
@@ -4446,11 +5103,13 @@ class AdminSettingsScreen(MDScreen):
         self._show_inline_message("Sucesso", "Regras oficiais de IVA restauradas.")
 
     def _show_inline_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
-            buttons=[MDFlatButton(text="OK", on_release=lambda x: x.parent.parent.parent.parent.dismiss())],
-        ).open()
+            buttons=[MDFlatButton(text="OK")],
+        )
+        dialog.buttons[0].bind(on_release=lambda *_: dialog.dismiss())
+        dialog.open()
 
     def show_message(self, title, message):
         self._show_inline_message(title, message)
@@ -4487,7 +5146,8 @@ class AdminSettingsScreen(MDScreen):
         except Exception:
             pass
 
-    def toggle_smart_monitor(self, enabled):
+    def toggle_smart_monitor(self, *args):
+        enabled = bool(args[-1]) if args else False
         if not getattr(self, "_smart_monitor_toggle_ready", True):
             return
         self.monitor_enabled = bool(enabled)
@@ -4507,7 +5167,8 @@ class AdminSettingsScreen(MDScreen):
             self._save_app_settings_fallback(smart_monitor_enabled=enabled)
         self._intelligence.set_enabled(bool(enabled))
 
-    def toggle_auto_banners(self, enabled):
+    def toggle_auto_banners(self, *args):
+        enabled = bool(args[-1]) if args else False
         if not getattr(self, "_auto_banners_toggle_ready", True):
             return
         self.auto_banners_enabled = bool(enabled)
@@ -4526,7 +5187,8 @@ class AdminSettingsScreen(MDScreen):
         else:
             self._save_app_settings_fallback(auto_banners_enabled=enabled)
 
-    def toggle_ai(self, enabled):
+    def toggle_ai(self, *args):
+        enabled = bool(args[-1]) if args else False
         if not getattr(self, "_api_toggle_ready", True):
             return
         self.api_ai_enabled = bool(enabled)
@@ -4545,7 +5207,18 @@ class AdminSettingsScreen(MDScreen):
         else:
             self._save_app_settings_fallback(ai_enabled=enabled)
 
-    def toggle_theme(self, enabled):
+    # Compatibilidade com layouts/versoes anteriores.
+    # Mantem os nomes antigos funcionais sem duplicar a logica.
+    def toggle_dark_theme(self, *args):
+        enabled = bool(args[-1]) if args else False
+        return self.toggle_theme(enabled)
+
+    def toggle_api_ai(self, *args):
+        enabled = bool(args[-1]) if args else False
+        return self.toggle_ai(enabled)
+
+    def toggle_theme(self, *args):
+        enabled = bool(args[-1]) if args else False
         if not getattr(self, "_theme_toggle_ready", True):
             return
         self.dark_theme_enabled = bool(enabled)
@@ -4576,18 +5249,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Prefill Ranxo em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Pre-carregar cache Ranxo",
-            text="Isto pode demorar alguns minutos e usar internet. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_ranxo_prefill(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Pre-carregar cache Ranxo',
+            'Isto pode demorar alguns minutos e usar internet. Continuar?',
+            lambda: self._confirm_ranxo_prefill(None),
+        ).open()
 
     def _confirm_ranxo_prefill(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_ranxo_prefill()
 
     def _start_ranxo_prefill(self):
@@ -4660,18 +5333,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Tarefa em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Pre-carregar cache Bazara",
-            text="Vai buscar todos os produtos via GraphQL e abrir cada pagina para obter o codigo de barras. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_bazara_prefill(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Pre-carregar cache Bazara',
+            'Vai buscar todos os produtos via GraphQL e abrir cada pagina para obter o codigo de barras. Continuar?',
+            lambda: self._confirm_bazara_prefill(None),
+        ).open()
 
     def _confirm_bazara_prefill(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_bazara_prefill(reset=False)
 
     def backfill_bazara_barcodes(self):
@@ -4679,18 +5352,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Tarefa em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Backfill codigos de barras Bazara",
-            text="Vai buscar codigos de barras para itens ja no cache. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_bazara_backfill(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Backfill codigos de barras Bazara',
+            'Vai buscar codigos de barras para itens ja no cache. Continuar?',
+            lambda: self._confirm_bazara_backfill(None),
+        ).open()
 
     def _confirm_bazara_backfill(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_bazara_backfill()
 
     def open_barcode_generator(self):
@@ -4751,12 +5424,15 @@ class AdminSettingsScreen(MDScreen):
             title="Gerador de codigos de barras",
             type="custom",
             content_cls=content,
+            size_hint=(None, None),
+            width=dp(620),
+            height=dp(430),
             buttons=[
                 MDFlatButton(text="Cancelar", on_release=lambda _x: dialog.dismiss()),
                 MDFlatButton(text="Gerar codigo", on_release=lambda _x: self._confirm_barcode_list_generation(dialog)),
                 MDRaisedButton(text="Atribuir", on_release=lambda _x: self._confirm_barcode_generation(dialog)),
             ],
-        )
+        auto_dismiss=False)
         self._barcode_generator_dialog = dialog
         dialog.open()
 
@@ -5048,18 +5724,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Tarefa em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Reset cache Bazara",
-            text="Vai apagar o cache Bazara e recriar do zero via GraphQL. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_reset_bazara(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Reset cache Bazara',
+            'Vai apagar o cache Bazara e recriar do zero via GraphQL. Continuar?',
+            lambda: self._confirm_reset_bazara(None),
+        ).open()
 
     def _confirm_reset_bazara(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_bazara_prefill(reset=True)
 
     def _start_bazara_prefill(self, reset: bool):
@@ -5197,18 +5873,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Tarefa em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Atualizar cache Open Food Facts",
-            text="Vai usar os barcodes do banco e do cache atual para buscar no site oficial do Open Food Facts e guardar os dados offline. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_openfoodfacts_prefill(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Atualizar cache Open Food Facts',
+            'Vai usar os barcodes do banco e do cache atual para buscar no site oficial do Open Food Facts e guardar os dados offline. Continuar?',
+            lambda: self._confirm_openfoodfacts_prefill(None),
+        ).open()
 
     def _confirm_openfoodfacts_prefill(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_openfoodfacts_prefill()
 
     def _start_openfoodfacts_prefill(self):
@@ -5280,18 +5956,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Tarefa em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Atualizar cache UPCitemdb",
-            text="Vai usar os barcodes do cache atual e consultar UPCitemdb. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_upcitemdb_prefill(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Atualizar cache UPCitemdb',
+            'Vai usar os barcodes do cache atual e consultar UPCitemdb. Continuar?',
+            lambda: self._confirm_upcitemdb_prefill(None),
+        ).open()
 
     def _confirm_upcitemdb_prefill(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_upcitemdb_prefill()
 
     def _start_upcitemdb_prefill(self):
@@ -5361,18 +6037,18 @@ class AdminSettingsScreen(MDScreen):
             self.show_message("Aviso", "Outra tarefa em andamento.")
             return
 
-        dialog = MDDialog(
-            title="Atualizar cache via APIs",
-            text="Vai usar os barcodes do cache atual e consultar UPCitemdb, Ranxo e Open Food Facts. Continuar?",
-            buttons=[
-                MDFlatButton(text="Cancelar", on_release=lambda x: dialog.dismiss()),
-                MDRaisedButton(text="Iniciar", on_release=lambda x: self._confirm_refresh_cache(dialog)),
-            ],
-        )
-        dialog.open()
+        compact_confirm_dialog(
+            'Atualizar cache via APIs',
+            'Vai usar os barcodes do cache atual e consultar UPCitemdb, Ranxo e Open Food Facts. Continuar?',
+            lambda: self._confirm_refresh_cache(None),
+        ).open()
 
     def _confirm_refresh_cache(self, dialog):
-        dialog.dismiss()
+        if dialog is not None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
         self._start_refresh_cache()
 
     def _start_refresh_cache(self):

@@ -2,10 +2,10 @@
     name: "losses_history"
     md_bg_color: app.theme_tokens['surface']
 
-    MDBoxLayout:
+    NativeBoxLayout:
         orientation: "vertical"
 
-        MDTopAppBar:
+        NativeTopAppBar:
             title: "Historico de Perdas"
             md_bg_color: app.theme_tokens['primary']
             specific_text_color: app.theme_tokens['on_primary']
@@ -13,12 +13,12 @@
             left_action_items: [["arrow-left", lambda x: root.go_back()]]
             right_action_items: [["file-pdf-box", lambda x: root.export_losses_pdf()], ["refresh", lambda x: root.load_losses_table()]]
 
-        MDBoxLayout:
+        NativeBoxLayout:
             orientation: "vertical"
             padding: dp(16)
             spacing: dp(12)
 
-            MDCard:
+            NativeCard:
                 id: losses_table_card
                 orientation: "vertical"
                 padding: dp(0)
@@ -28,7 +28,7 @@
                 md_bg_color: app.theme_tokens['card']
                 size_hint_y: 1
 
-                MDBoxLayout:
+                NativeCard:
                     id: header_row
                     size_hint_y: None
                     height: dp(44)
@@ -37,7 +37,7 @@
                     md_bg_color: app.theme_tokens['primary']
                     radius: [dp(10), dp(10), 0, 0]
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_date
                         text: "Data"
                         theme_text_color: "Custom"
@@ -47,7 +47,7 @@
                         halign: "left"
                         font_size: dp(12)
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_product
                         text: "Produto"
                         theme_text_color: "Custom"
@@ -57,7 +57,7 @@
                         halign: "left"
                         font_size: dp(12)
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_type
                         text: "Tipo"
                         theme_text_color: "Custom"
@@ -67,7 +67,7 @@
                         halign: "center"
                         font_size: dp(12)
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_qty
                         text: "Qtd"
                         theme_text_color: "Custom"
@@ -77,7 +77,7 @@
                         halign: "center"
                         font_size: dp(12)
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_cost
                         text: "Custo"
                         theme_text_color: "Custom"
@@ -87,7 +87,7 @@
                         halign: "right"
                         font_size: dp(12)
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_user
                         text: "Usuario"
                         theme_text_color: "Custom"
@@ -97,7 +97,7 @@
                         halign: "right"
                         font_size: dp(12)
 
-                    MDLabel:
+                    NativeLabel:
                         id: header_evidence
                         text: "Anexo"
                         theme_text_color: "Custom"
@@ -113,7 +113,7 @@
                     bar_color: 0.18, 0.28, 0.48, 0.6
                     bar_inactive_color: 0.18, 0.28, 0.48, 0.2
 
-                    MDBoxLayout:
+                    NativeBoxLayout:
                         id: losses_list
                         orientation: "vertical"
                         spacing: dp(0)
@@ -131,13 +131,13 @@
                     opacity: 0
                     disabled: True
 
-                    MDLabel:
+                    NativeLabel:
                         text: "Nenhuma perda registrada no periodo"
                         halign: "center"
                         theme_text_color: "Hint"
                         font_style: "Subtitle1"
 
-                MDRaisedButton:
+                NativeButton:
                     id: load_more_btn
                     text: "CARREGAR MAIS"
                     size_hint_y: None
