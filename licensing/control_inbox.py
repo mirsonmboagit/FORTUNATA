@@ -23,7 +23,10 @@ from licensing.offline import LICENSE_PREFIX, OfflineLicenseClient
 
 CONTROL_PREFIXES = (LICENSE_PREFIX, "SIGE-REV1", "SIGE-SUS1", "SIGE-RES1", "SIGE-RST1")
 _CONTROL_PATTERN = re.compile(
-    r"\b(SIGE-(?:LIC1|REV1|SUS1|RES1|RST1)\.[A-Za-z0-9_-]{1,16384})\b"
+    # Todos os codigos assinados usam ``PREFIX.payload.signature``. A versao
+    # anterior capturava somente o payload e descartava a assinatura, o que
+    # tornava impossivel aplicar automaticamente a licenca recebida por e-mail.
+    r"\b(SIGE-(?:LIC1|REV1|SUS1|RES1|RST1)(?:\.[A-Za-z0-9_-]{1,16384}){2})\b"
 )
 
 

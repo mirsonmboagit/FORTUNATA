@@ -19,6 +19,7 @@ import os
 import re
 
 from utils.config.paths import REPORTS_DIR, resolve_path
+from .i18n import current_pdf_language, pdf_font, pdf_text
 
 
 # ── Paleta visual limpa (fácil de ler em ecrã e impressão) ──────────────────
@@ -71,9 +72,29 @@ class BasePDFReport:
     def __init__(self, output_dir=None):
         resolved_output_dir = output_dir or REPORTS_DIR
         self.base_output_dir = str(resolve_path(resolved_output_dir))
+        self.language = current_pdf_language()
+        if self.language == "zh":
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
         self.styles = getSampleStyleSheet()
         self._register_styles()
+        if self.language == "zh":
+            for style_name in (
+                "ReportTitle", "ReportSubtitle", "SectionTitle", "BodyClean",
+                "MetaLabel", "MetaValue", "TableHeader", "TableHeaderRight",
+                "TableCell", "TableCellRight", "FooterNote", "KPIValue", "KPILabel",
+            ):
+                self.styles[style_name].fontName = pdf_font(self.language)
         self._ensure_directory(self.base_output_dir)
+
+    def _t(self, value):
+        """Traduz texto estático no idioma usado no momento da geração."""
+        return pdf_text(value, self.language)
+
+    def _translate_table(self, rows):
+        """Traduz rótulos conhecidos, mantendo dados livres intactos."""
+        return [[self._t(cell) if isinstance(cell, str) else cell for cell in row] for row in rows]
 
     # ─────────────────────────────────────────────
     # Estilos tipográficos
@@ -264,6 +285,8 @@ class BasePDFReport:
     def _create_header(self, elements, title, report_type, filters):
         """Cabeçalho compacto: título + faixa de metadados em grelha."""
         filters = filters or {}
+        title = self._t(title or "Relatório")
+        report_type = self._t(report_type)
 
         # Título + tipo
         title_block = [
@@ -349,7 +372,7 @@ class BasePDFReport:
         elements.append(Spacer(1, 12))
 
     def _create_section_title(self, elements, text):
-        elements.append(Paragraph(str(text), self.styles["SectionTitle"]))
+        elements.append(Paragraph(self._t(text), self.styles["SectionTitle"]))
         elements.append(
             HRFlowable(
                 width="100%",
@@ -381,7 +404,7 @@ class BasePDFReport:
         # Cabeçalho: mesmo alinhamento que os valores da coluna
         header_cells = [
             Paragraph(
-                str(h),
+                self._t(h),
                 self.styles["TableHeaderRight"]
                 if idx in numeric_cols
                 else self.styles["TableHeader"],
@@ -459,7 +482,7 @@ class BasePDFReport:
             items.append(
                 [
                     Paragraph(str(value), self.styles["KPIValue"]),
-                    Paragraph(str(label), self.styles["KPILabel"]),
+                    Paragraph(self._t(label), self.styles["KPILabel"]),
                 ]
             )
 

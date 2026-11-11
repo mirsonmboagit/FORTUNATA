@@ -31,6 +31,34 @@ class DatabaseSetupAndUserTests(TemporaryDatabaseTestCase):
         stored_password = self.fetch_scalar("SELECT password FROM users WHERE username = ?", ("admin",))
         self.assertNotEqual(stored_password, "secret")
 
+    def test_initial_admin_profile_is_persisted(self):
+        profile = {
+            "first_name": "Ana",
+            "last_name": "Mboa",
+            "phone": "+258 841234567",
+            "nationality": "Moçambicana",
+            "address": "Maputo",
+            "birth_date": "1990-05-20",
+        }
+        self.assertTrue(
+            self.quiet(
+                self.db.create_admin,
+                "ana.admin",
+                "SenhaForte!2026",
+                "ana@example.com",
+                profile,
+            )
+        )
+        row = self.db.cursor.execute(
+            "SELECT first_name, last_name, full_name, phone, nationality, address, birth_date "
+            "FROM users WHERE username = ?",
+            ("ana.admin",),
+        ).fetchone()
+        self.assertEqual(
+            row,
+            ("Ana", "Mboa", "Ana Mboa", "+258 841234567", "Moçambicana", "Maputo", "1990-05-20"),
+        )
+
     def test_manager_data_owner_defaults_to_username(self):
         self.assertTrue(self.quiet(self.db.create_user, "maria", "123", "manager"))
 

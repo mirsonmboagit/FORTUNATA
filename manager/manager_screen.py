@@ -60,7 +60,11 @@ from ui.components.tooltip_widgets import (
 from utils.core.i18n import correct_portuguese_text
 from utils.config.device_config import get_device_settings
 from utils.config.theme import get_theme_tokens
-from utils.business.receipt_policy import can_emit_receipt, resolve_receipt_data_for_emission
+from utils.business.receipt_policy import (
+    apply_receipt_business_data,
+    can_emit_receipt,
+    resolve_receipt_data_for_emission,
+)
 from utils.config.system_identity import get_system_name
 from utils.hardware.thermal_printer import print_pdf_with_system, print_thermal_receipt
 from utils.hardware.vision import get_vision_dependencies
@@ -135,9 +139,21 @@ def _sales_accessibility_palette():
         tokens.update(dict(getattr(app, "theme_tokens", {}) or {}))
 
     is_dark = style == "Dark"
+    # Garante manager_ink mesmo quando o tema base não o define
+    if "manager_ink" not in tokens:
+        tokens["manager_ink"] = (
+            [0.78, 0.82, 0.88, 1] if is_dark else [0.28, 0.32, 0.38, 1]
+        )
+        if app is not None:
+            try:
+                app_tokens = dict(getattr(app, "theme_tokens", {}) or {})
+                app_tokens.setdefault("manager_ink", tokens["manager_ink"])
+                app.theme_tokens = app_tokens
+            except Exception:
+                pass
     manager_ink = list(tokens.get(
         "manager_ink",
-        [1, 1, 1, 1] if is_dark else [0, 0, 0, 1],
+        [0.78, 0.82, 0.88, 1] if is_dark else [0.28, 0.32, 0.38, 1],
     ))
     return {
         "tokens": tokens,
@@ -383,6 +399,10 @@ class Glyph(Widget):
     kind = StringProperty("")
     rgba = ListProperty([1, 1, 1, 1])
 
+    def collide_point(self, x, y):
+        # Decorativo: toques passam ao botão por baixo
+        return False
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         with self.canvas:
@@ -480,6 +500,11 @@ class FloatingScannerPanel(MDCard):
     min_panel_height = NumericProperty(dp(220))
     drag_bar_height = NumericProperty(dp(30))
     resize_handle_size = NumericProperty(dp(18))
+
+    def collide_point(self, x, y):
+        if getattr(self, "opacity", 1) <= 0.01 or getattr(self, "disabled", False):
+            return False
+        return super().collide_point(x, y)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -613,19 +638,110 @@ class RecycleQuickProductCard(RecycleDataViewBehavior, QuickProductCard):
         return result
 
 
+class PassThroughFloatLayout(FloatLayout):
+    """FloatLayout que nunca rouba toques — so filhos visiveis capturam.
+
+    Resolve o problema dos botoes do rodape/pesquisa ficarem sem clique
+    porque o overlay de sugestoes/avisos cobre o ecra inteiro.
+    """
+
+    def on_touch_down(self, touch):
+        for child in reversed(self.children):
+            if child.dispatch('on_touch_down', touch):
+                return True
+        return False
+
+    def on_touch_move(self, touch):
+        for child in reversed(self.children):
+            if child.dispatch('on_touch_move', touch):
+                return True
+        return False
+
+    def on_touch_up(self, touch):
+        for child in reversed(self.children):
+            if child.dispatch('on_touch_up', touch):
+                return True
+        return False
+
+
+class TransparentTouchCard(MDCard):
+    """MDCard que so colide quando visivel (opacity > 0 e height > 0)."""
+
+    def collide_point(self, x, y):
+        if getattr(self, 'opacity', 1) <= 0.01:
+            return False
+        if getattr(self, 'height', 0) <= 0 or getattr(self, 'width', 0) <= 0:
+            return False
+        if getattr(self, 'disabled', False):
+            return False
+        return super().collide_point(x, y)
+
+
 class BorderedCard(MDCard):
     """Cartao com contorno fino desenhado por cima do fundo (ver sales_screen.kv)."""
     edge_color = ListProperty([1, 1, 1, 0.08])
     edge_width = NumericProperty(dp(1))
     edge_radius = NumericProperty(dp(16))
+    # id do TextField a focar ao clicar em qualquer zona do cartao (opcional)
+    focus_field_id = StringProperty("")
+
+    def on_touch_down(self, touch):
+        inside = self.collide_point(*touch.pos) and bool(self.focus_field_id)
+        field = None
+        if inside:
+            # Nao roubar o toque a botoes filhos (ex.: limpar pesquisa).
+            for child in self.walk():
+                if child is self:
+                    continue
+                cname = child.__class__.__name__
+                if cname in ("TooltipIconButton", "MDIconButton", "NativeIconButton", "Button", "TooltipRaisedButton"):
+                    if getattr(child, "opacity", 1) > 0.01 and not getattr(child, "disabled", False):
+                        if child.collide_point(*touch.pos):
+                            return super().on_touch_down(touch)
+            node = self
+            while node is not None:
+                ids = getattr(node, "ids", None)
+                if ids and self.focus_field_id in ids:
+                    field = ids[self.focus_field_id]
+                    break
+                node = getattr(node, "parent", None)
+        handled = super().on_touch_down(touch)
+        if field is not None:
+            def _focus(_dt, target=field):
+                try:
+                    target.disabled = False
+                    target.focus = True
+                except Exception:
+                    pass
+            Clock.schedule_once(_focus, 0)
+            # Garante que o toque conta como tratado para o campo receber foco
+            return True if handled is False else handled
+        return handled
 
 
 class SalesActionContent(AnchorLayout):
-    """Icone + texto centrados, desenhados por cima de um botao de accao."""
+    """Icone + texto centrados, desenhados por cima de um botao de accao.
+
+    Nao captura toques — o TooltipRaisedButton por baixo continua a receber
+    cliques mesmo quando a janela encolhe.
+    """
     icon_name = StringProperty("")
     glyph_kind = StringProperty("")
     label_text = StringProperty("")
     content_color = ListProperty([1, 1, 1, 1])
+
+    def collide_point(self, x, y):
+        # Deixa o toque atravessar para o botão real
+        return False
+
+    def on_touch_down(self, touch):
+        return False
+
+    def on_touch_move(self, touch):
+        return False
+
+    def on_touch_up(self, touch):
+        return False
 
 
 class EmptyHint(MDBoxLayout):
@@ -636,6 +752,8 @@ class EmptyHint(MDBoxLayout):
 
 Factory.register("Glyph", cls=Glyph)
 Factory.register("FloatingScannerPanel", cls=FloatingScannerPanel)
+Factory.register("PassThroughFloatLayout", cls=PassThroughFloatLayout)
+Factory.register("TransparentTouchCard", cls=TransparentTouchCard)
 Factory.register("BorderedCard", cls=BorderedCard)
 Factory.register("SalesActionContent", cls=SalesActionContent)
 Factory.register("EmptyHint", cls=EmptyHint)
@@ -657,6 +775,7 @@ Builder.load_file(os.path.join(CURRENT_DIR, "sales_screen.kv"))
 #
 #  PESQUISA E SCANNER
 #  ─────────────────────────────────────────────────────────────────────────────
+#  Qualquer letra/número   → Foca a pesquisa e começa a digitar (sem rato)
 #  Ctrl + F                → Focar campo de pesquisa
 #  Ctrl + L                → Limpar pesquisa
 #  Ctrl + B                → Ligar/Desligar scanner de câmara
@@ -724,6 +843,21 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
 
     def __init__(self, **kwargs):
         db = kwargs.pop("db", None)
+        # Garantir tokens usados pelo KV antes do apply das regras de linguagem
+        try:
+            app = App.get_running_app()
+            if app is not None:
+                tokens = dict(getattr(app, "theme_tokens", {}) or {})
+                style = getattr(getattr(app, "theme_cls", None), "theme_style", "Dark")
+                is_dark = style == "Dark"
+                tokens.setdefault(
+                    "manager_ink",
+                    [0.78, 0.82, 0.88, 1] if is_dark else [0.28, 0.32, 0.38, 1],
+                )
+                tokens.setdefault("badge", tokens.get("danger", [0.90, 0.28, 0.32, 1]))
+                app.theme_tokens = tokens
+        except Exception:
+            pass
         super().__init__(**kwargs)
         self.db = db or get_db()
         self.back_target = "manager"
@@ -877,18 +1011,22 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             traceback.print_exc()
 
     def on_enter(self):
+        self._configure_sales_window_icon()
         self._startup_entered = True
         self._refresh_device_settings()
         self._bind_keyboard_shortcuts()
         self._refresh_header_meta()
         self._start_clock()
-        # Nao repetir consultas pesadas imediatamente apos _post_init.
+
         stale = (time.perf_counter() - self._last_products_refresh_at) >= self.PRODUCTS_CACHE_SECONDS
         if not self._loaded_products or stale:
             Clock.schedule_once(lambda _dt: self.manual_refresh_stock(silent=True), 0.45)
         Clock.schedule_once(lambda _dt: self._load_operational_snapshot(), 0.65)
         if self._startup_cash_ev is None:
             self._startup_cash_ev = Clock.schedule_once(self._startup_load_cash_and_ai, 0.90)
+        # Polling is also deferred so entering the screen does not block rendering.
+        Clock.schedule_once(lambda _dt: self._start_stock_polling(), 1.00)
+
         app = App.get_running_app()
         warmup = getattr(app, "warmup_screens", None) if app else None
         if callable(warmup):
@@ -900,32 +1038,6 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             Clock.schedule_once(
                 lambda _dt: self._focus_text_field("search_input", select_all=False),
                 0.35,
-            )
-
-
-    def on_enter(self):
-        self._refresh_device_settings()
-        self._bind_keyboard_shortcuts()
-        self._refresh_header_meta()
-        self._start_clock()
-        stale = (time.perf_counter() - self._last_products_refresh_at) >= self.PRODUCTS_CACHE_SECONDS
-        if not self._loaded_products or stale:
-            self.manual_refresh_stock(silent=True)
-        self._load_operational_snapshot()
-        self._start_stock_polling()
-        self._start_ai_polling()
-        Clock.schedule_once(lambda _dt: self.ensure_cash_session(), 0.15)
-        app = App.get_running_app()
-        warmup = getattr(app, "warmup_screens", None) if app else None
-        if callable(warmup):
-            Clock.schedule_once(
-                lambda _dt: warmup(("sales_history", "losses", "losses_history"), delay=0.1),
-                0.18,
-            )
-        if self._physical_scanner_enabled:
-            Clock.schedule_once(
-                lambda _dt: self._focus_text_field("search_input", select_all=False),
-                0.05,
             )
 
     def on_leave(self):
@@ -1623,6 +1735,38 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                     self.remove_from_cart(idx)
                     return True
 
+        # Type-to-search: qualquer letra/numero foca a pesquisa sem precisar do rato.
+        # So ignora se o buffer do scanner USB ja tiver varios caracteres (rajada).
+        if not modifiers and not text_focused and not self._has_open_modal():
+            char = str(codepoint or "")
+            if not char and len(key_name) == 1:
+                char = key_name
+            if len(char) == 1 and char.isprintable() and not char.isspace():
+                buf = str(self._scanner_keyboard_buffer or "")
+                # Rajada de scanner: 3+ chars em intervalo curto
+                if len(buf) >= 3:
+                    now = time.perf_counter()
+                    if (now - self._scanner_keyboard_last_at) <= self._scanner_keyboard_max_gap:
+                        return False
+                search_input = self.ids.get("search_input") if self.ids else None
+                if search_input is not None and not getattr(search_input, "disabled", False):
+                    # Limpa buffer do scanner para nao confundir leitura USB
+                    self._reset_scanner_keyboard_buffer()
+                    search_input.focus = True
+                    prev = str(getattr(search_input, "text", "") or "")
+                    search_input.text = prev + char
+                    try:
+                        if hasattr(search_input, "cursor"):
+                            search_input.cursor = (len(search_input.text), 0)
+                    except Exception:
+                        pass
+                    # Dispara on_search manualmente se o bind nao correr
+                    try:
+                        self.on_search(search_input.text)
+                    except Exception:
+                        pass
+                    return True
+
         return False
 
     def _handle_window_keyboard(self, _window, key, scancode=None, codepoint=None, modifiers=None):
@@ -1934,22 +2078,51 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         compact = width < 1050
         phone = width < 640
 
-        # Header: keep metadata readable; never squeeze it into a vertical strip.
+        # Header: brand, metricas, meta e accoes adaptam-se a largura.
+        header = ids.get("header_card")
+        if header is not None:
+            header.height = dp(72 if width >= 900 else (64 if width >= 640 else 56))
+
+        metrics_hdr = ids.get("header_metrics_group")
+        if metrics_hdr is not None:
+            if width >= 1100:
+                metrics_hdr.width = dp(300)
+                metrics_hdr.opacity = 1
+                metrics_hdr.disabled = False
+            elif width >= 900:
+                metrics_hdr.width = dp(260)
+                metrics_hdr.opacity = 1
+                metrics_hdr.disabled = False
+            elif width >= 720:
+                metrics_hdr.width = dp(220)
+                metrics_hdr.opacity = 1
+                metrics_hdr.disabled = False
+            else:
+                metrics_hdr.width = 0
+                metrics_hdr.opacity = 0
+                metrics_hdr.disabled = True
+
         meta = ids.get("header_meta_group")
         if meta is not None:
-            show_meta = width >= 1050
-            meta.width = min(dp(218), max(dp(176), width * 0.205)) if show_meta else 0
+            # Atendente/data: so em ecras muito largos (liberta espaco no header)
+            show_meta = width >= 1400
+            meta.width = dp(180) if show_meta else 0
             meta.opacity = 1 if show_meta else 0
             meta.disabled = not show_meta
         conn = ids.get("connection_card")
         if conn is not None:
-            show_conn = width >= 760
+            show_conn = width >= 720
             conn.width = dp(88) if show_conn else 0
             conn.opacity = 1 if show_conn else 0
             conn.disabled = not show_conn
         sub = ids.get("brand_subtitle")
         if sub is not None:
-            sub.opacity = 1 if width >= 760 else 0
+            sub.opacity = 1 if width >= 700 else 0
+        brand_w = ids.get("brand_group")
+        # AI group always visible; shrink spacing on narrow screens
+        ai = ids.get("header_ai_group")
+        if ai is not None:
+            ai.width = dp(104 if width >= 640 else 88)
 
         empty_visual = ids.get("cart_empty_visual")
         if empty_visual is not None:
@@ -1993,59 +2166,64 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         if self._apply_cart_columns(width) and self.cart_items:
             self.update_cart_display()
 
-        # Footer: on medium/small windows use two rows of actions so each button
-        # retains a useful tap target and its icon/label cannot collide.
+        # Footer: so accoes (metricas foram para o header).
         bar = ids.get("bottom_bar")
         content = ids.get("bottom_bar_content")
         metrics = ids.get("footer_metrics_grid")
         actions = ids.get("bottom_actions_grid")
         divider = ids.get("bottom_divider")
-        if bar is not None and content is not None and metrics is not None and actions is not None:
-            if width >= 1120:
-                bar.height = dp(72)
-                content.orientation = "horizontal"
-                content.spacing = dp(12)
-                metrics.cols = 3
-                metrics.row_force_default = False
-                metrics.size_hint = (0.40, 1)
-                actions.cols = 5
-                actions.row_force_default = False
-                actions.size_hint = (0.60, 1)
-                if divider is not None:
-                    divider.size_hint = (None, 1)
-                    divider.width = dp(1)
-            else:
-                metric_h = dp(44 if phone else 48)
-                action_h = dp(42 if phone else 44)
-                action_cols = 3
-                action_rows = 2
-                bar.height = metric_h + dp(8) + action_h * action_rows + dp(8) + dp(12)
-                content.orientation = "vertical"
-                content.spacing = dp(7)
-                metrics.cols = 3
-                metrics.row_force_default = True
-                metrics.row_default_height = metric_h
-                metrics.size_hint = (1, None)
-                metrics.height = metric_h
-                actions.cols = action_cols
-                actions.row_force_default = True
-                actions.row_default_height = action_h
-                actions.size_hint = (1, None)
-                actions.height = action_h * action_rows
-                if divider is not None:
-                    divider.size_hint = (None, None)
-                    divider.size = (0, 0)
+        if bar is not None and content is not None and actions is not None:
+            if hasattr(actions, "orientation"):
+                actions.orientation = "horizontal"
+            if hasattr(actions, "spacing"):
+                actions.spacing = dp(5 if phone else 6)
 
-            # Smaller windows: trim icon footprint and text size inside metric cards.
-            for card in metrics.children:
-                for child in getattr(card, "children", []):
-                    if child.__class__.__name__ == "MDIcon":
-                        child.size = (dp(20), dp(20)) if compact else (dp(30), dp(30))
-                        child.font_size = dp(20) if compact else dp(28)
-                    elif child.__class__.__name__ == "MDBoxLayout":
-                        for label in getattr(child, "children", []):
-                            if hasattr(label, "font_size"):
-                                label.font_size = sp(11 if compact else 14) if not getattr(label, "bold", False) else sp(13 if compact else 17)
+            bar.height = dp(48 if phone else (52 if width < 980 else 56))
+            content.orientation = "horizontal"
+            content.spacing = dp(8)
+            actions.size_hint = (1, 1)
+            if metrics is not None:
+                metrics.size_hint = (None, None)
+                metrics.size = (0, 0)
+                metrics.opacity = 0
+                metrics.disabled = True
+            if divider is not None:
+                divider.size_hint = (None, None)
+                divider.size = (0, 0)
+                divider.opacity = 0
+
+            # Icones de alerta sempre centrados e com tamanho fixo
+            for btn_id in ("ai_button", "recommendations_button"):
+                btn = ids.get(btn_id)
+                if btn is None:
+                    continue
+                parent = btn.parent
+                if parent is not None:
+                    parent.size_hint = (None, None)
+                    parent.size = (dp(40), dp(40))
+                    for child in list(parent.children):
+                        if child.__class__.__name__ == "Glyph":
+                            child.size = (dp(22), dp(22))
+                            child.pos_hint = {"center_x": 0.5, "center_y": 0.5}
+
+            # Metricas no header: tipografia proporcional
+            metrics_hdr = ids.get("header_metrics_group")
+            if metrics_hdr is not None and metrics_hdr.opacity > 0:
+                for card in list(getattr(metrics_hdr, "children", []) or []):
+                    for child in list(getattr(card, "children", []) or []):
+                        cname = child.__class__.__name__
+                        if cname in ("MDIcon", "NativeIcon"):
+                            sz = dp(18) if width < 1000 else dp(22)
+                            child.size = (sz, sz)
+                            child.font_size = sz
+                        elif cname in ("MDBoxLayout", "NativeBoxLayout"):
+                            for label in list(getattr(child, "children", []) or []):
+                                if not hasattr(label, "font_size"):
+                                    continue
+                                if getattr(label, "bold", False):
+                                    label.font_size = sp(12 if width < 1000 else 14)
+                                else:
+                                    label.font_size = sp(9 if width < 1000 else 10)
 
         panel = ids.get("scanner_preview_card")
         if panel is not None and (getattr(self, "_scanner_panel_initialized", False) or panel.opacity > 0.01):
@@ -2400,18 +2578,101 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 search_input.focus = True
 
     def on_touch_down(self, touch):
-        # Toque fora do dropdown e da caixa de pesquisa fecha as sugestoes.
-        if self.suggestions_height > 0 and self.ids:
-            card = self.ids.get("suggestions_card")
-            field = self.ids.get("search_field_card")
-            local = self.to_local(*touch.pos)
-            inside = any(
-                widget is not None and widget.collide_point(*local)
-                for widget in (card, field)
-            )
-            if not inside:
-                self._dismiss_suggestions()
+        """Rodape tem prioridade absoluta sobre qualquer overlay flutuante."""
+        if self.ids and not getattr(touch, "is_mouse_scrolling", False):
+            bar = self.ids.get("bottom_bar")
+            if bar is not None:
+                # Coordenadas de janela evitam desfasamento apos resize/DPI
+                try:
+                    wx, wy = self.to_window(*touch.pos)
+                except Exception:
+                    wx, wy = touch.pos
+                try:
+                    bx, by = bar.to_window(bar.x, bar.y)
+                    inside_bar = (
+                        bx <= wx <= bx + bar.width
+                        and by <= wy <= by + bar.height
+                    )
+                except Exception:
+                    local = self.to_local(*touch.pos)
+                    inside_bar = bar.collide_point(*local)
+
+                if inside_bar:
+                    # 1) Entregar o toque ao rodape e aos filhos
+                    touch.push()
+                    try:
+                        touch.apply_transform_2d(bar.to_widget)
+                        if bar.dispatch("on_touch_down", touch):
+                            return True
+                    finally:
+                        touch.pop()
+                    # 2) Fallback: cada botao individualmente
+                    for btn_id in ("cash_btn", "receipt_btn", "cancel_btn", "hold_btn", "finalize_btn"):
+                        btn = self.ids.get(btn_id)
+                        if btn is None or getattr(btn, "disabled", False):
+                            continue
+                        try:
+                            bwx, bwy = btn.to_window(btn.x, btn.y)
+                            hit = (
+                                bwx <= wx <= bwx + btn.width
+                                and bwy <= wy <= bwy + btn.height
+                            )
+                        except Exception:
+                            hit = False
+                        if not hit:
+                            continue
+                        touch.push()
+                        try:
+                            touch.apply_transform_2d(btn.to_widget)
+                            if btn.dispatch("on_touch_down", touch):
+                                return True
+                        finally:
+                            touch.pop()
+                        # Ultimo recurso: disparar on_release (clique completo)
+                        try:
+                            btn.dispatch("on_release")
+                            return True
+                        except Exception:
+                            continue
+
+            # Fechar sugestoes ao tocar fora
+            if self.suggestions_height > 0:
+                card = self.ids.get("suggestions_card")
+                field = self.ids.get("search_field_card")
+                local = self.to_local(*touch.pos)
+                inside = any(
+                    widget is not None and widget.collide_point(*local)
+                    for widget in (card, field)
+                )
+                if not inside:
+                    self._dismiss_suggestions()
+
         return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        """Garante que o release no rodape chega aos botoes (completa o clique)."""
+        if self.ids and not getattr(touch, "is_mouse_scrolling", False):
+            bar = self.ids.get("bottom_bar")
+            if bar is not None:
+                try:
+                    wx, wy = self.to_window(*touch.pos)
+                    bx, by = bar.to_window(bar.x, bar.y)
+                    inside_bar = (
+                        bx <= wx <= bx + bar.width
+                        and by <= wy <= by + bar.height
+                    )
+                except Exception:
+                    local = self.to_local(*touch.pos)
+                    inside_bar = bar.collide_point(*local)
+                if inside_bar:
+                    touch.push()
+                    try:
+                        touch.apply_transform_2d(bar.to_widget)
+                        if bar.dispatch("on_touch_up", touch):
+                            return True
+                    finally:
+                        touch.pop()
+        return super().on_touch_up(touch)
 
     def show_product_details(self, product):
         if product is None:
@@ -2787,8 +3048,95 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             self.recommendation_count > 0,
         )
 
+    def _resolve_admin_icon_path(self):
+        """Devolve o caminho do admin.ico se existir."""
+        candidates = (
+            os.path.join(PROJECT_ROOT, "assets", "icon", "admin.ico"),
+            os.path.join(CURRENT_DIR, "assets", "icon", "admin.ico"),
+            os.path.join(PROJECT_ROOT, "assets", "icon", "admin.png"),
+            os.path.join(CURRENT_DIR, "assets", "icon", "admin.png"),
+            os.path.join(PROJECT_ROOT, "assets", "icons", "admin.ico"),
+            os.path.join(PROJECT_ROOT, "icon", "admin.ico"),
+        )
+        return next((p for p in candidates if os.path.isfile(p)), None)
+
+    def _configure_sales_window_icon(self, *_args):
+        """Configura o icone nativo da janela e o logo da marca no header."""
+        icon_path = self._resolve_admin_icon_path()
+        if not icon_path:
+            return
+        try:
+            app = App.get_running_app()
+            if app is not None:
+                app.icon = icon_path
+            Window.set_icon(icon_path)
+        except Exception:
+            traceback.print_exc()
+        self._apply_brand_logo(icon_path)
+
+    def _apply_brand_logo(self, icon_path=None):
+        """Substitui o icone generico do header pelo admin.ico."""
+        if not self.ids:
+            return
+        path = icon_path or self._resolve_admin_icon_path()
+        logo = self.ids.get("brand_logo")
+        fallback = self.ids.get("brand_logo_fallback")
+        if path and logo is not None:
+            try:
+                logo.source = path
+                logo.reload()
+                logo.opacity = 1
+                if fallback is not None:
+                    fallback.opacity = 0
+                return
+            except Exception:
+                traceback.print_exc()
+        if logo is not None:
+            logo.opacity = 0
+        if fallback is not None:
+            fallback.opacity = 1
+
     def open_all_products_table(self):
+        """Abre o catalogo sem bloquear a UI: modal de loading imediato + dados em background."""
         self.set_search_feedback("A preparar tabela de produtos", "info", "format-list-bulleted")
+
+        # Modal leve imediato para o utilizador nao sentir freeze
+        if getattr(self, "_catalog_loading_modal", None) is not None:
+            try:
+                self._catalog_loading_modal.dismiss()
+            except Exception:
+                pass
+            self._catalog_loading_modal = None
+
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        loading = ModalView(size_hint=(None, None), size=(dp(280), dp(120)), auto_dismiss=False)
+        card = MDCard(
+            orientation="vertical",
+            radius=[dp(12)],
+            elevation=4,
+            md_bg_color=tokens.get("card", [0.16, 0.18, 0.22, 1]),
+            padding=[dp(20), dp(16), dp(20), dp(16)],
+            spacing=dp(10),
+        )
+        card.add_widget(MDLabel(
+            text="A carregar catalogo...",
+            bold=True,
+            font_size=dp(16),
+            halign="center",
+            theme_text_color="Custom",
+            text_color=tokens.get("text_primary", [0.95, 0.96, 0.98, 1]),
+        ))
+        card.add_widget(MDLabel(
+            text="Aguarde um momento",
+            font_size=dp(13),
+            halign="center",
+            theme_text_color="Custom",
+            text_color=tokens.get("manager_ink", tokens.get("text_secondary", [0.69, 0.73, 0.81, 1])),
+        ))
+        loading.add_widget(card)
+        self._catalog_loading_modal = loading
+        loading.open()
 
         def worker():
             rows = []
@@ -2802,11 +3150,23 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
             except Exception as exc:
                 traceback.print_exc()
                 error = exc
-            Clock.schedule_once(lambda _dt, data=rows, err=error: self._show_all_products_table(data, err), 0)
+
+            def finish(_dt, data=rows, err=error):
+                modal = getattr(self, "_catalog_loading_modal", None)
+                if modal is not None:
+                    try:
+                        modal.dismiss()
+                    except Exception:
+                        pass
+                    self._catalog_loading_modal = None
+                self._show_all_products_table(data, err)
+
+            Clock.schedule_once(finish, 0)
 
         Thread(target=worker, daemon=True).start()
 
     def _show_all_products_table(self, rows, error=None):
+        """Catalogo compacto: 10/pagina, permanece aberto ao adicionar."""
         if error is not None:
             self.show_message("Falha ao carregar tabela de produtos.")
             return
@@ -2814,159 +3174,432 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         products = self._normalize_manager_product_rows(rows or [])
         app = App.get_running_app()
         tokens = getattr(app, "theme_tokens", {}) if app else {}
-        colors = {
-            "surface": tokens.get("surface", [0.96, 0.97, 0.99, 1]),
-            "card": tokens.get("card", [1, 1, 1, 1]),
-            "card_alt": tokens.get("card_alt", [0.94, 0.95, 0.97, 1]),
-            "divider": tokens.get("divider", [0.82, 0.84, 0.88, 1]),
-            "text": tokens.get("text_primary", [0.10, 0.12, 0.16, 1]),
-            "muted": tokens.get("manager_ink", [0, 0, 0, 1]),
-            "success": tokens.get("success", [0.0, 0.48, 0.28, 1]),
-            "info": tokens.get("info", [0.05, 0.32, 0.62, 1]),
-            "danger": tokens.get("danger", [0.72, 0.12, 0.17, 1]),
-        }
 
-        modal = ModalView(size_hint=(0.96, 0.88), auto_dismiss=True)
+        c_bg = tokens.get("card", [0.12, 0.15, 0.18, 1])
+        c_row = tokens.get("card_alt", [0.15, 0.18, 0.22, 1])
+        c_row_alt = [0.14, 0.17, 0.21, 1]
+        c_text = tokens.get("text_primary", [0.95, 0.96, 0.98, 1])
+        c_muted = tokens.get("manager_ink", tokens.get("text_secondary", [0.62, 0.68, 0.74, 1]))
+        c_green = tokens.get("success", [0.18, 0.68, 0.48, 1])
+        c_chip = [0.18, 0.22, 0.28, 1]
+        c_search = [0.10, 0.13, 0.16, 1]
+        c_border = tokens.get("divider", [0.25, 0.30, 0.36, 1])
+        c_danger = tokens.get("danger", [0.78, 0.28, 0.32, 1])
+
+        PAGE_SIZE = 10
+        state = {"page": 0, "query": "", "visible": list(products)}
+
+        modal = ModalView(
+            size_hint=(0.78, 0.72),
+            auto_dismiss=True,
+            background_color=[0, 0, 0, 0.45],
+        )
         root = MDCard(
             orientation="vertical",
-            radius=[dp(8)],
-            elevation=4,
-            md_bg_color=colors["card"],
-            padding=[0, 0, 0, 0],
+            radius=[dp(14)],
+            elevation=8,
+            md_bg_color=c_bg,
+            padding=[dp(14), dp(12), dp(14), dp(12)],
+            spacing=dp(8),
         )
 
-        header = MDBoxLayout(size_hint_y=None, height=dp(54), padding=[dp(16), 0, dp(8), 0], spacing=dp(8))
-        header.add_widget(MDLabel(
+        # Header compacto
+        header = MDBoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        title_box = MDBoxLayout(orientation="vertical", spacing=0)
+        title_box.add_widget(MDLabel(
             text="Catalogo de produtos",
             bold=True,
-            font_style="H6",
+            font_size=dp(16),
             theme_text_color="Custom",
-            text_color=colors["text"],
+            text_color=c_text,
+            size_hint_y=None,
+            height=dp(22),
         ))
-        product_count_label = MDLabel(
-            text=f"{len(products)} produtos",
-            halign="right",
-            font_size=dp(15),
+        title_box.add_widget(MDLabel(
+            text="Toque em Adicionar para colocar no carrinho",
+            font_size=dp(11),
             theme_text_color="Custom",
-            text_color=colors["muted"],
+            text_color=c_muted,
+            size_hint_y=None,
+            height=dp(16),
+        ))
+        header.add_widget(title_box)
+
+        count_chip = MDCard(
+            size_hint=(None, None),
+            size=(dp(110), dp(26)),
+            radius=[dp(13)],
+            elevation=0,
+            md_bg_color=c_chip,
+            padding=[dp(8), 0, dp(8), 0],
+            pos_hint={"center_y": 0.5},
         )
-        header.add_widget(product_count_label)
-        header.add_widget(MDIconButton(
-            icon="close",
+        count_label = MDLabel(
+            text=f"{len(products)}",
+            halign="center",
+            valign="middle",
+            font_size=dp(11),
+            bold=True,
             theme_text_color="Custom",
-            text_color=colors["muted"],
-            on_release=lambda *_args: modal.dismiss(),
-        ))
+            text_color=c_muted,
+            text_size=(dp(94), dp(26)),
+        )
+        count_chip.add_widget(count_label)
+        header.add_widget(count_chip)
+
+        close_btn = MDRaisedButton(
+            text="X",
+            size_hint=(None, None),
+            size=(dp(36), dp(28)),
+            font_size=sp(12),
+            md_bg_color=c_chip,
+            pos_hint={"center_y": 0.5},
+            on_release=lambda *_: modal.dismiss(),
+        )
+        header.add_widget(close_btn)
         root.add_widget(header)
 
-        search_input = MDTextField(
-            hint_text="Pesquisar no catalogo",
-            mode="rectangle",
-            multiline=False,
-            font_size=dp(16),
-            size_hint_y=None,
-            height=dp(52),
-        )
+        # Pesquisa compacta — BoxLayout (nao MDCard) para o TextInput receber toques
         search_shell = MDBoxLayout(
             size_hint_y=None,
-            height=dp(64),
-            padding=[dp(16), dp(4), dp(16), dp(8)],
+            height=dp(40),
+            padding=[dp(8), dp(2), dp(8), dp(2)],
+            spacing=dp(6),
         )
+        with search_shell.canvas.before:
+            _sc = Color(rgba=c_search)
+            _sr = RoundedRectangle(pos=search_shell.pos, size=search_shell.size, radius=[dp(10)])
+            def _sync_search_bg(*_a):
+                _sr.pos = search_shell.pos
+                _sr.size = search_shell.size
+            search_shell.bind(pos=_sync_search_bg, size=_sync_search_bg)
+
+        search_shell.add_widget(MDIcon(
+            icon="magnify",
+            size_hint=(None, None),
+            size=(dp(20), dp(20)),
+            font_size=dp(18),
+            theme_text_color="Custom",
+            text_color=c_muted,
+            pos_hint={"center_y": 0.5},
+        ))
+        search_input = MDTextField(
+            hint_text="Filtrar por nome ou codigo...",
+            mode="rectangle",
+            multiline=False,
+            font_size=dp(13),
+            size_hint_y=None,
+            height=dp(36),
+            padding=[dp(4), dp(8), dp(4), dp(8)],
+            write_tab=False,
+        )
+        for attr, val in (
+            ("line_color_normal", [0, 0, 0, 0]),
+            ("line_color_focus", c_green if isinstance(c_green, (list, tuple)) else [0.2, 0.7, 0.5, 1]),
+            ("fill_color_normal", [0, 0, 0, 0]),
+            ("fill_color_focus", [0, 0, 0, 0]),
+            ("background_active", ""),
+            ("background_normal", ""),
+            ("foreground_color", c_text),
+            ("hint_text_color", c_muted),
+        ):
+            if hasattr(search_input, attr):
+                try:
+                    setattr(search_input, attr, val)
+                except Exception:
+                    pass
         search_shell.add_widget(search_input)
         root.add_widget(search_shell)
 
-        col_widths = [dp(72), dp(300), dp(116), dp(116), dp(78), dp(136), dp(136), dp(250), dp(112)]
-        table_width = sum(col_widths)
-        cols = [
-            ("SEQ.", col_widths[0], "center"),
-            ("PRODUTO", col_widths[1], "left"),
-            ("ESTOQUE", col_widths[2], "center"),
-            ("VENDIDO", col_widths[3], "center"),
-            ("TIPO", col_widths[4], "center"),
-            ("PRECO", col_widths[5], "center"),
-            ("LUCRO", col_widths[6], "center"),
-            ("DATA DE VALIDADE", col_widths[7], "center"),
-            ("ACOES", col_widths[8], "center"),
-        ]
+        # Lista
+        body_scroll = KivyScrollView(
+            do_scroll_x=False,
+            do_scroll_y=True,
+            bar_width=dp(3),
+            bar_color=[c_green[0], c_green[1], c_green[2], 0.35],
+        )
+        body = MDBoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(4),
+            padding=[0, dp(2), 0, dp(2)],
+        )
+        body.bind(minimum_height=lambda inst, val: setattr(inst, "height", val))
+        body_scroll.add_widget(body)
+        root.add_widget(body_scroll)
 
-        scroll_x = KivyScrollView(do_scroll_x=True, do_scroll_y=False, bar_width=dp(6))
-        content = MDBoxLayout(orientation="vertical", size_hint=(None, 1), width=table_width)
-        header_row = GridLayout(cols=len(cols), size_hint_y=None, height=dp(44), size_hint_x=None, width=table_width)
-        for title, width, align in cols:
-            header_row.add_widget(self._build_catalog_cell(
-                title,
-                dp(44),
-                colors["card_alt"],
-                colors["divider"],
-                width,
-                halign=align,
-                bold=True,
-                text_color=colors["muted"],
-            ))
-        content.add_widget(header_row)
+        # Pager compacto
+        pager = MDBoxLayout(size_hint_y=None, height=dp(36), spacing=dp(8))
+        prev_btn = MDRaisedButton(
+            text="< Ant.",
+            size_hint_x=None,
+            width=dp(88),
+            font_size=sp(12),
+            md_bg_color=c_chip,
+        )
+        next_btn = MDRaisedButton(
+            text="Prox. >",
+            size_hint_x=None,
+            width=dp(88),
+            font_size=sp(12),
+            md_bg_color=c_green,
+        )
+        page_label = MDLabel(
+            text="",
+            halign="center",
+            valign="middle",
+            font_size=dp(12),
+            theme_text_color="Custom",
+            text_color=c_muted,
+        )
+        pager.add_widget(prev_btn)
+        pager.add_widget(page_label)
+        pager.add_widget(next_btn)
+        root.add_widget(pager)
 
-        body_scroll = KivyScrollView(do_scroll_x=False, do_scroll_y=True, bar_width=dp(6))
-        body_grid = GridLayout(cols=len(cols), size_hint_y=None, size_hint_x=None, width=table_width)
-        body_grid.bind(minimum_height=lambda inst, value: setattr(inst, "height", value))
-        row_h = dp(46)
+        def _filtered():
+            needle = str(state["query"] or "").strip().lower()
+            if not needle:
+                return list(products)
+            # Aceita multiplas palavras (AND)
+            parts = [p for p in needle.split() if p]
+            out = []
+            for p in products:
+                blob = " ".join((
+                    str(p.get("search_text") or ""),
+                    str(p.get("name") or ""),
+                    str(p.get("category") or ""),
+                    str(p.get("barcode") or ""),
+                    str(p.get("stock_text") or ""),
+                )).lower()
+                if all(part in blob for part in parts):
+                    out.append(p)
+            return out
 
-        def render_rows(query=""):
-            body_grid.clear_widgets()
-            needle = str(query or "").strip().lower()
-            visible = [
-                product for product in products
-                if not needle or needle in product["search_text"]
-            ]
-            product_count_label.text = f"{len(visible)} de {len(products)} produtos" if needle else f"{len(products)} produtos"
-            for idx, product in enumerate(visible, start=1):
-                bg = colors["surface"] if idx % 2 else colors["card"]
-                stock_color = colors["danger"] if product["stock"] <= 0 else colors["muted"]
-                values = [
-                    (str(idx), colors["text"], True, "center"),
-                    (product["name"], colors["text"], False, "left"),
-                    (product["stock_text"], stock_color, product["stock"] <= 0, "center"),
-                    (product["sold_text"], colors["muted"], False, "center"),
-                    (product["sale_type"], colors["text"], True, "center"),
-                    (_format_money(product["price"]), colors["success"], True, "center"),
-                    (_format_money(product["profit"]), colors["info"], True, "center"),
-                    (product["expiry_text"], colors["muted"], False, "center"),
-                ]
-                for col_index, (text, color, bold, align) in enumerate(values):
-                    body_grid.add_widget(self._build_catalog_cell(
-                        text, row_h, bg, colors["divider"], cols[col_index][1],
-                        halign=align, bold=bold, text_color=color,
-                        shorten=(col_index != 7),
-                        font_size=dp(14) if col_index == 7 else dp(15),
-                    ))
-                action_cell = self._build_catalog_cell("", row_h, bg, colors["divider"], cols[-1][1])
-                actions = MDBoxLayout(orientation="horizontal", spacing=dp(2))
-                actions.add_widget(MDIconButton(
-                    icon="information-outline",
-                    theme_text_color="Custom",
-                    text_color=colors["info"],
-                    on_release=lambda _btn, data=product["source"]: self.show_product_details(data),
-                ))
-                add_button = MDIconButton(
-                    icon="cart-plus",
-                    theme_text_color="Custom",
-                    text_color=colors["success"],
-                    disabled=product["stock"] <= 0,
-                    on_release=lambda _btn, data=product["source"]: self.add_to_cart(data, source="catalog"),
+        def _add_product(product):
+            """Adiciona ao carrinho SEM fechar o catalogo."""
+            try:
+                raw = product.get("source") or product.get("raw")
+                if raw is None:
+                    self.show_message("Produto invalido.")
+                    return
+                self.add_to_cart(raw, sale_mode="unit", source="catalog")
+                self.set_search_feedback(
+                    f"+ {product.get('name', 'produto')}",
+                    "success",
+                    "check-circle",
                 )
-                actions.add_widget(add_button)
-                action_cell.add_widget(actions)
-                body_grid.add_widget(action_cell)
+            except Exception as exc:
+                traceback.print_exc()
+                self.show_message(f"Nao foi possivel adicionar: {exc}")
 
-        search_input.bind(text=lambda _field, value: render_rows(value))
-        render_rows()
+        def _make_row(product, alt=False):
+            row = MDCard(
+                orientation="horizontal",
+                size_hint_y=None,
+                height=dp(52),
+                radius=[dp(10)],
+                elevation=0,
+                md_bg_color=c_row_alt if alt else c_row,
+                padding=[dp(10), dp(6), dp(8), dp(6)],
+                spacing=dp(8),
+            )
 
-        body_scroll.add_widget(body_grid)
-        content.add_widget(body_scroll)
-        scroll_x.add_widget(content)
-        root.add_widget(scroll_x)
+            # Nome + meta
+            left = MDBoxLayout(orientation="vertical", spacing=0, size_hint_x=0.40)
+            left.add_widget(MDLabel(
+                text=str(product.get("name") or "Sem nome"),
+                bold=True,
+                font_size=dp(13),
+                shorten=True,
+                shorten_from="right",
+                theme_text_color="Custom",
+                text_color=c_text,
+                size_hint_y=None,
+                height=dp(18),
+            ))
+            stock_txt = product.get("stock_text") or str(product.get("stock") or 0)
+            price_txt = _format_money(product.get("price") or 0)
+            cat = str(product.get("category") or "").strip() or (product.get("sale_type") or "UN")
+            left.add_widget(MDLabel(
+                text=f"{stock_txt}  ·  {price_txt}  ·  {cat}",
+                font_size=dp(11),
+                shorten=True,
+                shorten_from="right",
+                theme_text_color="Custom",
+                text_color=c_muted,
+                size_hint_y=None,
+                height=dp(16),
+            ))
+            row.add_widget(left)
+
+            # Qty + unit
+            unit = str(product.get("sale_type") or "UN")
+            stock_val = product.get("stock") or 0
+            try:
+                qty_val = str(int(stock_val)) if float(stock_val).is_integer() else f"{float(stock_val):g}"
+            except Exception:
+                qty_val = str(stock_val)
+
+            qty_box = MDBoxLayout(
+                orientation="horizontal",
+                size_hint_x=0.18,
+                spacing=dp(4),
+            )
+            qty_box.add_widget(MDLabel(
+                text=qty_val,
+                bold=True,
+                font_size=dp(13),
+                halign="right",
+                valign="middle",
+                theme_text_color="Custom",
+                text_color=c_text,
+            ))
+            unit_chip = MDCard(
+                size_hint=(None, None),
+                size=(dp(30), dp(20)),
+                radius=[dp(6)],
+                elevation=0,
+                md_bg_color=c_chip,
+                pos_hint={"center_y": 0.5},
+            )
+            unit_chip.add_widget(MDLabel(
+                text=unit,
+                bold=True,
+                font_size=dp(10),
+                halign="center",
+                valign="middle",
+                theme_text_color="Custom",
+                text_color=c_muted,
+                text_size=(dp(28), dp(20)),
+            ))
+            qty_box.add_widget(unit_chip)
+            row.add_widget(qty_box)
+
+            # Preco
+            row.add_widget(MDLabel(
+                text=price_txt,
+                bold=True,
+                font_size=dp(13),
+                size_hint_x=0.18,
+                halign="center",
+                valign="middle",
+                theme_text_color="Custom",
+                text_color=c_text,
+            ))
+
+            # Botao pequeno
+            add_btn = MDRaisedButton(
+                text="+ Add",
+                size_hint=(None, None),
+                size=(dp(72), dp(30)),
+                md_bg_color=c_green,
+                font_size=sp(11),
+                pos_hint={"center_y": 0.5},
+                on_release=lambda _b, p=product: _add_product(p),
+            )
+            row.add_widget(add_btn)
+            return row
+
+        def render_page(*_args):
+            state["visible"] = _filtered()
+            total = len(state["visible"])
+            pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+            state["page"] = max(0, min(state["page"], pages - 1))
+            start_i = state["page"] * PAGE_SIZE
+            chunk = state["visible"][start_i:start_i + PAGE_SIZE]
+
+            body.clear_widgets()
+            if not chunk:
+                body.add_widget(MDLabel(
+                    text="Nenhum produto encontrado.",
+                    size_hint_y=None,
+                    height=dp(48),
+                    halign="center",
+                    theme_text_color="Custom",
+                    text_color=c_muted,
+                ))
+            else:
+                for idx, product in enumerate(chunk):
+                    body.add_widget(_make_row(product, alt=bool(idx % 2)))
+
+            if state["query"]:
+                count_label.text = f"{total}/{len(products)}"
+            else:
+                count_label.text = f"{len(products)} itens"
+            page_label.text = f"{state['page'] + 1} / {pages}"
+            prev_btn.disabled = state["page"] <= 0
+            next_btn.disabled = state["page"] >= pages - 1
+            prev_btn.opacity = 0.35 if prev_btn.disabled else 1
+            next_btn.opacity = 0.35 if next_btn.disabled else 1
+            next_btn.md_bg_color = c_chip if next_btn.disabled else c_green
+
+        def go_prev(*_):
+            if state["page"] > 0:
+                state["page"] -= 1
+                render_page()
+
+        def go_next(*_):
+            total = len(state["visible"])
+            pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+            if state["page"] < pages - 1:
+                state["page"] += 1
+                render_page()
+
+        _filter_ev = {"ev": None}
+
+        def apply_filter(value=""):
+            state["query"] = str(value or "")
+            state["page"] = 0
+            render_page()
+
+        def on_filter(_field, value):
+            # Debounce leve para digitar fluido com muitos produtos
+            if _filter_ev["ev"] is not None:
+                try:
+                    _filter_ev["ev"].cancel()
+                except Exception:
+                    pass
+            _filter_ev["ev"] = Clock.schedule_once(
+                lambda _dt, v=value: apply_filter(v), 0.12
+            )
+
+        def on_text_event(*args):
+            # NativeTextField / TextInput: on_text(instance, text) ou so instance
+            value = ""
+            if len(args) >= 2:
+                value = args[1]
+            elif args:
+                value = getattr(args[0], "text", "")
+            on_filter(None, value)
+
+        prev_btn.bind(on_release=go_prev)
+        next_btn.bind(on_release=go_next)
+        search_input.bind(text=on_filter)
+        # Fallback para widgets que emitem on_text em vez da property
+        if hasattr(search_input, "bind"):
+            try:
+                search_input.bind(on_text=on_text_event)
+            except Exception:
+                pass
+
+        # Clique no padding da barra foca o campo (sem roubar o toque ao TextInput)
+        def _on_search_shell_touch(inst, touch):
+            if not inst.collide_point(*touch.pos):
+                return False
+            # Se o toque caiu no proprio TextInput, deixa-o tratar
+            if search_input.collide_point(*touch.pos):
+                return False
+            search_input.focus = True
+            return True
+
+        search_shell.bind(on_touch_down=_on_search_shell_touch)
+
         modal.add_widget(root)
+        render_page()
         modal.open()
-        self.set_search_feedback(f"Tabela com {len(products)} produtos aberta", "success", "format-list-bulleted")
+        Clock.schedule_once(lambda _dt: setattr(search_input, "focus", True), 0.08)
+
 
     def _build_catalog_cell(
         self,
@@ -3038,6 +3671,22 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 profit = 0.0
                 expiry = info.get("expiry_date")
                 source = row
+            # Categoria: tenta indices comuns em rows longas; fallback generico
+            category = ""
+            for cat_idx in (17, 18, 11, 9, 14):
+                if len(row) > cat_idx and row[cat_idx] not in (None, ""):
+                    candidate = str(row[cat_idx]).strip()
+                    # evita numeros puros / barcodes longos
+                    if candidate and not candidate.replace(".", "", 1).isdigit() and len(candidate) < 40:
+                        category = candidate
+                        break
+            if not category:
+                category = "Diversos"
+            barcode = ""
+            if len(row) > 12 and row[12] not in (None, ""):
+                barcode = str(row[12]).strip()
+            elif len(row) > 4 and row[4] not in (None, ""):
+                barcode = str(row[4]).strip()
             products.append({
                 "source": source,
                 "name": str(row[1] if len(row) > 1 else "Produto"),
@@ -3047,11 +3696,14 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 "sale_type": "KG" if is_weight else "UN",
                 "price": price,
                 "profit": profit,
+                "category": category,
+                "barcode": barcode,
                 "expiry_text": self._format_catalog_expiry(expiry),
                 "search_text": " ".join((
                     str(row[0] if len(row) > 0 else ""),
                     str(row[1] if len(row) > 1 else ""),
-                    str(row[12] if len(row) > 12 else ""),
+                    barcode,
+                    category,
                     "kg" if is_weight else "un",
                 )).lower(),
             })
@@ -4526,7 +5178,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 issued_at = datetime.now().strftime("%d/%m/%Y %H:%M")
                 receipt_code = datetime.now().strftime("%Y%m%d%H%M%S")
 
-            receipt_data = {
+            receipt_data = apply_receipt_business_data({
                 "store_name": get_system_name(force_reload=True),
                 "receipt_code": receipt_code,
                 "issued_at": issued_at,
@@ -4548,7 +5200,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 "paid_amount": total,
                 "change_amount": 0.0,
                 "vat_note": "Segunda via.",
-            }
+            })
             settings = get_device_settings(force_reload=True)
             paper_width = int(settings.get("receipt_paper_width_mm") or 80)
 
@@ -4935,7 +5587,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         if discount_amount > 0:
             note_parts.append(f"Desconto aplicado: {_format_money(discount_amount)}.")
 
-        return {
+        return apply_receipt_business_data({
             "store_name": get_system_name(force_reload=True),
             "receipt_code": datetime.now().strftime("%Y%m%d%H%M%S"),
             "issued_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -4958,7 +5610,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
                 for key, value in vat_summary.items()
             ],
             "vat_note": " ".join(note_parts),
-        }
+        })
 
     def _get_operator_full_name(self):
         app = App.get_running_app()
@@ -5027,6 +5679,7 @@ class SalesScreen(ProduceSalesMixin, MDScreen):
         if not receipt_data:
             self.show_message("Não há dados de venda para emitir recibo.")
             return
+        receipt_data = apply_receipt_business_data(receipt_data)
 
         settings = get_device_settings(force_reload=True)
         printer_name = str(settings.get("receipt_printer_name") or "").strip()

@@ -41,10 +41,6 @@ datas = []
 for tree in ("assets", "locales"):
     _add_tree(datas, tree)
 
-for cache_file in (ROOT / "data" / "cache").glob("*") if (ROOT / "data" / "cache").exists() else []:
-    if cache_file.is_file():
-        datas.append((str(cache_file), "data/cache"))
-
 for config_file in (
     "VERSION",
     "config/app.json",
@@ -125,7 +121,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[str(ROOT / "scripts" / "pyinstaller_kivy_runtime_hook.py")],
-    excludes=[],
+    excludes=["kivymd"],
     noarchive=False,
     optimize=0,
 )

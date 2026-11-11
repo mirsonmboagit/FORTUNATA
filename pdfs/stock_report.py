@@ -94,7 +94,7 @@ class StockReport(BasePDFReport):
             ['Produtos com estoque baixo', f"{produtos_a_repor}"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[5.3*inch, 4.9*inch])
+        summary_table = Table(self._translate_table(summary_data), colWidths=[5.3*inch, 4.9*inch])
         
         summary_table.setStyle(TableStyle([
             # Cabeçalho
@@ -216,7 +216,7 @@ class StockReport(BasePDFReport):
                 acao
             ])
         
-        alert_table = Table(alert_data, colWidths=[
+        alert_table = Table(self._translate_table(alert_data), colWidths=[
             2.4*inch, 1.2*inch, 0.9*inch, 0.9*inch, 
             0.9*inch, 1.0*inch, 2.4*inch
         ])
@@ -319,7 +319,7 @@ class StockReport(BasePDFReport):
             )
 
         table = Table(
-            table_data,
+            self._translate_table(table_data),
             colWidths=[3.2 * inch, 1.4 * inch, 1.3 * inch, 0.8 * inch, 1.7 * inch],
         )
         table.setStyle(
@@ -388,7 +388,7 @@ class StockReport(BasePDFReport):
                 status
             ])
         
-        detail_table = Table(detail_data, colWidths=[
+        detail_table = Table(self._translate_table(detail_data), colWidths=[
             2.6*inch, 1.3*inch, 1.0*inch, 1.0*inch, 
             1.0*inch, 1.2*inch, 1.2*inch
         ])

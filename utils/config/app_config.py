@@ -91,11 +91,19 @@ APP_SETTINGS_DEFAULTS = {
     "theme_style": "Light",
     "manager_theme_style": "Light",
     "language": "pt",
+    # "system" usa o idioma do sistema operativo até o utilizador escolher
+    # explicitamente outro idioma dentro da aplicação.
+    "language_mode": "system",
     "physical_scanner_enabled": True,
     "physical_scanner_min_length": 6,
     "receipt_auto_print": False,
     "receipt_printer_name": "",
     "receipt_paper_width_mm": 80,
+    # Dados comerciais impressos no cabecalho dos recibos.
+    "receipt_nuit": "",
+    "receipt_address": "",
+    "receipt_phone": "",
+    "receipt_street": "",
 }
 
 INSECURE_API_KEYS = {

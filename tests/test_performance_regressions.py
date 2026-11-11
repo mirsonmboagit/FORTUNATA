@@ -156,3 +156,22 @@ def test_home_resize_requests_are_coalesced():
         AdminHomeScreen.on_size(screen)
     Clock.tick()
     assert len(calls) == 1
+
+
+def test_alert_dialog_does_not_bind_label_texture_to_its_full_size():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "admin" / "admin_screen.py").read_text(encoding="utf-8")
+    assert "alert_label.bind(texture_size=alert_label.setter('size'))" not in source
+    assert "texture_size=sync_alert_height" in source
+
+
+def test_native_adaptive_layout_defers_its_height_update():
+    from kivy.clock import Clock
+    from ui.components.native_widgets import NativeBoxLayout, NativeLabel
+
+    layout = NativeBoxLayout(orientation="vertical", adaptive_height=True)
+    layout.add_widget(NativeLabel(text="Linha", size_hint_y=None, height=36))
+    Clock.tick()
+    Clock.tick()
+    assert layout.height == 36

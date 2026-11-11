@@ -27,6 +27,13 @@ def test_client_specs_do_not_bundle_a_second_api_executable():
         assert "api_exe" not in source
 
 
+def test_clean_release_builds_one_unified_desktop_client():
+    source = (ROOT / "scripts" / "build_clean_release.ps1").read_text(encoding="utf-8")
+    assert 'scripts\\build_manager_release.ps1' not in source
+    assert '"Desktop\\SIGEMPEAdmin"' in source
+    assert "Cliente desktop unico (Admin e Gerente)" in source
+
+
 def test_client_connection_wizard_only_configures_clients_safely():
     source = (ROOT / "scripts/setup_connection_wizard.ps1").read_text(encoding="utf-8")
     assert "Start-ApiProcess" not in source

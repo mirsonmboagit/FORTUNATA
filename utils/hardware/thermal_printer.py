@@ -105,6 +105,16 @@ def format_receipt_text(receipt_data: dict[str, Any], paper_width_mm: int = 80) 
     lines: list[str] = []
 
     lines.append(_center(receipt_data.get("store_name") or DEFAULT_SYSTEM_NAME, width))
+    business_lines = (
+        ("NUIT", receipt_data.get("receipt_nuit")),
+        ("Endereco", receipt_data.get("receipt_address")),
+        ("Av./Rua", receipt_data.get("receipt_street")),
+        ("Telefone", receipt_data.get("receipt_phone")),
+    )
+    for label, value in business_lines:
+        text = _plain_text(value)
+        if text:
+            lines.extend(_wrap_text(f"{label}: {text}", width)[:2])
     lines.append(_center("RECIBO DE VENDA", width))
     receipt_code = _plain_text(receipt_data.get("receipt_code") or "")
     if receipt_code:

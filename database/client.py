@@ -402,8 +402,8 @@ class DatabaseClient:
     def validate_user(self, username, password):
         return self._rpc("validate_user", username, password)
 
-    def create_admin(self, username, password, email=None):
-        result = self._rpc("create_admin", username, password, email=email)
+    def create_admin(self, username, password, email=None, profile=None):
+        result = self._rpc("create_admin", username, password, email=email, profile=profile)
         return bool(result) if result is not None else False
 
     def update_admin_credentials(self, old_username, new_username, new_password):

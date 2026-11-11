@@ -35,6 +35,7 @@ from utils.config.device_config import get_device_settings, save_device_settings
 from utils.config.env_loader import load_dotenv
 from utils.core.focus_navigation import FormKeyboardController
 from utils.core.i18n import language_label, language_options, normalize_language, translate
+from utils.config.app_config import get_app_settings, save_app_settings
 from utils.config.paths import APP_SETTINGS_FILE, ENV_FILE, data_path
 from utils.config.system_status import collect_system_status
 from utils.config.system_identity import DEFAULT_SYSTEM_NAME, get_system_name, normalize_system_name, save_system_name
@@ -416,7 +417,6 @@ class EmailVerificationDialog:
                 hint_text="Codigo de verificacao",
                 mode="rectangle",
                 input_filter="int",
-                max_text_length=6,
                 size_hint_y=None,
                 height=dp(56),
             )
@@ -4031,9 +4031,53 @@ class AdminSettingsScreen(MDScreen):
         printer = MDRectangleFlatIconButton(text=f"Impressora · {self.receipt_printer_name}", icon="printer", size_hint_y=None, height=dp(44), md_bg_color=tokens.get("card_alt", [.12,.16,.22,1]), text_color=tokens.get("text_primary", [1,1,1,1]), icon_color=tokens.get("primary", [.1,.4,.8,1]), line_color=tokens.get("divider", [1,1,1,.12]), line_width=1)
         printer.bind(on_release=lambda _btn: self.open_printer_settings())
         content.add_widget(printer)
+        business_data = MDRectangleFlatIconButton(text="Dados comerciais no recibo", icon="store-edit", size_hint_y=None, height=dp(44), md_bg_color=tokens.get("card_alt", [.12,.16,.22,1]), text_color=tokens.get("text_primary", [1,1,1,1]), icon_color=tokens.get("primary", [.1,.4,.8,1]), line_color=tokens.get("divider", [1,1,1,.12]), line_width=1)
+        business_data.bind(on_release=lambda _btn: self.open_receipt_business_data_settings())
+        content.add_widget(business_data)
         paper = MDLabel(text=f"Largura do papel: {self.receipt_paper_width_mm} mm", font_style="Caption", size_hint_y=None, height=dp(24), theme_text_color="Custom", text_color=tokens.get("text_secondary", [.6,.6,.6,1]))
         content.add_widget(paper)
         dialog = MDDialog(title="Dispositivos POS", type="custom", content_cls=content, size_hint=(None,None), width=min(dp(560), max(dp(360), Window.width-dp(40))), height=dp(350), buttons=[MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss())], auto_dismiss=False)
+        dialog.open()
+
+    def open_receipt_business_data_settings(self):
+        """Permite editar os dados obrigatorios/comerciais mostrados no recibo."""
+        settings = get_app_settings(force_reload=True)
+        content = MDBoxLayout(
+            orientation="vertical", spacing=dp(10), padding=[dp(16), dp(8), dp(16), dp(8)],
+            size_hint_y=None,
+        )
+        content.bind(minimum_height=content.setter("height"))
+        fields = {}
+        definitions = (
+            ("receipt_nuit", "NUIT", "Ex.: 401234567"),
+            ("receipt_address", "Endereco", "Ex.: Bairro Central, Maputo"),
+            ("receipt_street", "Avenida ou rua", "Ex.: Av. 24 de Julho, n.º 100"),
+            ("receipt_phone", "Telefone", "Ex.: +258 84 000 0000"),
+        )
+        for key, label, hint in definitions:
+            field = MDTextField(
+                text=str(settings.get(key) or ""), hint_text=label,
+                helper_text=hint, multiline=False, mode="rectangle",
+                size_hint_y=None, height=dp(56),
+            )
+            fields[key] = field
+            content.add_widget(field)
+
+        dialog = MDDialog(
+            title="Dados comerciais do recibo", type="custom", content_cls=content,
+            size_hint=(None, None), width=min(dp(620), Window.width - dp(32)),
+            buttons=[], auto_dismiss=False,
+        )
+
+        def save(*_args):
+            save_app_settings({key: str(field.text or "").strip() for key, field in fields.items()})
+            dialog.dismiss()
+            self.show_message("Sucesso", "Dados comerciais do recibo guardados.")
+
+        dialog.buttons = [
+            MDFlatButton(text="CANCELAR", on_release=lambda _x: dialog.dismiss()),
+            MDRaisedButton(text="GUARDAR", on_release=save),
+        ]
         dialog.open()
 
     def open_language_settings_dialog(self):

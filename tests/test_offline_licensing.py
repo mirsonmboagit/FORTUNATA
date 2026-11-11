@@ -113,6 +113,7 @@ def test_superadmin_shows_owner_full_details_and_expiration(tmp_path, monkeypatc
 
     now = datetime(2026, 9, 12, tzinfo=timezone.utc)
     monkeypatch.setattr("licensing.superadmin._now", lambda: now)
+    monkeypatch.setattr("licensing.account_provisioning._now", lambda: now)
     service = LocalSuperadmin(
         tmp_path / "superadmin.dat", protector=MemoryProtector(),
         issuer_key_file=tmp_path / "key.py", legacy_database=tmp_path / "missing.db",
@@ -777,7 +778,7 @@ def test_signed_admin_code_is_bound_to_the_active_license_and_device(tmp_path):
         username="admin.loja",
         password_hash=password_hash,
         email="admin@example.com",
-        expires_at=date(2026, 9, 30),
+        expires_at=date.today() + timedelta(days=30),
     )
     active_license = client.credential_store.load()["license_code"]
     validated = validate_admin_provisioning_for_license(
@@ -847,13 +848,17 @@ def test_superadmin_issues_one_safe_admin_code_for_each_license(tmp_path):
         legacy_database=tmp_path / "missing.db",
     )
     service.bootstrap("uma-palavra-passe-muito-forte")
-    client = _client(tmp_path / "client", service.public_key())
+    client = _client(
+        tmp_path / "client",
+        service.public_key(),
+        now=lambda: datetime.now(timezone.utc),
+    )
     license_code, license_payload = service.issue_license(
         client.activation_request(),
         customer_ref="Cliente de conta",
         plan_name="Mensal",
         months=1,
-        starts_at=date(2026, 9, 1),
+        starts_at=date.today() - timedelta(days=1),
     )
     assert client.activate(license_code).allowed is True
 
@@ -892,8 +897,8 @@ def test_superadmin_issues_one_safe_admin_code_for_each_license(tmp_path):
         client.activation_request(),
         customer_ref="Cliente de conta",
         plan_name="Renovacao",
-        duration_amount="1 dia",
-        starts_at=date(2026, 9, 9),
+        duration_amount="7 dias",
+        starts_at=date.today() - timedelta(days=1),
     )
     assert renewal_payload["license_id"] == license_payload["license_id"]
     assert client.activate(renewal_code).allowed is True

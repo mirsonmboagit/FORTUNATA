@@ -44,6 +44,7 @@ from licensing.account_provisioning import (
 )
 from licensing.account_events import notify_superadmin_account_event
 from licensing.offline_email import LICENSE_REQUEST_SUBJECT, license_request_body
+from licensing.control_inbox import control_inbox_settings, poll_control_inbox
 from utils.business.email_service import EmailServiceNotConfigured, send_system_email
 from utils.core.i18n import language_options, language_short, translate
 
@@ -77,7 +78,7 @@ class LoginScreen(MDScreen):
     back_button_text = StringProperty("Voltar")
     back_screen = StringProperty("")
     show_back_button = BooleanProperty(False)
-    show_theme_toggle = BooleanProperty(False)
+    show_theme_toggle = BooleanProperty(True)
     theme_toggle_text = StringProperty("Modo escuro")
     language_button_text = StringProperty("Idioma: PT")
     username_hint = StringProperty("Utilizador")
@@ -96,12 +97,39 @@ class LoginScreen(MDScreen):
     operation_status = StringProperty("")
     license_status = StringProperty("")
     allow_account_self_service = BooleanProperty(True)
+    show_license_request_action = BooleanProperty(False)
     footer_date = StringProperty("")
     footer_creator = StringProperty("Mirson Mboa")
     footer_email = StringProperty("mirsonmboapr@gmail.com")
     footer_phone = StringProperty("+258 86 1174 428")
     footer_version = StringProperty("v1.1.0")
     footer_year = StringProperty("")
+
+    # Tema local da tela de login (True = floresta escuro, False = creme claro)
+    is_login_dark = BooleanProperty(True)
+
+    # Cores dinâmicas do fundo e UI da landing / formulário
+    screen_bg_color = ListProperty([0.043, 0.059, 0.039, 1])       # floresta
+    ellipse_color_1 = ListProperty([0.12, 0.18, 0.10, 0.35])
+    ellipse_color_2 = ListProperty([0.08, 0.12, 0.06, 0.40])
+    form_bg_color = ListProperty([0.067, 0.090, 0.063, 0.97])
+    form_border_color = ListProperty([0.16, 0.23, 0.16, 0.85])
+    field_bg_color = ListProperty([0.09, 0.12, 0.08, 1])
+    field_border_color = ListProperty([0.20, 0.27, 0.18, 1])
+    close_btn_bg_color = ListProperty([0.14, 0.20, 0.12, 1])
+    chip_bg_color = ListProperty([0.15, 0.22, 0.14, 0.95])
+
+    accent_color = ListProperty([0.62, 0.75, 0.48, 1])              # oliva
+    icon_accent_color = ListProperty([0.72, 0.78, 0.43, 1])
+    primary_text_color = ListProperty([0.91, 0.89, 0.84, 1])        # marfim
+    muted_text_color = ListProperty([0.66, 0.64, 0.56, 0.85])
+    top_action_text_color = ListProperty([0.91, 0.89, 0.84, 0.85])
+    theme_toggle_color = ListProperty([0.66, 0.64, 0.56, 1])
+    input_text_color = ListProperty([0.93, 0.92, 0.87, 1])
+    hint_text_color = ListProperty([0.57, 0.62, 0.52, 1])
+    gold_line_color = ListProperty([0.42, 0.31, 0.15, 0.92])
+    footer_muted_color = ListProperty([0.55, 0.53, 0.45, 1])
+
 
     DEFAULT_PASSWORDS = ["123", "123456"]
 
@@ -134,6 +162,7 @@ class LoginScreen(MDScreen):
         self._register_dialog = None
         self._register_username = None
         self._register_email = None
+        self._register_profile_fields = {}
         self._register_password = None
         self._register_confirm = None
         self._register_feedback = None
@@ -510,9 +539,18 @@ class LoginScreen(MDScreen):
         self.show_back_button = bool(self.back_screen)
 
     def _sync_theme_toggle_text(self):
+        """Sincroniza o rótulo do botão e aplica as cores da tela de login."""
         app = App.get_running_app()
-        is_dark = bool(app and getattr(app, "theme_style", "Light") == "Dark")
-        self.theme_toggle_text = self._tr("login.theme_light") if is_dark else self._tr("login.theme_dark")
+        if hasattr(self, "is_login_dark"):
+            is_dark = bool(self.is_login_dark)
+        else:
+            is_dark = bool(app and getattr(app, "theme_style", "Light") == "Dark")
+            self.is_login_dark = is_dark
+
+        self.theme_toggle_text = (
+            self._tr("login.theme_light") if is_dark else self._tr("login.theme_dark")
+        )
+        self._apply_login_theme()
 
     def on_enter(self):
         self._bind_app_language()
@@ -578,12 +616,57 @@ class LoginScreen(MDScreen):
         self.manager.current = self.back_screen
 
     def toggle_theme(self, *args):
-        app = App.get_running_app()
-        if not app or not hasattr(app, "apply_theme"):
-            return
-        current = getattr(app, "theme_style", "Light")
-        app.apply_theme("Dark" if current != "Dark" else "Light")
+        """Alterna floresta/creme SÓ nesta tela de login (não afeta o resto da app)."""
+        self.is_login_dark = not bool(self.is_login_dark)
         self._sync_theme_toggle_text()
+
+    def _apply_login_theme(self):
+        """Aplica as cores de fundo e de UI conforme is_login_dark."""
+        if self.is_login_dark:
+            # ——— Tema floresta (atual) ———
+            self.screen_bg_color = [0.043, 0.059, 0.039, 1]          # #0B0F0A
+            self.ellipse_color_1 = [0.12, 0.18, 0.10, 0.35]
+            self.ellipse_color_2 = [0.08, 0.12, 0.06, 0.40]
+            self.form_bg_color = [0.067, 0.090, 0.063, 0.97]
+            self.form_border_color = [0.16, 0.23, 0.16, 0.85]
+            self.field_bg_color = [0.09, 0.12, 0.08, 1]
+            self.field_border_color = [0.20, 0.27, 0.18, 1]
+            self.close_btn_bg_color = [0.14, 0.20, 0.12, 1]
+            self.chip_bg_color = [0.15, 0.22, 0.14, 0.95]
+
+            self.accent_color = [0.62, 0.75, 0.48, 1]
+            self.icon_accent_color = [0.72, 0.78, 0.43, 1]
+            self.primary_text_color = [0.91, 0.89, 0.84, 1]
+            self.muted_text_color = [0.66, 0.64, 0.56, 0.85]
+            self.top_action_text_color = [0.91, 0.89, 0.84, 0.85]
+            self.theme_toggle_color = [0.66, 0.64, 0.56, 1]
+            self.input_text_color = [0.93, 0.92, 0.87, 1]
+            self.hint_text_color = [0.57, 0.62, 0.52, 1]
+            self.gold_line_color = [0.42, 0.31, 0.15, 0.92]
+            self.footer_muted_color = [0.55, 0.53, 0.45, 1]
+        else:
+            # ——— Tema creme / marfim (#E8E3D6) — suave, não carregado ———
+            self.screen_bg_color = [0.910, 0.890, 0.839, 1]          # #E8E3D6
+            self.ellipse_color_1 = [0.85, 0.82, 0.72, 0.40]
+            self.ellipse_color_2 = [0.82, 0.78, 0.68, 0.30]
+            self.form_bg_color = [0.96, 0.94, 0.90, 0.98]
+            self.form_border_color = [0.72, 0.68, 0.55, 0.70]
+            self.field_bg_color = [0.98, 0.96, 0.92, 1]
+            self.field_border_color = [0.70, 0.65, 0.52, 0.85]
+            self.close_btn_bg_color = [0.88, 0.85, 0.78, 1]
+            self.chip_bg_color = [0.88, 0.85, 0.78, 0.95]
+
+            self.accent_color = [0.35, 0.48, 0.22, 1]
+            self.icon_accent_color = [0.40, 0.52, 0.25, 1]
+            self.primary_text_color = [0.18, 0.16, 0.12, 1]
+            self.muted_text_color = [0.40, 0.37, 0.30, 0.90]
+            self.top_action_text_color = [0.25, 0.22, 0.18, 0.90]
+            self.theme_toggle_color = [0.35, 0.32, 0.25, 1]
+            self.input_text_color = [0.18, 0.16, 0.12, 1]
+            self.hint_text_color = [0.50, 0.47, 0.40, 1]
+            self.gold_line_color = [0.55, 0.42, 0.22, 0.85]
+            self.footer_muted_color = [0.45, 0.42, 0.35, 1]
+
 
     def _set_login_enabled(self, enabled):
         self._login_blocked = not enabled
@@ -1123,7 +1206,6 @@ class LoginScreen(MDScreen):
             helper_text='O código expira em 10 minutos',
             helper_text_mode='on_focus',
             input_filter='int',
-            max_text_length=6,
             mode='rectangle',
             size_hint_y=None,
             height=dp(56),
@@ -1520,6 +1602,13 @@ class LoginScreen(MDScreen):
 
         self._open_register_dialog()
 
+    def request_license(self):
+        """Ponto de entrada do rodapé para edições sem licenciamento."""
+        self._show_message(
+            "Licença",
+            "O pedido de licença está disponível na edição principal do sistema.",
+        )
+
     def _normalized_registration_mode(self):
         return (self.registration_mode or 'disabled').strip().lower()
 
@@ -1585,8 +1674,8 @@ class LoginScreen(MDScreen):
             width_hint = 0.72
         else:
             width_hint = 0.48
-        dialog_height = min(Window.height * 0.86, dp(600))
-        content_height = max(dp(260), dialog_height - dp(142))
+        dialog_height = min(Window.height * 0.90, dp(720))
+        content_height = max(dp(320), dialog_height - dp(142))
         return width_hint, dialog_height, content_height
 
     def _update_register_dialog_size(self):
@@ -1601,7 +1690,13 @@ class LoginScreen(MDScreen):
     def _set_register_busy(self, busy):
         if not any((self._register_username, self._register_email, self._register_password, self._register_confirm)):
             return
-        fields = [self._register_username, self._register_email, self._register_password, self._register_confirm]
+        fields = [
+            self._register_username,
+            self._register_email,
+            self._register_password,
+            self._register_confirm,
+            *self._register_profile_fields.values(),
+        ]
         for field in fields:
             if field is not None:
                 field.disabled = bool(busy)
@@ -1720,6 +1815,22 @@ class LoginScreen(MDScreen):
         ))
         content.add_widget(tip_row)
 
+        profile_fields = (
+            ('first_name', 'Nome', 'account-outline'),
+            ('last_name', 'Apelido', 'account-outline'),
+        )
+        for key, hint, icon_name in profile_fields:
+            field = MDTextField(
+                hint_text=hint,
+                icon_right=icon_name,
+                mode='rectangle',
+                size_hint_y=None,
+                height=dp(60),
+            )
+            field.line_color_focus = accent
+            self._register_profile_fields[key] = field
+            content.add_widget(field)
+
         self._register_username = MDTextField(
             hint_text='Nome de utilizador',
             icon_right='account-outline',
@@ -1743,6 +1854,26 @@ class LoginScreen(MDScreen):
         )
         self._register_email.line_color_focus = accent
         content.add_widget(self._register_email)
+
+        profile_fields = (
+            ('phone', 'Contacto telefónico', 'phone-outline', 'Ex.: +258 84 000 0000'),
+            ('nationality', 'Nacionalidade', 'flag-outline', ''),
+            ('address', 'Morada', 'map-marker-outline', ''),
+            ('birth_date', 'Data de nascimento (AAAA-MM-DD)', 'calendar-outline', 'Ex.: 1990-05-20'),
+        )
+        for key, hint, icon_name, helper in profile_fields:
+            field = MDTextField(
+                hint_text=hint,
+                helper_text=helper,
+                helper_text_mode='on_focus',
+                icon_right=icon_name,
+                mode='rectangle',
+                size_hint_y=None,
+                height=dp(60),
+            )
+            field.line_color_focus = accent
+            self._register_profile_fields[key] = field
+            content.add_widget(field)
 
         self._register_password = MDTextField(
             hint_text='Senha',
@@ -1775,6 +1906,7 @@ class LoginScreen(MDScreen):
             self._register_email,
             self._register_password,
             self._register_confirm,
+            *self._register_profile_fields.values(),
         ]
         self._register_confirm.bind(on_text_validate=self._submit_register)
         for field in register_fields:
@@ -1867,6 +1999,7 @@ class LoginScreen(MDScreen):
             self._register_dialog = None
         self._register_username = None
         self._register_email = None
+        self._register_profile_fields = {}
         self._register_password = None
         self._register_confirm = None
         self._register_answer_fields = []
@@ -1882,6 +2015,35 @@ class LoginScreen(MDScreen):
         email = self._register_email.text.strip() if self._register_email else ''
         password = self._register_password.text.strip() if self._register_password else ''
         confirm = self._register_confirm.text.strip() if self._register_confirm else ''
+        profile = {
+            key: field.text.strip()
+            for key, field in self._register_profile_fields.items()
+            if field is not None
+        }
+
+        required_profile_fields = {
+            'first_name': 'Informe o nome.',
+            'last_name': 'Informe o apelido.',
+            'phone': 'Informe o contacto telefónico.',
+            'nationality': 'Informe a nacionalidade.',
+            'address': 'Informe a morada.',
+            'birth_date': 'Informe a data de nascimento.',
+        }
+        for key, message in required_profile_fields.items():
+            if not profile.get(key):
+                self._set_register_feedback(message)
+                self._focus_register_field(self._register_profile_fields.get(key))
+                return
+        if len(''.join(char for char in profile['phone'] if char.isdigit())) < 7:
+            self._set_register_feedback('Informe um contacto telefónico válido.')
+            self._focus_register_field(self._register_profile_fields.get('phone'))
+            return
+        try:
+            datetime.strptime(profile['birth_date'], '%Y-%m-%d')
+        except ValueError:
+            self._set_register_feedback('Use a data de nascimento no formato AAAA-MM-DD.')
+            self._focus_register_field(self._register_profile_fields.get('birth_date'))
+            return
 
         if not username:
             self._set_register_feedback('Informe o nome de utilizador.')
@@ -1941,7 +2103,7 @@ class LoginScreen(MDScreen):
                     return None
                 if has_admin:
                     return {"status": "admin_exists"}
-                created = self.db.create_admin(username, password, email=email)
+                created = self.db.create_admin(username, password, email=email, profile=profile)
                 if not created and self._db_last_error():
                     return None
                 if not created:
@@ -1998,6 +2160,16 @@ class LoginScreen(MDScreen):
                 self.password.text = ''
             self.username_error = ''
             self.password_error = ''
+            # O registo administrativo é estritamente uma operação de
+            # inicialização. Assim que a conta for criada, a ação deixa de
+            # estar disponível nesta instalação; o backend mantém a mesma
+            # regra de forma atómica para impedir corridas entre clientes.
+            if role == 'admin':
+                self.registration_mode = 'disabled'
+                self.allow_account_self_service = False
+                on_completed = getattr(self, '_after_admin_bootstrap_created', None)
+                if callable(on_completed):
+                    on_completed()
             self._show_message('Sucesso', 'Conta criada com sucesso! Faça login.')
 
         self._run_background_task(
@@ -2007,13 +2179,17 @@ class LoginScreen(MDScreen):
         )
 
     def _show_message(self, title, message):
-        MDDialog(
+        dialog = MDDialog(
             title=title,
             text=message,
             buttons=[
-                MDFlatButton(text='OK', on_release=lambda x: x.parent.parent.parent.parent.dismiss())
+                MDFlatButton(
+                    text="OK",
+                    on_release=lambda *_: dialog.dismiss(),
+                )
             ],
-        ).open()
+        )
+        dialog.open()
 
 
 class AdminLoginScreen(LoginScreen):
@@ -2036,16 +2212,18 @@ class UnifiedLoginScreen(LoginScreen):
         license_client = kwargs.pop("license_client", None)
         kwargs.setdefault("login_variant", "admin")
         kwargs.setdefault("allowed_roles", [])
-        # A primeira conta admin nunca e criada pela propria instalacao. Ela
-        # precisa ser provisionada pelo superadmin e importada com um codigo
-        # assinado, depois de a licenca local ser confirmada.
-        kwargs.setdefault("allow_admin_setup", False)
-        kwargs.setdefault("registration_mode", "disabled")
+        # Depois de a licença local ser confirmada, a primeira utilização
+        # permite criar o único administrador diretamente neste computador.
+        # A criação é encerrada logo que exista um admin.
+        kwargs.setdefault("allow_admin_setup", True)
+        kwargs.setdefault("registration_mode", "admin_bootstrap")
         kwargs.setdefault("registration_password_min_len", 8)
-        kwargs.setdefault("allow_account_self_service", False)
+        kwargs.setdefault("allow_account_self_service", True)
+        kwargs.setdefault("show_license_request_action", True)
         kwargs.setdefault("show_theme_toggle", True)
         self.license_client = license_client
         self._license_access_confirmed = self.license_client is None
+        self._license_validation_started = False
         self._license_dialog = None
         self._license_content_container = None
         self._license_code_field = None
@@ -2084,22 +2262,20 @@ class UnifiedLoginScreen(LoginScreen):
         Clock.schedule_once(lambda _dt: self._update_admin_provision_dialog_size(), 0)
 
     def on_enter(self):
-        super().on_enter()
-        if self.license_client is not None:
-            self._set_login_enabled(False)
-            Clock.schedule_once(lambda _dt: self._validate_desktop_license(), 0.01)
+        # O primeiro administrador é configurado antes da licença. Não usamos
+        # LoginScreen.on_enter() aqui porque ele agenda a verificação genérica
+        # de admin depois de iniciarmos a validação da licença.
+        self._bind_app_language()
+        self._apply_variant_defaults()
+        self._sync_theme_toggle_text()
+        self._sync_language_button_text()
+        self.carousel_event = None
+        Clock.schedule_once(lambda dt: self._start_brand_animation(), 0.15)
+        Clock.schedule_once(lambda dt: self._reset_login_layers(), 0)
+        Clock.schedule_once(lambda dt: self._update_responsive_layout(), 0.02)
+        Clock.schedule_once(lambda _dt: self._ensure_admin_setup(), 0)
 
     def _ensure_admin_setup(self):
-        # O provisionamento local somente abre depois de este computador ter
-        # uma licenca offline valida. Nao ha fallback para criar um admin sem
-        # o codigo assinado do superadmin.
-        if self.license_client is not None and not self._license_access_confirmed:
-            return
-
-        if self.license_client is None:
-            self._set_login_enabled(False)
-            return
-
         def task():
             has_admin = bool(self.db.has_admin())
             if self._db_last_error():
@@ -2107,12 +2283,6 @@ class UnifiedLoginScreen(LoginScreen):
             return {"has_admin": has_admin}
 
         def apply_setup(state, error):
-            # Uma revogacao pode ser importada enquanto esta verificacao da
-            # base local ainda esta a decorrer. Nunca deixe esse retorno
-            # tardio voltar a libertar o botao de login.
-            if self.license_client is not None and not self._license_access_confirmed:
-                self._set_login_enabled(False)
-                return
             if error:
                 self._set_login_enabled(False)
                 self._show_message(
@@ -2122,16 +2292,99 @@ class UnifiedLoginScreen(LoginScreen):
                 return
             if (state or {}).get("has_admin"):
                 self._close_admin_provision_dialog()
-                self._set_login_enabled(True)
+                self.registration_mode = "disabled"
+                self.allow_account_self_service = False
+                self.register_text = self._tr("login.create_account")
+                if self._license_access_confirmed:
+                    self._set_login_enabled(True)
+                else:
+                    self._start_license_validation()
                 return
-            self._set_login_enabled(False)
-            self._open_admin_provision_dialog()
+            # Não existe administrador: o botão "Criar nova conta" abre o
+            # formulário de configuração inicial. A confirmação final também
+            # é protegida por create_admin(), que aceita apenas o primeiro.
+            self.registration_mode = "admin_bootstrap"
+            self.allow_account_self_service = True
+            self.register_text = "CRIAR ADMINISTRADOR"
+            # Mantém o formulário utilizável durante a configuração inicial.
+            # A autenticação continua a validar a licença quando for enviada.
+            self._set_login_enabled(True)
 
         self._run_background_task(
             task,
             apply_setup,
             busy_text="A verificar conta administrativa...",
         )
+
+    def _after_admin_bootstrap_created(self):
+        """Continua para a licença somente após o admin inicial existir."""
+        self._start_license_validation()
+
+    def _start_license_validation(self):
+        if self.license_client is None:
+            self._set_login_enabled(True)
+            return
+        if self._license_validation_started:
+            return
+        self._license_validation_started = True
+        self._set_login_enabled(False)
+        Clock.schedule_once(lambda _dt: self._validate_desktop_license(show_activation=False), 0)
+
+    def request_license(self):
+        """Abre o fluxo de emissão de pedido a partir do rodapé."""
+        if self.operation_in_progress:
+            return
+        if self._license_access_confirmed:
+            self._show_message(
+                "Licença ativa",
+                "Esta instalação já tem uma licença válida. Não é necessário emitir um novo pedido neste momento.",
+            )
+            return
+        self.check_available_license()
+
+    def check_available_license(self):
+        """Procura e aplica a licenca emitida para esta instalacao."""
+        if self.license_client is None or self.operation_in_progress:
+            return
+        settings = control_inbox_settings()
+        if not settings.configured:
+            self._show_message(
+                "Caixa de licenças não configurada",
+                "Configure o e-mail desta instalação para receber a licença automaticamente e volte a verificar.",
+            )
+            return
+
+        def task():
+            report = poll_control_inbox(self.license_client, settings=settings)
+            return report, self.license_client.validate()
+
+        def handle_result(value, error):
+            if error:
+                message = str(error or "Não foi possível verificar a caixa de licenças. Tente novamente.")
+                self._show_message("Verificação da licença", message)
+                return
+            report, result = value
+            if result and result.allowed:
+                self._grant_license_access(result)
+                self._show_message("Licença disponível", "A licença foi aplicada automaticamente. Já pode iniciar sessão.")
+                return
+            if getattr(report, "failures", None):
+                self._show_message("Verificação da licença", report.failures[0])
+                return
+            try:
+                _recipient, _request_code, submitted = self.license_client.pending_license_request()
+            except Exception:
+                submitted = False
+            if not submitted:
+                # O identificador técnico do computador segue para o emissor
+                # automaticamente; o administrador nunca precisa copiá-lo.
+                self._confirm_license_request_email()
+            self._show_message(
+                "Licença ainda indisponível",
+                "O pedido foi encaminhado automaticamente. Quando a licença for emitida, use este botão novamente para a aplicar.",
+            )
+
+        self._run_background_task(task, handle_result, busy_text="A verificar licença disponível...")
 
     def _calc_admin_provision_dialog_sizes(self):
         width = Window.width or dp(900)
@@ -3178,8 +3431,8 @@ class UnifiedLoginScreen(LoginScreen):
         self._desktop_license_state = str(getattr(result, "state", "active") or "active")
         self.license_status = self._license_message(result)
         self._refresh_license_control_actions()
-        # O login so e libertado quando existir uma conta administrativa
-        # local valida ou o codigo assinado for importado com sucesso.
+        # O login e o registo inicial so sao libertados depois de a licença
+        # local estar válida; a criação do admin continua limitada a uma vez.
         self._set_login_enabled(False)
         Clock.schedule_once(lambda _dt: self._ensure_admin_setup(), 0)
 
@@ -3216,7 +3469,7 @@ class UnifiedLoginScreen(LoginScreen):
 
         self._run_background_task(task, handle_result, busy_text="A validar licenca do computador...")
 
-    def _calc_license_dialog_sizes(self):
+    def _calc_license_dialog_sizes(self, compact=False):
         width = Window.width or dp(900)
         height = Window.height or dp(620)
         if width < dp(620):
@@ -3224,15 +3477,20 @@ class UnifiedLoginScreen(LoginScreen):
         elif width < dp(980):
             width_hint = 0.76
         else:
-            width_hint = 0.64
-        dialog_height = min(max(dp(380), height * 0.65), dp(460))
-        content_height = max(dp(220), dialog_height - dp(150))
+            width_hint = 0.56
+        # Sempre reserva espaço para o campo do código de ativação.
+        if compact:
+            dialog_height = min(max(dp(420), height * 0.62), dp(500))
+        else:
+            dialog_height = min(max(dp(460), height * 0.68), dp(540))
+        content_height = max(dp(240), dialog_height - dp(130))
         return width_hint, dialog_height, content_height
 
     def _update_license_dialog_size(self):
         if not self._license_dialog:
             return
-        width_hint, dialog_height, content_height = self._calc_license_dialog_sizes()
+        compact = bool(getattr(self, "_license_request_submitted", False))
+        width_hint, dialog_height, content_height = self._calc_license_dialog_sizes(compact=compact)
         self._license_dialog.size_hint = (width_hint, None)
         self._license_dialog.height = dialog_height
         if self._license_content_container is not None:
@@ -3260,61 +3518,71 @@ class UnifiedLoginScreen(LoginScreen):
                 request_ready = True
             except Exception:
                 request_ready = False
+
+        pending = bool(can_activate and self._license_request_submitted)
         accent = self._theme_color("primary", [0.10, 0.33, 0.58, 1])
         card_alt = self._theme_color("card_alt", [0.94, 0.95, 0.97, 1])
         text_secondary = self._theme_color("text_secondary", [0.35, 0.38, 0.45, 1])
         on_primary = self._theme_color("on_primary", [1, 1, 1, 1])
+
         dialog_title = (
-            "Renovacao da licenca" if is_renewal
-            else "Ativacao da licenca" if can_activate
-            else "Licenca suspensa" if getattr(result, "state", "") == "suspended"
-            else "Licenca cancelada" if getattr(result, "state", "") == "revoked"
-            else "Licenca indisponivel"
+            "Renovação da licença" if is_renewal
+            else "Ativação da licença" if can_activate
+            else "Licença suspensa" if getattr(result, "state", "") == "suspended"
+            else "Licença cancelada" if getattr(result, "state", "") == "revoked"
+            else "Licença indisponível"
         )
         status_title = (
-            "Pedido pendente" if can_activate and self._license_request_submitted
-            else "Renovacao necessaria" if is_renewal
-            else "Ativacao necessaria" if can_activate
-            else "Reativacao necessaria" if getattr(result, "state", "") == "suspended"
-            else "Recuperacao necessaria" if getattr(result, "state", "") == "revoked"
-            else "Verificacao necessaria"
+            "Pedido pendente" if pending
+            else "Renovação necessária" if is_renewal
+            else "Ativação necessária" if can_activate
+            else "Reativação necessária" if getattr(result, "state", "") == "suspended"
+            else "Recuperação necessária" if getattr(result, "state", "") == "revoked"
+            else "Verificação necessária"
         )
         status_message = self._license_message(result)
-        if can_activate and self._license_request_submitted:
-            status_message = "Pedido enviado. Aguarde a resposta do responsavel."
+        if pending:
+            status_message = "Pedido enviado. Aguarde a resposta do responsável."
         elif is_renewal and request_ready:
-            status_message = "Selecione o plano e peca a renovacao."
+            status_message = "Selecione o plano e peça a renovação."
         elif can_activate and not request_ready:
-            status_message = "Pode copiar o pedido e envia-lo ao responsavel."
+            status_message = "Pode copiar o pedido e enviá-lo ao responsável."
 
         content = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(10),
-            padding=[dp(16), dp(10), dp(16), dp(10)],
+            spacing=dp(12),
+            padding=[dp(16), dp(12), dp(16), dp(8)],
             adaptive_height=True,
             size_hint_x=1,
         )
         content.bind(minimum_height=content.setter("height"))
 
+        # --- Cartão de estado ---
         status_card = MDCard(
             orientation="horizontal",
             spacing=dp(12),
-            padding=[dp(14), dp(11), dp(14), dp(11)],
+            padding=[dp(14), dp(12), dp(14), dp(12)],
             size_hint_y=None,
-            height=dp(92),
+            height=dp(88),
             radius=[dp(16)],
             elevation=0,
             md_bg_color=self._color_with_alpha(accent, 0.12),
         )
         icon_slot = MDCard(
             size_hint=(None, None),
-            size=(dp(48), dp(48)),
-            radius=[dp(15)],
+            size=(dp(46), dp(46)),
+            radius=[dp(14)],
             elevation=0,
             md_bg_color=self._color_with_alpha(accent, 0.18),
+            pos_hint={"center_y": 0.5},
         )
         status_icon = MDIcon(
-            icon="email-check-outline" if can_activate and self._license_request_submitted else "shield-sync" if is_renewal else "shield-key-outline" if can_activate else "shield-alert-outline",
+            icon=(
+                "email-check-outline" if pending
+                else "shield-sync" if is_renewal
+                else "shield-key-outline" if can_activate
+                else "shield-alert-outline"
+            ),
             halign="center",
             valign="middle",
             theme_text_color="Custom",
@@ -3322,18 +3590,22 @@ class UnifiedLoginScreen(LoginScreen):
         )
         status_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
         icon_slot.add_widget(status_icon)
-        status_text = MDBoxLayout(orientation="vertical", spacing=dp(3), size_hint_x=1)
+        status_text = MDBoxLayout(orientation="vertical", spacing=dp(4), size_hint_x=1)
         status_text.add_widget(self._register_text_label(status_title, "text_primary", "Subtitle1", True))
         status_text.add_widget(self._register_text_label(status_message, "text_secondary", "Caption"))
         status_card.add_widget(icon_slot)
         status_card.add_widget(status_text)
         content.add_widget(status_card)
 
+        self._license_plan_button = None
+
         if can_activate:
             self._license_selected_plan = "" if is_renewal else "Mensal"
             saved_details = {}
             try:
-                saved_details = parse_license_request(self.license_client.activation_request()).get("request_details") or {}
+                saved_details = parse_license_request(
+                    self.license_client.activation_request()
+                ).get("request_details") or {}
             except Exception:
                 pass
             if saved_details:
@@ -3341,25 +3613,155 @@ class UnifiedLoginScreen(LoginScreen):
                     "" if saved_details.get("plan_choice") == "Manter plano atual"
                     else saved_details.get("requested_plan", "")
                 )
-            self._license_plan_button = MDRectangleFlatIconButton(
-                icon="menu-down",
-                text="Plano: " + (self._license_selected_plan or "Manter plano atual"),
-                theme_text_color="Custom", text_color=accent,
-                disabled=bool(saved_details),
-                on_release=lambda caller: self._open_license_plan_menu(caller, is_renewal),
-            )
-            content.add_widget(self._license_plan_button)
+            plan_label = self._license_selected_plan or "Manter plano atual"
+
+            if pending:
+                # Estado pendente: mostra o plano escolhido de forma estática (sem botão solto)
+                plan_card = MDCard(
+                    orientation="horizontal",
+                    spacing=dp(10),
+                    padding=[dp(14), dp(10), dp(14), dp(10)],
+                    size_hint_y=None,
+                    height=dp(52),
+                    radius=[dp(14)],
+                    elevation=0,
+                    md_bg_color=card_alt,
+                )
+                plan_icon = MDIcon(
+                    icon="file-document-outline",
+                    halign="center",
+                    valign="middle",
+                    theme_text_color="Custom",
+                    text_color=accent,
+                    size_hint_x=None,
+                    width=dp(24),
+                )
+                plan_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+                plan_card.add_widget(plan_icon)
+                plan_card.add_widget(self._register_text_label(
+                    f"Plano solicitado: {plan_label}",
+                    "text_primary",
+                    "Caption",
+                    True,
+                ))
+                content.add_widget(plan_card)
+
+                info_card = MDCard(
+                    orientation="horizontal",
+                    spacing=dp(10),
+                    padding=[dp(14), dp(10), dp(14), dp(10)],
+                    size_hint_y=None,
+                    height=dp(64),
+                    radius=[dp(14)],
+                    elevation=0,
+                    md_bg_color=self._color_with_alpha(accent, 0.08),
+                )
+                info_icon = MDIcon(
+                    icon="information-outline",
+                    halign="center",
+                    valign="middle",
+                    theme_text_color="Custom",
+                    text_color=accent,
+                    size_hint_x=None,
+                    width=dp(24),
+                )
+                info_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+                info_card.add_widget(info_icon)
+                info_card.add_widget(self._register_text_label(
+                    "Quando o superadmin enviar a licença, cole o código no campo abaixo e clique em APLICAR CÓDIGO.",
+                    "text_secondary",
+                    "Caption",
+                ))
+                content.add_widget(info_card)
+            else:
+                # Ainda pode escolher o plano
+                content.add_widget(self._register_text_label(
+                    "PLANO",
+                    "text_primary",
+                    "Caption",
+                    True,
+                ))
+                self._license_plan_button = MDRectangleFlatIconButton(
+                    icon="menu-down",
+                    text=f"Plano: {plan_label}",
+                    theme_text_color="Custom",
+                    text_color=accent,
+                    size_hint_x=1,
+                    size_hint_y=None,
+                    height=dp(44),
+                    on_release=lambda caller: self._open_license_plan_menu(caller, is_renewal),
+                )
+                content.add_widget(self._license_plan_button)
+
+                info_card = MDCard(
+                    orientation="horizontal",
+                    spacing=dp(10),
+                    padding=[dp(14), dp(10), dp(14), dp(10)],
+                    size_hint_y=None,
+                    height=dp(64),
+                    radius=[dp(14)],
+                    elevation=0,
+                    md_bg_color=card_alt,
+                )
+                info_icon = MDIcon(
+                    icon="information-outline",
+                    halign="center",
+                    valign="middle",
+                    theme_text_color="Custom",
+                    text_color=accent,
+                    size_hint_x=None,
+                    width=dp(24),
+                )
+                info_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
+                info_card.add_widget(info_icon)
+                info_card.add_widget(self._register_text_label(
+                    "O pedido usa os dados desta instalação. Quando o superadmin emitir a licença, cole o código abaixo.",
+                    "text_secondary",
+                    "Caption",
+                ))
+                content.add_widget(info_card)
+
+            # Campo para colar o código de ativação/renovação recebido
             content.add_widget(self._register_text_label(
-                "O pedido usa os dados desta instalacao. Quando o superadmin emitir a licenca, o sistema recebe e aplica-a automaticamente.",
-                "text_secondary", "Caption",
+                "CÓDIGO DE ATIVAÇÃO RECEBIDO",
+                "text_primary",
+                "Caption",
+                True,
             ))
+            self._license_code_field = MDTextField(
+                hint_text="Cole aqui o código completo enviado pelo superadmin",
+                helper_text="Pode colar todas as linhas do e-mail; espaços e quebras de linha são ignorados.",
+                helper_text_mode="on_focus",
+                multiline=True,
+                mode="rectangle",
+                size_hint_y=None,
+                height=dp(100),
+            )
+            self._license_code_field.line_color_focus = accent
+            content.add_widget(self._license_code_field)
+
+            self._license_feedback = MDLabel(
+                text="",
+                opacity=0,
+                font_style="Caption",
+                theme_text_color="Custom",
+                text_color=self._theme_color("danger", [0.78, 0.22, 0.24, 1]),
+                size_hint_y=None,
+                height=dp(0),
+            )
+            self._license_feedback.bind(
+                width=lambda instance, width: setattr(instance, "text_size", (width, None))
+            )
+            content.add_widget(self._license_feedback)
         else:
+            self._license_code_field = None
+            self._license_feedback = None
             support_card = MDCard(
                 orientation="horizontal",
-                spacing=dp(9),
-                padding=[dp(12), dp(10), dp(12), dp(10)],
+                spacing=dp(10),
+                padding=[dp(14), dp(10), dp(14), dp(10)],
                 size_hint_y=None,
-                height=dp(64),
+                height=dp(68),
                 radius=[dp(14)],
                 elevation=0,
                 md_bg_color=card_alt,
@@ -3371,14 +3773,14 @@ class UnifiedLoginScreen(LoginScreen):
                 theme_text_color="Custom",
                 text_color=accent,
                 size_hint_x=None,
-                width=dp(22),
+                width=dp(24),
             )
             support_icon.bind(size=lambda instance, value: setattr(instance, "text_size", value))
             support_card.add_widget(support_icon)
             support_message = (
-                "A reativacao sera aplicada automaticamente assim que o superadmin a emitir."
+                "A reativação será aplicada automaticamente assim que o superadmin a emitir."
                 if getattr(result, "state", "") == "suspended"
-                else "A recuperacao sera aplicada automaticamente assim que o superadmin a emitir."
+                else "A recuperação será aplicada automaticamente assim que o superadmin a emitir."
                 if getattr(result, "state", "") == "revoked"
                 else "Confirme a data e hora do computador e tente novamente. Se o problema continuar, contacte o superadmin."
             )
@@ -3391,7 +3793,7 @@ class UnifiedLoginScreen(LoginScreen):
 
         scroll = MDScrollView(do_scroll_x=False, size_hint=(1, 1))
         scroll.add_widget(content)
-        width_hint, dialog_height, content_height = self._calc_license_dialog_sizes()
+        width_hint, dialog_height, content_height = self._calc_license_dialog_sizes(compact=pending)
         self._license_content_container = MDBoxLayout(
             orientation="vertical",
             size_hint=(1, None),
@@ -3406,7 +3808,18 @@ class UnifiedLoginScreen(LoginScreen):
         )
         buttons = [close_button]
         if can_activate:
-            if request_ready and self._license_request_submitted:
+            # Botão principal: aplicar o código colado
+            buttons.insert(
+                0,
+                MDRaisedButton(
+                    text="APLICAR CÓDIGO",
+                    md_bg_color=accent,
+                    theme_text_color="Custom",
+                    text_color=on_primary,
+                    on_release=lambda _button: self._submit_license_activation(),
+                ),
+            )
+            if pending:
                 buttons.insert(
                     0,
                     MDFlatButton(
@@ -3419,16 +3832,22 @@ class UnifiedLoginScreen(LoginScreen):
             else:
                 buttons.insert(
                     0,
-                    MDRaisedButton(
-                        text="PEDIR RENOVACAO" if is_renewal else "PEDIR LICENCA",
-                        md_bg_color=accent,
+                    MDFlatButton(
+                        text="PEDIR RENOVAÇÃO" if is_renewal else "PEDIR LICENÇA",
                         theme_text_color="Custom",
-                        text_color=on_primary,
+                        text_color=accent,
                         on_release=lambda _button: self._confirm_license_request_email(),
                     ),
                 )
         elif getattr(result, "state", "") != "not_configured":
-            buttons.insert(0, MDRaisedButton(text="TENTAR NOVAMENTE", on_release=lambda _button: self._retry_license_validation()))
+            buttons.insert(
+                0,
+                MDRaisedButton(
+                    text="TENTAR NOVAMENTE",
+                    on_release=lambda _button: self._retry_license_validation(),
+                ),
+            )
+
         self._license_dialog = MDDialog(
             title=dialog_title,
             type="custom",
@@ -3634,9 +4053,11 @@ class UnifiedLoginScreen(LoginScreen):
     def _submit_license_activation(self):
         if self.license_client is None or self.operation_in_progress:
             return
-        code = str(self._license_code_field.text if self._license_code_field else "").strip()
+        raw_code = str(self._license_code_field.text if self._license_code_field else "")
+        # E-mails podem inserir quebras de linha; o código assinado não admite espaços.
+        code = "".join(raw_code.split())
         if not code:
-            self._set_license_feedback("Informe o codigo de ativacao.")
+            self._set_license_feedback("Cole o código de ativação recebido do superadmin.")
             return
 
         def task():
@@ -3644,13 +4065,13 @@ class UnifiedLoginScreen(LoginScreen):
 
         def handle_result(result, error):
             if error:
-                result = LicenseResult(False, "storage_error", "Nao foi possivel ativar a licenca local.")
+                result = LicenseResult(False, "storage_error", "Não foi possível ativar a licença local.")
             if result and result.allowed:
                 self._close_license_dialog()
                 self._grant_license_access(result)
-                self._show_message("Licenca ativada", self._license_message(result))
+                self._show_message("Licença ativada", self._license_message(result))
                 return
-            failed = result or LicenseResult(False, "storage_error", "Nao foi possivel ativar a licenca local.")
+            failed = result or LicenseResult(False, "storage_error", "Não foi possível ativar a licença local.")
             self.license_status = self._license_message(failed)
             self._set_license_feedback(self._license_message(failed))
 
@@ -3658,7 +4079,7 @@ class UnifiedLoginScreen(LoginScreen):
 
     def login(self):
         if self.license_client is not None and not self._license_access_confirmed:
-            self._validate_desktop_license(continue_login=True, show_activation=True)
+            self.check_available_license()
             return
         super().login()
 

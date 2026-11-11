@@ -40,6 +40,7 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.recycleview import RecycleView
 from kivy.uix.recycleview.views import RecycleDataViewBehavior
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from ui.components.native_widgets import (
     NativeBoxLayout as MDBoxLayout, NativeButton as MDRaisedButton,
@@ -66,34 +67,44 @@ Builder.load_string("""
 <SaleRowView>:
     orientation: "horizontal"
     size_hint_y: None
-    height: dp(54)
-    padding: [dp(12), dp(4), dp(10), dp(4)]
+    height: dp(56)
+    padding: [dp(12), dp(5), dp(10), dp(5)]
     spacing: dp(6)
     md_bg_color: self.row_bg
+    canvas.after:
+        Color:
+            rgba: 1, 1, 1, 0.06
+        Rectangle:
+            pos: self.x + dp(12), self.y
+            size: self.width - dp(24), dp(1)
 
     MDLabel:
         text: root.col_date
         size_hint_x: root.w_date
         halign: "left"
-        font_size: dp(10)
+        valign: "middle"
+        font_size: dp(11)
         theme_text_color: "Custom"
         text_color: root.col_text_sec
+        text_size: self.size
 
     MDBoxLayout:
         orientation: "vertical"
         size_hint_x: root.w_prod
         padding: [0, 0, dp(4), 0]
-        spacing: dp(1)
+        spacing: dp(2)
 
         MDLabel:
             text: root.col_product
             halign: "left"
-            font_size: dp(12)
+            font_size: dp(13)
             bold: True
             shorten: True
             shorten_from: "right"
             theme_text_color: "Custom"
             text_color: root.col_text_pri
+            size_hint_y: None
+            height: dp(20)
 
         MDLabel:
             text: root.col_meta
@@ -103,57 +114,72 @@ Builder.load_string("""
             shorten_from: "right"
             theme_text_color: "Custom"
             text_color: root.col_text_sec
+            size_hint_y: None
+            height: dp(16)
 
     MDLabel:
         text: root.col_qty
         size_hint_x: root.w_qty
         halign: "center"
-        font_size: dp(12)
+        valign: "middle"
+        font_size: dp(13)
         bold: True
         theme_text_color: "Custom"
         text_color: root.col_primary
+        text_size: self.size
 
     MDLabel:
         id: price_lbl
         text: root.col_price
         size_hint_x: root.w_price
-        halign: "right"
-        font_size: dp(11)
+        halign: "center"
+        valign: "middle"
+        font_size: dp(12)
         theme_text_color: "Custom"
         text_color: root.col_text_sec
         opacity: root.show_price
+        text_size: self.size
 
     MDLabel:
         text: root.col_total
         size_hint_x: root.w_total
         halign: "right"
-        font_size: dp(12)
+        valign: "middle"
+        font_size: dp(13)
         bold: True
         theme_text_color: "Custom"
         text_color: root.col_success
+        text_size: self.size
 
-    MDRaisedButton:
-        text: root.btn_label
+    AnchorLayout:
         size_hint_x: root.w_action
-        md_bg_color: root.btn_color
-        theme_text_color: "Custom"
-        text_color: [1,1,1,1]
-        font_size: dp(9)
-        elevation: 0
-        disabled: root.btn_disabled
-        on_release: root.on_action()
+        anchor_x: "center"
+        anchor_y: "center"
+
+        MDRaisedButton:
+            text: root.btn_label
+            size_hint: None, None
+            size: dp(58), dp(28)
+            md_bg_color: root.btn_color
+            theme_text_color: "Custom"
+            text_color: [1, 1, 1, 1]
+            font_size: dp(11)
+            elevation: 0
+            radius: [dp(8)]
+            disabled: root.btn_disabled
+            on_release: root.on_action()
 
 
 <SaleRecycleView>:
     viewclass: "SaleRowView"
     scroll_type: ["bars", "content"]
     bar_width: dp(6)
-    bar_color: 0.09, 0.38, 0.73, 0.5
-    bar_inactive_color: 0.85, 0.85, 0.88, 1
+    bar_color: 0.20, 0.55, 0.90, 0.55
+    bar_inactive_color: 0.30, 0.34, 0.40, 0.4
 
     RecycleBoxLayout:
         orientation: "vertical"
-        default_size: None, dp(54)
+        default_size: None, dp(58)
         default_size_hint: 1, None
         size_hint_y: None
         height: self.minimum_height
@@ -191,17 +217,23 @@ Builder.load_string("""
                 id: filters_card
                 orientation: "vertical"
                 size_hint_y: None
-                height: dp(154)
-                padding: dp(10)
-                spacing: dp(8)
-                elevation: 1
-                radius: [dp(8)]
+                height: dp(186)
+                padding: [dp(10), dp(8)]
+                spacing: dp(6)
+                elevation: 0
+                radius: [dp(12)]
                 md_bg_color: app.theme_tokens['card']
+                canvas.before:
+                    Color:
+                        rgba: app.theme_tokens.get('divider', [0.25, 0.28, 0.34, 0.55])
+                    Line:
+                        width: 1
+                        rounded_rectangle: self.x, self.y, self.width, self.height, dp(12)
 
                 # Linha pesquisa
                 MDBoxLayout:
                     size_hint_y: None
-                    height: dp(44)
+                    height: dp(40)
                     spacing: dp(6)
 
                     MDTextField:
@@ -209,6 +241,7 @@ Builder.load_string("""
                         hint_text: "Produto, vendedor ou ID…"
                         mode: "rectangle"
                         size_hint_x: 1
+                        font_size: dp(13)
                         icon_right: "magnify"
                         line_color_focus: app.theme_tokens['primary']
                         on_text_validate: root.apply_search_filter()
@@ -216,32 +249,37 @@ Builder.load_string("""
 
                     MDRaisedButton:
                         text: "BUSCAR"
-                        size_hint_x: None
-                        width: dp(88)
+                        size_hint: None, None
+                        size: dp(80), dp(34)
+                        font_size: dp(12)
                         md_bg_color: app.theme_tokens['primary']
                         elevation: 0
+                        radius: [dp(8)]
+                        pos_hint: {"center_y": 0.5}
                         on_release: root.apply_search_filter()
 
                     MDFlatButton:
                         text: "LIMPAR"
-                        size_hint_x: None
-                        width: dp(76)
+                        size_hint: None, None
+                        size: dp(70), dp(34)
+                        font_size: dp(12)
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['danger']
+                        pos_hint: {"center_y": 0.5}
                         on_release: root.clear_search_filter()
 
                 # Linha datas
                 MDBoxLayout:
                     size_hint_y: None
-                    height: dp(44)
+                    height: dp(40)
                     spacing: dp(6)
 
                     MDTextField:
                         id: start_date
                         hint_text: "Início  dd/mm/aaaa"
                         mode: "rectangle"
-                        size_hint_x: 0.4
-                        max_text_length: 10
+                        size_hint_x: 1
+                        font_size: dp(13)
                         icon_right: "calendar"
                         line_color_focus: app.theme_tokens['primary']
                         on_text_validate: root.apply_date_filter()
@@ -250,17 +288,21 @@ Builder.load_string("""
                         id: end_date
                         hint_text: "Fim  dd/mm/aaaa"
                         mode: "rectangle"
-                        size_hint_x: 0.4
-                        max_text_length: 10
+                        size_hint_x: 1
+                        font_size: dp(13)
                         icon_right: "calendar"
                         line_color_focus: app.theme_tokens['primary']
                         on_text_validate: root.apply_date_filter()
 
                     MDRaisedButton:
                         text: "APLICAR"
-                        size_hint_x: 0.2
+                        size_hint: None, None
+                        size: dp(100), dp(34)
+                        font_size: dp(12)
                         md_bg_color: app.theme_tokens['primary']
                         elevation: 0
+                        radius: [dp(8)]
+                        pos_hint: {"center_y": 0.5}
                         on_release: root.apply_date_filter()
 
                 # Atalhos rápidos
@@ -270,51 +312,95 @@ Builder.load_string("""
                     spacing: dp(5)
 
                     MDRaisedButton:
+                        id: btn_today
                         text: "HOJE"
+                        font_size: dp(11)
                         md_bg_color: app.theme_tokens['success']
                         elevation: 0
+                        radius: [dp(8)]
                         on_release: root.filter_today()
 
                     MDRaisedButton:
+                        id: btn_week
                         text: "SEMANA"
+                        font_size: dp(11)
                         md_bg_color: app.theme_tokens['info']
                         elevation: 0
+                        radius: [dp(8)]
                         on_release: root.filter_this_week()
 
                     MDRaisedButton:
+                        id: btn_month
                         text: "MÊS"
+                        font_size: dp(11)
                         md_bg_color: app.theme_tokens['info']
                         elevation: 0
+                        radius: [dp(8)]
                         on_release: root.filter_this_month()
 
                     MDRaisedButton:
+                        id: btn_year
                         text: "ANO"
+                        font_size: dp(11)
                         md_bg_color: app.theme_tokens['info']
                         elevation: 0
+                        radius: [dp(8)]
                         on_release: root.filter_this_year()
 
                     MDRaisedButton:
+                        id: btn_promo
                         text: "PROMO"
+                        font_size: dp(11)
                         md_bg_color: app.theme_tokens['warning']
                         elevation: 0
+                        radius: [dp(8)]
                         on_release: root.filter_promotional_sales()
 
                     MDFlatButton:
+                        id: btn_all
                         text: "TODOS"
+                        font_size: dp(11)
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens['danger']
                         on_release: root.load_all_sales(prefer_local_cache=True)
+
+                # Acção destrutiva
+                MDBoxLayout:
+                    size_hint_y: None
+                    height: dp(34)
+                    spacing: dp(8)
+                    padding: [0, dp(2), 0, 0]
+
+                    Widget:
+                        size_hint_x: 1
+
+                    MDRaisedButton:
+                        id: btn_delete_history
+                        text: "ELIMINAR HISTÓRICO"
+                        size_hint: None, None
+                        size: dp(170), dp(32)
+                        font_size: dp(11)
+                        md_bg_color: app.theme_tokens['danger']
+                        elevation: 0
+                        radius: [dp(8)]
+                        on_release: root.confirm_delete_history()
 
             # ── Resumo ────────────────────────────────────────────────────────
             MDCard:
                 orientation: "horizontal"
                 size_hint_y: None
-                height: dp(58)
-                padding: [dp(14), dp(6)]
+                height: dp(52)
+                padding: [dp(12), dp(4)]
                 spacing: dp(0)
-                elevation: 1
-                radius: [dp(8)]
+                elevation: 0
+                radius: [dp(12)]
                 md_bg_color: app.theme_tokens['card']
+                canvas.before:
+                    Color:
+                        rgba: app.theme_tokens.get('divider', [0.25, 0.28, 0.34, 0.55])
+                    Line:
+                        width: 1
+                        rounded_rectangle: self.x, self.y, self.width, self.height, dp(12)
 
                 MDBoxLayout:
                     orientation: "vertical"
@@ -329,7 +415,7 @@ Builder.load_string("""
                     MDLabel:
                         id: total_sales_label
                         text: "—"
-                        font_style: "H5"
+                        font_size: dp(18)
                         bold: True
                         halign: "center"
                         theme_text_color: "Primary"
@@ -354,7 +440,7 @@ Builder.load_string("""
                     MDLabel:
                         id: total_revenue_label
                         text: "—"
-                        font_style: "H5"
+                        font_size: dp(18)
                         bold: True
                         halign: "center"
                         theme_text_color: "Custom"
@@ -372,7 +458,7 @@ Builder.load_string("""
                     size_hint_x: 0.33
 
                     MDLabel:
-                        text: "Removidos"
+                        text: "Estornado"
                         font_style: "Caption"
                         theme_text_color: "Secondary"
                         halign: "center"
@@ -380,7 +466,7 @@ Builder.load_string("""
                     MDLabel:
                         id: avg_sale_label
                         text: "—"
-                        font_style: "H5"
+                        font_size: dp(18)
                         bold: True
                         halign: "center"
                         theme_text_color: "Custom"
@@ -391,67 +477,85 @@ Builder.load_string("""
                 orientation: "vertical"
                 padding: dp(0)
                 spacing: dp(0)
-                elevation: 1
-                radius: [dp(8)]
+                elevation: 0
+                radius: [dp(12)]
                 md_bg_color: app.theme_tokens['card']
+                canvas.before:
+                    Color:
+                        rgba: app.theme_tokens.get('divider', [0.25, 0.28, 0.34, 0.55])
+                    Line:
+                        width: 1
+                        rounded_rectangle: self.x, self.y, self.width, self.height, dp(12)
 
                 # Cabeçalho
                 MDBoxLayout:
                     size_hint_y: None
                     height: dp(36)
-                    padding: [dp(12), dp(0)]
+                    padding: [dp(12), dp(0), dp(10), dp(0)]
                     spacing: dp(6)
                     md_bg_color: app.theme_tokens['card_alt']
-                    radius: [dp(8), dp(8), 0, 0]
+                    radius: [dp(12), dp(12), 0, 0]
 
                     MDLabel:
+                        id: h_date
                         text: "Data/Hora"
                         bold: True
-                        size_hint_x: 0.20
+                        size_hint_x: 0.15
                         halign: "left"
+                        valign: "middle"
                         font_size: dp(11)
                         theme_text_color: "Secondary"
+                        text_size: self.size
 
                     MDLabel:
-                        text: "Produtos"
+                        id: h_prod
+                        text: "Produto"
                         bold: True
-                        size_hint_x: 0.38
+                        size_hint_x: 0.40
                         halign: "left"
+                        valign: "middle"
                         font_size: dp(11)
                         theme_text_color: "Secondary"
+                        text_size: self.size
 
                     MDLabel:
+                        id: h_qty
                         text: "Qtd"
                         bold: True
                         size_hint_x: 0.10
                         halign: "center"
+                        valign: "middle"
                         font_size: dp(11)
                         theme_text_color: "Secondary"
+                        text_size: self.size
 
                     MDLabel:
-                        id: header_price_lbl
+                        id: h_price
                         text: "Itens"
                         bold: True
-                        size_hint_x: 0.14
-                        halign: "right"
+                        size_hint_x: 0.10
+                        halign: "center"
+                        valign: "middle"
                         font_size: dp(11)
                         theme_text_color: "Secondary"
+                        text_size: self.size
 
                     MDLabel:
+                        id: h_total
                         text: "Total"
                         bold: True
-                        size_hint_x: 0.10
+                        size_hint_x: 0.13
                         halign: "right"
+                        valign: "middle"
                         font_size: dp(11)
                         theme_text_color: "Secondary"
+                        text_size: self.size
 
                     MDLabel:
-                        text: "Ver"
-                        bold: True
-                        size_hint_x: 0.08
-                        halign: "center"
+                        id: h_ver
+                        text: ""
+                        size_hint_x: 0.12
                         font_size: dp(11)
-                        theme_text_color: "Secondary"
 
                 # RecycleView — renderiza apenas as linhas visíveis
                 SaleRecycleView:
@@ -462,25 +566,33 @@ Builder.load_string("""
                 MDBoxLayout:
                     id: empty_state
                     orientation: "vertical"
-                    padding: dp(40)
-                    spacing: dp(12)
+                    padding: [dp(24), dp(28)]
+                    spacing: dp(8)
                     size_hint_y: None
-                    height: dp(180)
+                    height: dp(140)
                     opacity: 1
 
                     MDLabel:
                         id: empty_title
                         text: "Selecione um filtro para ver o histórico"
                         halign: "center"
-                        theme_text_color: "Hint"
-                        font_style: "H6"
+                        font_size: dp(15)
                         bold: True
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens.get('text_primary', [0.9, 0.9, 0.92, 1])
+                        size_hint_y: None
+                        height: dp(28)
 
                     MDLabel:
                         id: empty_msg
                         text: "Use Hoje, Semana, Mês, Ano, Promo ou defina um intervalo de datas."
                         halign: "center"
-                        theme_text_color: "Hint"
+                        font_size: dp(12)
+                        theme_text_color: "Custom"
+                        text_color: app.theme_tokens.get('text_secondary', [0.6, 0.65, 0.7, 1])
+                        size_hint_y: None
+                        height: dp(40)
+
 """)
 
 
@@ -534,6 +646,29 @@ def _popup_button(text, color, width=112, height=38, enabled=True, font_size=11)
     return btn
 
 
+def _popup_input(text="", hint="", height=44, **kwargs):
+    ti = TextInput(
+        text=text,
+        hint_text=hint,
+        multiline=False,
+        size_hint_y=None,
+        height=dp(height),
+        font_size=dp(14),
+        background_normal="",
+        background_active="",
+        background_color=[0, 0, 0, 0],
+        foreground_color=[0.95, 0.96, 0.98, 1],
+        hint_text_color=[0.55, 0.60, 0.68, 1],
+        cursor_color=[0.95, 0.62, 0.12, 1],
+        padding=[dp(12), (dp(height) - dp(14) * 1.25) / 2, dp(12), 0],
+        **kwargs,
+    )
+    _popup_paint(ti, (0.18, 0.21, 0.27, 1), radius=10)
+    return ti
+
+
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  RecycleView e view-item reutilizável
 # ─────────────────────────────────────────────────────────────────────────────
@@ -565,12 +700,12 @@ class SaleRowView(RecycleDataViewBehavior, MDBoxLayout):
     col_primary  = ListProperty([0.10, 0.35, 0.65, 1])
     col_success  = ListProperty([0.20, 0.65, 0.30, 1])
 
-    w_date   = 0.20
-    w_prod   = 0.38
+    w_date   = 0.15
+    w_prod   = 0.40
     w_qty    = 0.10
-    w_price  = 0.14
-    w_total  = 0.10
-    w_action = 0.08
+    w_price  = 0.10
+    w_total  = 0.13
+    w_action = 0.12
 
     _sale_data   = None
     _on_action_cb = None
@@ -661,7 +796,10 @@ class SalesHistoryScreen(MDScreen):
         else:
             self._show_initial_state()
 
+
     def _show_initial_state(self):
+        self.current_filter = None
+        self._highlight_filter()
         self._set_empty_state(
             "Selecione um filtro para ver o histórico",
             "Use Hoje, Semana, Mês, Ano, Promo ou defina um intervalo de datas.",
@@ -713,6 +851,16 @@ class SalesHistoryScreen(MDScreen):
         compact = width < dp(900)
         changed = compact != self.compact_mode
         self.compact_mode = compact
+        if compact:
+            w = (0.16, 0.46, 0.10, 0.0, 0.14, 0.14)
+        else:
+            w = (0.15, 0.40, 0.10, 0.10, 0.13, 0.12)
+        for wid, sx in zip(("h_date", "h_prod", "h_qty", "h_price", "h_total", "h_ver"), w):
+            if wid in self.ids:
+                self.ids[wid].size_hint_x = sx
+        if "h_price" in self.ids:
+            self.ids.h_price.opacity = 0 if compact else 1
+        # compat legado
         if "header_price_lbl" in self.ids:
             self.ids.header_price_lbl.opacity = 0 if compact else 1
         if changed and self._filtered_rows:
@@ -721,21 +869,25 @@ class SalesHistoryScreen(MDScreen):
     # ── Cache de cores ────────────────────────────────────────────────────────
     def _refresh_color_cache(self):
         app    = App.get_running_app()
-        tokens = getattr(app, "theme_tokens", {})
+        tokens = getattr(app, "theme_tokens", {}) or {}
+        card = tokens.get("card", [0.14, 0.16, 0.20, 1])
+        card_alt = tokens.get("card_alt", [0.17, 0.19, 0.24, 1])
         self._C = {
-            "divider":    tokens.get("divider",        [0,    0,    0,    0.08]),
-            "bg_even":    tokens.get("surface_alt",    [0.97, 0.98, 1,    1   ]),
-            "bg_odd":     tokens.get("card",           [1,    1,    1,    1   ]),
-            "text_pri":   tokens.get("text_primary",   [0.15, 0.20, 0.30, 1   ]),
-            "text_sec":   tokens.get("text_secondary", [0.35, 0.40, 0.50, 1   ]),
-            "primary":    tokens.get("primary",        [0.10, 0.35, 0.65, 1   ]),
-            "success":    tokens.get("success",        [0.20, 0.65, 0.30, 1   ]),
-            "warning":    tokens.get("warning",        [0.95, 0.62, 0.12, 1   ]),
-            "on_primary": tokens.get("on_primary",     [1,    1,    1,    1   ]),
-            "card_alt":   tokens.get("card_alt",       [0.65, 0.65, 0.65, 1   ]),
+            "divider":    tokens.get("divider",        [0.25, 0.28, 0.34, 0.6]),
+            "bg_even":    card_alt,
+            "bg_odd":     card,
+            "text_pri":   tokens.get("text_primary",   [0.95, 0.96, 0.98, 1]),
+            "text_sec":   tokens.get("manager_ink", tokens.get("text_secondary", [0.62, 0.67, 0.74, 1])),
+            "primary":    tokens.get("primary",        [0.15, 0.48, 0.82, 1]),
+            "success":    tokens.get("success",        [0.20, 0.68, 0.42, 1]),
+            "warning":    tokens.get("warning",        [0.95, 0.62, 0.12, 1]),
+            "danger":     tokens.get("danger",         [0.85, 0.28, 0.30, 1]),
+            "on_primary": tokens.get("on_primary",     [1, 1, 1, 1]),
+            "card_alt":   card_alt,
+            "info":       tokens.get("info",           [0.20, 0.55, 0.80, 1]),
         }
 
-    # ── Estado vazio ──────────────────────────────────────────────────────────
+
     def _set_empty_state(self, title, msg, visible=True):
         if "empty_state" not in self.ids:
             return
@@ -852,10 +1004,10 @@ class SalesHistoryScreen(MDScreen):
 
         compact = self.compact_mode
         if compact:
-            w_date, w_prod, w_qty, w_price, w_total, w_action = 0.22, 0.44, 0.11, 0.0, 0.15, 0.08
+            w_date, w_prod, w_qty, w_price, w_total, w_action = 0.16, 0.46, 0.10, 0.0, 0.14, 0.14
             show_price = 0
         else:
-            w_date, w_prod, w_qty, w_price, w_total, w_action = 0.18, 0.40, 0.10, 0.14, 0.12, 0.08
+            w_date, w_prod, w_qty, w_price, w_total, w_action = 0.15, 0.40, 0.10, 0.10, 0.13, 0.12
             show_price = 1
 
         data = []
@@ -867,39 +1019,45 @@ class SalesHistoryScreen(MDScreen):
             items = transaction["items"]
             product_names = []
             for item in items:
-                name = str(item.get("product") or "Produto")
+                name = str(item.get("product") or "Produto").strip()
                 if name not in product_names:
                     product_names.append(name)
-            displayed_names = product_names[:2]
-            if len(product_names) > 2:
-                displayed_names.append(f"+{len(product_names) - 2}")
 
-            meta_parts = [f"{transaction['item_count']} produto(s)"]
-            code = transaction.get("transaction_code") or ""
-            if code:
-                meta_parts.append(f"Venda {code}")
+            def _short(n, limit=28):
+                n = str(n or "").strip()
+                if len(n) <= limit:
+                    return n
+                return n[: limit - 1].rstrip() + "…"
+
+            if len(product_names) == 1:
+                displayed = _short(product_names[0], 32)
+            elif len(product_names) == 2:
+                displayed = f"{_short(product_names[0], 18)} · {_short(product_names[1], 14)}"
             else:
-                meta_parts.append(f"Venda #{items[0].get('sale_id')}")
+                displayed = f"{_short(product_names[0], 22)} · +{len(product_names) - 1}"
+
+            code = transaction.get("transaction_code") or ""
+            sale_ref = code if code and len(str(code)) <= 16 else f"#{items[0].get('sale_id')}"
+            meta_parts = [f"{transaction['item_count']} item(s)", str(sale_ref)]
             seller = str(transaction.get("created_by") or "").strip()
             if seller and seller.lower() != "sistema":
                 meta_parts.append(seller)
             if transaction.get("is_promotional"):
                 meta_parts.append("PROMO")
-            if transaction.get("refunded_total", 0.0) > 0:
-                meta_parts.append(f"est.: {self._fmt_cur(transaction['refunded_total'])}")
-            meta_parts.append(
-                self._refund_window_text(
-                    transaction.get("refund_seconds_left"),
-                    transaction.get("can_refund"),
-                )
-            )
+            if float(transaction.get("refunded_total") or 0) > 0:
+                meta_parts.append(f"est. {self._fmt_cur(transaction['refunded_total'])}")
+            if transaction.get("can_refund"):
+                minutes, seconds = divmod(max(0, int(transaction.get("refund_seconds_left") or 0)), 60)
+                meta_parts.append(f"{minutes:02d}:{seconds:02d}")
+            else:
+                meta_parts.append("expirado")
 
             data.append({
                 "sale_data": transaction,
                 "action_callback": self.open_transaction_dialog,
                 "row_bg": C["bg_even"] if i % 2 == 0 else C["bg_odd"],
                 "col_date": self._fmt_date(transaction.get("sale_date")),
-                "col_product": "  ·  ".join(displayed_names) or "Produtos da venda",
+                "col_product": displayed or "Produtos",
                 "col_meta": "  ·  ".join(meta_parts),
                 "col_qty": self._fmt_qty(transaction.get("quantity")),
                 "col_price": str(transaction.get("item_count") or 0),
@@ -1081,9 +1239,30 @@ class SalesHistoryScreen(MDScreen):
         if "end_date" in self.ids:
             self.ids.end_date.text = end
 
+
+    def _highlight_filter(self):
+        """Destaca o atalho de filtro activo."""
+        mapping = {
+            "today": "btn_today",
+            "week": "btn_week",
+            "month": "btn_month",
+            "year": "btn_year",
+            "promo": "btn_promo",
+            "all": "btn_all",
+        }
+        for key, wid in mapping.items():
+            btn = self.ids.get(wid) if self.ids else None
+            if btn is None:
+                continue
+            active = self.current_filter == key or (
+                key == "all" and self.current_filter in (None, "all", "custom")
+            )
+            btn.opacity = 1.0 if active else 0.55
+
     def filter_today(self):
-        today = datetime.now().strftime("%d/%m/%Y")
         self.current_filter = "today"
+        today = datetime.now().strftime("%d/%m/%Y")
+        self._highlight_filter()
         self._set_date_inputs(today, today)
         cached = self._from_cache_filtered(today, today)
         if cached is not None:
@@ -1093,10 +1272,11 @@ class SalesHistoryScreen(MDScreen):
         self._load_async(lambda d=today: self.db.get_sales_by_date(d))
 
     def filter_this_week(self):
+        self.current_filter = "week"
         today = datetime.now()
         start = (today - timedelta(days=today.weekday())).strftime("%d/%m/%Y")
         end   = today.strftime("%d/%m/%Y")
-        self.current_filter = "week"
+        self._highlight_filter()
         self._set_date_inputs(start, end)
         cached = self._from_cache_filtered(start, end)
         if cached is not None:
@@ -1106,10 +1286,11 @@ class SalesHistoryScreen(MDScreen):
         self._load_async(lambda s=start, e=end: self.db.get_sales_by_date_range(s, e))
 
     def filter_this_month(self):
+        self.current_filter = "month"
         today = datetime.now()
         start = today.replace(day=1).strftime("%d/%m/%Y")
         end   = today.strftime("%d/%m/%Y")
-        self.current_filter = "month"
+        self._highlight_filter()
         self._set_date_inputs(start, end)
         cached = self._from_cache_filtered(start, end)
         if cached is not None:
@@ -1119,10 +1300,11 @@ class SalesHistoryScreen(MDScreen):
         self._load_async(lambda s=start, e=end: self.db.get_sales_by_date_range(s, e))
 
     def filter_this_year(self):
+        self.current_filter = "year"
         today = datetime.now()
         start = today.replace(month=1, day=1).strftime("%d/%m/%Y")
         end   = today.strftime("%d/%m/%Y")
-        self.current_filter = "year"
+        self._highlight_filter()
         self._set_date_inputs(start, end)
         cached = self._from_cache_filtered(start, end)
         if cached is not None:
@@ -1133,6 +1315,8 @@ class SalesHistoryScreen(MDScreen):
 
     def filter_promotional_sales(self):
         self.current_filter = "promo"
+        self.current_filter = "promo"
+        self._highlight_filter()
         start, end = self._get_date_inputs()
         cached = self._from_cache_filtered(start, end, promo_only=True)
         if cached is not None:
@@ -1188,7 +1372,8 @@ class SalesHistoryScreen(MDScreen):
         self._load_async(fetcher, cache_all=not promo)
 
     def load_all_sales(self, force_refresh=False, prefer_local_cache=False):
-        self.current_filter = None
+        self.current_filter = "all"
+        self._highlight_filter()
         self._set_date_inputs("", "")
         if force_refresh:
             self._invalidate_cache()
@@ -1223,58 +1408,151 @@ class SalesHistoryScreen(MDScreen):
 
     # ── Eliminar histórico ────────────────────────────────────────────────────
     def confirm_delete_history(self):
-        cancel_btn  = MDFlatButton(text="CANCELAR")
-        confirm_btn = MDRaisedButton(
-            text="SIM, ELIMINAR",
-            md_bg_color=[0.85, 0.15, 0.15, 1],
-        )
-        dialog = MDDialog(
-            title="Eliminar Histórico de Vendas",
-            text=(
-                "Esta ação é IRREVERSÍVEL.\n\n"
-                "Todo o histórico de vendas será apagado permanentemente da base de dados.\n\n"
-                "Tem a certeza que quer continuar?"
-            ),
-            buttons=[cancel_btn, confirm_btn],
-        )
-        cancel_btn.bind(on_release=lambda _: dialog.dismiss())
-        confirm_btn.bind(on_release=lambda _: self._delete_history_step2(dialog))
-        dialog.open()
+        """Passo 1: aviso claro, botoes equilibrados."""
+        BG = (0.12, 0.14, 0.18, 1)
+        CARD = (0.16, 0.19, 0.24, 1)
+        TXT = (0.95, 0.96, 0.98, 1)
+        MUTED = (0.62, 0.67, 0.75, 1)
+        DANGER = (0.85, 0.22, 0.24, 1)
+        GRAY = (0.28, 0.32, 0.38, 1)
 
-    def _delete_history_step2(self, first_dialog):
-        first_dialog.dismiss()
-
-        confirm_input = MDTextField(
-            hint_text='Digite ELIMINAR para confirmar',
-            mode="rectangle",
-            size_hint_y=None,
-            height=dp(48),
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(min(Window.width * 0.88, dp(420)), dp(260)),
+            background="",
+            background_color=[0, 0, 0, 0],
+            overlay_color=[0, 0, 0, 0.55],
+            auto_dismiss=True,
         )
-        content = MDBoxLayout(
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(18), dp(16)],
+            spacing=dp(12),
+        )
+        _popup_paint(root, BG, radius=14)
+
+        root.add_widget(_popup_label(
+            "Eliminar histórico", size=17, color=TXT, bold=True,
+            size_hint_y=None, height=dp(26),
+        ))
+
+        warn = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(70),
-            padding=[dp(4), dp(8)],
+            height=dp(96),
+            padding=[dp(12), dp(10)],
+            spacing=dp(4),
         )
-        content.add_widget(confirm_input)
+        _popup_paint(warn, CARD, radius=10)
+        warn.add_widget(_popup_label(
+            "Esta ação é IRREVERSÍVEL", size=13, color=DANGER, bold=True,
+            size_hint_y=None, height=dp(20),
+        ))
+        warn.add_widget(_popup_label(
+            "Todo o histórico de vendas será apagado permanentemente da base de dados.",
+            size=12, color=MUTED,
+            size_hint_y=None, height=dp(40),
+        ))
+        warn.add_widget(_popup_label(
+            "Tem a certeza que quer continuar?",
+            size=12, color=TXT, bold=True,
+            size_hint_y=None, height=dp(20),
+        ))
+        root.add_widget(warn)
 
-        cancel_btn  = MDFlatButton(text="CANCELAR")
-        confirm_btn = MDRaisedButton(
-            text="ELIMINAR DEFINITIVAMENTE",
-            md_bg_color=[0.85, 0.15, 0.15, 1],
+        actions = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
+        cancel_btn = _popup_button("CANCELAR", GRAY, width=150, height=40, font_size=12)
+        next_btn = _popup_button("CONTINUAR", DANGER, width=150, height=40, font_size=12)
+        actions.add_widget(cancel_btn)
+        actions.add_widget(Widget())
+        actions.add_widget(next_btn)
+        root.add_widget(actions)
+
+        cancel_btn.bind(on_release=lambda *_: popup.dismiss())
+        next_btn.bind(on_release=lambda *_: self._delete_history_step2(popup))
+        popup.add_widget(root)
+        popup.open()
+
+    def _delete_history_step2(self, first_dialog):
+        """Passo 2: confirmar digitando ELIMINAR."""
+        try:
+            first_dialog.dismiss()
+        except Exception:
+            pass
+
+        BG = (0.12, 0.14, 0.18, 1)
+        CARD = (0.16, 0.19, 0.24, 1)
+        TXT = (0.95, 0.96, 0.98, 1)
+        MUTED = (0.62, 0.67, 0.75, 1)
+        DANGER = (0.85, 0.22, 0.24, 1)
+        GRAY = (0.28, 0.32, 0.38, 1)
+
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(min(Window.width * 0.88, dp(420)), dp(280)),
+            background="",
+            background_color=[0, 0, 0, 0],
+            overlay_color=[0, 0, 0, 0.55],
+            auto_dismiss=True,
         )
-        dialog = MDDialog(
-            title="Confirmação Final",
-            text="Esta operação não pode ser desfeita.",
-            type="custom",
-            content_cls=content,
-            buttons=[cancel_btn, confirm_btn],
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(18), dp(16)],
+            spacing=dp(10),
         )
-        cancel_btn.bind(on_release=lambda _: dialog.dismiss())
+        _popup_paint(root, BG, radius=14)
+
+        root.add_widget(_popup_label(
+            "Confirmação final", size=17, color=TXT, bold=True,
+            size_hint_y=None, height=dp(26),
+        ))
+        root.add_widget(_popup_label(
+            "Escreva ELIMINAR em maiúsculas para confirmar.",
+            size=12, color=MUTED,
+            size_hint_y=None, height=dp(22),
+        ))
+
+        confirm_input = MDTextField(
+            hint_text="ELIMINAR",
+            mode="rectangle",
+            size_hint_y=None,
+            height=dp(44),
+            font_size=dp(14),
+        )
+        root.add_widget(confirm_input)
+
+        tip = BoxLayout(
+            size_hint_y=None, height=dp(36),
+            padding=[dp(10), dp(6)],
+        )
+        _popup_paint(tip, CARD, radius=8)
+        tip.add_widget(_popup_label(
+            "Esta operação não pode ser desfeita.",
+            size=11, color=DANGER, bold=True,
+            size_hint_y=None, height=dp(24),
+        ))
+        root.add_widget(tip)
+
+        actions = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
+        cancel_btn = _popup_button("CANCELAR", GRAY, width=150, height=40, font_size=12)
+        confirm_btn = _popup_button("ELIMINAR", DANGER, width=150, height=40, font_size=12)
+        actions.add_widget(cancel_btn)
+        actions.add_widget(Widget())
+        actions.add_widget(confirm_btn)
+        root.add_widget(actions)
+
+        class _Proxy:
+            def dismiss(self_inner):
+                popup.dismiss()
+
+        proxy = _Proxy()
+        cancel_btn.bind(on_release=lambda *_: popup.dismiss())
         confirm_btn.bind(
-            on_release=lambda _: self._execute_delete_history(dialog, confirm_input)
+            on_release=lambda *_: self._execute_delete_history(proxy, confirm_input)
         )
-        dialog.open()
+        popup.add_widget(root)
+        popup.open()
+        Clock.schedule_once(lambda _dt: setattr(confirm_input, "focus", True), 0.08)
 
     def _execute_delete_history(self, dialog, confirm_input):
         typed = (confirm_input.text or "").strip().upper()
@@ -1287,22 +1565,25 @@ class SalesHistoryScreen(MDScreen):
             error = None
             try:
                 fn = getattr(self.db, "delete_all_sales_history", None)
-                if callable(fn):
-                    fn()
-                else:
-                    conn = getattr(self.db, "conn", None) or getattr(self.db, "connection", None)
-                    if conn:
-                        conn.execute("DELETE FROM sales")
-                        conn.commit()
-                    else:
-                        raise RuntimeError("Método delete_all_sales_history não encontrado no provider.")
+                if not callable(fn):
+                    raise RuntimeError(
+                        "Método delete_all_sales_history não encontrado na base de dados. "
+                        "Actualize o ficheiro database.py."
+                    )
+                ok = fn()
+                if ok is False:
+                    raise RuntimeError("A base de dados recusou a eliminação do histórico.")
                 app = App.get_running_app()
                 username = getattr(app, "current_user", None)
-                role     = getattr(app, "current_role", None) or "manager"
+                role = getattr(app, "current_role", None) or "manager"
                 if username:
                     try:
-                        self.db.log_action(username, role, "DELETE_ALL_SALES_HISTORY",
-                                           "Histórico de vendas eliminado pelo utilizador.")
+                        self.db.log_action(
+                            username,
+                            role,
+                            "DELETE_ALL_SALES_HISTORY",
+                            "Histórico de vendas eliminado pelo utilizador.",
+                        )
                     except Exception:
                         pass
             except Exception as exc:
@@ -1508,7 +1789,7 @@ class SalesHistoryScreen(MDScreen):
 
     # ── Diálogo de remoção de item ────────────────────────────────────────────
     def open_refund_dialog(self, sale_data):
-        refund_allowed, _seconds_left = refund_window_status((sale_data or {}).get("sale_date"))
+        refund_allowed, _ = refund_window_status((sale_data or {}).get("sale_date"))
         if not refund_allowed:
             self._show_msg(
                 "Estorno expirado",
@@ -1526,46 +1807,149 @@ class SalesHistoryScreen(MDScreen):
         returned_qty = float(sale_data.get("returned_qty", 0) or 0)
         price        = float(sale_data.get("price", 0) or 0)
 
-        content = MDBoxLayout(
-            orientation="vertical", spacing=dp(10),
-            padding=[dp(8), dp(4)], size_hint_y=None,
-        )
-        content.bind(minimum_height=content.setter("height"))
-        content.add_widget(MDLabel(
-            text=(
-                f"Venda #{sale_id} — {product}\n"
-                f"Vendido: {self._fmt_qty(qty)}  |  Removido: {self._fmt_qty(returned_qty)}"
-                f"  |  Disponível: {self._fmt_qty(available)}\n"
-                f"Preço unitário: {self._fmt_cur(price)} MT"
-            ),
-            theme_text_color="Secondary",
-            size_hint_y=None, height=dp(72),
-        ))
-        qty_input = MDTextField(
-            hint_text="Quantidade para remover",
-            input_filter="float", mode="rectangle",
-            text=f"{available:.2f}", size_hint_y=None, height=dp(48),
-        )
-        reason_input = MDTextField(
-            hint_text="Motivo", mode="rectangle",
-            text="Item lançado por engano", size_hint_y=None, height=dp(48),
-        )
-        content.add_widget(qty_input)
-        content.add_widget(reason_input)
+        # Paleta (igual ao popup "Produtos da venda")
+        BG_CARD = (0.09, 0.11, 0.15, 1)
+        BG_ROW  = (0.13, 0.16, 0.21, 1)
+        TXT_PRI = (0.95, 0.96, 0.98, 1)
+        TXT_SEC = (0.62, 0.67, 0.75, 1)
+        WARN    = (0.95, 0.62, 0.12, 1)
+        DANGER  = (0.90, 0.35, 0.35, 1)
+        OFF     = (0.30, 0.33, 0.38, 1)
 
-        cancel_btn  = MDFlatButton(text="CANCELAR")
-        confirm_btn = MDRaisedButton(text="CONFIRMAR")
-        dialog = MDDialog(
-            title="Remover Item da Venda", type="custom",
-            content_cls=content, buttons=[cancel_btn, confirm_btn],
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(min(Window.width * 0.92, dp(560)), min(dp(520), Window.height * 0.94)),
+            background="",
+            background_color=[0, 0, 0, 0],
+            overlay_color=[0, 0, 0, 0.60],
+            auto_dismiss=False,
         )
-        cancel_btn.bind(on_release=lambda _: dialog.dismiss())
+        root = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(10))
+        _popup_paint(root, BG_CARD, radius=16)
+
+        # ── Título ──
+        root.add_widget(_popup_label(
+            "Remover item da venda", size=17, color=TXT_PRI, bold=True,
+            size_hint_y=None, height=dp(30),
+        ))
+
+        # ── Cartão do produto ──
+        prod_card = BoxLayout(
+            orientation="vertical", size_hint_y=None, height=dp(64),
+            padding=[dp(14), dp(8)], spacing=dp(2),
+        )
+        _popup_paint(prod_card, BG_ROW, radius=12)
+        prod_card.add_widget(_popup_label(
+            product, size=14, color=TXT_PRI, bold=True,
+            shorten=True, shorten_from="right",
+        ))
+        prod_card.add_widget(_popup_label(
+            f"Venda #{sale_id}   ·   {self._fmt_cur(price)} MT / un.",
+            size=11, color=TXT_SEC,
+        ))
+        root.add_widget(prod_card)
+
+        # ── Chips: vendido / removido / disponível ──
+        chips = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(8))
+
+        def chip(title, value, color=TXT_PRI):
+            box = BoxLayout(orientation="vertical", padding=[dp(12), dp(6)], spacing=dp(1))
+            _popup_paint(box, BG_ROW, radius=10)
+            box.add_widget(_popup_label(title, size=9, color=TXT_SEC, bold=True))
+            box.add_widget(_popup_label(value, size=14, color=color, bold=True))
+            return box
+
+        chips.add_widget(chip("VENDIDO", self._fmt_qty(qty)))
+        chips.add_widget(chip(
+            "REMOVIDO",
+            self._fmt_qty(returned_qty),
+            WARN if returned_qty > 0 else TXT_PRI,
+        ))
+        chips.add_widget(chip("DISPONÍVEL", self._fmt_qty(available), self._C["success"]))
+        root.add_widget(chips)
+
+        # ── Quantidade com stepper ──
+        root.add_widget(_popup_label(
+            "QUANTIDADE A REMOVER", size=10, color=TXT_SEC, bold=True,
+            size_hint_y=None, height=dp(18),
+        ))
+        qty_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        qty_input = _popup_input(text=self._fmt_qty(available), input_filter="float")
+        qty_input.size_hint_y = 1
+        minus_btn = _popup_button("−", OFF, width=44, height=44, font_size=20)
+        plus_btn  = _popup_button("+", OFF, width=44, height=44, font_size=20)
+        all_btn   = _popup_button("TUDO", WARN, width=70, height=44, font_size=11)
+        for w in (minus_btn, qty_input, plus_btn, all_btn):
+            qty_row.add_widget(w)
+        root.add_widget(qty_row)
+
+        preview = _popup_label(
+            "", size=12, color=TXT_SEC, size_hint_y=None, height=dp(22),
+        )
+        root.add_widget(preview)
+
+        def _read_qty():
+            try:
+                return float((qty_input.text or "").replace(",", "."))
+            except Exception:
+                return 0.0
+
+        def _update_preview(*_):
+            q = _read_qty()
+            if q <= 0 or q > available + 1e-9:
+                preview.color = list(DANGER)
+                preview.text = f"Quantidade inválida (máx. {self._fmt_qty(available)})"
+            else:
+                preview.color = list(TXT_SEC)
+                preview.text = f"Valor a estornar:  [b]{self._fmt_cur(q * price)} MT[/b]"
+
+        def _step(delta):
+            q = min(available, max(0.0, _read_qty() + delta))
+            qty_input.text = self._fmt_qty(q)
+
+        qty_input.bind(text=_update_preview)
+        minus_btn.bind(on_release=lambda *_: _step(-1))
+        plus_btn.bind(on_release=lambda *_: _step(+1))
+        all_btn.bind(on_release=lambda *_: setattr(qty_input, "text", self._fmt_qty(available)))
+        _update_preview()
+
+        # ── Motivo + atalhos ──
+        root.add_widget(_popup_label(
+            "MOTIVO", size=10, color=TXT_SEC, bold=True,
+            size_hint_y=None, height=dp(18),
+        ))
+        reason_input = _popup_input(text="Item lançado por engano", hint="Motivo")
+        root.add_widget(reason_input)
+
+        quick = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(6))
+        for txt in ("Lançado por engano", "Cliente desistiu", "Produto danificado"):
+            b = _popup_button(txt, OFF, width=10, height=32, font_size=10)
+            b.size_hint = (1, None)
+            b.bind(on_release=lambda _b, t=txt: setattr(reason_input, "text", t))
+            quick.add_widget(b)
+        root.add_widget(quick)
+
+        root.add_widget(Widget())  # empurra o rodapé para baixo
+
+        # ── Rodapé: botões com tamanho fixo ──
+        footer = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
+        footer.add_widget(Widget())
+        cancel_btn  = _popup_button("CANCELAR", OFF, width=130, height=44, font_size=12)
+        confirm_btn = _popup_button("CONFIRMAR", WARN, width=170, height=44, font_size=12)
+        footer.add_widget(cancel_btn)
+        footer.add_widget(confirm_btn)
+        root.add_widget(footer)
+
+        cancel_btn.bind(on_release=lambda *_: popup.dismiss())
         confirm_btn.bind(
-            on_release=lambda _: self._submit_refund(
-                dialog, sale_data, qty_input, reason_input, cancel_btn, confirm_btn,
+            on_release=lambda *_: self._submit_refund(
+                popup, sale_data, qty_input, reason_input, cancel_btn, confirm_btn,
             )
         )
-        dialog.open()
+
+        popup.add_widget(root)
+        popup.open()
+
 
     def _set_refund_state(self, widgets, busy):
         for w in widgets:

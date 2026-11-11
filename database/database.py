@@ -817,6 +817,16 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
                     self.cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
                 if "full_name" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
+                if "first_name" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
+                if "last_name" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN last_name TEXT")
+                if "nationality" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN nationality TEXT")
+                if "address" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN address TEXT")
+                if "birth_date" not in cols:
+                    self.cursor.execute("ALTER TABLE users ADD COLUMN birth_date TEXT")
                 if "data_owner" not in cols:
                     self.cursor.execute("ALTER TABLE users ADD COLUMN data_owner TEXT")
                 if "email_verified" not in cols:
@@ -1969,7 +1979,7 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             return None
         return password_hash
 
-    def create_admin(self, username, password, email=None):
+    def create_admin(self, username, password, email=None, profile=None):
         """Cria o unico admin de uma instalacao quando ainda nao existe um."""
         username = str(username or "").strip()
         password_text = str(password or "")
@@ -1980,6 +1990,19 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             normalized_email = None
         if normalized_email is not None and not is_valid_email(normalized_email):
             return False
+        profile = profile if isinstance(profile, dict) else {}
+        first_name = str(profile.get("first_name") or "").strip()[:80]
+        last_name = str(profile.get("last_name") or "").strip()[:80]
+        phone = str(profile.get("phone") or "").strip()[:40] or None
+        nationality = str(profile.get("nationality") or "").strip()[:80] or None
+        address = str(profile.get("address") or "").strip()[:255] or None
+        birth_date = str(profile.get("birth_date") or "").strip()[:10] or None
+        if birth_date:
+            try:
+                datetime.strptime(birth_date, "%Y-%m-%d")
+            except ValueError:
+                return False
+        full_name = " ".join(part for part in (first_name, last_name) if part) or None
         try:
             # O bloqueio de escrita elimina a corrida entre duas tentativas de
             # criacao e complementa o indice parcial nas bases novas.
@@ -1998,13 +2021,18 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             self.cursor.execute(
                 """
                 INSERT INTO users (
-                    username, password, role, email, email_verified,
+                    username, password, role, email, phone, full_name,
+                    first_name, last_name, nationality, address, birth_date, email_verified,
                     email_verified_at, data_owner, is_active,
                     must_change_password, created_at, password_changed_at,
                     failed_login_attempts, locked_until
-                ) VALUES (?, ?, 'admin', ?, 0, NULL, ?, 1, 0, ?, ?, 0, NULL)
+                ) VALUES (?, ?, 'admin', ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, 1, 0, ?, ?, 0, NULL)
                 """,
-                (username, hashed_password, normalized_email, username, now, now),
+                (
+                    username, hashed_password, normalized_email, phone, full_name,
+                    first_name or None, last_name or None, nationality, address, birth_date,
+                    username, now, now,
+                ),
             )
             if not had_users:
                 self._assign_unowned_records_to_first_admin(username)
@@ -3739,6 +3767,75 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             return row[0] if row else None
         except sqlite3.Error:
             return None
+
+    def delete_damage_evidence_force(self, evidence_id):
+        """Remove evidencia mesmo se ja estiver ligada a um movimento.
+
+        Apaga o registo, o ficheiro em disco e limpa references no movimento.
+        """
+        if not evidence_id:
+            return {"ok": False, "message": "ID de evidencia em falta."}
+        try:
+            owner = self._active_owner()
+            where = ["id = ?"]
+            params = [str(evidence_id)]
+            if owner:
+                where.append("COALESCE(owner_username, '') = ?")
+                params.append(owner)
+            self.cursor.execute(
+                "SELECT storage_path, movement_id FROM damage_evidence WHERE "
+                + " AND ".join(where),
+                tuple(params),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return {"ok": False, "message": "Evidencia nao encontrada ou sem permissao."}
+            storage_path, movement_id = row[0], row[1]
+            # limpar referencia no movimento, se existir coluna evidence_id / evidence_path
+            if movement_id:
+                try:
+                    cols = [r[1] for r in self.cursor.execute("PRAGMA table_info(stock_movements)")]
+                    if "evidence_id" in cols:
+                        self.cursor.execute(
+                            "UPDATE stock_movements SET evidence_id = NULL WHERE id = ?",
+                            (movement_id,),
+                        )
+                    if "evidence_path" in cols:
+                        self.cursor.execute(
+                            "UPDATE stock_movements SET evidence_path = NULL WHERE id = ?",
+                            (movement_id,),
+                        )
+                except Exception:
+                    pass
+            self.cursor.execute(
+                "DELETE FROM damage_evidence WHERE " + " AND ".join(where),
+                tuple(params),
+            )
+            self.conn.commit()
+            try:
+                from utils.business.damage_evidence import remove_stored_evidence
+                remove_stored_evidence(storage_path)
+            except Exception:
+                pass
+            # tentar apagar path absoluto se for relativo
+            try:
+                from utils.config.paths import resolve_path
+                p = resolve_path(storage_path)
+                import os
+                if p and os.path.isfile(str(p)):
+                    try:
+                        os.remove(str(p))
+                    except OSError:
+                        pass
+            except Exception:
+                pass
+            return {"ok": True}
+        except Exception as exc:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return {"ok": False, "message": str(exc)}
 
     def record_stock_movement(
         self,
@@ -7314,6 +7411,130 @@ class Database(ProduceInventoryMixin, DatabaseAutomationMixin):
             print(f"Erro ao estornar venda: {e}")
             self.conn.rollback()
             return {"ok": False, "message": str(e)}
+
+    def delete_all_sales_history(self):
+        """Apaga o historico de vendas do ambito actual (owner).
+
+        Ordem segura com FKs:
+        1) sales_returns  2) produce_sales  3) main.sales
+        4) arquivo sales_archive (se ligado)
+        Nao toca em produtos, stock nem utilizadores.
+        """
+        try:
+            owner = self._active_owner()
+            scope_sql, scope_params = self._owner_filter()
+            self.conn.execute("BEGIN IMMEDIATE")
+
+            # IDs de vendas no ambito actual
+            if owner:
+                sale_ids = [
+                    int(r[0])
+                    for r in self.conn.execute(
+                        "SELECT id FROM main.sales WHERE COALESCE(owner_username, '') = ?",
+                        (owner,),
+                    ).fetchall()
+                ]
+            else:
+                sale_ids = [
+                    int(r[0])
+                    for r in self.conn.execute("SELECT id FROM main.sales").fetchall()
+                ]
+
+            if sale_ids:
+                placeholders = ",".join("?" for _ in sale_ids)
+                # 1) devolucoes / estornos
+                try:
+                    self.conn.execute(
+                        f"DELETE FROM main.sales_returns WHERE sale_id IN ({placeholders})",
+                        sale_ids,
+                    )
+                except sqlite3.Error:
+                    # tabela pode nao existir em bases muito antigas
+                    pass
+                # tambem por owner_username se a coluna existir
+                if owner:
+                    try:
+                        self.conn.execute(
+                            "DELETE FROM main.sales_returns WHERE COALESCE(owner_username, '') = ?",
+                            (owner,),
+                        )
+                    except sqlite3.Error:
+                        pass
+
+                # 2) metadados produce
+                try:
+                    self.conn.execute(
+                        f"DELETE FROM main.produce_sales WHERE sale_id IN ({placeholders})",
+                        sale_ids,
+                    )
+                except sqlite3.Error:
+                    pass
+
+                # 3) vendas principais
+                self.conn.execute(
+                    f"DELETE FROM main.sales WHERE id IN ({placeholders})",
+                    sale_ids,
+                )
+
+            # 4) arquivo (se ATTACH estiver activo)
+            try:
+                attached = [row[1] for row in self.conn.execute("PRAGMA database_list")]
+                if "sales_archive" in attached:
+                    if owner:
+                        # arquivo pode nao ter owner_username em bases antigas
+                        cols = [
+                            r[1]
+                            for r in self.conn.execute("PRAGMA sales_archive.table_info(sales)").fetchall()
+                        ]
+                        if "owner_username" in cols:
+                            arch_ids = [
+                                int(r[0])
+                                for r in self.conn.execute(
+                                    "SELECT id FROM sales_archive.sales "
+                                    "WHERE COALESCE(owner_username, '') = ?",
+                                    (owner,),
+                                ).fetchall()
+                            ]
+                        else:
+                            arch_ids = []
+                    else:
+                        arch_ids = [
+                            int(r[0])
+                            for r in self.conn.execute(
+                                "SELECT id FROM sales_archive.sales"
+                            ).fetchall()
+                        ]
+                    if arch_ids:
+                        ph = ",".join("?" for _ in arch_ids)
+                        try:
+                            self.conn.execute(
+                                f"DELETE FROM sales_archive.produce_sales WHERE sale_id IN ({ph})",
+                                arch_ids,
+                            )
+                        except sqlite3.Error:
+                            pass
+                        self.conn.execute(
+                            f"DELETE FROM sales_archive.sales WHERE id IN ({ph})",
+                            arch_ids,
+                        )
+            except sqlite3.Error as exc:
+                print(f"Aviso ao limpar arquivo de vendas: {exc}")
+
+            self.conn.commit()
+            # refrescar a view temporaria sales_history se existir
+            try:
+                if hasattr(self, "_configure_sales_archive"):
+                    self._configure_sales_archive()
+            except Exception:
+                pass
+            return True
+        except (sqlite3.Error, ValueError, TypeError) as exc:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            print(f"Erro ao eliminar historico de vendas: {exc}")
+            return False
 
     def get_all_sales(self, limit=None, offset=0):
         """Obter todas as vendas"""

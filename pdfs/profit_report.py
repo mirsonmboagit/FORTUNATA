@@ -89,7 +89,7 @@ class ProfitReport(BasePDFReport):
             ['Lucro médio em percentagem', f"{media_margem:.2f}%"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[5.3*inch, 4.9*inch])
+        summary_table = Table(self._translate_table(summary_data), colWidths=[5.3*inch, 4.9*inch])
         
         summary_table.setStyle(TableStyle([
             # Cabeçalho
@@ -169,7 +169,7 @@ class ProfitReport(BasePDFReport):
                 f"{row['percentual_lucro']:.1f}%"
             ])
         
-        detail_table = Table(detail_data, colWidths=[
+        detail_table = Table(self._translate_table(detail_data), colWidths=[
             0.4*inch, 3.1*inch, 1.4*inch, 1.45*inch, 1.7*inch, 1.25*inch
         ])
         
@@ -258,7 +258,7 @@ class ProfitReport(BasePDFReport):
         )
         elements.append(Spacer(1, 12))
 
-        margin_table = Table(margin_data, colWidths=[2.5*inch, 2.5*inch, 2.0*inch, 2.0*inch])
+        margin_table = Table(self._translate_table(margin_data), colWidths=[2.5*inch, 2.5*inch, 2.0*inch, 2.0*inch])
         
         margin_table.setStyle(TableStyle([
             # Cabeçalho

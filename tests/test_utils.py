@@ -118,13 +118,14 @@ class ReceiptSecurityAndTextTests(ProjectTestCase):
         self.assertFalse(check_answer("outra resposta", hashed))
 
     def test_i18n_normalizes_languages_and_dynamic_text(self):
-        from utils.core.i18n import language_short, normalize_language, translate_text
+        from utils.core.i18n import detect_system_language, language_short, normalize_language, translate_text
 
         self.assertEqual(normalize_language("pt-MZ"), "pt")
         self.assertEqual(normalize_language("zz", fallback="en"), "en")
         self.assertEqual(language_short("english"), "PT")
         self.assertEqual(translate_text("3 produtos", "en"), "3 products")
         self.assertEqual(translate_text("2 alerta(s) pendente(s)", "fr"), "2 alerte(s) en attente")
+        self.assertIn(detect_system_language(), {"pt", "en", "fr", "de", "es", "zh"})
 
     def test_system_identity_and_theme_helpers(self):
         from utils.config.system_identity import DEFAULT_SYSTEM_NAME, MAX_SYSTEM_NAME_LENGTH, normalize_system_name

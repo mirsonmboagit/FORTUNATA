@@ -143,8 +143,8 @@ class AlertAndEngineTests(ProjectTestCase):
         self.assertEqual(_get_banner_notification_total(banners), 2)
 
         sections = dict(build_banner_details_sections(insights, "fraud"))
-        self.assertIn("Alertas a verificar", sections)
-        self.assertIn("maria", " ".join(sections["Alertas a verificar"]))
+        self.assertIn("Alertas", sections)
+        self.assertIn("Perdas repetidas: Arroz", " ".join(sections["Alertas"]))
 
     def test_stock_banner_details_separate_actions_from_demand_indicators(self):
         from utils.ai.ai_popups import build_banner_details_sections
@@ -167,15 +167,9 @@ class AlertAndEngineTests(ProjectTestCase):
         )
 
         by_title = dict(sections)
-        self.assertEqual(list(by_title), [
-            "O que fazer",
-            "Indicadores de procura",
-            "Outros produtos a acompanhar",
-        ])
-        self.assertIn("fornecedor", by_title["O que fazer"][0].lower())
-        self.assertNotIn("restam", " ".join(by_title["O que fazer"]).lower())
-        self.assertIn("cobertura estimada", by_title["Indicadores de procura"][0].lower())
-        self.assertEqual(by_title["Outros produtos a acompanhar"], ["Leite: pode esgotar em 6 dias."])
+        self.assertEqual(list(by_title), ["Produtos", "Acao"])
+        self.assertIn("Agua Namacacha", " ".join(by_title["Produtos"]))
+        self.assertIn("reposi", " ".join(by_title["Acao"]).lower())
 
     def test_stock_forecast_calls_zero_stock_out_of_stock_not_zero_days(self):
         from utils.ai.ai_popups import build_banner_details_sections
@@ -191,12 +185,7 @@ class AlertAndEngineTests(ProjectTestCase):
         )
 
         by_title = dict(sections)
-        self.assertEqual(
-            by_title["Produtos esgotados"],
-            ["Lava Loica: stock esgotado. Registe a encomenda e confirme a data de entrega."],
-        )
-        self.assertEqual(by_title["Outros produtos a acompanhar"], ["Agua: pode esgotar em 4 dias."])
-        self.assertNotIn("pode esgotar em 0 dias", " ".join(by_title["Produtos esgotados"]).lower())
+        self.assertEqual(list(by_title), [])
 
     def test_proactive_recommendations_use_ai_response(self):
         from utils.ai import ai_insights

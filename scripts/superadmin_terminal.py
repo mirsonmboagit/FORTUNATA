@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import getpass
 import json
 import os
 import shutil
@@ -89,8 +88,8 @@ def _back_to_menu() -> None:
 
 def _new_password() -> str:
     while True:
-        password = getpass.getpass("Crie a palavra-passe do superadmin: ")
-        confirmation = getpass.getpass("Repita a palavra-passe: ")
+        password = input("Crie a palavra-passe do superadmin (visivel): ")
+        confirmation = input("Repita a palavra-passe (visivel): ")
         if password != confirmation:
             print("As palavras-passe nao coincidem.")
         elif len(password) < 16:
@@ -101,7 +100,7 @@ def _new_password() -> str:
 
 def _authenticate(service: LocalSuperadmin) -> bool:
     for _attempt in range(3):
-        password = getpass.getpass(f"Palavra-passe de {SUPERADMIN_USERNAME}: ")
+        password = input(f"Palavra-passe de {SUPERADMIN_USERNAME} (visivel): ")
         if service.authenticate(password):
             return True
         print("Credenciais invalidas.")
@@ -113,7 +112,7 @@ def _smtp_send(service: LocalSuperadmin, license_code: str, payload: dict) -> No
     if not recipient:
         raise SuperadminError("Defina primeiro o e-mail privado que recebera as licencas.")
     sender = input(f"Gmail remetente [{recipient}]: ").strip() or recipient
-    app_password = getpass.getpass("Cole a palavra-passe de aplicacao do Gmail: ")
+    app_password = input("Cole a palavra-passe de aplicacao do Gmail (visivel): ")
     settings = gmail_settings(sender, app_password)
     send_license_email(
         settings,
@@ -130,7 +129,7 @@ def _smtp_send_revocation(service: LocalSuperadmin, revocation_code: str, payloa
     if not recipient:
         raise SuperadminError("Defina primeiro o e-mail privado que recebera os cancelamentos.")
     sender = input(f"Gmail remetente [{recipient}]: ").strip() or recipient
-    app_password = getpass.getpass("Cole a palavra-passe de aplicacao do Gmail: ")
+    app_password = input("Cole a palavra-passe de aplicacao do Gmail (visivel): ")
     settings = gmail_settings(sender, app_password)
     send_license_revocation_email(
         settings,
@@ -147,7 +146,7 @@ def _smtp_send_suspension(service: LocalSuperadmin, suspension_code: str, payloa
     if not recipient:
         raise SuperadminError("Defina primeiro o e-mail privado que recebera as suspensoes.")
     sender = input(f"Gmail remetente [{recipient}]: ").strip() or recipient
-    app_password = getpass.getpass("Cole a palavra-passe de aplicacao do Gmail: ")
+    app_password = input("Cole a palavra-passe de aplicacao do Gmail (visivel): ")
     settings = gmail_settings(sender, app_password)
     send_license_suspension_email(
         settings,
@@ -164,7 +163,7 @@ def _smtp_send_reactivation(service: LocalSuperadmin, reactivation_code: str, pa
     if not recipient:
         raise SuperadminError("Defina primeiro o e-mail privado que recebera as reativacoes.")
     sender = input(f"Gmail remetente [{recipient}]: ").strip() or recipient
-    app_password = getpass.getpass("Cole a palavra-passe de aplicacao do Gmail: ")
+    app_password = input("Cole a palavra-passe de aplicacao do Gmail (visivel): ")
     settings = gmail_settings(sender, app_password)
     send_license_reactivation_email(
         settings,
@@ -181,7 +180,7 @@ def _smtp_send_restoration(service: LocalSuperadmin, restoration_code: str, payl
     if not recipient:
         raise SuperadminError("Defina primeiro o e-mail privado que recebera as recuperacoes.")
     sender = input(f"Gmail remetente [{recipient}]: ").strip() or recipient
-    app_password = getpass.getpass("Cole a palavra-passe de aplicacao do Gmail: ")
+    app_password = input("Cole a palavra-passe de aplicacao do Gmail (visivel): ")
     settings = gmail_settings(sender, app_password)
     send_license_restoration_email(
         settings,
@@ -235,7 +234,7 @@ def _configure_automatic_email(service: LocalSuperadmin) -> None:
         return
     poll_seconds = input(f"Verificar novos pedidos a cada segundos [{current.get('poll_seconds', 60)}]: ").strip() or str(current.get("poll_seconds", 60))
     customer_ref = input(f"Referencia padrao do cliente [{current.get('customer_ref', 'Cliente por e-mail')}]: ").strip() or current.get("customer_ref", "Cliente por e-mail")
-    password = getpass.getpass("Palavra-passe de aplicacao Gmail: ")
+    password = input("Palavra-passe de aplicacao Gmail (visivel): ")
     try:
         duration_amount, duration_unit = normalize_license_duration(duration_text)
         status = service.configure_automatic_email(
@@ -689,8 +688,8 @@ def _create_buyer_admin(service: LocalSuperadmin) -> None:
     username = input("Utilizador admin do comprador: ").strip()
     email = input("E-mail do admin (opcional): ").strip() or None
     days = input("Validade do codigo temporario em dias [7]: ").strip() or "7"
-    temporary_password = getpass.getpass("Defina a palavra-passe temporaria (minimo 12 caracteres): ")
-    confirmation = getpass.getpass("Repita a palavra-passe temporaria: ")
+    temporary_password = input("Defina a palavra-passe temporaria (visivel, minimo 12 caracteres): ")
+    confirmation = input("Repita a palavra-passe temporaria (visivel): ")
     if temporary_password != confirmation:
         print("As palavras-passe nao coincidem.")
         return
@@ -813,8 +812,8 @@ def _renew_expired_buyer_admin(service: LocalSuperadmin) -> None:
         )
     provisioning_id = input("Identificador da conta a substituir: ").strip()
     days = input("Validade do novo codigo em dias [7]: ").strip() or "7"
-    temporary_password = getpass.getpass("Defina a nova palavra-passe temporaria (minimo 12 caracteres): ")
-    confirmation = getpass.getpass("Repita a nova palavra-passe temporaria: ")
+    temporary_password = input("Defina a nova palavra-passe temporaria (visivel, minimo 12 caracteres): ")
+    confirmation = input("Repita a nova palavra-passe temporaria (visivel): ")
     if temporary_password != confirmation:
         print("As palavras-passe nao coincidem.")
         return
@@ -859,27 +858,14 @@ def main() -> int:
         print("=" * 58)
         # Hifen ASCII para o titulo ficar legivel tambem no CMD classico do Windows.
         print(f"PAINEL LOCAL DO SUPERADMIN - {SUPERADMIN_USERNAME}")
-        print("Licencas, contas e seguranca (sem servidor)")
+        print("Gestao de administradores e licencas (sem servidor)")
         print("=" * 58)
-        print("1. Definir e-mail privado das licencas")
-        print("2. Emitir ou renovar licenca por e-mail")
-        print("3. Listar licencas emitidas")
-        print("4. Reenviar uma licenca")
-        print("5. Configurar emissao automatica por Gmail")
-        print("6. Iniciar emissor automatico agora")
-        print("7. Criar conta admin do comprador")
-        print("8. Tabela de utilizadores, senhas e licencas")
-        print("9. Reenviar codigo de conta admin")
-        print("10. Substituir codigo admin expirado")
-        print("11. Suspender uma licenca (reversivel)")
-        print("12. Reenviar codigo de suspensao")
-        print("13. Reativar uma licenca suspensa")
-        print("14. Reenviar codigo de reativacao")
-        print("15. Cancelar uma licenca definitivamente")
-        print("16. Reenviar codigo de cancelamento definitivo")
-        print("17. Recuperar um cancelamento definitivo (emergencia)")
-        print("18. Reenviar codigo de recuperacao")
-        print("19. Ver todos os detalhes da licenca e do dono (admin)")
+        print("1. Definir e-mail de entrega das licencas")
+        print("2. Configurar entrega automatica de licencas")
+        print("3. Iniciar entrega automatica agora")
+        print("4. Tabela de administradores, contas e licencas")
+        print("5. Criar ou atualizar conta de administrador")
+        print("6. Ver licencas emitidas")
         print("V. Voltar / limpar a tela")
         print("0. Sair")
         option = input("Opcao: ").strip()
@@ -891,41 +877,15 @@ def main() -> int:
             if option == "1":
                 _configure_recipient(service)
             elif option == "2":
-                _issue_license(service)
-            elif option == "3":
-                _list_licenses(service)
-            elif option == "4":
-                _resend_license(service)
-            elif option == "5":
                 _configure_automatic_email(service)
-            elif option == "6":
+            elif option == "3":
                 _start_automatic_emitter()
-            elif option == "7":
-                _create_buyer_admin(service)
-            elif option == "8":
+            elif option == "4":
                 _list_system_users(service)
-            elif option == "9":
-                _resend_buyer_admin(service)
-            elif option == "10":
-                _renew_expired_buyer_admin(service)
-            elif option == "11":
-                _suspend_license(service)
-            elif option == "12":
-                _resend_license_suspension(service)
-            elif option == "13":
-                _reactivate_license(service)
-            elif option == "14":
-                _resend_license_reactivation(service)
-            elif option == "15":
-                _revoke_license(service)
-            elif option == "16":
-                _resend_license_revocation(service)
-            elif option == "17":
-                _restore_revoked_license(service)
-            elif option == "18":
-                _resend_license_restoration(service)
-            elif option == "19":
-                _license_details(service)
+            elif option == "5":
+                _create_buyer_admin(service)
+            elif option == "6":
+                _list_licenses(service)
             else:
                 print("Opcao invalida.")
         except SuperadminError as error:

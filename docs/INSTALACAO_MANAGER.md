@@ -1,4 +1,6 @@
-# Instalacao da App Manager
+# Guia legado da App Manager
+
+> O desktop atual utiliza uma aplicacao unica e uma tela de login comum para administrador e gerente. Use [INSTALACAO_ADMIN.md](INSTALACAO_ADMIN.md), que agora descreve o cliente desktop unico. Este guia e mantido apenas para pacotes antigos `SIGEMPEManager`.
 
 O pacote `SIGEMPEManager` e apenas o cliente de vendas. A API e a base de dados principal sao instaladas separadamente no pacote `LojaAPI`, no computador servidor.
 

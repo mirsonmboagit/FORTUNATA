@@ -94,7 +94,7 @@ class LossReport(BasePDFReport):
             ["Perda Média por Evento", f"MZN {avg_loss:,.2f}"],
         ]
 
-        table = Table(summary_data, colWidths=[3.6 * inch, 3.2 * inch])
+        table = Table(self._translate_table(summary_data), colWidths=[3.6 * inch, 3.2 * inch])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2980b9")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -146,7 +146,7 @@ class LossReport(BasePDFReport):
         if len(rows) == 1:
             rows.append(["Sem perdas no período", "-", "-", "-", "-"])
 
-        table = Table(rows, colWidths=[2.2 * inch, 1.2 * inch, 1.8 * inch, 2.1 * inch, 2.0 * inch])
+        table = Table(self._translate_table(rows), colWidths=[2.2 * inch, 1.2 * inch, 1.8 * inch, 2.1 * inch, 2.0 * inch])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#27ae60")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -178,7 +178,7 @@ class LossReport(BasePDFReport):
         if len(data) == 1:
             data.append(["Sem dados", "-", "-", "-"])
 
-        table = Table(data, colWidths=[3.0 * inch, 1.0 * inch, 2.2 * inch, 2.2 * inch])
+        table = Table(self._translate_table(data), colWidths=[3.0 * inch, 1.0 * inch, 2.2 * inch, 2.2 * inch])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#8e44ad")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -209,7 +209,7 @@ class LossReport(BasePDFReport):
         if len(data) == 1:
             data.append(["Sem dados", "-", "-"])
 
-        table = Table(data, colWidths=[5.5 * inch, 1.2 * inch, 2.0 * inch])
+        table = Table(self._translate_table(data), colWidths=[5.5 * inch, 1.2 * inch, 2.0 * inch])
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#c0392b")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -253,7 +253,7 @@ class LossReport(BasePDFReport):
         if len(data) == 1:
             data.append(["Sem perdas no período", "-", "-", "-", "-", "-", "-"])
 
-        table = Table(data, colWidths=[
+        table = Table(self._translate_table(data), colWidths=[
             1.6 * inch, 3.2 * inch, 1.1 * inch, 1.1 * inch, 1.2 * inch, 1.4 * inch, 1.2 * inch
         ])
         table.setStyle(TableStyle([

@@ -127,6 +127,11 @@ class LossesFloatingScannerPanel(MDCard):
         if not self.collide_point(*touch.pos):
             return False
 
+        # 1) Filhos clicaveis (X, CAPTURAR, etc.) têm prioridade sobre arrastar
+        for child in reversed(list(self.children)):
+            if child.dispatch("on_touch_down", touch):
+                return True
+
         if self._touch_in_resize_zone(touch):
             touch.grab(self)
             self._active_mode = "resize"
@@ -296,6 +301,7 @@ class LossesScreen(MDScreen):
         """Quando entra na tela"""
         self.request_enter_refresh(force=not bool(self.products))
         self.clear_form()
+        self.current_step = 1
         self.update_ui_state()
         self._update_responsive_layout()
         Clock.schedule_once(lambda dt: self._check_expired_batch(), 0.3)
@@ -473,104 +479,29 @@ class LossesScreen(MDScreen):
 
         Clock.schedule_once(lambda _dt: self._update_responsive_layout(), 0)
 
-    def close_scanner_panel(self):
+    def close_scanner_panel(self, *_args):
         self._cancel_scanner_auto_start()
         self.stop_scanner(status_text="Scanner fechado", hide_panel=True)
 
     def _update_responsive_layout(self):
-        """Responsividade sem bloquear cliques.
-
-        - Paineis ocultos ficam fora do ecran (nao capturam toque)
-        - Formulario empilha em ecras estreitos
-        - Padding inferior so cresce quando ha painel visivel
-        """
-        if not hasattr(self, "ids") or not self.ids:
+        """So gere o espaco inferior quando um painel flutuante esta aberto."""
+        ids = getattr(self, "ids", None)
+        if not ids or "content_column" not in ids:
             return
-        if "loss_type_qty_row" not in self.ids:
-            return
-
-        width = float(self.width or Window.width or 1200)
-        compact = width < dp(900)
-        narrow = width < dp(720)
-
-        content_column = self.ids.get("content_column")
-        selected_meta = self.ids.get("selected_product_meta_row")
-        scanner_preview = self.ids.get("scanner_preview_card")
-        damage_camera_preview = self.ids.get("damage_camera_preview_card")
-        scanner_buttons = self.ids.get("scanner_buttons_row")
-        loss_type_row = self.ids.get("loss_type_qty_row")
-        loss_type_btn = self.ids.get("loss_type_btn")
-        qty_input = self.ids.get("qty_input")
-        loss_body = self.ids.get("loss_body_row")
-        loss_fields = self.ids.get("loss_fields_col")
-        loss_impact = self.ids.get("loss_impact_card")
-        loss_form = self.ids.get("loss_form_card")
-        search_card = self.ids.get("search_card")
-
-        if selected_meta is not None:
-            selected_meta.orientation = "vertical" if narrow else "horizontal"
-            selected_meta.height = dp(54) if narrow else dp(20)
-
-        if scanner_preview is not None and scanner_preview.opacity > 0.5 and not scanner_preview.disabled:
-            self._ensure_scanner_panel_geometry()
-        if damage_camera_preview is not None and damage_camera_preview.opacity > 0.5 and not damage_camera_preview.disabled:
-            self._ensure_damage_camera_panel_geometry()
-
-        if scanner_buttons is not None:
-            scanner_buttons.width = dp(120) if compact else dp(132)
-
-        if loss_body is not None:
-            if narrow:
-                loss_body.orientation = "vertical"
-                loss_body.height = dp(420) if self.selected_loss_type == "DAMAGE" else dp(340)
-                if loss_fields is not None:
-                    loss_fields.size_hint_x = 1
-                if loss_impact is not None:
-                    loss_impact.size_hint_x = 1
-                    loss_impact.size_hint_y = None
-                    loss_impact.height = dp(140)
-            else:
-                loss_body.orientation = "horizontal"
-                loss_body.height = dp(280)
-                if loss_fields is not None:
-                    loss_fields.size_hint_x = 0.58
-                if loss_impact is not None:
-                    loss_impact.size_hint_x = 0.42
-                    loss_impact.size_hint_y = 1
-                    loss_impact.height = 0
-
-        if loss_type_row is not None:
-            loss_type_row.orientation = "vertical" if narrow else "horizontal"
-            loss_type_row.height = dp(96) if narrow else dp(46)
-        if loss_type_btn is not None:
-            loss_type_btn.size_hint_x = 1 if narrow else 0.58
-        if qty_input is not None:
-            qty_input.size_hint_x = 1 if narrow else 0.42
-
-        if search_card is not None and float(getattr(search_card, "opacity", 0) or 0) > 0.5:
-            search_card.height = dp(320) if narrow else dp(380)
-
-        if loss_form is not None and float(getattr(loss_form, "opacity", 0) or 0) > 0.5:
-            target = self._loss_form_target_height()
-            if narrow:
-                target = max(target, dp(480 if self.selected_loss_type == "DAMAGE" else 400))
-            loss_form.height = target
-            loss_form.disabled = False
-
-        visible_h = 0.0
-        if scanner_preview is not None and float(getattr(scanner_preview, "opacity", 0) or 0) > 0.5 and not scanner_preview.disabled:
-            visible_h = max(visible_h, float(scanner_preview.height or 0))
-        if damage_camera_preview is not None and float(getattr(damage_camera_preview, "opacity", 0) or 0) > 0.5 and not damage_camera_preview.disabled:
-            visible_h = max(visible_h, float(damage_camera_preview.height or 0))
-        bottom_padding = (visible_h + dp(28)) if visible_h else dp(16)
-        if content_column is not None:
-            content_column.padding = [
-                dp(12) if narrow else dp(14),
-                dp(10),
-                dp(12) if narrow else dp(14),
-                bottom_padding,
-            ]
-            content_column.spacing = dp(10) if narrow else dp(12)
+        narrow = float(self.width or Window.width or 1200) < dp(720)
+        panels = []
+        for pid, ensure in (
+            ("scanner_preview_card", self._ensure_scanner_panel_geometry),
+            ("damage_camera_preview_card", self._ensure_damage_camera_panel_geometry),
+        ):
+            panel = ids.get(pid)
+            if panel is not None and panel.opacity > 0.5 and not panel.disabled:
+                ensure()
+                panels.append(panel)
+        visible_h = max((p.height for p in panels), default=0)
+        side = dp(12) if narrow else dp(14)
+        ids.content_column.padding = [side, dp(10), side, visible_h + dp(28) if visible_h else dp(16)]
+        ids.content_column.spacing = dp(10) if narrow else dp(12)
 
 
     def request_enter_refresh(self, force=False, delay=None):
@@ -613,66 +544,27 @@ class LossesScreen(MDScreen):
         self.manager.current = "losses_history"
 
     # ========== UI STATE MANAGEMENT (NOVO) ==========
-    def _loss_form_target_height(self):
-        """Altura do formulario de perda (com ou sem evidencia)."""
-        base = dp(320)
-        if self.selected_loss_type == "DAMAGE":
-            return base + dp(200)
-        return base
-
     def _scroll_loss_form_to_top(self, _dt=0):
         if "losses_scroll" in self.ids:
             self.ids.losses_scroll.scroll_y = 1
 
     def update_ui_state(self):
-        """Atualiza visibilidade dos cards baseado no estado"""
-        if self.current_step == 1:
-            # Step 1: Selecionar produto
-            self._show_card(self.ids.search_card, 360)
-            self._hide_card(self.ids.loss_form_card)
-            self._hide_card(self.ids.selected_product_card)
-            
-            # Atualizar indicadores
-            self.ids.step1_icon.icon = "numeric-1-circle"
-            self.ids.step1_icon.text_color = _theme_color("info", [0.15, 0.65, 0.85, 1])
-            self.ids.step1_label.bold = True
-            self.ids.step1_label.text_color = _theme_color("text_primary", [0.9, 0.9, 0.9, 1])
-            
-            self.ids.step2_icon.icon = "numeric-2-circle-outline"
-            self.ids.step2_icon.text_color = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
-            self.ids.step2_label.bold = False
-            self.ids.step2_label.text_color = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
-            
-        elif self.current_step == 2:
-            # Step 2: Preencher perda
-            self._hide_card(self.ids.search_card)
-            self._show_card(self.ids.loss_form_card, self._loss_form_target_height())
-            self._show_card(self.ids.selected_product_card, 80)
-            
-            # Atualizar indicadores
-            self.ids.step1_icon.icon = "check-circle"
-            self.ids.step1_icon.text_color = _theme_color("success", [0.2, 0.7, 0.3, 1])
-            self.ids.step1_label.bold = False
-            self.ids.step1_label.text_color = _theme_color("text_secondary", [0.5, 0.5, 0.5, 1])
-            
-            self.ids.step2_icon.icon = "numeric-2-circle"
-            self.ids.step2_icon.text_color = _theme_color("info", [0.15, 0.65, 0.85, 1])
-            self.ids.step2_label.bold = True
-            self.ids.step2_label.text_color = _theme_color("text_primary", [0.9, 0.9, 0.9, 1])
+        """Mostra o passo 1 OU o passo 2. Sem animacoes, sem alturas manuais."""
+        if self.current_step == 2 and not self.selected_product:
+            self.current_step = 1
+        step1 = self.current_step == 1
+        ids = self.ids
+        if "search_card" in ids:
+            ids.search_card.disabled = not step1
+        if "loss_form_card" in ids:
+            ids.loss_form_card.disabled = step1
+        if "loss_action_bar" in ids:
+            ids.loss_action_bar.disabled = step1
+        if not step1:
+            Clock.schedule_once(self._scroll_loss_form_to_top, 0.05)
+        self._refresh_step2_controls()
 
-    def _show_card(self, card, height):
-        """Anima card para aparecer"""
-        card.disabled = False
-        anim = Animation(height=height, opacity=1, duration=0.25, t='out_cubic')
-        anim.start(card)
 
-    def _hide_card(self, card):
-        """Anima card para desaparecer"""
-        card.disabled = True
-        anim = Animation(height=0, opacity=0, duration=0.25, t='out_cubic')
-        anim.start(card)
-
-    # ========== SONS ==========
     def load_sounds(self):
         """Carrega sons do scanner"""
         try:
@@ -885,6 +777,14 @@ class LossesScreen(MDScreen):
         self._products_load_token = token
         self._products_loading = True
         query = str(self._pending_search or "").strip()
+        if hasattr(self, "ids") and self.ids:
+            label = self.ids.get("losses_page_label")
+            if label is not None:
+                label.text = "A carregar…"
+            for bid in ("losses_prev_btn", "losses_next_btn"):
+                btn = self.ids.get(bid)
+                if btn is not None:
+                    btn.disabled = True
 
         def worker():
             try:
@@ -920,6 +820,9 @@ class LossesScreen(MDScreen):
         self.products = rows
         self._products_page_offset = offset
         self._products_has_more = bool((payload or {}).get("has_more"))
+        # se a BD nao devolver has_more, assumir mais paginas quando a pagina veio cheia
+        if not self._products_has_more and len(rows) >= self.PRODUCTS_PAGE_SIZE:
+            self._products_has_more = True
         self.show_products(self.products)
         self._sync_products_page_controls()
         self._consume_pending_product_focus()
@@ -992,58 +895,54 @@ class LossesScreen(MDScreen):
             self.set_loss_type(label, code)
         return True
 
+    def _stop_products_render(self):
+        if getattr(self, "_products_render_ev", None):
+            try:
+                self._products_render_ev.cancel()
+            except Exception:
+                pass
+            self._products_render_ev = None
+
     def show_products(self, products):
-        """Mostra produtos na lista"""
+        """Renderiza a pagina actual de produtos como tabela de cartoes."""
         if "products_list" not in self.ids:
             return
-            
+
         self._stop_products_render()
         self.ids.products_list.clear_widgets()
-        
-        if not products:
-            empty = TwoLineListItem(
-                text="Nenhum produto disponível",
-                secondary_text="Stock vazio ou filtro aplicado"
+
+        rows = list(products or [])
+        if not rows:
+            empty = MDBoxLayout(
+                orientation="vertical",
+                size_hint_y=None,
+                height=dp(72),
+                padding=[dp(12), dp(16)],
             )
+            empty.add_widget(MDLabel(
+                text="Nenhum produto encontrado",
+                bold=True,
+                halign="center",
+                theme_text_color="Custom",
+                text_color=_theme_color("text_primary", [0.9, 0.92, 0.95, 1]),
+            ))
+            empty.add_widget(MDLabel(
+                text="Ajuste a pesquisa ou verifique o stock disponivel.",
+                halign="center",
+                font_size=dp(12),
+                theme_text_color="Custom",
+                text_color=_theme_color("text_secondary", [0.55, 0.6, 0.65, 1]),
+            ))
             self.ids.products_list.add_widget(empty)
             return
 
-        # Antes a lista completa era criada num unico frame; com muitos itens a
-        # interface ficava menos responsiva logo ao abrir a tela.
-        self._products_render_rows = list(products or [])
+        self._products_render_rows = rows
         self._products_render_index = 0
         self._render_next_products_batch(0)
         if self._products_render_index < len(self._products_render_rows):
-            self._products_render_ev = Clock.schedule_interval(self._render_next_products_batch, 0.016)
-        return
-        
-        for p in products:
-            pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = p
-            unit = "KG" if is_weight else "UN"
-            
-            # Status tag
-            tag = ""
-            if status == "EXPIRADO":
-                tag = " • ⚠️ EXPIRADO"
-            elif status == "PERTO_DO_PRAZO":
-                tag = " • ⏰ PERTO DO PRAZO"
-            
-            # Criar item clicável
-            def on_item_click(instance, product=p):
-                self.select_product(product)
-            
-            item = TwoLineListItem(
-                text=name,
-                secondary_text=f"Stock: {stock:.1f} {unit} • {price:.2f} MZN{tag}"
+            self._products_render_ev = Clock.schedule_interval(
+                self._render_next_products_batch, 0.016
             )
-            item.bind(on_release=on_item_click)
-            
-            self.ids.products_list.add_widget(item)
-
-    def _stop_products_render(self):
-        if self._products_render_ev:
-            self._products_render_ev.cancel()
-            self._products_render_ev = None
 
     def _render_next_products_batch(self, _dt):
         products_list = self.ids.get("products_list") if hasattr(self, "ids") else None
@@ -1066,35 +965,180 @@ class LossesScreen(MDScreen):
         return True
 
     def _build_product_list_item(self, product):
-        _pid, name, stock, price, _cost, _barcode, is_weight, _exp, status, _vat_rule_code = product
+        """Linha de produto robusta, clicavel, com stock/preco/estado."""
+        pid, name, stock, price, _cost, barcode, is_weight, exp, status, _vat = product
         unit = "KG" if is_weight else "UN"
-        tag = ""
-        if status == "EXPIRADO":
-            tag = " • EXPIRADO"
-        elif status == "PERTO_DO_PRAZO":
-            tag = " • PERTO DO PRAZO"
+        stock_val = float(stock or 0)
+        stock_txt = f"{stock_val:.2f} {unit}" if is_weight else f"{int(stock_val)} {unit}"
+        price_txt = f"{float(price or 0):.2f} MT"
+        code_txt = str(barcode or "").strip() or f"#{pid}"
 
         tokens = getattr(App.get_running_app(), "theme_tokens", {}) or {}
-        is_attention = status in {"EXPIRADO", "PERTO_DO_PRAZO"}
-        item = TwoLineListItem(
-            text=name,
-            secondary_text=f"Stock: {stock:.1f} {unit}  |  {price:.2f} MZN{tag}",
-            md_bg_color=tokens.get("card_alt", [0.95, 0.96, 0.98, 1]),
-            line_color=tokens.get("warning" if is_attention else "divider", [0, 0, 0, 0.12]),
-            line_width=1,
-            radius=[dp(8)],
-            padding=[dp(12), dp(7)],
+        is_expired = status == "EXPIRADO"
+        is_near = status == "PERTO_DO_PRAZO"
+
+        bg = tokens.get("card_alt", [0.16, 0.19, 0.24, 1])
+        fg = tokens.get("text_primary", [0.95, 0.96, 0.98, 1])
+        muted = tokens.get("text_secondary", [0.55, 0.60, 0.66, 1])
+        danger = tokens.get("danger", [0.85, 0.25, 0.28, 1])
+        warning = tokens.get("warning", [0.90, 0.65, 0.15, 1])
+        success = tokens.get("success", [0.20, 0.70, 0.42, 1])
+        primary = tokens.get("primary", [0.15, 0.48, 0.82, 1])
+
+        if is_expired:
+            badge_text, badge_color = "EXPIRADO", danger
+        elif is_near:
+            badge_text, badge_color = "PERTO", warning
+        else:
+            badge_text, badge_color = "OK", success
+
+        display_name = str(name or "Produto").strip()
+        if len(display_name) > 36:
+            display_name = display_name[:35].rstrip() + "…"
+
+        row = MDCard(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(56),
+            padding=[dp(10), dp(6), dp(8), dp(6)],
+            spacing=dp(8),
+            radius=[dp(10)],
             elevation=0,
+            md_bg_color=bg,
         )
-        item._primary.text_color = tokens.get("text_primary", [0.12, 0.15, 0.20, 1])
-        item._secondary.text_color = tokens.get(
-            "warning" if is_attention else "text_secondary", [0.35, 0.40, 0.50, 1]
+
+        left = MDBoxLayout(orientation="vertical", spacing=dp(2), size_hint_x=0.48)
+        left.add_widget(MDLabel(
+            text=display_name,
+            bold=True,
+            font_size=dp(13),
+            shorten=True,
+            shorten_from="right",
+            theme_text_color="Custom",
+            text_color=fg,
+            size_hint_y=None,
+            height=dp(20),
+        ))
+        left.add_widget(MDLabel(
+            text=f"{code_txt}  ·  {stock_txt}",
+            font_size=dp(11),
+            theme_text_color="Custom",
+            text_color=muted,
+            size_hint_y=None,
+            height=dp(16),
+        ))
+        row.add_widget(left)
+
+        price_lbl = MDLabel(
+            text=price_txt,
+            bold=True,
+            font_size=dp(13),
+            size_hint_x=0.22,
+            halign="right",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=fg,
         )
-        # A seleção ocorre no pressionar, antes de qualquer gesto curto do
-        # ScrollView. Assim o item continua fiável tanto com clique como com
-        # toque, sem cair no botão de registo abaixo da lista.
-        item.bind(on_press=lambda instance, current=product: self.select_product(current))
-        return item
+        price_lbl.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        row.add_widget(price_lbl)
+
+        badge = MDCard(
+            size_hint=(None, None),
+            size=(dp(78), dp(26)),
+            radius=[dp(8)],
+            elevation=0,
+            md_bg_color=[badge_color[0], badge_color[1], badge_color[2], 0.22],
+            padding=[dp(4), 0],
+            pos_hint={"center_y": 0.5},
+        )
+        badge.add_widget(MDLabel(
+            text=badge_text,
+            bold=True,
+            font_size=dp(10),
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=badge_color,
+            text_size=(dp(70), dp(26)),
+        ))
+        row.add_widget(badge)
+
+        select_btn = MDRaisedButton(
+            text="Usar",
+            size_hint=(None, None),
+            size=(dp(58), dp(28)),
+            font_size=dp(11),
+            radius=[dp(8)],
+            elevation=0,
+            md_bg_color=primary,
+            pos_hint={"center_y": 0.5},
+        )
+        select_btn.bind(on_release=lambda _b, p=product: self.select_product(p))
+        row.add_widget(select_btn)
+
+        def _on_row_touch(instance, touch, p=product):
+            if not instance.collide_point(*touch.pos):
+                return False
+            if select_btn.collide_point(*touch.pos):
+                return False
+            if getattr(touch, "is_mouse_scrolling", False):
+                return False
+            if touch.grab_current is not None and touch.grab_current is not instance:
+                return False
+            self.select_product(p)
+            return True
+
+        row.bind(on_touch_up=_on_row_touch)
+        return row
+
+    def previous_products_page(self, *_args):
+        """Pagina anterior — sempre responde ao clique."""
+        if self._products_page_offset <= 0:
+            return
+        # se ficou preso em loading, liberta
+        if self._products_loading:
+            self._products_loading = False
+        new_offset = max(0, self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
+        self.load_products(new_offset)
+
+    def next_products_page(self, *_args):
+        """Pagina seguinte — tenta avançar se houver indício de mais dados."""
+        count = len(self.products or [])
+        can_try = self._products_has_more or count >= self.PRODUCTS_PAGE_SIZE
+        if not can_try:
+            return
+        if self._products_loading:
+            self._products_loading = False
+        self.load_products(self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
+
+    def _sync_products_page_controls(self):
+        """Actualiza label e estado dos botoes Anterior/Proximo."""
+        if not hasattr(self, "ids") or not self.ids:
+            return
+        label = self.ids.get("losses_page_label")
+        prev_btn = self.ids.get("losses_prev_btn")
+        next_btn = self.ids.get("losses_next_btn")
+
+        count = len(self.products or [])
+        start = self._products_page_offset + 1 if count else 0
+        end = self._products_page_offset + count
+        page_num = (self._products_page_offset // max(1, self.PRODUCTS_PAGE_SIZE)) + 1
+        can_next = bool(self._products_has_more) or count >= self.PRODUCTS_PAGE_SIZE
+
+        if label is not None:
+            if count:
+                suffix = " +" if can_next else ""
+                label.text = f"Pag. {page_num}  ·  {start}–{end}{suffix}"
+            else:
+                label.text = "Sem resultados"
+
+        if prev_btn is not None:
+            prev_btn.disabled = self._products_page_offset <= 0
+            prev_btn.opacity = 0.45 if prev_btn.disabled else 1.0
+
+        if next_btn is not None:
+            next_btn.disabled = not can_next
+            next_btn.opacity = 0.45 if next_btn.disabled else 1.0
 
     def on_search(self, text):
         """Filtra produtos pela pesquisa (debounce)."""
@@ -1133,7 +1177,8 @@ class LossesScreen(MDScreen):
 
     def _apply_search(self, dt):
         self._search_ev = None
-        self.load_products()
+        self._products_page_offset = 0
+        self.load_products(0)
 
     # def _load_products_page(self, offset):
     #     if self._products_loading:
@@ -1167,28 +1212,6 @@ class LossesScreen(MDScreen):
     #         self._pending_products_page_request = None
     #         Clock.schedule_once(lambda _dt, off=pending_offset: self._load_products_page(off), 0.05)
 
-    def previous_products_page(self):
-        if self._products_loading or self._products_page_offset <= 0:
-            return
-        self.load_products(self._products_page_offset - self.PRODUCTS_PAGE_SIZE)
-
-    def next_products_page(self):
-        if self._products_loading or not self._products_has_more:
-            return
-        self.load_products(self._products_page_offset + self.PRODUCTS_PAGE_SIZE)
-
-    def _sync_products_page_controls(self):
-        if not self.ids: return
-        label = self.ids.get("losses_page_label")
-        if label: label.text = f"{self._products_page_offset + 1}-{self._products_page_offset + len(self.products)}"
-        if self.ids.get("losses_prev_btn"): self.ids.losses_prev_btn.disabled = self._products_page_offset <= 0
-        if self.ids.get("losses_next_btn"): self.ids.losses_next_btn.disabled = not self._products_has_more
-        if label:
-            if self.products:
-                label.text = f"{self._products_page_offset + 1}-{self._products_page_offset + len(self.products)}"
-            else:
-                label.text = "0"
-
     def _filter_products(self, query):
         filtered = []
         for p in self.products:
@@ -1204,12 +1227,14 @@ class LossesScreen(MDScreen):
         return filtered
 
     def on_search_enter(self):
-        """Executa a pesquisa no banco, sem filtrar apenas a p?gina atual."""
+        """Pesquisa no banco desde o inicio (offset 0)."""
         if self._search_ev:
             Clock.unschedule(self._search_ev)
             self._search_ev = None
-        self._pending_search = self.ids.search_input.text.strip()
-        self.load_products()
+        raw = self.ids.search_input.text if "search_input" in self.ids else ""
+        self._pending_search = str(raw or "").strip()
+        self._products_page_offset = 0
+        self.load_products(0)
 
     def find_product_by_barcode(self, barcode):
         """Busca produto pelo código de barras"""
@@ -1219,153 +1244,177 @@ class LossesScreen(MDScreen):
         return None
 
     def select_product(self, product):
-        """Seleciona um produto e avança para step 2"""
-        normalized_product = self._normalize_product_row(product)
-        if normalized_product is None:
+        """Seleciona um produto e avanca para o passo 2."""
+        normalized = self._normalize_product_row(product)
+        if normalized is None:
             self.show_dialog("Erro", "Produto invalido para selecao.")
             return
-        self.selected_product = normalized_product
-        pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat_rule_code = normalized_product
+        self.selected_product = normalized
+        pid, name, stock, price, cost, barcode, is_weight, exp, status, _vat = normalized
         unit = "KG" if is_weight else "UN"
-        
-        # Atualizar UI do produto selecionado
-        self.ids.selected_name.text = name
-        self.ids.selected_stock.text = f"Stock: {stock:.1f} {unit}"
-        self.ids.selected_unit.text = f"Unidade: {unit}"
-        self.ids.selected_price.text = f"Preço: {price:.2f} MZN"
-        
-        # Configurar input de quantidade. Uma perda por validade remove todo o
-        # stock: o valor definitivo e aplicado por set_loss_type abaixo.
+        stock = float(stock or 0)
+        if stock <= 0:
+            self.show_dialog("Sem stock", "Este produto nao tem stock disponivel para perda.")
+            self.selected_product = None
+            return
+
+        self.ids.selected_name.text = str(name or "Produto")
+        self.ids.selected_stock.text = f"Stock: {stock:g} {unit}  ·  Preco: {float(price or 0):.2f} MZN"
+        if "qty_hint" in self.ids:
+            self.ids.qty_hint.text = f"de {stock:g} {unit}"
         self.ids.qty_input.disabled = False
-        self.ids.qty_input.text = "1"
         self.ids.qty_input.input_filter = "float" if is_weight else "int"
-        
-        # Um produto identificado como vencido sugere o tipo; o motivo continua
-        # uma escolha controlada, nunca texto livre.
+        self.ids.qty_input.text = "1"
+
+        self._clear_damage_evidence_attempt()
+        self.selected_loss_type = ""
+        self.selected_loss_reason = ""
         if status == "EXPIRADO":
             self.set_loss_type("EXPIRADO", "EXPIRED")
         else:
-            # Limpar tipo e motivo anteriores
-            self.selected_loss_type = ""
-            self.selected_loss_reason = ""
-            self.ids.loss_type_btn.text = "Selecionar Tipo"
-            self.ids.reason_spinner_btn.text = "Selecionar motivo"
-        
+            self._rebuild_reason_buttons()
         self._update_damage_evidence_visibility()
         self.update_summary()
-        
-        # Avançar para step 2
+
         self.current_step = 2
         self.update_ui_state()
-        Clock.schedule_once(self._scroll_loss_form_to_top, 0.35)
 
-    def clear_selection(self):
-        """Limpa seleção e volta para step 1"""
-        self.selected_product = None
+
+    def clear_selection(self, *_args):
+        """Botao TROCAR: volta ao passo 1."""
+        self.clear_form()
         self.current_step = 1
         self.update_ui_state()
-        self.clear_form()
-
-    # ========== TIPO DE PERDA ==========
-    def open_loss_menu(self):
-        """Abre menu de tipos de perda"""
-        if not self.loss_menu:
-            items = []
-            for label, code in LOSS_TYPES:
-                items.append({
-                    "text": label,
-                    "on_release": lambda x=label, y=code: self.set_loss_type(x, y)
-                })
-            self.loss_menu = MDDropdownMenu(
-                caller=self.ids.loss_type_btn,
-                items=items,
-                width_mult=3
-            )
-        self.loss_menu.open()
+        Clock.schedule_once(lambda _dt: self.load_products(0), 0.05)
 
     def set_loss_type(self, label, code):
-        """Define o tipo e preenche automaticamente o motivo de validade."""
+        """1 clique: define o tipo e prepara motivo, quantidade e foto."""
+        if not self.selected_product:
+            return
+        code = str(code or "").strip().upper()
+        previous = self.selected_loss_type
         self.selected_loss_type = code
-        self.ids.loss_type_btn.text = label
+
         qty_input = self.ids.qty_input
-        if code == "EXPIRED" and self.selected_product:
-            stock = max(0.0, float(self.selected_product[2] or 0))
-            is_weight = bool(self.selected_product[6])
-            qty_input.input_filter = "float" if is_weight else "int"
-            qty_input.text = str(stock) if is_weight else str(int(stock))
+        is_weight = bool(self.selected_product[6])
+        stock = max(0.0, float(self.selected_product[2] or 0))
+        qty_input.input_filter = "float" if is_weight else "int"
+
+        if code == "EXPIRED":
+            qty_input.text = f"{stock:g}" if is_weight else str(int(stock))
             qty_input.disabled = True
+            self.selected_loss_reason = EXPIRY_LOSS_REASON
         else:
             qty_input.disabled = False
-        self.selected_loss_reason = EXPIRY_LOSS_REASON if code == "EXPIRED" else ""
-        self.ids.reason_spinner_btn.text = (
-            f"Motivo: {EXPIRY_LOSS_REASON} (automatico)"
-            if code == "EXPIRED"
-            else "Selecionar motivo"
-        )
+            if previous == "EXPIRED" or not (qty_input.text or "").strip():
+                qty_input.text = "1"
+            self.selected_loss_reason = ""
+
+        self._rebuild_reason_buttons()
         self._update_damage_evidence_visibility()
         self.update_summary()
-        if self.current_step == 2:
-            self._show_card(self.ids.loss_form_card, self._loss_form_target_height())
-        
-        if self.loss_menu:
-            self.loss_menu.dismiss()
+        self._refresh_step2_controls()
 
-    def open_reason_menu(self):
-        """Abre a lista de motivos permitidos; validade ja vem preenchida."""
-        if not self.selected_loss_type or self.selected_loss_type == "EXPIRED":
+    def _rebuild_reason_buttons(self):
+        """Motivos como botoes visiveis (1 clique) em vez de menu."""
+        if not hasattr(self, "ids") or "reason_box" not in self.ids:
             return
-        if self.reason_menu:
-            self.reason_menu.dismiss()
-        reasons = LOSS_REASONS.get(self.selected_loss_type, ())
-        self.reason_menu = MDDropdownMenu(
-            caller=self.ids.reason_spinner_btn,
-            items=[
-                {
-                    "text": reason,
-                    "on_release": lambda *_args, value=reason: self.set_loss_reason(value),
-                }
-                for reason in reasons
-            ],
-            width_mult=5,
-        )
-        self.reason_menu.open()
+        box = self.ids.reason_box
+        box.clear_widgets()
+        primary = _theme_color("primary", [0.15, 0.48, 0.82, 1])
+        neutral = _theme_color("card_alt", [0.16, 0.19, 0.24, 1])
+        on_primary = _theme_color("on_primary", [1, 1, 1, 1])
+        text_main = _theme_color("text_primary", [0.9, 0.92, 0.95, 1])
+        muted = _theme_color("text_secondary", [0.55, 0.6, 0.65, 1])
+
+        code = self.selected_loss_type
+        if not code or code == "EXPIRED":
+            msg = "Escolha primeiro o tipo." if not code else f"Automatico: {EXPIRY_LOSS_REASON}"
+            box.add_widget(MDLabel(
+                text=msg, font_size=dp(12), size_hint_y=None, height=dp(24),
+                theme_text_color="Custom", text_color=muted,
+            ))
+            return
+
+        for reason in LOSS_REASONS.get(code, ()):
+            selected = reason == self.selected_loss_reason
+            btn = MDRaisedButton(
+                text=reason,
+                size_hint=(1, None),
+                height=dp(40),
+                font_size=dp(13),
+                radius=[dp(10)],
+                elevation=0,
+                md_bg_color=primary if selected else neutral,
+                theme_text_color="Custom",
+                text_color=on_primary if selected else text_main,
+            )
+            btn.bind(on_release=lambda _b, r=reason: self.set_loss_reason(r))
+            box.add_widget(btn)
 
     def set_loss_reason(self, reason):
         self.selected_loss_reason = str(reason or "").strip()
-        self.ids.reason_spinner_btn.text = self.selected_loss_reason or "Selecionar motivo"
-        if self.reason_menu:
-            self.reason_menu.dismiss()
+        self._rebuild_reason_buttons()
+        self._refresh_step2_controls()
 
-    @staticmethod
-    def _is_product_expired(expiry_date):
-        if not expiry_date:
-            return False
-        text = str(expiry_date).strip()
-        if not text:
-            return False
-        try:
-            return datetime.fromisoformat(text).date() < date.today()
-        except ValueError:
-            for date_format in ("%Y-%m-%d", "%d/%m/%Y"):
-                try:
-                    return datetime.strptime(text, date_format).date() < date.today()
-                except ValueError:
-                    continue
-        return False
+    def change_qty(self, delta):
+        """Botoes - / +."""
+        if not self.selected_product or self.selected_loss_type == "EXPIRED":
+            return
+        is_weight = bool(self.selected_product[6])
+        stock = max(1.0, float(self.selected_product[2] or 0))
+        new_qty = min(max((self.get_qty() or 0) + delta, 1), stock)
+        self.ids.qty_input.text = f"{new_qty:g}" if is_weight else str(int(new_qty))
 
-    # ========== EVIDENCIA INTELIGENTE DE DANO ==========
+    def _refresh_step2_controls(self):
+        """Destaca o tipo escolhido e indica o que falta."""
+        ids = getattr(self, "ids", None)
+        if not ids or "loss_action_bar" not in ids:
+            return
+        primary = _theme_color("primary", [0.15, 0.48, 0.82, 1])
+        neutral = _theme_color("card_alt", [0.16, 0.19, 0.24, 1])
+        for _label, code in LOSS_TYPES:
+            btn = ids.get(f"type_btn_{code}")
+            if btn is not None:
+                btn.md_bg_color = primary if code == self.selected_loss_type else neutral
+
+        missing = []
+        if not self.selected_loss_type:
+            missing.append("tipo")
+        elif not self.selected_loss_reason:
+            missing.append("motivo")
+        qty = self.get_qty() if self.selected_product else None
+        if not qty or qty <= 0:
+            missing.append("quantidade")
+        if self.selected_loss_type == "DAMAGE" and not self.damage_evidence_id:
+            missing.append("foto")
+
+        hint = ids.get("loss_missing_hint")
+        if hint is not None:
+            hint.text = ("Falta: " + ", ".join(missing)) if missing else "Tudo pronto"
+            hint.text_color = (
+                _theme_color("warning", [0.9, 0.65, 0.15, 1]) if missing
+                else _theme_color("success", [0.2, 0.7, 0.3, 1])
+            )
+        submit = ids.get("submit_loss_btn")
+        if submit is not None and not self._saving_loss:
+            submit.opacity = 0.6 if missing else 1.0
+        self.update_summary()
+
+
     def _update_damage_evidence_visibility(self):
         if not hasattr(self, "ids") or "damage_evidence_card" not in self.ids:
             return
         enabled = self.selected_loss_type == "DAMAGE"
-        card = self.ids.damage_evidence_card
-        card.opacity = 1 if enabled else 0
-        card.disabled = not enabled
-        card.height = dp(326) if enabled else 0
+        self.ids.damage_evidence_card.disabled = not enabled
         if not enabled:
             self.close_damage_camera_panel()
             self._clear_damage_evidence_attempt()
-            self.ids.damage_evidence_status.text = ""
+            if "damage_evidence_status" in self.ids:
+                self.ids.damage_evidence_status.text = ""
+        elif not self.damage_evidence_id:
+            self.ids.damage_evidence_status.text = "Foto obrigatoria do dano"
+
 
     def _clear_damage_evidence_attempt(self):
         """Remove da interface uma foto que nao pode servir de evidencia.
@@ -1490,10 +1539,18 @@ class LossesScreen(MDScreen):
         if hide_panel:
             self._set_damage_camera_preview_visible(False)
 
-    def close_damage_camera_panel(self):
-        self.stop_damage_camera(hide_panel=True)
-        self._discard_damage_camera_snapshot()
-        self._set_damage_camera_controls(captured=False)
+    def close_damage_camera_panel(self, *_args):
+        """Fecha o painel flutuante da camera de evidencia."""
+        try:
+            self.close_damage_camera_device(clear_preview=True)
+        except Exception as exc:
+            print(f"[losses] close_damage_camera_device: {exc}")
+        try:
+            self._set_damage_camera_preview_visible(False)
+        except Exception as exc:
+            print(f"[losses] hide damage panel: {exc}")
+        self.damage_camera_running = False
+
 
     def preview_damage_camera_frame(self, _dt):
         if not self.damage_camera_running or not self.damage_camera:
@@ -1637,30 +1694,22 @@ class LossesScreen(MDScreen):
 
     # ========== RESUMO ==========
     def on_qty_change(self, text):
-        """Quando quantidade muda"""
         self.update_summary()
+        self._refresh_step2_controls()
+
 
     def update_summary(self):
-        """Atualiza resumo financeiro"""
-        if not self.selected_product:
-            self.ids.cost_label.text = "0.00 MZN"
-            self.ids.revenue_label.text = "0.00 MZN"
+        label = self.ids.get("loss_impact_label") if self.ids else None
+        if label is None:
             return
-        
-        qty = self.get_qty()
-        if qty is None or qty <= 0:
-            self.ids.cost_label.text = "0.00 MZN"
-            self.ids.revenue_label.text = "0.00 MZN"
+        qty = self.get_qty() if self.selected_product else None
+        if not qty or qty <= 0:
+            label.text = "Custo 0.00 MZN  ·  Receita perdida 0.00 MZN"
             return
-        
         price = float(self.selected_product[3] or 0)
         cost = float(self.selected_product[4] or 0)
-        
-        total_cost = cost * qty
-        total_revenue = price * qty
-        
-        self.ids.cost_label.text = f"{total_cost:.2f} MZN"
-        self.ids.revenue_label.text = f"{total_revenue:.2f} MZN"
+        label.text = f"Custo {cost * qty:.2f} MZN  ·  Receita perdida {price * qty:.2f} MZN"
+
 
     def get_qty(self):
         """Usa todo o stock para validade e a quantidade digitada nos outros tipos."""
@@ -1681,6 +1730,8 @@ class LossesScreen(MDScreen):
             return
         submit_btn.disabled = self._saving_loss
         submit_btn.text = "A PROCESSAR..." if self._saving_loss else "REGISTRAR PERDA"
+        if not self._saving_loss:
+            self._refresh_step2_controls()
 
     # ========== REGISTRO ==========
     def submit_loss(self):
@@ -1692,9 +1743,11 @@ class LossesScreen(MDScreen):
         if self._saving_loss:
             return
 
-        # Valida??es
+        # Validacoes
         if not self.selected_product:
             self.show_dialog("Erro", "Nenhum produto selecionado")
+            self.current_step = 1
+            self.update_ui_state()
             return
 
         if not self.selected_loss_type:
@@ -1835,7 +1888,7 @@ class LossesScreen(MDScreen):
 
         Thread(target=finish_worker, daemon=True).start()
 
-            # ========== LOTE DE PRODUTOS VENCIDOS ==========
+    # ========== LOTE DE PRODUTOS VENCIDOS ==========
     def _check_expired_batch(self, on_ready=None):
         """Verifica, em segundo plano, quantos produtos estão vencidos no catálogo inteiro."""
         if self._expired_batch_checking:
@@ -2199,26 +2252,38 @@ class LossesScreen(MDScreen):
             print(f"Erro ao salvar log de perda: {e}")
 
     def clear_form(self):
-        """Limpa o formulário"""
         self.selected_product = None
         self.selected_loss_type = ""
         self.selected_loss_reason = ""
-        self.ids.loss_type_btn.text = "Selecionar Tipo"
-        self.ids.qty_input.disabled = False
-        self.ids.qty_input.text = ""
-        self.ids.reason_spinner_btn.text = "Selecionar motivo"
-        self.ids.note_input.text = ""
+        ids = self.ids
+        if not ids:
+            return
+        if "qty_input" in ids:
+            ids.qty_input.disabled = False
+            ids.qty_input.text = ""
+        if "qty_hint" in ids:
+            ids.qty_hint.text = ""
+        if "note_input" in ids:
+            ids.note_input.text = ""
+        if "selected_name" in ids:
+            ids.selected_name.text = "Produto Selecionado"
+        if "selected_stock" in ids:
+            ids.selected_stock.text = ""
+        if "search_input" in ids:
+            ids.search_input.text = ""
         self._clear_damage_evidence_attempt()
-        if "damage_evidence_card" in self.ids:
+        try:
             self.close_damage_camera_panel()
-            self.ids.damage_evidence_status.text = ""
-            self._update_damage_evidence_visibility()
-        self.ids.selected_name.text = "Produto Selecionado"
-        self.ids.selected_stock.text = "Stock: --"
-        self.ids.selected_unit.text = "Tipo: --"
-        self.ids.selected_price.text = "Preço: --"
-        self.ids.search_input.text = ""
+        except Exception:
+            pass
+        if "damage_evidence_status" in ids:
+            ids.damage_evidence_status.text = ""
+        if "damage_evidence_card" in ids:
+            ids.damage_evidence_card.disabled = True
+        self._rebuild_reason_buttons()
         self.update_summary()
+        self._refresh_step2_controls()
+
 
     def show_dialog(self, title, message):
         """Mostra mensagem"""

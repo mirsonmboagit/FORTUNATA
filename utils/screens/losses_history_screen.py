@@ -7,10 +7,15 @@ from contextlib import nullcontext
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.graphics import Color, RoundedRectangle
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.modalview import ModalView
 from kivy.uix.widget import Widget
+from kivy.uix.image import Image
 from ui.components.native_widgets import (
     NativeBoxLayout, NativeButton, NativeCard, NativeDialog, NativeFlatButton,
     NativeLabel, NativeScreen,
@@ -18,7 +23,6 @@ from ui.components.native_widgets import (
 from database.provider import get_db
 from utils.screens.reports_screen import DateRangeDialog
 from utils.config.paths import resolve_path, temp_path
-from kivy.uix.image import Image
 
 
 Builder.load_file(str(Path(__file__).with_name("losses_history_screen.kv")))
@@ -28,6 +32,39 @@ def _theme_color(name, fallback):
     app = App.get_running_app()
     tokens = getattr(app, "theme_tokens", {}) if app else {}
     return tokens.get(name, fallback)
+
+
+def _popup_paint(widget, color, radius=12):
+    with widget.canvas.before:
+        Color(rgba=color)
+        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[dp(radius)])
+    def _sync(*_):
+        rect.pos = widget.pos
+        rect.size = widget.size
+    widget.bind(pos=_sync, size=_sync)
+
+
+def _popup_label(text, size=13, color=(0.95, 0.96, 0.98, 1), bold=False, **kwargs):
+    return NativeLabel(
+        text=text,
+        font_size=dp(size),
+        bold=bold,
+        theme_text_color="Custom",
+        text_color=color,
+        **kwargs,
+    )
+
+
+def _popup_button(text, color, width=140, height=40, font_size=12):
+    btn = NativeButton(
+        text=text,
+        size_hint=(None, None),
+        size=(dp(width), dp(height)),
+        font_size=dp(font_size),
+        md_bg_color=color,
+        elevation=0,
+    )
+    return btn
 
 
 LOSS_LABELS = {
@@ -57,6 +94,7 @@ class LossesHistoryScreen(NativeScreen):
         self._row_theme = {}
         self._last_loaded_at = 0.0
         self._exporting_pdf = False
+        self._evidence_popup = None
         self.back_target = "losses"
         super().__init__(**kwargs)
         self._layout_trigger = Clock.create_trigger(self._update_responsive_layout, 0)
@@ -231,10 +269,10 @@ class LossesHistoryScreen(NativeScreen):
         if not self._pending_rows:
             return
         self._row_theme = {
-            "bg_even": _theme_color("surface_alt", [0.98, 0.99, 1, 1]),
-            "bg_odd": _theme_color("card", [1, 1, 1, 1]),
-            "text_primary": _theme_color("text_primary", [0.2, 0.2, 0.2, 1]),
-            "text_secondary": _theme_color("text_secondary", [0.5, 0.5, 0.5, 1]),
+            "bg_even": _theme_color("surface_alt", [0.14, 0.16, 0.20, 1]),
+            "bg_odd": _theme_color("card", [0.16, 0.19, 0.24, 1]),
+            "text_primary": _theme_color("text_primary", [0.95, 0.96, 0.98, 1]),
+            "text_secondary": _theme_color("text_secondary", [0.55, 0.60, 0.66, 1]),
             "danger": _theme_color("danger", [0.85, 0.3, 0.3, 1]),
         }
         token = self._render_token
@@ -313,6 +351,7 @@ class LossesHistoryScreen(NativeScreen):
             return datetime.fromisoformat(str(value))
         except Exception:
             return None
+
     def _create_loss_row(self, row, index, theme=None):
         if isinstance(row, dict):
             created_at = row.get("created_at")
@@ -321,10 +360,10 @@ class LossesHistoryScreen(NativeScreen):
             qty = row.get("qty")
             unit = row.get("unit")
             total_cost = row.get("total_cost")
-            total_price = row.get("total_price")
             reason = row.get("reason")
             created_by = row.get("created_by")
             evidence_id = row.get("evidence_id")
+            note = row.get("note")
         else:
             row = tuple(row)
             if len(row) < 10:
@@ -333,18 +372,17 @@ class LossesHistoryScreen(NativeScreen):
                 created_at, product, movement_type, qty, unit,
                 total_cost, total_price, reason, created_by, evidence_id,
             ) = row[:10]
+            note = None
         theme = theme or {
-            "bg_even": _theme_color("surface_alt", [0.98, 0.99, 1, 1]),
-            "bg_odd": _theme_color("card", [1, 1, 1, 1]),
-            "text_primary": _theme_color("text_primary", [0.2, 0.2, 0.2, 1]),
-            "text_secondary": _theme_color("text_secondary", [0.5, 0.5, 0.5, 1]),
+            "bg_even": _theme_color("surface_alt", [0.14, 0.16, 0.20, 1]),
+            "bg_odd": _theme_color("card", [0.16, 0.19, 0.24, 1]),
+            "text_primary": _theme_color("text_primary", [0.95, 0.96, 0.98, 1]),
+            "text_secondary": _theme_color("text_secondary", [0.55, 0.60, 0.66, 1]),
             "danger": _theme_color("danger", [0.85, 0.3, 0.3, 1]),
         }
-        bg_even = theme["bg_even"]
-        bg_odd = theme["bg_odd"]
+        bg = theme["bg_even"] if index % 2 == 0 else theme["bg_odd"]
         text_primary = theme["text_primary"]
         text_secondary = theme["text_secondary"]
-        bg = bg_even if index % 2 == 0 else bg_odd
 
         try:
             dt = datetime.fromisoformat(str(created_at))
@@ -376,64 +414,36 @@ class LossesHistoryScreen(NativeScreen):
         )
 
         line.add_widget(NativeLabel(
-            text=date_str,
-            size_hint_x=date_hint,
-            halign="left",
-            font_size=dp(10),
-            theme_text_color="Custom",
-            text_color=text_secondary,
+            text=date_str, size_hint_x=date_hint, halign="left", font_size=dp(10),
+            theme_text_color="Custom", text_color=text_secondary,
         ))
         line.add_widget(NativeLabel(
-            text=str(product),
-            size_hint_x=product_hint,
-            halign="left",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=text_primary,
-            shorten=True,
-            shorten_from="right",
+            text=str(product), size_hint_x=product_hint, halign="left", font_size=dp(11),
+            theme_text_color="Custom", text_color=text_primary, shorten=True, shorten_from="right",
         ))
         line.add_widget(NativeLabel(
-            text=label,
-            size_hint_x=type_hint,
-            halign="center",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=text_secondary,
+            text=label, size_hint_x=type_hint, halign="center", font_size=dp(11),
+            theme_text_color="Custom", text_color=text_secondary,
         ))
         line.add_widget(NativeLabel(
-            text=qty_str,
-            size_hint_x=qty_hint,
-            halign="center",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=text_secondary,
+            text=qty_str, size_hint_x=qty_hint, halign="center", font_size=dp(11),
+            theme_text_color="Custom", text_color=text_secondary,
         ))
         line.add_widget(NativeLabel(
-            text=cost_str,
-            size_hint_x=cost_hint,
-            halign="right",
-            font_size=dp(11),
-            theme_text_color="Custom",
-            text_color=theme["danger"],
+            text=cost_str, size_hint_x=cost_hint, halign="right", font_size=dp(11),
+            theme_text_color="Custom", text_color=theme["danger"],
         ))
         if not self.compact_mode:
             line.add_widget(NativeLabel(
-                text=created_by or "N/A",
-                size_hint_x=user_hint,
-                halign="right",
-                font_size=dp(11),
-                theme_text_color="Custom",
-                text_color=text_secondary,
-                shorten=True,
-                shorten_from="right",
+                text=created_by or "N/A", size_hint_x=user_hint, halign="right", font_size=dp(11),
+                theme_text_color="Custom", text_color=text_secondary, shorten=True, shorten_from="right",
             ))
 
         if movement_type == "DAMAGE" and evidence_id:
             evidence_payload = {
                 "evidence_id": evidence_id,
                 "reason": reason,
-                "note": row.get("note") if isinstance(row, dict) else None,
+                "note": note,
             }
             line.add_widget(NativeFlatButton(
                 text="FOTO",
@@ -445,10 +455,7 @@ class LossesHistoryScreen(NativeScreen):
             line.add_widget(Widget(size_hint_x=evidence_hint))
 
         container = NativeBoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=dp(49),
-            spacing=0,
+            orientation="vertical", size_hint_y=None, height=dp(49), spacing=0,
         )
         container.add_widget(line)
         container.add_widget(Widget(size_hint_y=None, height=dp(1)))
@@ -475,7 +482,12 @@ class LossesHistoryScreen(NativeScreen):
                 preview_path = temp_path("evidence-previews", f"{evidence_id}{suffix}")
                 preview_path.parent.mkdir(parents=True, exist_ok=True)
                 preview_path.write_bytes(data)
-                return {"ok": True, "evidence": evidence, "preview_path": str(preview_path)}
+                return {
+                    "ok": True,
+                    "evidence": evidence,
+                    "evidence_id": evidence_id,
+                    "preview_path": str(preview_path),
+                }
             except Exception as exc:
                 return {"ok": False, "message": f"Nao foi possivel abrir a evidencia: {exc}"}
 
@@ -489,28 +501,159 @@ class LossesHistoryScreen(NativeScreen):
         if not result.get("ok"):
             self._show_simple_dialog("Evidencia", result.get("message") or "Falha ao abrir evidencia.")
             return
-        content = NativeBoxLayout(orientation="vertical", spacing=dp(8), padding=dp(6))
-        content.add_widget(Image(
-            source=result["preview_path"], allow_stretch=True, keep_ratio=True,
-            size_hint_y=None, height=dp(230),
-        ))
-        content.add_widget(NativeLabel(
-            text=f"Motivo registado: {(row or {}).get('reason') or '—'}",
-            size_hint_y=None, height=dp(24), font_size=dp(11),
-        ))
+
+        BG = (0.12, 0.14, 0.18, 1)
+        CARD = (0.16, 0.19, 0.24, 1)
+        TXT = (0.95, 0.96, 0.98, 1)
+        MUTED = (0.62, 0.67, 0.75, 1)
+        DANGER = (0.85, 0.22, 0.24, 1)
+        GRAY = (0.28, 0.32, 0.38, 1)
+        PRIMARY = _theme_color("primary", (0.15, 0.48, 0.82, 1))
+
+        evidence_id = result.get("evidence_id") or (row or {}).get("evidence_id")
+        reason = str((row or {}).get("reason") or "—")
         note = str((row or {}).get("note") or "").strip()
-        if note:
-            content.add_widget(NativeLabel(
-                text=f"Observacao: {note}",
-                size_hint_y=None, height=dp(32), font_size=dp(11),
-            ))
-        dialog = NativeDialog(
-            title="Foto do produto danificado",
-            type="custom",
-            content_cls=content,
-            buttons=[NativeFlatButton(text="Fechar", on_release=lambda _x: dialog.dismiss())],
+
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(min(Window.width * 0.9, dp(460)), min(Window.height * 0.82, dp(480))),
+            background="",
+            background_color=[0, 0, 0, 0],
+            overlay_color=[0, 0, 0, 0.6],
+            auto_dismiss=True,
         )
-        dialog.open()
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(16), dp(14)],
+            spacing=dp(10),
+        )
+        _popup_paint(root, BG, radius=14)
+
+        # Header
+        header = BoxLayout(size_hint_y=None, height=dp(28), spacing=dp(8))
+        header.add_widget(_popup_label("Foto do produto danificado", size=16, color=TXT, bold=True))
+        root.add_widget(header)
+
+        # Image card
+        img_shell = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=dp(260),
+            padding=dp(6),
+        )
+        _popup_paint(img_shell, CARD, radius=10)
+        img = Image(
+            source=result["preview_path"],
+            allow_stretch=True,
+            keep_ratio=True,
+        )
+        img_shell.add_widget(img)
+        root.add_widget(img_shell)
+
+        # Meta
+        root.add_widget(_popup_label(
+            f"Motivo: {reason}",
+            size=12, color=MUTED,
+            size_hint_y=None, height=dp(20),
+        ))
+        if note:
+            root.add_widget(_popup_label(
+                f"Observacao: {note}",
+                size=12, color=MUTED,
+                size_hint_y=None, height=dp(20),
+            ))
+
+        # Actions
+        actions = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+        close_btn = _popup_button("FECHAR", GRAY, width=120, height=40, font_size=12)
+        delete_btn = _popup_button("ELIMINAR FOTO", DANGER, width=150, height=40, font_size=12)
+        actions.add_widget(close_btn)
+        actions.add_widget(Widget())
+        actions.add_widget(delete_btn)
+        root.add_widget(actions)
+
+        close_btn.bind(on_release=lambda *_: popup.dismiss())
+        delete_btn.bind(
+            on_release=lambda *_: self._confirm_delete_evidence(popup, evidence_id)
+        )
+
+        popup.add_widget(root)
+        self._evidence_popup = popup
+        popup.open()
+
+    def _confirm_delete_evidence(self, parent_popup, evidence_id):
+        """Confirmacao antes de eliminar a foto."""
+        BG = (0.12, 0.14, 0.18, 1)
+        TXT = (0.95, 0.96, 0.98, 1)
+        MUTED = (0.62, 0.67, 0.75, 1)
+        DANGER = (0.85, 0.22, 0.24, 1)
+        GRAY = (0.28, 0.32, 0.38, 1)
+
+        confirm = ModalView(
+            size_hint=(None, None),
+            size=(min(Window.width * 0.85, dp(380)), dp(200)),
+            background="",
+            background_color=[0, 0, 0, 0],
+            overlay_color=[0, 0, 0, 0.55],
+            auto_dismiss=True,
+        )
+        root = BoxLayout(orientation="vertical", padding=[dp(16), dp(14)], spacing=dp(10))
+        _popup_paint(root, BG, radius=14)
+        root.add_widget(_popup_label("Eliminar foto?", size=16, color=TXT, bold=True,
+                                     size_hint_y=None, height=dp(24)))
+        root.add_widget(_popup_label(
+            "A imagem sera apagada permanentemente da base de dados e do disco.",
+            size=12, color=MUTED, size_hint_y=None, height=dp(48),
+        ))
+        actions = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
+        cancel_btn = _popup_button("CANCELAR", GRAY, width=120, height=40, font_size=12)
+        ok_btn = _popup_button("ELIMINAR", DANGER, width=120, height=40, font_size=12)
+        actions.add_widget(cancel_btn)
+        actions.add_widget(Widget())
+        actions.add_widget(ok_btn)
+        root.add_widget(actions)
+        cancel_btn.bind(on_release=lambda *_: confirm.dismiss())
+        ok_btn.bind(on_release=lambda *_: self._execute_delete_evidence(confirm, parent_popup, evidence_id))
+        confirm.add_widget(root)
+        confirm.open()
+
+    def _execute_delete_evidence(self, confirm_popup, parent_popup, evidence_id):
+        try:
+            confirm_popup.dismiss()
+        except Exception:
+            pass
+
+        def worker():
+            fn = getattr(self.db, "delete_damage_evidence_force", None)
+            if callable(fn):
+                return fn(evidence_id)
+            # fallback: try unbound delete
+            fn2 = getattr(self.db, "delete_damage_evidence", None)
+            if callable(fn2):
+                path = fn2(evidence_id)
+                return {"ok": bool(path), "message": None if path else "Nao foi possivel eliminar."}
+            return {"ok": False, "message": "Metodo de eliminacao indisponivel na BD."}
+
+        def finish():
+            result = worker()
+            Clock.schedule_once(lambda _dt, r=result: self._on_evidence_deleted(r, parent_popup), 0)
+
+        Thread(target=finish, daemon=True).start()
+
+    def _on_evidence_deleted(self, result, parent_popup):
+        try:
+            if parent_popup:
+                parent_popup.dismiss()
+        except Exception:
+            pass
+        if not (result or {}).get("ok"):
+            self._show_simple_dialog(
+                "Erro",
+                (result or {}).get("message") or "Nao foi possivel eliminar a foto.",
+            )
+            return
+        self._show_simple_dialog("Concluido", "Foto eliminada com sucesso.")
+        self.load_losses_table()
 
     def export_losses_pdf(self, *args):
         dialog = DateRangeDialog(database=self.db, callback=self._generate_losses_pdf)

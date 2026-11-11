@@ -99,6 +99,43 @@ function Restore-File {
     Copy-Item -LiteralPath $source -Destination $target -Force
 }
 
+function Backup-Directory {
+    param(
+        [string]$Root,
+        [string]$RelativePath,
+        [string]$BackupRoot
+    )
+
+    $source = Join-Path $Root $RelativePath
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+        return
+    }
+    $target = Join-Path $BackupRoot $RelativePath
+    $parent = Split-Path $target -Parent
+    if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force $parent | Out-Null
+    }
+    Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+}
+
+function Restore-Directory {
+    param(
+        [string]$BackupRoot,
+        [string]$RelativePath,
+        [string]$TargetRoot
+    )
+
+    $source = Join-Path $BackupRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $source -PathType Container)) {
+        return
+    }
+    $target = Join-Path $TargetRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $target)) {
+        New-Item -ItemType Directory -Force $target | Out-Null
+    }
+    Copy-Item -Path (Join-Path $source "*") -Destination $target -Recurse -Force
+}
+
 $sourceRoot = Find-ReleaseRoot $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $InstallDir = Join-Path $env:LOCALAPPDATA "SIGEMPEAdmin"
@@ -128,11 +165,22 @@ foreach ($relative in $jsonConfigs + @("config\.env")) {
     Backup-File -Root $installRoot -RelativePath $relative -BackupRoot $backupRoot
 }
 
+# Os dados operacionais pertencem a instalacao ja existente, nunca ao pacote
+# novo. A base local tambem e preservada para actualizacoes de instalacoes
+# antigas ou mistas.
+$runtimeDirectories = @("data", "logs", "temp", "database")
+foreach ($relative in $runtimeDirectories) {
+    Backup-Directory -Root $installRoot -RelativePath $relative -BackupRoot $backupRoot
+}
+
 Copy-Item -Path (Join-Path $sourceRoot "*") -Destination $installRoot -Recurse -Force
 
 Restore-File -BackupRoot $backupRoot -RelativePath "config\.env" -TargetRoot $installRoot
 foreach ($relative in $jsonConfigs) {
     Merge-JsonConfig -OldPath (Join-Path $backupRoot $relative) -NewPath (Join-Path $installRoot $relative)
+}
+foreach ($relative in $runtimeDirectories) {
+    Restore-Directory -BackupRoot $backupRoot -RelativePath $relative -TargetRoot $installRoot
 }
 
 $exePath = Join-Path $installRoot "SIGEMPEAdmin.exe"
@@ -148,4 +196,4 @@ if ((-not $NoShortcut) -and (Test-Path $exePath)) {
 }
 
 Write-Host "Admin pronto em: $installRoot"
-Write-Host "Base de dados, config\\.env e configuracao da API foram preservadas."
+Write-Host "Dados, base de dados, config\\.env e configuracoes foram preservados."

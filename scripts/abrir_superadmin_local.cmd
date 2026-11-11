@@ -13,7 +13,7 @@ if not exist "%PROJECT_PYTHON%" (
     exit /b 1
 )
 
-"%PROJECT_PYTHON%" scripts\superadmin_terminal.py
+"%PROJECT_PYTHON%" scripts\superadmin_gui.py
 set "SUPERADMIN_EXIT=%ERRORLEVEL%"
 if not "%SUPERADMIN_EXIT%"=="0" (
     echo.

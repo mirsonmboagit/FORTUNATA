@@ -306,6 +306,15 @@ class NativeAdaptiveMixin:
 
         self._adaptive_width_bound = False
 
+        # Alterar ``height`` durante o ``do_layout`` pode provocar outra
+        # passagem de layout no mesmo frame. Em contentores com labels cujo
+        # tamanho tambem depende da largura isso formava um ciclo de eventos
+        # ``-1`` no Clock. As alteracoes adaptativas passam a ser coalescidas
+        # para o proximo frame.
+        self._adaptive_height_event = None
+
+        self._adaptive_width_event = None
+
         self.bind(
 
             adaptive_height=self._apply_adaptive_size,
@@ -332,7 +341,7 @@ class NativeAdaptiveMixin:
 
             if not self._adaptive_height_bound:
 
-                self.bind(minimum_height=lambda instance, value: setattr(instance, "height", value))
+                self.bind(minimum_height=self._queue_adaptive_height)
 
                 self._adaptive_height_bound = True
 
@@ -342,9 +351,65 @@ class NativeAdaptiveMixin:
 
             if not self._adaptive_width_bound:
 
-                self.bind(minimum_width=lambda instance, value: setattr(instance, "width", value))
+                self.bind(minimum_width=self._queue_adaptive_width)
 
                 self._adaptive_width_bound = True
+
+    def _queue_adaptive_height(self, _instance, value):
+
+        if not (self.adaptive_height or self.adaptive_size):
+
+            return
+
+        if abs(float(self.height) - float(value)) < 0.5:
+
+            return
+
+        if self._adaptive_height_event is None:
+
+            self._adaptive_height_event = Clock.schedule_once(
+
+                self._apply_queued_adaptive_height, 0
+
+            )
+
+    def _apply_queued_adaptive_height(self, _dt):
+
+        self._adaptive_height_event = None
+
+        value = float(self.minimum_height)
+
+        if abs(float(self.height) - value) >= 0.5:
+
+            self.height = value
+
+    def _queue_adaptive_width(self, _instance, value):
+
+        if not (self.adaptive_width or self.adaptive_size):
+
+            return
+
+        if abs(float(self.width) - float(value)) < 0.5:
+
+            return
+
+        if self._adaptive_width_event is None:
+
+            self._adaptive_width_event = Clock.schedule_once(
+
+                self._apply_queued_adaptive_width, 0
+
+            )
+
+    def _apply_queued_adaptive_width(self, _dt):
+
+        self._adaptive_width_event = None
+
+        value = float(self.minimum_width)
+
+        if abs(float(self.width) - value) >= 0.5:
+
+            self.width = value
 
 
 
@@ -500,11 +565,13 @@ class NativeLabel(Label):
 
         self._native_auto_text_width = False
 
+        self._native_text_width_event = None
+
         self.bind(font_style=self._apply_font_style, text_color=self._apply_color,
 
-                  theme_text_color=self._apply_color, size=self._sync_text_width,
+                  theme_text_color=self._apply_color, size=self._queue_text_width_sync,
 
-                  shorten=self._sync_text_width, halign=self._sync_text_width)
+                  shorten=self._queue_text_width_sync, halign=self._queue_text_width_sync)
 
         self._apply_font_style()
 
@@ -530,7 +597,11 @@ class NativeLabel(Label):
 
             if self._native_auto_text_width:
 
-                self.text_size = (None, self.text_size[1])
+                desired = (None, self.text_size[1])
+
+                if self.text_size != desired:
+
+                    self.text_size = desired
 
                 self._native_auto_text_width = False
 
@@ -542,7 +613,29 @@ class NativeLabel(Label):
 
             self._native_auto_text_width = True
 
-            self.text_size = (self.width, current[1])
+            desired = (self.width, current[1])
+
+            if current != desired:
+
+                self.text_size = desired
+
+    def _queue_text_width_sync(self, *_args):
+
+        """Evita mudar ``text_size`` no meio de um ``BoxLayout.do_layout``."""
+
+        if self._native_text_width_event is None:
+
+            self._native_text_width_event = Clock.schedule_once(
+
+                self._run_queued_text_width_sync, 0
+
+            )
+
+    def _run_queued_text_width_sync(self, _dt):
+
+        self._native_text_width_event = None
+
+        self._sync_text_width()
 
 
 

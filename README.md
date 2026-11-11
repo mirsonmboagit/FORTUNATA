@@ -1,6 +1,6 @@
 # SIGE MPE
 
-Versao atual: `1.0.0`.
+Versao atual: `1.1.0`.
 
 Sistema de gestao para mercearia/pequeno comercio, com uma aplicacao desktop, uma unica tela de login e base de dados SQLite partilhada. O perfil autenticado abre o painel de administrador ou de gerente, mantendo as respetivas permissoes.
 
@@ -32,7 +32,7 @@ Para desenvolvimento e testes:
 
 ```powershell
 python -m pip install -r requirements-dev.txt
-python -m unittest discover
+python -m pytest -q
 ```
 
 Para empacotamento:
@@ -129,7 +129,7 @@ manter o emissor local a verificar os pedidos recebidos.
 ## Testes
 
 ```powershell
-python -m unittest discover
+python -m pytest -q
 ```
 
 Os testes atuais cobrem partes importantes da base de dados, configuracao, IA e servicos. Antes de novas funcionalidades grandes, vale adicionar testes de fluxo completo para venda, reposicao, perda, relatorio e recibo.

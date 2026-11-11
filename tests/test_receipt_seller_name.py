@@ -23,8 +23,24 @@ class ReceiptSellerNameTests(TemporaryDatabaseTestCase):
             }
         )
 
-        self.assertIn("Foste ajudado por:", receipt)
+        self.assertIn("Atendente:", receipt)
         self.assertIn("Maria Fernanda Mboa", receipt)
+
+    def test_receipt_includes_optional_store_contact_data(self):
+        receipt = format_receipt_text(
+            {
+                "store_name": "Loja Teste",
+                "receipt_nuit": "401234567",
+                "receipt_address": "Bairro Central, Maputo",
+                "receipt_street": "Av. 24 de Julho, 100",
+                "receipt_phone": "+258 84 000 0000",
+            }
+        )
+
+        self.assertIn("NUIT: 401234567", receipt)
+        self.assertIn("Endereco: Bairro Central, Maputo", receipt)
+        self.assertIn("Av./Rua: Av. 24 de Julho, 100", receipt)
+        self.assertIn("Telefone: +258 84 000 0000", receipt)
 
 
     def test_receipt_has_one_reference_and_one_tax_breakdown(self):

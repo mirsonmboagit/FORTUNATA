@@ -133,11 +133,20 @@ foreach ($file in @("config\api.json", "config\app.json", "config\service.json",
 # gera config\.env e cria uma base vazia no destino.
 $releaseAppConfigPath = Join-Path $release "config\app.json"
 $releaseAppConfig = Get-Content $releaseAppConfigPath -Raw | ConvertFrom-Json
-$releaseAppConfig.app_env = "production"
-$releaseAppConfig.db_mode = "local"
-$releaseAppConfig.db_path = "database/inventory.db"
-$releaseAppConfig.api_base_url = "http://127.0.0.1:8080"
-$releaseAppConfig.api_key = ""
+$productionConfig = [ordered]@{
+    app_env = "production"
+    db_mode = "local"
+    db_path = "database/inventory.db"
+    api_base_url = "http://127.0.0.1:8080"
+    api_key = ""
+}
+foreach ($entry in $productionConfig.GetEnumerator()) {
+    if ($null -eq $releaseAppConfig.PSObject.Properties[$entry.Key]) {
+        $releaseAppConfig | Add-Member -NotePropertyName $entry.Key -NotePropertyValue $entry.Value
+    } else {
+        $releaseAppConfig.($entry.Key) = $entry.Value
+    }
+}
 $releaseAppConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $releaseAppConfigPath
 
 $nssmCandidates = @(

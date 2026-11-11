@@ -44,6 +44,24 @@ from ui.components.admin_home_dashboard import SalesTrendChart
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton
 from ui.components.tooltip_widgets import TooltipFloatingActionButton, set_attention_shake
 from utils.core.formatters import format_compact_number, format_display_value, format_money
+try:
+    from utils.core.i18n import (
+        translate as t,
+        translate_text,
+        normalize_language,
+        apply_language_to_widget_tree,
+        DEFAULT_LANGUAGE,
+    )
+except Exception:
+    def t(key, language=None, default=None, **kw):
+        return default if default is not None else key
+    def translate_text(text, language=None):
+        return str(text or "")
+    def normalize_language(value, fallback="pt"):
+        return str(value or fallback)
+    def apply_language_to_widget_tree(root, language=None):
+        return 0
+    DEFAULT_LANGUAGE = "pt"
 
 
 Builder.load_file(os.path.join(CURRENT_DIR, "admin_home_screen.kv"))
@@ -157,7 +175,7 @@ class AdminLogsDialog:
             if widget is not None:
                 widget.disabled = self._loading
         if self.refresh_button:
-            self.refresh_button.text = "A CARREGAR..." if self._loading else "ATUALIZAR"
+            self.refresh_button.text = translate_text("A CARREGAR...", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None) if self._loading else translate_text("ACTUALIZAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None)
 
     def close(self, *_args):
         """Fecha o painel de forma segura, inclusive durante uma consulta."""
@@ -188,8 +206,23 @@ class AdminLogsDialog:
     @classmethod
     def _translate_details(cls, details):
         parts = [part.strip() for part in str(details or "").split("|")]
-        translated = [cls._DETAIL_LABELS.get(part.upper(), part) for part in parts]
-        return " | ".join(part for part in translated if part)
+        labels = []
+        for part in parts:
+            if not part:
+                continue
+            base = cls._DETAIL_LABELS.get(part.upper(), part)
+            try:
+                from kivy.app import App
+                app = App.get_running_app()
+                lang = getattr(app, "ui_language", None) if app else None
+            except Exception:
+                lang = None
+            try:
+                labels.append(translate_text(base, lang))
+            except Exception:
+                labels.append(base)
+        return " | ".join(labels)
+
 
     def _set_role_filter(self, role):
         self.role_filter = str(role or "").strip().lower()
@@ -280,7 +313,7 @@ class AdminLogsDialog:
         )
 
         content.add_widget(MDLabel(
-            text="Consulte a atividade da loja com filtros rápidos por data, utilizador e perfil.",
+            text=translate_text("Consulte a atividade da loja com filtros rapidos por data, utilizador e perfil.", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             font_style="Caption",
             size_hint_y=None,
             height=dp(26),
@@ -299,18 +332,18 @@ class AdminLogsDialog:
         user_shell, self.user_field = self._build_filter_input("Utilizador", "Todos", 0.28)
         self.user_field.bind(on_text_validate=lambda *_args: self.load_logs())
         self.today_button = MDFlatButton(
-            text="HOJE", size_hint_x=None, width=dp(68), radius=[dp(10)],
+            text=translate_text("HOJE", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), size_hint_x=None, width=dp(68), radius=[dp(10)],
             line_color=tokens.get("outline", [0.35, 0.40, 0.50, 1]), line_width=1,
             on_release=lambda *_args: self.use_today(),
         )
         self.clear_button = MDFlatButton(
-            text="LIMPAR", size_hint_x=None, width=dp(76), radius=[dp(10)],
+            text=translate_text("LIMPAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), size_hint_x=None, width=dp(76), radius=[dp(10)],
             theme_text_color="Custom", text_color=tokens.get("danger", [0.82, 0.24, 0.28, 1]),
             line_color=tokens.get("danger", [0.82, 0.24, 0.28, 1]), line_width=1,
             on_release=lambda *_args: self.confirm_clear_logs(),
         )
         self.refresh_button = MDRaisedButton(
-            text="ATUALIZAR",
+            text=translate_text("ACTUALIZAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             size_hint_x=None,
             width=dp(116),
             radius=[dp(10)],
@@ -334,7 +367,7 @@ class AdminLogsDialog:
             height=dp(36),
         )
         role_row.add_widget(MDLabel(
-            text="Perfil:",
+            text=translate_text("Perfil:", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             font_style="Caption",
             size_hint_x=None,
             width=dp(46),
@@ -356,7 +389,7 @@ class AdminLogsDialog:
         self._set_role_filter("")
 
         self.status_label = MDLabel(
-            text="A preparar logs recentes...",
+            text=translate_text("A preparar logs recentes...", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             font_style="Caption",
             size_hint_y=None,
             height=dp(20),
@@ -371,17 +404,17 @@ class AdminLogsDialog:
         content.add_widget(self.logs_list)
 
         self.dialog = MDDialog(
-            title="Atividade recente",
+            title=translate_text("Atividade recente", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             type="custom",
             content_cls=content,
             size_hint=(0.82, 0.82),
             buttons=[
                 MDFlatButton(
-                    text="FECHAR", size_hint_x=None, width=dp(92), radius=[dp(10)],
+                    text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), size_hint_x=None, width=dp(92), radius=[dp(10)],
                     on_release=self.close,
                 ),
                 MDRaisedButton(
-                    text="ATUALIZAR", size_hint_x=None, width=dp(116), radius=[dp(10)], elevation=1,
+                    text=translate_text("ACTUALIZAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), size_hint_x=None, width=dp(116), radius=[dp(10)], elevation=1,
                     md_bg_color=tokens.get("primary", [0.10, 0.35, 0.65, 1]),
                     theme_text_color="Custom",
                     text_color=tokens.get("on_primary", [1, 1, 1, 1]),
@@ -427,7 +460,7 @@ class AdminLogsDialog:
             self.clear_logs()
 
         confirmation = MDDialog(
-            title="Eliminar registos?",
+            title=translate_text("Eliminar registos?", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             text="Esta ação elimina permanentemente todos os logs visíveis para esta loja. Não pode ser desfeita.",
             size_hint=(0.68, None),
             height=dp(230),
@@ -604,6 +637,10 @@ class AdminLogsDialog:
             str(action or "").upper(),
             str(action or "Ação do sistema").replace("_", " ").capitalize(),
         )
+        try:
+            action_text = translate_text(action_text, getattr(self, "_ui_language", None) or getattr(App.get_running_app(), "ui_language", None))
+        except Exception:
+            pass
         header = MDBoxLayout(orientation="horizontal", size_hint_y=None, height=dp(20))
         header.add_widget(MDLabel(
             text=f"{username or 'Sistema'} ({self._role_label(role)}) · {action_text}",
@@ -651,6 +688,10 @@ class RecycledLogCard(RecycleDataViewBehavior, MDBoxLayout):
                 str(action or "").upper(),
                 str(action or "Ação do sistema").replace("_", " ").capitalize(),
             )
+            try:
+                action_text = translate_text(action_text, getattr(App.get_running_app(), "ui_language", None))
+            except Exception:
+                pass
             header.children[1].text = f"{username or 'Sistema'} ({controller._role_label(role)}) · {action_text}"
             header.children[0].text = controller._format_timestamp(timestamp)
             card.children[0].text = " ".join(controller._translate_details(details or role or "").split())[:180] or "Sem detalhes adicionais."
@@ -719,6 +760,110 @@ class AdminHomeScreen(MDScreen):
         self._layout_mode = "wide"
         self._chart_collapsed = False
         super().__init__(**kwargs)
+        try:
+            app = App.get_running_app()
+            # A aplicação é a única fonte de verdade para a língua. Não use
+            # preferências locais deste painel, pois elas deixavam o login e
+            # as demais telas em idiomas diferentes.
+            code = getattr(app, "language", None) if app else None
+            self._ui_language = normalize_language(code or DEFAULT_LANGUAGE)
+            if app is not None:
+                setattr(app, "ui_language", self._ui_language)
+        except Exception:
+            self._ui_language = DEFAULT_LANGUAGE
+
+    def apply_translations(self):
+        """Actualiza todos os textos visiveis para o idioma activo da app."""
+        app = App.get_running_app()
+        lang = normalize_language(
+            getattr(app, "language", None)
+            or getattr(self, "_ui_language", None)
+            or DEFAULT_LANGUAGE
+        )
+        self._ui_language = lang
+        if app is not None:
+            setattr(app, "ui_language", lang)
+
+        # Propriedades StringProperty
+        self.home_title = translate_text("Painel do Administrador", lang)
+        self.home_subtitle = translate_text("Resumo da loja", lang)
+        loading_variants = {
+            "A carregar dados...", "Loading data...", "Chargement des donnees...",
+            "Cargando datos...", "正在加载数据...", "Daten werden geladen...",
+        }
+        if not (self.status_text or "").strip() or self.status_text in loading_variants:
+            self.status_text = translate_text("A carregar dados...", lang)
+
+        try:
+            self.chart_metric_text = self._chart_metric_label()
+        except Exception:
+            self.chart_metric_text = translate_text("Faturacao", lang)
+        period_src = {
+            7: "7 dias", 14: "14 dias", 30: "30 dias", 90: "90 dias",
+        }.get(int(getattr(self, "_chart_period_days", 30) or 30), "30 dias")
+        self.chart_period_text = translate_text(period_src, lang)
+
+        # Percorre toda a arvore (KV + menus dinamicos)
+        try:
+            apply_language_to_widget_tree(self, lang)
+        except Exception as exc:
+            print(f"[admin_home] apply_language_to_widget_tree: {exc}")
+        try:
+            self._localize_sales_chart()
+        except Exception:
+            pass
+
+        # Garantir botoes do hero (podem ter sido recriados)
+        ids = getattr(self, "ids", None) or {}
+        for btn_id, src_text in (
+            ("hero_summary_btn", "Resumo"),
+            ("hero_access_btn", "Acessos"),
+            ("hero_add_button", "Adicionar"),
+            ("hero_alerts_caption", "Alertas prioritarios"),
+            ("hero_highlights_caption", "Destaques"),
+            ("chart_title_label", "Desempenho"),
+            ("chart_launch_title", "Ver grafico de desempenho"),
+            ("summary_panel_title", "Resumo do dia"),
+            ("access_panel_title", "Acessos rapidos"),
+            ("insights_panel_title", "Destaques"),
+        ):
+            w = ids.get(btn_id)
+            if w is not None and hasattr(w, "text"):
+                w.text = translate_text(src_text, lang)
+
+        for fab_id, src_text in (
+            ("ai_button", "Alertas com IA"),
+            ("recommendations_button", "Recomendacoes com IA"),
+            ("ai_toggle_button", "Mostrar/ocultar atalhos operacionais"),
+        ):
+            w = ids.get(fab_id)
+            if w is not None and hasattr(w, "hint_text"):
+                w.hint_text = translate_text(src_text, lang)
+
+
+
+    def _lang(self):
+        """Idioma activo da UI."""
+        app = App.get_running_app()
+        return normalize_language(
+            (getattr(app, "language", None) if app else None)
+            or getattr(self, "_ui_language", None)
+            or DEFAULT_LANGUAGE
+        )
+
+    def _tx(self, text, **kwargs):
+        """Atalho: traduz texto livre no idioma activo."""
+        try:
+            out = translate_text(text, self._lang())
+        except Exception:
+            out = str(text or "")
+        if kwargs:
+            try:
+                out = out.format(**kwargs)
+            except Exception:
+                pass
+        return out
+
 
     def _get_intelligence(self):
         if self._intelligence is None:
@@ -742,6 +887,10 @@ class AdminHomeScreen(MDScreen):
         self._init_badge(0)
         self._render_dashboard()
         Clock.schedule_once(lambda _dt: self._bind_section_buttons(), 0)
+        try:
+            self.apply_translations()
+        except Exception:
+            pass
 
     def _bind_theme_updates(self):
         app = App.get_running_app()
@@ -766,6 +915,10 @@ class AdminHomeScreen(MDScreen):
         Clock.schedule_once(lambda _dt: self._render_dashboard(), 0)
 
     def on_enter(self):
+        try:
+            self.apply_translations()
+        except Exception:
+            pass
         self._bind_keyboard_shortcuts()
         self._start_clock()
         self._start_ai_polling()
@@ -792,12 +945,21 @@ class AdminHomeScreen(MDScreen):
         self._layout_trigger()
 
     def _chart_metric_options(self):
+        # labels em PT (fonte); traduzidos no menu e no botao
         return [
             ("revenue", "Faturacao"),
             ("sales_count", "Qtd. vendas"),
             ("stock_flow", "Fluxo stock"),
             ("top_products", "Produtos mais vendidos"),
         ]
+
+    def _chart_metric_label(self, metric=None):
+        metric = metric or getattr(self, "_chart_metric", "revenue")
+        for key, label in self._chart_metric_options():
+            if key == metric:
+                return self._tx(label)
+        return self._tx("Faturacao")
+
 
     def _chart_period_options(self):
         return [
@@ -810,10 +972,14 @@ class AdminHomeScreen(MDScreen):
 
     def show_chart_metric_menu(self, caller):
         if self._chart_metric_menu:
-            self._chart_metric_menu.dismiss()
+            try:
+                self._chart_metric_menu.dismiss()
+            except Exception:
+                pass
+            self._chart_metric_menu = None
         items = [
             {
-                "text": label,
+                "text": self._tx(label),
                 "on_release": lambda key=key, text=label: self._set_chart_metric(key, text),
             }
             for key, label in self._chart_metric_options()
@@ -821,12 +987,13 @@ class AdminHomeScreen(MDScreen):
         self._chart_metric_menu = MDDropdownMenu(caller=caller, items=items, width_mult=3)
         self._chart_metric_menu.open()
 
+
     def show_chart_period_menu(self, caller):
         if self._chart_period_menu:
             self._chart_period_menu.dismiss()
         items = [
             {
-                "text": label,
+                "text": self._tx(label),
                 "on_release": lambda days=days, text=label: self._set_chart_period(days, text),
             }
             for days, label in self._chart_period_options()
@@ -836,18 +1003,29 @@ class AdminHomeScreen(MDScreen):
 
     def _set_chart_metric(self, metric, label):
         if self._chart_metric_menu:
-            self._chart_metric_menu.dismiss()
+            try:
+                self._chart_metric_menu.dismiss()
+            except Exception:
+                pass
             self._chart_metric_menu = None
         self._chart_metric = metric
-        self.chart_metric_text = label
-        self._render_dashboard()
+        # label pode vir em PT (fonte) — sempre traduzir para o idioma activo
+        self.chart_metric_text = self._tx(label) if label else self._chart_metric_label(metric)
+        try:
+            self._request_chart_render()
+        except Exception:
+            try:
+                self._render_chart(getattr(self, "_last_snapshot", None) or {})
+            except Exception:
+                pass
+
 
     def _set_chart_period(self, days, label):
         if self._chart_period_menu:
             self._chart_period_menu.dismiss()
             self._chart_period_menu = None
         self._chart_period_days = int(days or 30)
-        self.chart_period_text = label
+        self.chart_period_text = self._tx(label) if label else label
         if self._snapshot_loading:
             self._snapshot_token += 1
             self._snapshot_loading = False
@@ -1115,12 +1293,12 @@ class AdminHomeScreen(MDScreen):
 
         items = [
             {"text": "Adicionar produto", "on_release": lambda: self._overflow_action(self.add_product)},
-            {"text": "Atualizar painel", "on_release": lambda: self._overflow_action(self.refresh_home)},
+            {"text": translate_text("Atualizar painel", getattr(self, "_ui_language", None)), "on_release": lambda: self._overflow_action(self.refresh_home)},
             {"text": "Ver grafico", "on_release": lambda: self._overflow_action(self.open_chart_modal)},
-            {"text": "Produtos", "on_release": lambda: self._overflow_action(lambda *a: self.open_products_module() if hasattr(self, "open_products_module") else self._nav_safe("admin"))},
+            {"text": translate_text("Produtos", getattr(self, "_ui_language", None)), "on_release": lambda: self._overflow_action(lambda *a: self.open_products_module() if hasattr(self, "open_products_module") else self._nav_safe("admin"))},
             {"text": "Reposicao", "on_release": lambda: self._overflow_action(lambda *a: self.open_stock_module())},
-            {"text": "Perdas", "on_release": lambda: self._overflow_action(lambda *a: self.open_losses_module())},
-            {"text": "Definicoes", "on_release": lambda: self._overflow_action(lambda *a: self.go_to_settings())},
+            {"text": translate_text("Perdas", getattr(self, "_ui_language", None)), "on_release": lambda: self._overflow_action(lambda *a: self.open_losses_module())},
+            {"text": translate_text("Definicoes", getattr(self, "_ui_language", None)), "on_release": lambda: self._overflow_action(lambda *a: self.go_to_settings())},
             {"text": "Alertas com IA", "on_release": lambda: self._overflow_action(lambda *a: self.open_ai_menu())},
             {"text": "Recomendacoes", "on_release": lambda: self._overflow_action(lambda *a: self.show_ai_recommendations())},
         ]
@@ -1190,7 +1368,7 @@ class AdminHomeScreen(MDScreen):
             on_release=lambda x: self.show_chart_period_menu(x),
         )
         close_btn = MDFlatButton(
-            text="FECHAR",
+            text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None),
             size_hint=(None, None),
             size=(dp(90), dp(34)),
             on_release=lambda *_: self._close_chart_modal(),
@@ -1467,6 +1645,11 @@ class AdminHomeScreen(MDScreen):
         self._render_alert_cards(snapshot.get("alerts") or {})
         self._render_insights(snapshot)
         self._schedule_chart_render(snapshot)
+        try:
+            apply_language_to_widget_tree(self, self._lang())
+        except Exception:
+            pass
+
 
     def _schedule_chart_render(self, snapshot):
         sales_series = snapshot.get("sales_series") or []
@@ -1500,40 +1683,134 @@ class AdminHomeScreen(MDScreen):
             self._ensure_chart_widgets()
         if self._sales_chart:
             if self._snapshot_error:
-                self._sales_chart.set_state_text("Falha ao carregar indicadores.")
+                self._sales_chart.set_state_text(self._tx("Falha ao carregar indicadores."))
             elif self._snapshot_loading and not snapshot:
-                self._sales_chart.set_state_text("Indicadores a atualizar em segundo plano.")
+                self._sales_chart.set_state_text(self._tx("Indicadores a atualizar em segundo plano."))
             elif not snapshot:
-                self._sales_chart.set_state_text("Indicadores visuais serao carregados em segundo plano.")
+                self._sales_chart.set_state_text(self._tx("Indicadores visuais serao carregados em segundo plano."))
             else:
-                self._sales_chart.set_dashboard(
+                # Titulo do grafico no idioma activo (ex.: "Faturacao Geral" -> "Overall revenue")
+                metric_title = self._chart_metric_label()
+                geral = self._tx("Geral")
+                title = f"{metric_title} {geral}".strip() if metric_title else self._tx("Faturacao Geral")
+                kwargs = dict(
                     metric=self._chart_metric,
                     period_label=self.chart_period_text,
                     sales_series=snapshot.get("sales_series") or [],
                     stock_series=snapshot.get("stock_flow_series") or [],
                     top_products=snapshot.get("top_products") or [],
                 )
+                # APIs mais recentes do SalesTrendChart aceitam title / metric_label
+                for key, val in (
+                    ("title", title),
+                    ("metric_label", metric_title),
+                    ("metric_title", title),
+                    ("header_title", title),
+                ):
+                    kwargs[key] = val
+                try:
+                    self._sales_chart.set_dashboard(**kwargs)
+                except TypeError:
+                    # Versao antiga: so metric + period + series
+                    self._sales_chart.set_dashboard(
+                        metric=self._chart_metric,
+                        period_label=self.chart_period_text,
+                        sales_series=snapshot.get("sales_series") or [],
+                        stock_series=snapshot.get("stock_flow_series") or [],
+                        top_products=snapshot.get("top_products") or [],
+                    )
+                self._localize_sales_chart(title=title, metric_label=metric_title)
+
+    def _localize_sales_chart(self, title=None, metric_label=None):
+        """Forca traducao dos labels internos do SalesTrendChart (Faturacao Geral, etc.)."""
+        chart = getattr(self, "_sales_chart", None)
+        if chart is None:
+            return
+        lang = self._lang()
+        # Propriedades comuns
+        for attr, value in (
+            ("title", title),
+            ("header_title", title),
+            ("metric_title", title),
+            ("metric_label", metric_label),
+            ("title_text", title),
+        ):
+            if value and hasattr(chart, attr):
+                try:
+                    setattr(chart, attr, value)
+                except Exception:
+                    pass
+        # Labels hardcoded no widget
+        replacements = {
+            "Faturacao Geral": title or self._tx("Faturacao Geral"),
+            "Faturação Geral": title or self._tx("Faturacao Geral"),
+            "Quantidade de Vendas": self._tx("Quantidade de Vendas"),
+            "Fluxo de Stock": self._tx("Fluxo stock"),
+            "Fluxo stock": self._tx("Fluxo stock"),
+            "Produtos mais vendidos": self._tx("Produtos mais vendidos"),
+            "Faturacao": metric_label or self._tx("Faturacao"),
+            "Faturação": metric_label or self._tx("Faturacao"),
+            "Vendas": self._tx("Vendas"),
+        }
+        # Subtitulo tipo "30 Days | Faturacao: 5 180.00 MZN"
+        def walk(widget):
+            if widget is None:
+                return
+            for attr in ("text", "hint_text", "title"):
+                if not hasattr(widget, attr):
+                    continue
+                try:
+                    value = getattr(widget, attr)
+                except Exception:
+                    continue
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                new_value = value
+                for src, dst in replacements.items():
+                    if src and src in new_value and dst:
+                        new_value = new_value.replace(src, dst)
+                # Traduzir fragmentos restantes via catalogo
+                if new_value == value:
+                    try:
+                        translated = translate_text(value, lang)
+                        if translated != value:
+                            new_value = translated
+                    except Exception:
+                        pass
+                if new_value != value:
+                    try:
+                        setattr(widget, attr, new_value)
+                    except Exception:
+                        pass
+            for child in list(getattr(widget, "children", []) or []):
+                walk(child)
+
+        try:
+            walk(chart)
+        except Exception:
+            pass
 
     def _render_header(self, snapshot):
         app = App.get_running_app()
         username = (getattr(app, "current_user", None) or "Administrador").strip() or "Administrador"
         first_name = username.split()[0]
         hour = datetime.now().hour
-        greeting = "Bom dia" if hour < 12 else ("Boa tarde" if hour < 18 else "Boa noite")
+        greeting_src = "Bom dia" if hour < 12 else ("Boa tarde" if hour < 18 else "Boa noite")
+        greeting = self._tx(greeting_src)
         self.home_title = f"{greeting}, {first_name}"
         self.home_subtitle = self._build_header_subtitle(snapshot)
 
         if self._snapshot_error:
-            self.status_text = "Resumo indisponivel no momento."
+            self.status_text = self._tx("Resumo indisponivel no momento.")
         elif self._snapshot_loading and not snapshot:
-            self.status_text = "A atualizar dados..."
+            self.status_text = self._tx("A atualizar dados...")
         else:
             summary = snapshot.get("summary") or {}
             alerts = snapshot.get("alerts") or {}
             total_alerts = sum(int(value or 0) for value in (alerts.get("counts") or {}).values())
             # Linha de estado no header: subtítulo operacional + totais
             sub = (self.home_subtitle or "").strip()
-            totals = f"Hoje: {_format_mzn(summary.get('revenue_today'))}  ·  Alertas: {total_alerts}"
+            totals = f"{self._tx('Hoje')}: {_format_mzn(summary.get('revenue_today'))}  ·  {self._tx('Alertas')}: {total_alerts}"
             if sub and sub not in ("Vendas, stock e alertas.",):
                 # Preferir subtítulo rico; se for muito longo, prioriza alertas
                 if len(sub) > 72:
@@ -1550,9 +1827,9 @@ class AdminHomeScreen(MDScreen):
             pass
     def _build_header_subtitle(self, snapshot):
         if self._snapshot_error:
-            return "Nao foi possivel atualizar os dados agora."
+            return self._tx("Nao foi possivel atualizar os dados agora.")
         if self._snapshot_loading and not snapshot:
-            return "Vendas, stock e alertas."
+            return self._tx("Vendas, stock e alertas.")
 
         summary = snapshot.get("summary") or {}
         alerts = snapshot.get("alerts") or {}
@@ -1572,12 +1849,12 @@ class AdminHomeScreen(MDScreen):
         if expired > 0 or critical > 0 or out_of_stock > 0:
             parts = []
             if expired > 0:
-                parts.append(f"{expired} itens vencidos")
+                parts.append(f"{expired} {self._tx('itens vencidos')}")
             if critical > 0:
                 parts.append(f"{critical} produtos com stock critico")
             if out_of_stock > 0:
-                parts.append(f"{out_of_stock} produtos esgotados")
-            return ", ".join(parts) + " requerem atencao."
+                parts.append(f"{out_of_stock} {self._tx('produtos esgotados')}")
+            return ", ".join(parts) + " " + self._tx("requerem atencao.")
         if expiring > 0:
             return f"Ha {expiring} produtos perto do vencimento."
         if direction == "above" and delta_percent is not None:
@@ -1607,7 +1884,7 @@ class AdminHomeScreen(MDScreen):
 
         specs = [
             ("Faturacao Hoje", _format_mzn(revenue_today), "Receita atual do dia", "cash-multiple", "primary", self.show_today_revenue),
-            ("Vendas Hoje", _format_value(sales_today), "Resumo do dia", "cash-register", "success", self.open_today_sales),
+            ("Vendas Hoje", _format_value(sales_today), translate_text("Resumo do dia", getattr(self, "_ui_language", None)), "cash-register", "success", self.open_today_sales),
             ("Acoes de utilizadores", _format_value(user_logs_today), "Registos de hoje", "text-box-search-outline", "info", self.open_user_logs),
             ("Alertas de fraude", _format_value(fraud_alerts), "Sinais a verificar", "shield-alert-outline", "danger" if fraud_alerts else "success", self.show_operational_alerts_banner),
         ]
@@ -1685,12 +1962,12 @@ class AdminHomeScreen(MDScreen):
             return
 
         actions = [
-            ("Produtos", "Catalogo", "package-variant", "primary", self.go_to_products),
-            ("Reposicao", "Entrada de stock", "package-variant-plus", "warning", self.open_stock_module),
-            ("Perdas", "Quebras e ajustes", "alert-circle-outline", "danger", self.open_losses_module),
-            ("Relatorios", "Relatorios e PDF", "chart-box-outline", "info", self.open_reports),
-            ("Definicoes", "Sistema", "cog-outline", "primary", self.go_to_settings),
-            ("Utilizadores", "Acessos", "account-key-outline", "primary", self.open_users_module),
+            (translate_text("Produtos", getattr(self, "_ui_language", None)), "Catalogo", "package-variant", "primary", self.go_to_products),
+            ("Reposicao", translate_text("Entrada de stock", getattr(self, "_ui_language", None)), "package-variant-plus", "warning", self.open_stock_module),
+            (translate_text("Perdas", getattr(self, "_ui_language", None)), translate_text("Quebras e ajustes", getattr(self, "_ui_language", None)), "alert-circle-outline", "danger", self.open_losses_module),
+            (translate_text("Relatorios", getattr(self, "_ui_language", None)), "Relatorios e PDF", "chart-box-outline", "info", self.open_reports),
+            (translate_text("Definicoes", getattr(self, "_ui_language", None)), "Sistema", "cog-outline", "primary", self.go_to_settings),
+            (translate_text("Utilizadores", getattr(self, "_ui_language", None)), "Acessos", "account-key-outline", "primary", self.open_users_module),
         ]
 
         if grid is not None and len(grid.children) == 0:
@@ -1794,13 +2071,13 @@ class AdminHomeScreen(MDScreen):
 
         if int(counts.get("expired") or 0) > 0:
             first = expired_items[0] if expired_items else {}
-            cards.append(("Produtos vencidos", int(counts.get("expired") or 0), "danger", "calendar-remove-outline", f"{first.get('name', 'Itens expirados')} exigem retirada imediata.", self.show_expired_products_banner))
+            cards.append((self._tx("Produtos vencidos"), int(counts.get("expired") or 0), "danger", "calendar-remove-outline", f"{first.get('name', self._tx('Itens expirados'))} {self._tx('exigem retirada imediata.')}", self.show_expired_products_banner))
         if int(counts.get("critical_stock") or 0) > 0:
             first = low_stock_items[0] if low_stock_items else {}
-            cards.append(("Stock critico", int(counts.get("critical_stock") or 0), "warning", "alert-decagram-outline", f"{first.get('name', 'Reposicao')} esta com cobertura curta de stock.", self.show_stock_critical_banner))
+            cards.append((translate_text("Stock critico", getattr(self, "_ui_language", None)), int(counts.get("critical_stock") or 0), "warning", "alert-decagram-outline", f"{first.get('name', 'Reposicao')} esta com cobertura curta de stock.", self.show_stock_critical_banner))
         if int(counts.get("out_of_stock") or 0) > 0:
             first = out_of_stock_items[0] if out_of_stock_items else {}
-            cards.append(("Produtos esgotados", int(counts.get("out_of_stock") or 0), "danger", "close-octagon-outline", f"{first.get('name', 'Ha produtos')} ja estao sem disponibilidade.", self.show_out_of_stock_banner))
+            cards.append((self._tx("Produtos esgotados"), int(counts.get("out_of_stock") or 0), "danger", "close-octagon-outline", f"{first.get('name', self._tx('Ha produtos'))} {self._tx('ja estao sem disponibilidade.')}", self.show_out_of_stock_banner))
         if int(counts.get("expiring_soon") or 0) > 0:
             first = expiring_items[0] if expiring_items else {}
             day_text = first.get("days_left")
@@ -1988,7 +2265,7 @@ class AdminHomeScreen(MDScreen):
             counts = alerts.get("counts") or {}
             top = (snapshot or {}).get("top_products") or []
             if counts.get("expired"):
-                insights.append({"title": f"{int(counts.get('expired'))} vencidos", "icon": "calendar-remove", "tone": "danger"})
+                insights.append({"title": f"{int(counts.get('expired'))} {self._tx('vencidos')}", "icon": "calendar-remove", "tone": "danger"})
             if counts.get("critical_stock"):
                 insights.append({"title": f"{int(counts.get('critical_stock'))} stock crítico", "icon": "alert", "tone": "warning"})
             if summary.get("revenue_today") not in (None, 0, 0.0):
@@ -2002,7 +2279,7 @@ class AdminHomeScreen(MDScreen):
 
         if not insights:
             # Pill neutra
-            insights = [{"title": "Sem destaques", "icon": "information-outline", "tone": "info"}]
+            insights = [{"title": translate_text("Sem destaques", getattr(self, "_ui_language", None)), "icon": "information-outline", "tone": "info"}]
 
         tone_map = {
             "danger": tokens.get("danger", [0.9, 0.3, 0.3, 1]),
@@ -2059,7 +2336,7 @@ class AdminHomeScreen(MDScreen):
         if grid is None:
             return
         if meta_label:
-            meta_label.text = "Resumo do dia"
+            meta_label.text = translate_text("Resumo do dia", getattr(self, "_ui_language", None))
 
         insights = self._build_insight_specs(snapshot)[:2]
         theme_style = getattr(App.get_running_app(), "theme_style", "Light")
@@ -2436,7 +2713,7 @@ class AdminHomeScreen(MDScreen):
                 title="Vendas de Hoje",
                 text=f"Falha ao carregar o resumo do dia.\n{error}",
                 buttons=[
-                    MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                    MDFlatButton(text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), on_release=lambda _x: dialog.dismiss()),
                 ],
             )
             self._today_sales_dialog = dialog
@@ -2446,12 +2723,12 @@ class AdminHomeScreen(MDScreen):
 
         summary = self._build_today_sales_summary(rows)
         dialog = MDDialog(
-            title="Vendas de hoje",
+            title=translate_text("Vendas de hoje", getattr(self, "_ui_language", None)),
             type="custom",
             content_cls=self._build_today_sales_content(day_label, summary),
             size_hint=(0.78, 0.72),
             buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                MDFlatButton(text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), on_release=lambda _x: dialog.dismiss()),
                 MDRaisedButton(
                     text="VER HISTÓRICO",
                     on_release=lambda _x: self._open_today_sales_history(dialog),
@@ -2527,7 +2804,7 @@ class AdminHomeScreen(MDScreen):
 
     def _action_button(self, text, callback):
         return {
-            "text": text,
+            "text": self._tx(text) if text else text,
             "callback": callback,
             "dismiss_after": True,
         }
@@ -2537,7 +2814,7 @@ class AdminHomeScreen(MDScreen):
         if not items:
             from utils.ai.ai_popups import build_positive_banner
             banner = build_positive_banner(empty_kind)
-            banner["details_sections"] = [("Estado atual", ["Nenhum produto nesta prioridade agora."])]
+            banner["details_sections"] = [(self._tx("Estado atual"), [self._tx("Nenhum produto nesta prioridade agora.")])]
             return banner
 
         messages = []
@@ -2559,14 +2836,14 @@ class AdminHomeScreen(MDScreen):
             "variant": variant,
             "icon": icon,
             "bg_color": (0.96, 0.62, 0.22, 1) if variant == "warning" else (0.93, 0.34, 0.34, 1),
-            "title": title,
+            "title": self._tx(title) if title else title,
             "messages": messages[:5],
             "all_messages": messages,
             "count": len(items),
             "urgency": 0 if variant == "danger" else 3,
             "details_sections": [
-                ("Produtos", detail_lines),
-                ("Proxima acao", ["Abra a reposicao e registe a nova entrada de stock."]),
+                (translate_text("Produtos", getattr(self, "_ui_language", None)), detail_lines),
+                (self._tx("Proxima acao"), [self._tx("Abra a reposicao e registe a nova entrada de stock.")]),
             ],
             "action_buttons": [
                 self._action_button("Repor produto", lambda item=first: self.open_restock_modal(product_item=item)),
@@ -2578,7 +2855,7 @@ class AdminHomeScreen(MDScreen):
         if not items:
             from utils.ai.ai_popups import build_positive_banner
             banner = build_positive_banner("expiry")
-            banner["details_sections"] = [("Estado atual", ["Nenhum produto vencido na leitura atual da HOME."])]
+            banner["details_sections"] = [(self._tx("Estado atual"), [self._tx("Nenhum produto vencido na leitura atual da HOME.")])]
             return banner
 
         messages = []
@@ -2587,8 +2864,8 @@ class AdminHomeScreen(MDScreen):
             name = self._alert_item_name(item)
             expiry_date = str(item.get("date") or "data nao informada")
             qty = self._format_banner_quantity(item.get("stock"), item.get("unit") or "un")
-            messages.append(f"{name}: vencido em {expiry_date}.")
-            detail_lines.append(f"{name}: stock {qty}; validade {expiry_date}.")
+            messages.append(f"{name}: {self._tx('vencido em')} {expiry_date}.")
+            detail_lines.append(f"{name}: {self._tx('stock')} {qty}; {self._tx('validade')} {expiry_date}.")
 
         return {
             "kind": "expiry",
@@ -2596,21 +2873,25 @@ class AdminHomeScreen(MDScreen):
             "variant": "danger",
             "icon": "alert-octagon",
             "bg_color": (0.93, 0.34, 0.34, 1),
-            "title": "Produtos vencidos",
+            "title": self._tx("Produtos vencidos"),
             "messages": messages[:5],
             "all_messages": messages,
             "count": len(items),
             "urgency": 0,
             "details_sections": [
-                ("Produtos vencidos", detail_lines),
-                ("Acao imediata", [
-                    "Retire os itens vencidos da area de venda.",
-                    "Registe a perda ou trate da devolucao assim que possível.",
+                (self._tx("Produtos vencidos"), detail_lines),
+                (self._tx("Acao imediata"), [
+                    self._tx("Retire os itens vencidos da area de venda."),
+                    self._tx("Registe a perda ou trate da devolucao assim que possível."),
                 ]),
             ],
             "action_buttons": [
                 self._action_button(
-                    f"Registar {len(items)} perda(s)" if len(items) > 1 else "Registar perda",
+                    (
+                        f"{self._tx('Registar')} {len(items)} {self._tx('perda(s)')}"
+                        if len(items) > 1
+                        else self._tx("Registar perda")
+                    ),
                     lambda rows=list(items): self.open_losses_module(expired_items=rows),
                 ),
             ],
@@ -2797,7 +3078,7 @@ class AdminHomeScreen(MDScreen):
             "count": len(items),
             "urgency": 12,
             "details_sections": [
-                ("Produtos", detail_lines or messages),
+                (translate_text("Produtos", getattr(self, "_ui_language", None)), detail_lines or messages),
                 ("Proxima acao", ["Revise preco de venda, custo de compra e regras de margem."]),
             ],
             "action_buttons": [
@@ -2859,7 +3140,7 @@ class AdminHomeScreen(MDScreen):
         self._show_single_home_banner(
             self._build_stock_alert_banner(
                 "low_stock_items",
-                "Stock critico",
+                translate_text("Stock critico", getattr(self, "_ui_language", None)),
                 "warning",
                 "alert-decagram-outline",
             )
@@ -2974,7 +3255,7 @@ class AdminHomeScreen(MDScreen):
             content_cls=self._build_today_sales_content(today_label, summary, revenue_only=True),
             size_hint=(0.70, 0.60),
             buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda _x: dialog.dismiss()),
+                MDFlatButton(text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), on_release=lambda _x: dialog.dismiss()),
                 MDRaisedButton(
                     text="VER VENDAS",
                     on_release=lambda _x: self.open_today_sales(),
@@ -3584,7 +3865,7 @@ class AdminHomeScreen(MDScreen):
         error = MDDialog(
             title="Reposicao de Stock",
             text=str(message or "Falha ao registar reposicao."),
-            buttons=[MDFlatButton(text="FECHAR", on_release=lambda _btn: error.dismiss())],
+            buttons=[MDFlatButton(text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), on_release=lambda _btn: error.dismiss())],
         )
         error.open()
 
@@ -3752,7 +4033,7 @@ class AdminHomeScreen(MDScreen):
             size_hint=(0.72, None),
             height=dp(430),
             buttons=[
-                MDFlatButton(text="FECHAR", on_release=lambda _btn: self._dismiss_quick_restock_dialog()),
+                MDFlatButton(text=translate_text("FECHAR", getattr(self, "_ui_language", None) if hasattr(self, "_ui_language") else None), on_release=lambda _btn: self._dismiss_quick_restock_dialog()),
                 submit_btn,
             ],
         )
@@ -4176,95 +4457,95 @@ class AdminHomeScreen(MDScreen):
         rows = [
             {
                 "icon": "cash-multiple",
-                "title": "Vendas de hoje",
-                "subtitle": "Total faturado no dia",
+                "title": translate_text("Vendas de hoje", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Total faturado no dia", getattr(self, "_ui_language", None)),
                 "trailing": sales,
                 "tone": "success",
             },
             {
                 "icon": "receipt-text-outline",
-                "title": "Tickets",
-                "subtitle": "Vendas concluídas",
+                "title": translate_text("Tickets", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Vendas concluidas", getattr(self, "_ui_language", None)),
                 "trailing": str(tickets),
                 "tone": "info",
             },
             {
                 "icon": "alert-outline",
-                "title": "Stock crítico",
-                "subtitle": "Produtos a repor",
+                "title": translate_text("Stock critico", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Produtos a repor", getattr(self, "_ui_language", None)),
                 "trailing": str(stock_alerts),
                 "tone": "warning",
             },
             {
                 "icon": "trending-down",
-                "title": "Perdas",
-                "subtitle": "Valor registado",
+                "title": translate_text("Perdas", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Valor registado", getattr(self, "_ui_language", None)),
                 "trailing": losses,
                 "tone": "danger",
             },
             {
                 "icon": "refresh",
-                "title": "Atualizar painel",
-                "subtitle": "Recarregar indicadores",
+                "title": translate_text("Atualizar painel", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Recarregar indicadores", getattr(self, "_ui_language", None)),
                 "trailing": "",
                 "tone": "primary",
                 "on_release": self.refresh_home,
             },
         ]
-        self._open_rich_dropdown(caller, "Resumo do dia", rows, active_key="summary_panel", width=dp(360))
+        self._open_rich_dropdown(caller, translate_text("Resumo do dia", getattr(self, "_ui_language", None)), rows, active_key="summary_panel", width=dp(360))
 
     def show_access_menu(self, caller):
         rows = [
             {
                 "icon": "package-variant",
-                "title": "Produtos",
-                "subtitle": "Catálogo e preços",
-                "trailing": "Abrir",
+                "title": translate_text("Produtos", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Catalogo e precos", getattr(self, "_ui_language", None)),
+                "trailing": translate_text("Abrir", getattr(self, "_ui_language", None)),
                 "tone": "primary",
                 "on_release": self.go_to_products,
             },
             {
                 "icon": "package-variant-plus",
-                "title": "Reposição",
-                "subtitle": "Entrada de stock",
-                "trailing": "Abrir",
+                "title": translate_text("Reposição", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Entrada de stock", getattr(self, "_ui_language", None)),
+                "trailing": translate_text("Abrir", getattr(self, "_ui_language", None)),
                 "tone": "warning",
                 "on_release": self.open_stock_module,
             },
             {
                 "icon": "alert-circle-outline",
-                "title": "Perdas",
-                "subtitle": "Quebras e ajustes",
-                "trailing": "Abrir",
+                "title": translate_text("Perdas", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Quebras e ajustes", getattr(self, "_ui_language", None)),
+                "trailing": translate_text("Abrir", getattr(self, "_ui_language", None)),
                 "tone": "danger",
                 "on_release": self.open_losses_module,
             },
             {
                 "icon": "chart-box-outline",
-                "title": "Relatórios",
-                "subtitle": "PDFs e análises",
-                "trailing": "Abrir",
+                "title": translate_text("Relatorios", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("PDFs e analises", getattr(self, "_ui_language", None)),
+                "trailing": translate_text("Abrir", getattr(self, "_ui_language", None)),
                 "tone": "info",
                 "on_release": self.open_reports,
             },
             {
                 "icon": "account-key-outline",
-                "title": "Utilizadores",
-                "subtitle": "Acessos e permissões",
-                "trailing": "Abrir",
+                "title": translate_text("Utilizadores", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Acessos e permissoes", getattr(self, "_ui_language", None)),
+                "trailing": translate_text("Abrir", getattr(self, "_ui_language", None)),
                 "tone": "primary",
                 "on_release": self.open_users_module,
             },
             {
                 "icon": "cog-outline",
-                "title": "Definições",
-                "subtitle": "Sistema e preferências",
-                "trailing": "Abrir",
+                "title": translate_text("Definicoes", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Sistema e preferencias", getattr(self, "_ui_language", None)),
+                "trailing": translate_text("Abrir", getattr(self, "_ui_language", None)),
                 "tone": "primary",
                 "on_release": self.go_to_settings,
             },
         ]
-        self._open_rich_dropdown(caller, "Acessos rápidos", rows, active_key="access_panel", width=dp(340))
+        self._open_rich_dropdown(caller, translate_text("Acessos rapidos", getattr(self, "_ui_language", None)), rows, active_key="access_panel", width=dp(340))
 
     def show_insights_menu(self, caller):
         snap = getattr(self, "_snapshot", None) or {}
@@ -4277,8 +4558,8 @@ class AdminHomeScreen(MDScreen):
             rows.append(
                 {
                     "icon": "information-outline",
-                    "title": "Sem destaques",
-                    "subtitle": "Os indicadores aparecem aqui",
+                    "title": translate_text("Sem destaques", getattr(self, "_ui_language", None)),
+                    "subtitle": translate_text("Os indicadores aparecem aqui", getattr(self, "_ui_language", None)),
                     "trailing": "",
                     "tone": "info",
                 }
@@ -4309,14 +4590,14 @@ class AdminHomeScreen(MDScreen):
         rows.append(
             {
                 "icon": "refresh",
-                "title": "Atualizar",
-                "subtitle": "Recarregar destaques",
+                "title": translate_text("Atualizar", getattr(self, "_ui_language", None)),
+                "subtitle": translate_text("Recarregar indicadores", getattr(self, "_ui_language", None)),
                 "trailing": "",
                 "tone": "primary",
                 "on_release": self.refresh_home,
             }
         )
-        self._open_rich_dropdown(caller, "Destaques", rows, active_key="insights_panel", width=dp(360))
+        self._open_rich_dropdown(caller, translate_text("Destaques", getattr(self, "_ui_language", None)), rows, active_key="insights_panel", width=dp(360))
 
     def _menu_action(self, menu_attr, callback):
         self._dismiss_section_menus()

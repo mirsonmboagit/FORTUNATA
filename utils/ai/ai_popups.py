@@ -4,10 +4,14 @@ from kivy.animation import Animation
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.graphics import Color, Line, RoundedRectangle
+from kivy.graphics import (
+    Color, Ellipse, Line, PopMatrix, PushMatrix, Rectangle, RoundedRectangle, Scale,
+)
 from kivy.metrics import dp
 from kivy.uix.anchorlayout import AnchorLayout
+from kivy.properties import NumericProperty
 from kivy.uix.behaviors import ButtonBehavior
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
@@ -28,6 +32,14 @@ from utils.business.expiry_alerts import (
     ALERT_LEVEL_VENCIDO,
 )
 from utils.config.theme import get_theme_tokens
+try:
+    from utils.core.i18n import translate_text, normalize_language
+except Exception:
+    def translate_text(text, language=None):
+        return str(text or "")
+    def normalize_language(value, fallback="pt"):
+        return str(value or fallback)
+
 
 
 class _BannerIconButton(ButtonBehavior, MDLabel):
@@ -40,61 +52,34 @@ class _BannerPillButton(ButtonBehavior, MDLabel):
     pass
 
 
+class _BannerCloseButton(ButtonBehavior, Widget):
+    """Botão X desenhado em canvas: sem fundo nativo, sem glifo de fonte."""
+
+    def __init__(self, callback=None, palette=None, **kwargs):
+        super().__init__(size_hint=(None, None), size=(dp(34), dp(34)), **kwargs)
+        palette = palette or {}
+        self._fg = _rgba(palette.get("button_text") or (0.8, 0.8, 0.8, 1))
+        self.bind(pos=self._draw, size=self._draw, state=self._draw)
+        if callback:
+            self.bind(on_release=callback)
+        self._draw()
+
+    def _draw(self, *_args):
+        self.canvas.clear()
+        cx, cy = self.center_x, self.center_y
+        r = min(self.width, self.height) / 2.0
+        a = r * 0.34
+        pressed = self.state == "down"
+        with self.canvas:
+            Color(self._fg[0], self._fg[1], self._fg[2], 0.16 if pressed else 0.07)
+            Ellipse(pos=(cx - r, cy - r), size=(r * 2, r * 2))
+            Color(self._fg[0], self._fg[1], self._fg[2], 0.78)
+            Line(points=[cx - a, cy - a, cx + a, cy + a], width=dp(1.2), cap="round")
+            Line(points=[cx - a, cy + a, cx + a, cy - a], width=dp(1.2), cap="round")
+
+
 def _build_banner_close_button(callback, palette=None):
-    """Botão X moderno: círculo nítido, ícone centrado, área de toque confortável."""
-    palette = palette or {}
-    accent = _rgba(palette.get("button_text") or palette.get("accent") or (0.30, 0.35, 0.42, 1))
-    bg = _rgba(palette.get("close_bg") or palette.get("icon_bg") or (1, 1, 1, 0.55))
-    # Fundo um pouco mais opaco para o X destacar no cartão
-    if bg[3] < 0.45:
-        bg = (bg[0], bg[1], bg[2], 0.55)
-    border = _blend(bg, accent, 0.35, alpha=0.55)
-
-    button = MDIconButton(
-        icon="close",
-        theme_text_color="Custom",
-        text_color=accent,
-        size_hint=(None, None),
-        size=(dp(34), dp(34)),
-        on_release=callback,
-    )
-    # Desenho próprio: círculo + anel fino (mais legível que o estilo default)
-    with button.canvas.before:
-        button._close_bg_color = Color(*bg)
-        button._close_bg = RoundedRectangle(
-            pos=button.pos, size=button.size, radius=[dp(17), dp(17), dp(17), dp(17)]
-        )
-    with button.canvas.after:
-        button._close_border_color = Color(*border)
-        button._close_border = Line(width=1.15)
-
-    def _sync_chrome(*_args):
-        pos = button.pos
-        size = button.size
-        button._close_bg.pos = pos
-        button._close_bg.size = size
-        button._close_border.rounded_rectangle = (
-            pos[0] + dp(0.5),
-            pos[1] + dp(0.5),
-            max(size[0] - dp(1), 1),
-            max(size[1] - dp(1), 1),
-            dp(17),
-        )
-
-    def _press(*_args):
-        button._close_bg_color.rgba = _blend(bg, accent, 0.22)
-        button.opacity = 0.88
-
-    def _release(*_args):
-        button._close_bg_color.rgba = bg
-        button.opacity = 1.0
-
-    button.bind(pos=_sync_chrome, size=_sync_chrome)
-    button.bind(on_press=_press)
-    # on_release já fecha; reforça o feedback visual
-    button.bind(on_release=lambda *_: _release())
-    Clock.schedule_once(lambda _dt: _sync_chrome(), 0)
-    return button
+    return _BannerCloseButton(callback=callback, palette=palette)
 
 
 def _rgba(color, alpha=None):
@@ -118,6 +103,27 @@ def _blend(base, overlay, factor, alpha=None):
     if alpha is not None:
         mixed[3] = float(alpha)
     return mixed
+
+
+def _ui_lang():
+    app = App.get_running_app()
+    if not app:
+        return "pt"
+    code = getattr(app, "ui_language", None) or getattr(app, "language", None)
+    try:
+        return normalize_language(code)
+    except Exception:
+        return str(code or "pt")
+
+
+def _tx(text, **kwargs):
+    out = translate_text(text, _ui_lang())
+    if kwargs:
+        try:
+            out = out.format(**kwargs)
+        except Exception:
+            pass
+    return out
 
 
 def _theme_tokens():
@@ -182,10 +188,10 @@ def _format_banner_quantity(value, unit):
     is_weight = unit_text in {"kg", "quilo", "quilos", "quilograma", "quilogramas"}
     if is_weight:
         number = f"{amount:.1f}".replace(".", ",")
-        label = "quilograma" if abs(amount - 1) < 0.001 else "quilogramas"
+        label = _tx("quilograma") if abs(amount - 1) < 0.001 else _tx("quilogramas")
     else:
         number = str(int(amount)) if amount.is_integer() else f"{amount:.1f}".replace(".", ",")
-        label = "unidade" if abs(amount - 1) < 0.001 else "unidades"
+        label = _tx("unidade") if abs(amount - 1) < 0.001 else _tx("unidades")
     return f"{number} {label}"
 
 
@@ -194,7 +200,7 @@ def _format_banner_days(value):
         days = max(0, int(round(float(value))))
     except (TypeError, ValueError):
         days = 0
-    return f"{days} dia" if days == 1 else f"{days} dias"
+    return f"{days} {_tx('dia')}" if days == 1 else f"{days} {_tx('dias')}"
 
 
 def _variant_name(variant):
@@ -234,25 +240,60 @@ def _banner_palette(banner_data):
     tokens = _theme_tokens()
     dark = _is_dark_color(tokens.get("surface"))
     variant = _resolve_variant(banner_data)
+    own_bg = banner_data.get("bg_color")
+    if own_bg:
+        # Modelo classico: cartao com a cor do alerta e texto adaptativo.
+        bg = _rgba(own_bg)
+        dark_bg = _is_dark_color(bg)
+        fg = [1.0, 1.0, 1.0, 1.0] if dark_bg else [0.13, 0.14, 0.16, 1.0]
+        body = [1.0, 1.0, 1.0, 0.92] if dark_bg else [0.22, 0.23, 0.26, 1.0]
+        tint = [1.0, 1.0, 1.0] if dark_bg else [0.0, 0.0, 0.0]
+        return {
+            "variant": variant,
+            "accent": fg,
+            "accent_soft": fg,
+            "dark": dark_bg,
+            "bar_alpha": 0.0,
+            "bg": bg,
+            "border": [fg[0], fg[1], fg[2], 0.14],
+            "icon_bg": tint + [0.16 if dark_bg else 0.08],
+            "chip_bg": tint + [0.24 if dark_bg else 0.12],
+            "button_bg": tint + [0.18 if dark_bg else 0.08],
+            "button_bg_hover": tint + [0.28 if dark_bg else 0.14],
+            "button_text": fg,
+            "title": fg,
+            "text": body,
+            "muted": fg,
+            "progress": [fg[0], fg[1], fg[2], 0.55],
+            "elevation": 3,
+            "hover_elevation": 6,
+        }
     accent = _rgba(tokens.get(variant, tokens.get("info", [0.15, 0.45, 0.75, 1])))
     base = _rgba(tokens.get("card", [1, 1, 1, 1]))
     secondary_base = _rgba(tokens.get("card_alt", base))
     divider = _rgba(tokens.get("divider", [0, 0, 0, 0.10]))
+    title_c = _rgba(tokens.get("text_primary", [0.15, 0.20, 0.30, 1]))
+    soft = _blend(accent, title_c, 0.35 if dark else 0.15)
     return {
         "variant": variant,
         "accent": accent,
+        "accent_soft": soft,
         "dark": dark,
-        "bg": _blend(base, accent, 0.09 if not dark else 0.14),
-        "border": _blend(divider, accent, 0.44, alpha=0.52 if not dark else 0.72),
-        "icon_bg": _blend(secondary_base, accent, 0.18 if not dark else 0.28),
-        "chip_bg": _blend(base, accent, 0.16 if not dark else 0.22),
-        "button_bg": _blend(secondary_base, accent, 0.18 if not dark else 0.28),
-        "button_bg_hover": _blend(secondary_base, accent, 0.25 if not dark else 0.36),
-        "button_text": accent,
-        "title": _rgba(tokens.get("text_primary", [0.15, 0.20, 0.30, 1])),
-        "text": _rgba(tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])),
+        "bg": _blend(base, accent, 0.15 if not dark else 0.20),
+        "border": _blend(divider, accent, 0.40, alpha=0.38 if not dark else 0.45),
+        "icon_bg": _blend(base, accent, 0.20 if not dark else 0.26),
+        "chip_bg": _blend(base, accent, 0.22 if not dark else 0.30),
+        "button_bg": _blend(base, accent, 0.16 if not dark else 0.22),
+        "button_bg_hover": _blend(base, accent, 0.26 if not dark else 0.32),
+        "button_text": soft,
+        "title": title_c,
+        "text": _blend(
+            _rgba(tokens.get("text_secondary", [0.35, 0.40, 0.50, 1])),
+            title_c,
+            0.35,
+        ),
         "muted": _rgba(tokens.get("text_muted", tokens.get("text_secondary", [0.55, 0.60, 0.70, 1]))),
-        "progress": _rgba(accent, 0.92),
+        "progress": _rgba(soft, 0.65),
         "elevation": 2 if not dark else 1,
         "hover_elevation": 5 if not dark else 3,
     }
@@ -277,8 +318,16 @@ def _bind_auto_height(label, min_height=dp(18)):
             label.texture_update()
         except Exception:
             pass
-        label.height = max(float(label.texture_size[1] or 0), float(min_height))
+        height = max(float(label.texture_size[1] or 0), float(min_height))
+        reserve = getattr(label, "_hover_reserve", None)
+        if callable(reserve):
+            try:
+                height = max(height, float(reserve(True)[1]))
+            except Exception:
+                pass
+        label.height = height
 
+    label._relayout = _update
     label.bind(width=_update, text=_update)
     Clock.schedule_once(lambda _dt: _update(), 0)
 
@@ -292,9 +341,17 @@ def _bind_texture_size(label, min_height=dp(18), horizontal_padding=dp(4)):
             label.texture_update()
         except Exception:
             pass
-        label.width = max(float(label.texture_size[0] or 0) + float(horizontal_padding), float(dp(24)))
+        text_w = float(label.texture_size[0] or 0)
+        reserve = getattr(label, "_hover_reserve", None)
+        if callable(reserve):
+            try:
+                text_w = max(text_w, float(reserve(False)[0]))
+            except Exception:
+                pass
+        label.width = max(text_w + float(horizontal_padding), float(dp(24)))
         label.height = max(float(label.texture_size[1] or 0), float(min_height))
 
+    label._relayout = _update
     label.bind(text=_update)
     _update()
     Clock.schedule_once(lambda _dt: _update(), 0)
@@ -349,6 +406,131 @@ def _detach_widget(widget):
         parent.remove_widget(widget)
     except Exception:
         pass
+
+
+_MARKUP_TOKEN_RE = re.compile(r"(\[/?[a-zA-Z]+(?:=[^\]]*)?\]|&[a-z]+;)")
+_MEASURE_CACHE = {}
+
+
+def _hover_markup_for(label, base_text, was_markup=None):
+    """MAIUSCULAS + bold sem estragar tags/entidades de markup."""
+    markup = label.markup if was_markup is None else was_markup
+    text = str(base_text or "")
+    if not markup:
+        text = escape_markup(text)
+    parts = _MARKUP_TOKEN_RE.split(text)
+    out = []
+    for part in parts:
+        if part and _MARKUP_TOKEN_RE.fullmatch(part):
+            out.append(part)
+        else:
+            out.append(part.upper())
+    return "[b]" + "".join(out) + "[/b]"
+
+
+def _measure_label(label, markup_text, wrap):
+    """Mede o texto (sem o desenhar) para reservar o espaco antes do hover."""
+    width = max(float(label.width), 1.0) if wrap else 0.0
+    key = (markup_text, round(width), float(label.font_size), str(getattr(label, "font_name", "")),
+           float(getattr(label, "line_height", 1.0)), wrap)
+    cached = _MEASURE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    from kivy.uix.label import Label as _KLabel
+
+    kwargs = {"text_size": (width, None)} if wrap else {}
+    probe = _KLabel(
+        text=markup_text,
+        markup=True,
+        font_size=label.font_size,
+        line_height=getattr(label, "line_height", 1.0),
+        **kwargs,
+    )
+    font_name = getattr(label, "font_name", None)
+    if font_name:
+        probe.font_name = font_name
+    probe.texture_update()
+    size = (float(probe.texture_size[0]), float(probe.texture_size[1]))
+    if len(_MEASURE_CACHE) > 400:
+        _MEASURE_CACHE.clear()
+    _MEASURE_CACHE[key] = size
+    return size
+
+
+def _set_label_text(label, text):
+    """Altera o texto respeitando o estado de hover."""
+    text = str(text)
+    if getattr(label, "_hover_on", False):
+        label._normal_text = text
+        label.text = _hover_markup_for(label, text, was_markup=label._was_markup)
+    else:
+        label.text = text
+
+
+def _apply_hover_text(label, on):
+    if on:
+        label._normal_text = label.text
+        label._was_markup = label.markup
+        hover_text = _hover_markup_for(label, label._normal_text, was_markup=label._was_markup)
+        label._hover_on = True
+        label.markup = True
+        label.text = hover_text
+    else:
+        label._hover_on = False
+        label.markup = label._was_markup
+        label.text = label._normal_text
+
+
+def _fit_hover_scale(label, factor=1.08):
+    """Cresce o maximo possivel sem sair da area do texto (tudo legivel dentro do card)."""
+    try:
+        label.texture_update()
+        text_w = float(label.texture_size[0] or 0)
+        if text_w <= 0:
+            return 1.0
+        wraps = label.text_size[0] is not None
+        available = float(label.width) if wraps else float(label.width) + dp(10)
+        return max(1.0, min(factor, available / text_w))
+    except Exception:
+        return 1.0
+
+
+def _attach_hover_grow(label, center=False):
+    """Prepara o label: hover => MAIUSCULAS + bold + crescimento (escala por canvas)."""
+    label.create_property("hover_scale", 1.0)
+    label._hover_on = False
+    label._normal_text = label.text
+    label._was_markup = label.markup
+
+    def _reserve(wrap, lb=label):
+        base = lb._normal_text if lb._hover_on else lb.text
+        return _measure_label(lb, _hover_markup_for(lb, base, was_markup=lb._was_markup if lb._hover_on else None), wrap)
+
+    label._hover_reserve = _reserve
+
+    def _track(instance, value):
+        if not instance._hover_on:
+            instance._normal_text = value
+
+    label.bind(text=_track)
+
+    with label.canvas.before:
+        PushMatrix()
+        label._grow_scale = Scale(1, 1, 1)
+    with label.canvas.after:
+        PopMatrix()
+
+    def _sync(*_args):
+        ox = label.center_x if center else label.x + dp(1)
+        label._grow_scale.origin = (ox, label.center_y)
+        scale = float(label.hover_scale)
+        label._grow_scale.xyz = (scale, scale, 1)
+
+    label.bind(pos=_sync, size=_sync, hover_scale=_sync)
+    _sync()
+    # recalcula o tamanho reservado agora que o perfil de hover existe
+    Clock.schedule_once(lambda _dt: getattr(label, "_relayout", lambda: None)(), 0)
+    return label
 
 
 def _decorate_pill(widget, bg_color, border_color=None, radius=dp(18)):
@@ -419,14 +601,14 @@ def _expiry_level_meta(level):
     level = str(level or "").lower()
     color = ALERT_COLORS.get(level, ALERT_COLORS[ALERT_LEVEL_LEVE])["rgba"]
     if level == ALERT_LEVEL_VENCIDO:
-        return "alert-octagon", "Produtos Vencidos", color
+        return "alert-octagon", _tx("Produtos vencidos"), color
     if level == ALERT_LEVEL_CRITICO:
-        return "alert-circle", "Vencem em breve", color
+        return "alert-circle", _tx("Vencem em breve"), color
     if level == ALERT_LEVEL_ALTO:
-        return "alert", "Validade próxima", color
+        return "alert", _tx("Validade próxima"), color
     if level == ALERT_LEVEL_MEDIO:
-        return "calendar-alert", "Validades a acompanhar", color
-    return "calendar-clock", "Validades a acompanhar", color
+        return "calendar-alert", _tx("Validades a acompanhar"), color
+    return "calendar-clock", _tx("Validades a acompanhar"), color
 
 
 def _get_stock_message_variant(item_name, stock, unit, days_left):
@@ -476,8 +658,8 @@ def _get_expiry_message_variant(item_name, days_left, date_str):
 def _get_expiry_level_message(level, item_name, days_left, date_str):
     if level == ALERT_LEVEL_VENCIDO:
         overdue = abs(int(days_left))
-        day_text = "1 dia" if overdue == 1 else f"{overdue} dias"
-        return f"{item_name}: vencido há {day_text} ({date_str}). Retire da venda."
+        day_text = _tx("1 dia") if overdue == 1 else f"{overdue} {_tx('dias')}"
+        return f"{item_name}: {_tx('vencido há')} {day_text} ({date_str}). {_tx('Retire da venda.')}"
     return _get_expiry_message_variant(item_name, days_left, date_str)
 
 
@@ -529,7 +711,7 @@ def build_auto_banner_data(insights):
                 "variant": "danger" if max_severity >= 3 else "warning" if max_severity == 2 else "info",
                 "icon": "shield-alert-outline" if max_severity >= 3 else "shield-search-outline",
                 "bg_color": (0.93, 0.34, 0.34, 1) if max_severity >= 3 else (0.98, 0.76, 0.34, 1),
-                "title": "Alertas de fraude",
+                "title": _tx("Alertas de fraude"),
                 "messages": messages[:5],
                 "all_messages": messages,
                 "count": len(fraud_alerts),
@@ -553,13 +735,13 @@ def build_auto_banner_data(insights):
 
         min_days = min(urgency_levels) if urgency_levels else 999
         if min_days < 1:
-            title = "Produtos sem estoque"
+            title = _tx("Produtos sem estoque")
             icon = "alert-circle"
         elif min_days < 10:
-            title = "Produtos com estoque baixo"
+            title = _tx("Produtos com estoque baixo")
             icon = "alert"
         else:
-            title = "Produtos com estoque baixo"
+            title = _tx("Produtos com estoque baixo")
             icon = "information-outline"
 
         unique_msgs = []
@@ -571,9 +753,9 @@ def build_auto_banner_data(insights):
             seen_m.add(key)
             unique_msgs.append(msg)
         real_count = len(unique_msgs) if unique_msgs else len(low_stock)
-        summary = unique_msgs[0] if unique_msgs else "Stock a acompanhar."
+        summary = unique_msgs[0] if unique_msgs else _tx("Stock a acompanhar.")
         if real_count > 1:
-            summary = f"{summary} Há mais {real_count - 1} para consultar nos detalhes."
+            summary = f"{summary} {_tx('Há mais')} {real_count - 1} {_tx('para consultar nos detalhes.')}"
         banners.append(
             {
                 "kind": "stock",
@@ -581,8 +763,8 @@ def build_auto_banner_data(insights):
                 "icon": icon,
                 "bg_color": (1, 0.4, 0.4, 1),
                 "title": title,
-                "messages": [summary],
-                "all_messages": [summary],
+                "messages": (unique_msgs[:2] or [summary]),
+                "all_messages": (unique_msgs or [summary]),
                 "count": real_count,
                 "urgency": min_days,
                 "notification_key": _stable_banner_source_key("stock", low_stock),
@@ -622,9 +804,12 @@ def build_auto_banner_data(insights):
             continue
         # Uma linha de resumo no cabecalho; lista completa so nos detalhes
         top = unique_rows[0]
+        row_messages = [
+            _get_expiry_level_message(level, r[0], r[1], r[2]) for r in unique_rows
+        ]
         summary = _get_expiry_level_message(level, top[0], top[1], top[2])
         if real_count > 1:
-            summary = f"{summary} Há mais {real_count - 1} para consultar nos detalhes."
+            summary = f"{summary} {_tx('Há mais')} {real_count - 1} {_tx('para consultar nos detalhes.')}"
         banners.append(
             {
                 "kind": "expiry",
@@ -633,8 +818,8 @@ def build_auto_banner_data(insights):
                 "icon": icon,
                 "bg_color": bg_color,
                 "title": title,
-                "messages": [summary],
-                "all_messages": [summary],
+                "messages": (row_messages[:2] or [summary]),
+                "all_messages": (row_messages or [summary]),
                 "count": real_count,
                 "urgency": min(urgencies) if urgencies else 999,
                 "notification_key": _stable_banner_source_key("expiry", unique_rows, level=level),
@@ -842,9 +1027,213 @@ def build_banner_details_sections(insights, kind, max_lines=None, expiry_level=N
     return sections
 
 
+class _BannerModalBlocker(Widget):
+    """Camada modal: escurece e bloqueia todo o ecrã por baixo dos banners."""
+
+    scrim = NumericProperty(0.0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas:
+            self._scrim_color = Color(0, 0, 0, 0)
+            self._scrim_rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._sync, size=self._sync, scrim=self._sync)
+
+    def _sync(self, *_args):
+        self._scrim_color.rgba = (0, 0, 0, float(self.scrim))
+        self._scrim_rect.pos = self.pos
+        self._scrim_rect.size = self.size
+
+    # Consome SEMPRE os toques (clique, arrasto, roda do rato): nada passa para baixo.
+    def on_touch_down(self, touch):
+        return True
+
+    def on_touch_move(self, touch):
+        return True
+
+    def on_touch_up(self, touch):
+        return True
+
+
+class _PillIcon(Widget):
+    """Ícone fino desenhado em canvas para os botões (chevron / download)."""
+
+    def __init__(self, kind="chevron_down", color=(1, 1, 1, 1), **kwargs):
+        super().__init__(size_hint=(None, None), size=(dp(16), dp(16)), **kwargs)
+        self.kind = kind
+        self.color = _rgba(color)
+        self.bind(pos=self._draw, size=self._draw)
+
+    def set_kind(self, kind):
+        if kind != self.kind:
+            self.kind = kind
+            self._draw()
+
+    def _draw(self, *_args):
+        self.canvas.clear()
+        cx, cy = self.center_x, self.center_y
+        a = dp(4.2)
+        w = dp(1.4)
+        with self.canvas:
+            Color(self.color[0], self.color[1], self.color[2], 0.95)
+            if self.kind == "chevron_up":
+                Line(points=[cx - a, cy - a * 0.5, cx, cy + a * 0.5, cx + a, cy - a * 0.5],
+                     width=w, cap="round", joint="round")
+            elif self.kind == "download":
+                Line(points=[cx, cy + a, cx, cy - a * 0.7], width=w, cap="round")
+                Line(points=[cx - a * 0.8, cy - a * 0.1, cx, cy - a * 0.9, cx + a * 0.8, cy - a * 0.1],
+                     width=w, cap="round", joint="round")
+                Line(points=[cx - a, cy - a * 1.5, cx + a, cy - a * 1.5], width=w, cap="round")
+            else:
+                Line(points=[cx - a, cy + a * 0.5, cx, cy - a * 0.5, cx + a, cy + a * 0.5],
+                     width=w, cap="round", joint="round")
+
+
+class _ActionPill(ButtonBehavior, BoxLayout):
+    """Botão em pílula: [ícone] [texto] [+N]. Mesma altura e estilo para todos."""
+
+    def __init__(self, text="", icon_kind=None, color=(1, 1, 1, 1), bg=None, border=None, **kwargs):
+        super().__init__(
+            orientation="horizontal",
+            spacing=dp(7),
+            padding=[dp(12), 0, dp(14), 0],
+            size_hint=(None, None),
+            height=dp(34),
+            **kwargs,
+        )
+        self._color = _rgba(color)
+        self.chip = None
+        self._count = 0
+        self.icon = None
+        if icon_kind:
+            self.icon = _PillIcon(icon_kind, color, pos_hint={"center_y": 0.5})
+            self.add_widget(self.icon)
+        self.label = MDLabel(
+            text=str(text),
+            theme_text_color="Custom",
+            text_color=color,
+            font_size=dp(12),
+            bold=True,
+            halign="center",
+            valign="middle",
+            pos_hint={"center_y": 0.5},
+        )
+        _bind_texture_size(self.label, min_height=dp(18), horizontal_padding=dp(2))
+        self.add_widget(self.label)
+        self.bind(minimum_width=lambda inst, value: setattr(inst, "width", value))
+        if bg is not None:
+            _decorate_pill(self, bg, border, radius=dp(17))
+
+    def set_text(self, text):
+        _set_label_text(self.label, text)
+
+    def set_count(self, count, bg, color):
+        count = int(count or 0)
+        if count == self._count:
+            return
+        self._count = count
+        if self.chip is not None:
+            self.remove_widget(self.chip)
+            self.chip = None
+        if count > 0:
+            label = f"+{count}"
+            self.chip = _build_chip(label, bg, color)
+            self.chip.width = max(dp(30), dp(12 + 6.6 * len(label)))
+            self.chip.pos_hint = {"center_y": 0.5}
+            self.add_widget(self.chip)
+
+
+class _BannerStatusIcon(Widget):
+    """Ícone de estado desenhado em canvas (sem depender de fontes)."""
+
+    _SHAPE_BY_KIND = {
+        "stock": "box",
+        "expiry": "calendar",
+        "fraud": "shield",
+        "positive": "success",
+        "stock_ok": "success",
+        "expiry_ok": "success",
+    }
+
+    def __init__(self, variant="info", color=(1, 1, 1, 1), kind=None, **kwargs):
+        super().__init__(**kwargs)
+        self.variant = variant
+        self.kind = kind
+        self.color = _rgba(color)
+        self.bind(pos=self._draw, size=self._draw)
+
+    def _draw(self, *_args):
+        self.canvas.clear()
+        s = min(self.width, self.height) * 0.32
+        if s <= 0:
+            return
+        shape = self._SHAPE_BY_KIND.get(str(self.kind or ""), self.variant)
+        cx, cy = self.center_x, self.center_y
+        w = max(dp(1.3), s * 0.09)
+        dot = max(dp(2.2), s * 0.16)
+        with self.canvas:
+            Color(self.color[0], self.color[1], self.color[2], 0.92)
+            if shape == "calendar":
+                Line(rounded_rectangle=(cx - s, cy - s * 0.85, s * 2, s * 1.8, dp(3)), width=w)
+                Line(points=[cx - s, cy + s * 0.3, cx + s, cy + s * 0.3], width=w)
+                Line(points=[cx - s * 0.5, cy + s * 0.75, cx - s * 0.5, cy + s * 1.15], width=w, cap="round")
+                Line(points=[cx + s * 0.5, cy + s * 0.75, cx + s * 0.5, cy + s * 1.15], width=w, cap="round")
+                Line(points=[cx, cy - s * 0.02, cx, cy - s * 0.32], width=w, cap="round")
+                Ellipse(pos=(cx - dot / 2, cy - s * 0.58 - dot / 2), size=(dot, dot))
+            elif shape == "box":
+                Line(rounded_rectangle=(cx - s, cy - s * 0.8, s * 2, s * 1.6, dp(3)), width=w)
+                Line(points=[cx - s, cy + s * 0.2, cx + s, cy + s * 0.2], width=w)
+                Line(points=[cx - s * 0.35, cy - s * 0.25, cx + s * 0.35, cy - s * 0.25], width=w, cap="round")
+            elif shape == "shield":
+                Line(points=[cx, cy + s, cx + s * 0.85, cy + s * 0.62, cx + s * 0.85, cy - s * 0.1,
+                             cx, cy - s, cx - s * 0.85, cy - s * 0.1, cx - s * 0.85, cy + s * 0.62],
+                     close=True, width=w, joint="round")
+                Line(points=[cx, cy + s * 0.35, cx, cy - s * 0.15], width=w, cap="round")
+                Ellipse(pos=(cx - dot / 2, cy - s * 0.42 - dot / 2), size=(dot, dot))
+            elif shape == "success":
+                Line(circle=(cx, cy, s), width=w)
+                Line(points=[cx - s * 0.42, cy, cx - s * 0.1, cy - s * 0.32, cx + s * 0.45, cy + s * 0.34],
+                     width=w, cap="round", joint="round")
+            elif shape == "warning":
+                Line(points=[cx, cy + s, cx + s * 1.05, cy - s * 0.7, cx - s * 1.05, cy - s * 0.7],
+                     close=True, width=w, joint="round")
+                Line(points=[cx, cy + s * 0.32, cx, cy - s * 0.18], width=w, cap="round")
+                Ellipse(pos=(cx - dot / 2, cy - s * 0.46 - dot / 2), size=(dot, dot))
+            elif shape == "danger":
+                Line(circle=(cx, cy, s), width=w)
+                Line(points=[cx, cy + s * 0.5, cx, cy - s * 0.1], width=w, cap="round")
+                Ellipse(pos=(cx - dot / 2, cy - s * 0.42 - dot / 2), size=(dot, dot))
+            else:  # info
+                Line(circle=(cx, cy, s), width=w)
+                Ellipse(pos=(cx - dot / 2, cy + s * 0.42 - dot / 2), size=(dot, dot))
+                Line(points=[cx, cy + s * 0.12, cx, cy - s * 0.5], width=w, cap="round")
+
+
+_EMPHASIS_RE = re.compile(
+    r"\d+(?:[.,]\d+)?\s*(?:unidades?|units?|quilogramas?|quilos?|kg|dias?|days?|MZN)\b"
+    r"|\b(?:out of stock|esgotado|vencido|expired|cr[ií]tico|critical|"
+    r"restam|remaining|vence em|expires in|poss[ií]vel perda)\b",
+    re.IGNORECASE,
+)
+
+
 class ModernBannerCard(MDCard):
     def __init__(self, banner_data, show_timer=True, insights=None, **kwargs):
         self.banner_data = dict(banner_data or {})
+        # Banner payloads may be cached or produced before the current UI
+        # language was selected.  Localise at the rendering boundary so that
+        # live product data stays intact while every surrounding UI phrase
+        # follows the active language.
+        if self.banner_data.get("title"):
+            self.banner_data["title"] = _tx(self.banner_data["title"])
+        for field in ("messages", "all_messages"):
+            values = self.banner_data.get(field) or []
+            self.banner_data[field] = [_tx(value) for value in values]
+        sections = self.banner_data.get("details_sections") or []
+        self.banner_data["details_sections"] = [
+            (_tx(title), [_tx(item) for item in (items or [])])
+            for title, items in sections
+        ]
         self.palette = _banner_palette(self.banner_data)
         self.all_messages = _clean_messages(self.banner_data.get("all_messages") or self.banner_data.get("messages") or [])
         self.details_sections = list(self.banner_data.get("details_sections") or [])
@@ -854,7 +1243,12 @@ class ModernBannerCard(MDCard):
                 self.banner_data.get("kind"),
                 expiry_level=self.banner_data.get("expiry_level"),
             )
+            self.details_sections = [
+                (_tx(title), [_tx(item) for item in (items or [])])
+                for title, items in self.details_sections
+            ]
         self.full_description = self._build_description_text()
+        self._grow_labels = []
         self._expanded = False
         self._compact = False
         self._preview_truncated = False
@@ -882,7 +1276,7 @@ class ModernBannerCard(MDCard):
         )
 
         with self.canvas.after:
-            self._accent_color_instruction = Color(*_rgba(self.palette["accent"]))
+            self._accent_color_instruction = Color(*_rgba(self.palette["accent"], self.palette.get("bar_alpha", 0.70)))
             self._accent_bar = RoundedRectangle(radius=[dp(2), dp(2), dp(2), dp(2)])
             self._border_color_instruction = Color(*_rgba(self.palette["border"]))
             self._border_line = Line(width=1.0)
@@ -907,17 +1301,64 @@ class ModernBannerCard(MDCard):
             except Exception:
                 pass
 
+    def on_touch_down(self, touch):
+        handled = super().on_touch_down(touch)
+        if self.collide_point(*touch.pos) and self.opacity > 0.05:
+            return True  # nunca deixa o toque passar para o ecrã por baixo
+        return handled
+
+    def on_touch_move(self, touch):
+        handled = super().on_touch_move(touch)
+        return True if self.collide_point(*touch.pos) else handled
+
+    def on_touch_up(self, touch):
+        handled = super().on_touch_up(touch)
+        return True if self.collide_point(*touch.pos) else handled
+
+    def _grow(self, label, center=False):
+        _attach_hover_grow(label, center=center)
+        self._grow_labels.append(label)
+        return label
+
+    def _set_grow(self, label, on):
+        if getattr(label, "_grow_on", False) == on:
+            return
+        label._grow_on = on
+        _apply_hover_text(label, on)
+        target = _fit_hover_scale(label) if on else 1.0
+        Animation.cancel_all(label, "hover_scale")
+        Animation(hover_scale=target, d=0.14, t="out_quad").start(label)
+
+    def _update_word_hover(self, pos):
+        active = self.opacity > 0.05 and not self.disabled
+        for label in list(self._grow_labels):
+            if label.parent is None:
+                self._grow_labels.remove(label)
+                continue
+            inside = False
+            if active:
+                try:
+                    lx, ly = label.to_widget(*pos)
+                    text_w = max(float(label.texture_size[0] or 0), 1.0)
+                    inside = (
+                        label.x <= lx <= label.x + text_w
+                        and label.y <= ly <= label.top
+                    )
+                except Exception:
+                    inside = False
+            self._set_grow(label, inside)
+
     def _build_description_text(self):
         if not self.all_messages:
             count = int(self.banner_data.get("count") or 0)
-            return f"{count} itens foram agrupados neste aviso." if count > 0 else "Sem detalhes adicionais."
+            return (f"{count} {_tx('itens foram agrupados neste aviso.')}" if count > 0 else _tx("Sem detalhes adicionais."))
         first = self.all_messages[0]
         first = first if first.endswith((".", "!", "?")) else f"{first}."
         count = int(self.banner_data.get("count") or 0)
         remaining = max(count - 1, len(self.all_messages) - 1)
         if remaining > 0:
-            noun = "ocorrencia" if remaining == 1 else "ocorrencias"
-            return f"{first} Há mais {remaining} {noun} para consultar nos detalhes."
+            noun = _tx("ocorrencia") if remaining == 1 else _tx("ocorrencias")
+            return f"{first} {_tx('Há mais')} {remaining} {noun} {_tx('para consultar nos detalhes.')}"
         # Os banners positivos podem ter dois pontos curtos e complementares.
         if len(self.all_messages) > 1:
             second = self.all_messages[1]
@@ -927,30 +1368,25 @@ class ModernBannerCard(MDCard):
 
     @staticmethod
     def _emphasize_banner_text(text):
-        """Emphasise product names and operational facts in banner messages."""
         raw_text = str(text or "").strip()
         if not raw_text:
             return ""
-
         rendered = escape_markup(raw_text)
-        product_match = re.match(r"^([^:\n]{1,100}):\s*", rendered)
-        if product_match:
-            product_name = product_match.group(1).strip()
-            rendered = f"[b]{product_name}[/b]{rendered[product_match.end(1):]}"
 
-        important_patterns = (
-            r"\b(?:stock(?:\s+(?:atual|baixo|esgotado))?|restam|cobertura estimada|"
-            r"validade|vence em|vencido(?:\s+(?:h[aá]|desde))?|poss[ií]vel perda)\b[^.;]*",
-            r"\bexistem mais\s+\d+\s+ocorr[eê]ncias?\b",
-        )
-        for pattern in important_patterns:
-            rendered = re.sub(
-                pattern,
-                lambda match: f"[b]{match.group(0)}[/b]",
-                rendered,
-                flags=re.IGNORECASE,
-            )
-        return rendered
+        head = ""
+        m = re.match(r"^([^:\n]{1,100}):(\s*)", rendered)
+        if m:  # "Produto: ..." -> nome em negrito
+            head = f"[b]{m.group(1).strip()}[/b]:{m.group(2)}"
+            rendered = rendered[m.end():]
+        else:
+            m = re.match(r"^(.+?)(\s+·\s+)", rendered)
+            if m:  # "Produto · detalhe · qtd" -> nome em negrito
+                head = f"[b]{m.group(1).strip()}[/b]{m.group(2)}"
+                rendered = rendered[m.end():]
+
+        # uma só passagem, sem [b] aninhado
+        rendered = _EMPHASIS_RE.sub(lambda mm: f"[b]{mm.group(0)}[/b]", rendered)
+        return head + rendered
 
     def _build_ui(self, show_timer):
         self._content = MDBoxLayout(
@@ -973,22 +1409,17 @@ class ModernBannerCard(MDCard):
         self._icon_shell = MDCard(
             size_hint=(None, None),
             size=(dp(46), dp(46)),
-            radius=[dp(23), dp(23), dp(23), dp(23)],
+            radius=[dp(14), dp(14), dp(14), dp(14)],
             elevation=0,
             md_bg_color=self.palette["icon_bg"],
         )
-        self._icon_label = MDLabel(
-            text=md_icons.get(str(self.banner_data.get("icon") or "information-outline"), md_icons.get("information-outline", "")),
-            font_style="Icon",
-            halign="center",
-            valign="middle",
-            theme_text_color="Custom",
-            text_color=self.palette["button_text"],
-            font_size=dp(22),
+        self._icon_label = _BannerStatusIcon(
+            variant=self.palette["variant"],
+            kind=self.banner_data.get("kind"),
+            color=self.palette["button_text"],
         )
-        self._icon_label.bind(size=lambda instance, value: setattr(instance, "text_size", value))
         self._icon_shell.add_widget(self._icon_label)
-        self._top_row.add_widget(self._icon_shell)
+        # icone do cabecalho removido (o shell fica fora do layout)
 
         self._text_box = MDBoxLayout(
             orientation="vertical",
@@ -1012,11 +1443,10 @@ class ModernBannerCard(MDCard):
             text_color=self.palette["title"],
             font_size=dp(15.5),
             bold=True,
-            shorten=True,
-            shorten_from="right",
             size_hint_y=None,
         )
         _bind_auto_height(self._title_label, dp(22))
+        self._grow(self._title_label)
         self._title_row.add_widget(self._title_label)
 
         count = int(self.banner_data.get("count") or 0)
@@ -1024,51 +1454,35 @@ class ModernBannerCard(MDCard):
         if self._count_chip is not None:
             self._title_row.add_widget(self._count_chip)
 
-        self._description_label = MDLabel(
-            text="",
-            markup=True,
-            theme_text_color="Custom",
-            text_color=self.palette["text"],
-            font_size=dp(12.8),
-            line_height=1.22,
+        self._description_box = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(3),
             size_hint_y=None,
         )
-        _bind_auto_height(self._description_label, dp(20))
-        self._text_box.add_widget(self._description_label)
-
-        self._inline_actions = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(8),
-            size_hint=(None, None),
-        )
-        self._inline_actions.bind(minimum_width=lambda instance, value: setattr(instance, "width", value))
-        self._inline_actions.bind(minimum_height=lambda instance, value: setattr(instance, "height", max(value, dp(34))))
-        self._top_row.add_widget(self._inline_actions)
-
-        self._inline_toggle_btn = self._build_action_button()
-        self._inline_actions.add_widget(self._inline_toggle_btn)
+        self._description_box.bind(minimum_height=_sync_box_height)
+        self._text_box.add_widget(self._description_box)
 
         self._close_btn = _build_banner_close_button(
             lambda *_args: animate_banner_out(self._wrapper or self),
             {"button_text": self.palette["muted"], "close_bg": self.palette["icon_bg"]},
         )
-        self._inline_actions.add_widget(self._close_btn)
+        self._close_btn.pos_hint = {"top": 1}
+        self._top_row.add_widget(self._close_btn)
 
-        self._bottom_actions = MDBoxLayout(
+        # Linha unica de acoes: "Ver mais" e "PDF" alinhados (mesma altura/estilo).
+        self._actions_row = MDBoxLayout(
             orientation="horizontal",
             spacing=dp(8),
+            padding=[0, 0, 0, 0],
             size_hint_y=None,
-            height=0,
-            opacity=0,
+            height=dp(34),
         )
-        self._bottom_toggle_btn = self._build_action_button()
-        self._bottom_actions.add_widget(self._bottom_toggle_btn)
-        self._bottom_actions.add_widget(Widget())
-        self._content.add_widget(self._bottom_actions)
-
-        self._quick_actions = self._build_quick_actions()
-        if self._quick_actions is not None:
-            self._content.add_widget(self._quick_actions)
+        self._toggle_btn = self._build_action_button()
+        self._actions_row.add_widget(self._toggle_btn)
+        for quick_btn in self._build_quick_actions():
+            self._actions_row.add_widget(quick_btn)
+        self._actions_row.add_widget(Widget())
+        self._content.add_widget(self._actions_row)
 
         self._details_scroll = ScrollView(
             size_hint=(1, None),
@@ -1117,55 +1531,29 @@ class ModernBannerCard(MDCard):
             for spec in (self.banner_data.get("action_buttons") or [])
             if isinstance(spec, dict) and str(spec.get("text") or "").strip()
         ][:3]
-        if not specs:
-            return None
-
-        scroll = ScrollView(
-            size_hint=(1, None),
-            height=dp(38),
-            do_scroll_x=True,
-            do_scroll_y=False,
-            bar_width=0,
-        )
-        row = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(8),
-            padding=[dp(2), 0, dp(2), 0],
-            size_hint=(None, None),
-            height=dp(38),
-        )
-        row.bind(minimum_width=lambda instance, value: setattr(instance, "width", value))
-        scroll.add_widget(row)
-
         self._quick_action_buttons = []
         for spec in specs:
-            label = str(spec.get("text") or "").strip()
+            label = str(spec.get("text") or "").strip().upper()
             callback = spec.get("callback") or spec.get("on_release")
             dismiss_after = bool(spec.get("dismiss_after", True))
-            preferred_width = max(dp(104), dp(7.4 * len(label) + 30))
-            button = _BannerPillButton(
-                text=label.upper(),
-                theme_text_color="Custom",
-                text_color=self.palette["button_text"],
-                halign="center",
-                valign="middle",
-                shorten=False,
-                font_size=dp(12),
-                size_hint=(None, None),
-                size=(preferred_width, dp(36)),
-            )
-            button._preferred_banner_width = preferred_width
-            self._bind_pill_text(button)
-            _decorate_pill(button, self.palette["button_bg"], self.palette["border"])
             export_pdf = bool(spec.get("export_pdf"))
+            button = _ActionPill(
+                text=label,
+                icon_kind="download" if export_pdf else None,
+                color=self.palette["button_text"],
+                bg=self.palette["button_bg"],
+                border=self.palette["border"],
+            )
+            button.bind(on_press=lambda instance: self._animate_button(instance, pressed=True))
             button.bind(
                 on_release=lambda btn, cb=callback, close=dismiss_after, exp=export_pdf: self._run_quick_action(
                     btn, cb, close, export_pdf=exp
                 )
             )
-            row.add_widget(button)
+            button.bind(on_release=lambda instance: self._animate_button(instance, pressed=False))
+            self._grow(button.label, center=True)
             self._quick_action_buttons.append(button)
-        return scroll
+        return self._quick_action_buttons
 
     def _run_quick_action(self, button, callback, dismiss_after, export_pdf=False):
         if export_pdf:
@@ -1186,9 +1574,9 @@ class ModernBannerCard(MDCard):
                 if path and app and hasattr(app, "show_toast"):
                     app.show_toast(f"Relatório exportado: {path}")
                 elif path:
-                    old = getattr(button, "text", "PDF")
-                    button.text = "OK"
-                    Clock.schedule_once(lambda _dt: setattr(button, "text", old), 1.4)
+                    old = getattr(button.label, "_normal_text", button.label.text)
+                    button.set_text("OK")
+                    Clock.schedule_once(lambda _dt: button.set_text(old), 1.4)
             except Exception:
                 pass
             return
@@ -1201,17 +1589,7 @@ class ModernBannerCard(MDCard):
                 callback(button)
 
     def _sync_quick_action_widths(self):
-        buttons = getattr(self, "_quick_action_buttons", [])
-        if not buttons:
-            return
-        actions_row = getattr(self, "_quick_actions", None)
-        row_width = float(actions_row.width or 0) if actions_row is not None else 0
-        if row_width <= 0:
-            row_width = max(float(self.width or 0) - dp(44), 0)
-        available = max(row_width - dp(4) - dp(8) * max(len(buttons) - 1, 0), 1)
-        maximum = available / len(buttons)
-        for button in buttons:
-            button.width = max(1, min(float(button._preferred_banner_width), maximum))
+        return
 
     @staticmethod
     def _bind_pill_text(button):
@@ -1222,22 +1600,17 @@ class ModernBannerCard(MDCard):
         Clock.schedule_once(lambda _dt: _sync_text_area(button, button.size), 0)
 
     def _build_action_button(self):
-        button = _BannerPillButton(
-            text="Ver mais",
-            theme_text_color="Custom",
-            text_color=self.palette["button_text"],
-            halign="center",
-            valign="middle",
-            shorten=True,
-            font_size=dp(12),
-            size_hint=(None, None),
-            size=(dp(104), dp(36)),
-            on_release=lambda *_args: self._toggle_details(),
+        button = _ActionPill(
+            text=_tx("Ver mais"),
+            icon_kind="chevron_down",
+            color=self.palette["button_text"],
+            bg=self.palette["button_bg"],
+            border=self.palette["border"],
         )
-        self._bind_pill_text(button)
-        _decorate_pill(button, self.palette["button_bg"], self.palette["border"])
         button.bind(on_press=lambda instance: self._animate_button(instance, pressed=True))
+        button.bind(on_release=lambda *_args: self._toggle_details())
         button.bind(on_release=lambda instance: self._animate_button(instance, pressed=False))
+        self._grow(button.label, center=True)
         return button
 
     def _animate_button(self, button, pressed):
@@ -1254,7 +1627,7 @@ class ModernBannerCard(MDCard):
             size_hint_y=None,
         )
         _bind_auto_height(label, dp(18))
-        return label
+        return self._grow(label)
 
     def _build_text_block(self, text):
         label = MDLabel(
@@ -1267,7 +1640,7 @@ class ModernBannerCard(MDCard):
             size_hint_y=None,
         )
         _bind_auto_height(label, dp(22))
-        return label
+        return self._grow(label)
 
     def _build_bullet_text(self, text):
         label = MDLabel(
@@ -1280,46 +1653,74 @@ class ModernBannerCard(MDCard):
             size_hint_y=None,
         )
         _bind_auto_height(label, dp(18))
-        return label
+        return self._grow(label)
+
+    def _shown_messages(self):
+        msgs = _clean_messages(self.banner_data.get("messages") or self.all_messages)
+        return msgs[:3]
+
+    def _hidden_count(self):
+        shown = len(self._shown_messages())
+        count = int(self.banner_data.get("count") or 0)
+        return max(count - shown, len(self.all_messages) - shown, 0)
 
     def _refresh_expandable_state(self):
-        preview_limit = 230 if self.width >= dp(860) else 180 if self.width >= dp(620) else 130
-        preview_text, truncated = _truncate_text(self.full_description, preview_limit)
-        self._preview_truncated = truncated
-        self._has_extra_content = bool(truncated or self.details_sections or len(self.all_messages) > 1)
-        self._description_label.text = self._emphasize_banner_text(preview_text)
+        shown = self._shown_messages()
+        self._preview_truncated = False
+        self._has_extra_content = bool(self.details_sections or self._hidden_count() > 0)
+        if shown:
+            lines = [f"• {self._emphasize_banner_text(msg)}" for msg in shown]
+        else:
+            lines = [self._emphasize_banner_text(self.full_description)]
+        signature = tuple(lines)
+        if signature != getattr(self, "_desc_signature", None):
+            self._desc_signature = signature
+            self._description_box.clear_widgets()
+            for line in lines:
+                self._description_box.add_widget(self._make_description_line(line))
         self._apply_action_button_state()
 
+    def _make_description_line(self, markup_text):
+        label = MDLabel(
+            text=markup_text,
+            markup=True,
+            theme_text_color="Custom",
+            text_color=self.palette["text"],
+            font_size=dp(12.8),
+            line_height=1.22,
+            size_hint_y=None,
+        )
+        _bind_auto_height(label, dp(20))
+        return self._grow(label)
+
     def _apply_action_button_state(self):
-        label = "Ver menos" if self._expanded else "Ver mais"
-        self._inline_toggle_btn.text = label
-        self._bottom_toggle_btn.text = label
+        label = _tx("Ver menos") if self._expanded else _tx("Ver mais")
+        self._toggle_btn.set_text(label)
+        self._toggle_btn.icon.set_kind("chevron_up" if self._expanded else "chevron_down")
+        self._toggle_btn.set_count(
+            0 if self._expanded else self._hidden_count(),
+            self.palette["chip_bg"],
+            self.palette["button_text"],
+        )
 
-        inline_visible = self._has_extra_content and not self._compact
-        bottom_visible = self._has_extra_content and self._compact
+        visible = bool(self._has_extra_content)
+        in_row = self._toggle_btn.parent is not None
+        if visible and not in_row:
+            self._actions_row.add_widget(self._toggle_btn, index=len(self._actions_row.children))
+        elif not visible and in_row:
+            self._actions_row.remove_widget(self._toggle_btn)
 
-        self._inline_toggle_btn.disabled = not inline_visible
-        self._inline_toggle_btn.opacity = 1 if inline_visible else 0
-        self._inline_toggle_btn.width = dp(104) if inline_visible else 0
-
-        self._bottom_toggle_btn.disabled = not bottom_visible
-        self._bottom_toggle_btn.opacity = 1 if bottom_visible else 0
-        self._bottom_toggle_btn.width = dp(104) if bottom_visible else 0
-        self._bottom_actions.opacity = 1 if bottom_visible else 0
-        self._bottom_actions.height = dp(40) if bottom_visible else 0
+        has_row = visible or bool(getattr(self, "_quick_action_buttons", []))
+        self._actions_row.height = dp(34) if has_row else 0
+        self._actions_row.opacity = 1 if has_row else 0
 
     def _rebuild_details_content(self):
         self._details_content.clear_widgets()
 
-        if self._preview_truncated:
-            self._details_content.add_widget(self._build_section_title("Descrição completa"))
-            self._details_content.add_widget(self._build_text_block(self.full_description))
-
-        # Quando há secções estruturadas, repetir as mensagens volta a mostrar
-        # o mesmo diagnóstico já visível no cabeçalho do aviso.
-        if len(self.all_messages) > 1 and not self.details_sections:
-            self._details_content.add_widget(self._build_section_title("Pontos observados"))
-            for message in self.all_messages:
+        extra = self.all_messages[len(self._shown_messages()):]
+        if extra and not self.details_sections:
+            self._details_content.add_widget(self._build_section_title(_tx("Pontos observados")))
+            for message in extra:
                 self._details_content.add_widget(self._build_bullet_text(message))
 
         for title, items in self.details_sections:
@@ -1407,6 +1808,7 @@ class ModernBannerCard(MDCard):
     def _handle_mouse_pos(self, _window, pos):
         if not self.get_root_window():
             return
+        self._update_word_hover(pos)
         local = self.to_widget(*pos)
         hovered = self.collide_point(*local)
         if hovered and not getattr(self, "_hovered", False):
@@ -1426,8 +1828,8 @@ class ModernBannerCard(MDCard):
         self._content.padding = [dp(18), dp(16), dp(16), dp(14)] if self._compact else [dp(22), dp(18), dp(18), dp(16)]
         self._top_row.spacing = dp(10) if self._compact else dp(14)
         self._icon_shell.size = (dp(40), dp(40)) if self._compact else (dp(46), dp(46))
-        self._icon_shell.radius = [dp(20)] * 4 if self._compact else [dp(23)] * 4
-        self._sync_quick_action_widths()
+        self._icon_shell.radius = [dp(12)] * 4 if self._compact else [dp(14)] * 4
+        self._actions_row.padding = [0, 0, 0, 0]
         self._refresh_expandable_state()
         if self._expanded:
             self._details_scroll.height = self._details_target_height()
@@ -1435,9 +1837,9 @@ class ModernBannerCard(MDCard):
 
     def _update_decorations(self, *_args):
         accent_x = self.x + dp(12)
-        accent_y = self.y + dp(12)
+        accent_y = self.y + dp(14)
         self._accent_bar.pos = (accent_x, accent_y)
-        self._accent_bar.size = (dp(4), max(dp(52), self.height - dp(24)))
+        self._accent_bar.size = (dp(3), max(dp(40), self.height - dp(28)))
         self._border_line.rounded_rectangle = (
             self.x + 0.5,
             self.y + 0.5,
@@ -1537,6 +1939,7 @@ def clear_banner_container(container):
     for widget in list(getattr(container, "_ai_banner_widgets", []) or []):
         _cancel_banner_widget(widget)
     container._ai_banner_widgets = []
+    _release_modal_blocker(container)
     container.clear_widgets()
     container._ai_banner_host = None
     container._ai_banner_shell = None
@@ -1550,6 +1953,46 @@ def clear_banner_container(container):
         except Exception:
             pass
         container._ai_banner_recenter = None
+
+
+def _ensure_modal_blocker(container):
+    """Bloqueia o ecrã por baixo dos banners: sem cliques, sem scroll, nada se move."""
+    if not container:
+        return None
+    blocker = getattr(container, "_ai_banner_blocker", None)
+    if blocker is None:
+        blocker = _BannerModalBlocker(size_hint=(None, None))
+
+        def _fit(*_args):
+            blocker.pos = container.pos
+            blocker.size = container.size
+
+        container.bind(pos=_fit, size=_fit)
+        blocker._fit = _fit
+        container._ai_banner_blocker = blocker
+    blocker._fit()
+    if blocker.parent is not None:
+        blocker.parent.remove_widget(blocker)
+    container.add_widget(blocker)  # os banners sao adicionados depois, ficam por cima
+    Animation.cancel_all(blocker, "scrim")
+    Animation(scrim=0.38, d=0.25, t="out_quad").start(blocker)
+    return blocker
+
+
+def _release_modal_blocker(container):
+    blocker = getattr(container, "_ai_banner_blocker", None) if container else None
+    if blocker is None:
+        return
+    fit = getattr(blocker, "_fit", None)
+    if fit is not None:
+        try:
+            container.unbind(pos=fit, size=fit)
+        except Exception:
+            pass
+    Animation.cancel_all(blocker)
+    if blocker.parent is not None:
+        blocker.parent.remove_widget(blocker)
+    container._ai_banner_blocker = None
 
 
 def _ensure_banner_surface(container):
@@ -1678,8 +2121,8 @@ def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
     count = int(banner_data.get("count") or 0)
     if count > 1 and len(messages) > 1:
         remaining = count - 1
-        noun = "alerta" if remaining == 1 else "alertas"
-        message = f"{message} Há mais {remaining} {noun} neste aviso."
+        noun = _tx("alerta") if remaining == 1 else _tx("alertas")
+        message = f"{message} {_tx('Há mais')} {remaining} {noun} {_tx('neste aviso.')}"
     message_scroll = _build_horizontal_banner_text_scroll(
         f"[b]ATENÇÃO:[/b] {message}",
         (0.2, 0.2, 0.2, 1),
@@ -1890,7 +2333,37 @@ def _create_auto_banner_original(banner_data, show_timer=True, insights=None):
     return card
 
 
+def _run_pdf_export(banner_data, insights, button=None):
+    try:
+        data = insights
+        if not data:
+            try:
+                from utils.ai.ai_insights import build_admin_insights
+                data = build_admin_insights()
+            except Exception:
+                data = {}
+        path = export_banner_alerts_pdf(banner_data=banner_data, insights=data)
+        app = App.get_running_app()
+        if path and app and hasattr(app, "show_toast"):
+            app.show_toast(f"Relatório exportado: {path}")
+        elif path and button is not None:
+            old = getattr(button, "text", "PDF")
+            button.text = "OK"
+            Clock.schedule_once(lambda _dt: setattr(button, "text", old), 1.4)
+    except Exception:
+        pass
+
+
 def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
+    # Cores adaptativas: texto claro em fundos escuros, escuro em fundos claros.
+    _bg = _rgba(banner_data.get("bg_color") or (0.9, 0.9, 0.9, 1))
+    _dark_bg = _is_dark_color(_bg)
+    c_title = (1, 1, 1, 1) if _dark_bg else (0.15, 0.15, 0.15, 1)
+    c_text = (1, 1, 1, 0.94) if _dark_bg else (0.25, 0.25, 0.25, 1)
+    c_btn_bg = (1, 1, 1, 0.18) if _dark_bg else (0, 0, 0, 0.08)
+    c_close = (1, 1, 1, 0.95) if _dark_bg else (0.35, 0.35, 0.35, 1)
+    c_badge_bg = (1, 1, 1, 0.24) if _dark_bg else (0.2, 0.2, 0.2, 0.85)
+    c_details_text = (1, 1, 1, 0.9) if _dark_bg else (0.3, 0.3, 0.3, 1)
     header_height = dp(64)
     card = MDCard(
         orientation="vertical",
@@ -1917,7 +2390,7 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         text=icon_text,
         font_style="Icon",
         theme_text_color="Custom",
-        text_color=(0.2, 0.2, 0.2, 1),
+        text_color=c_title,
         font_size=dp(26),
         size_hint=(None, None),
         size=(dp(32), dp(32)),
@@ -1932,7 +2405,7 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         text=f"[b]{title_text}[/b]",
         markup=True,
         theme_text_color="Custom",
-        text_color=(0.15, 0.15, 0.15, 1),
+        text_color=c_title,
         font_size=dp(15),
         halign="left",
         valign="middle",
@@ -1961,14 +2434,14 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         )
         badge.bind(size=lambda inst, val: setattr(inst, "text_size", val))
         with badge.canvas.before:
-            Color(0.2, 0.2, 0.2, 0.85)
+            Color(*c_badge_bg)
             badge._bg_rect = RoundedRectangle(pos=badge.pos, size=badge.size, radius=[dp(11)])
         badge.bind(pos=lambda *_: setattr(badge._bg_rect, "pos", badge.pos))
         badge.bind(size=lambda *_: setattr(badge._bg_rect, "size", badge.size))
 
     close_btn = _build_banner_close_button(
         lambda *_args: animate_banner_out(card),
-        {"button_text": (0.35, 0.35, 0.35, 1), "close_bg": (1, 1, 1, 0.48)},
+        {"button_text": c_close, "close_bg": (1, 1, 1, 0.48)},
     )
     close_btn.pos_hint = {"center_y": 0.5}
 
@@ -2002,9 +2475,10 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
 
     for msg in messages:
         bullet = MDLabel(
-            text=f"• {msg}",
+            text=f"• {ModernBannerCard._emphasize_banner_text(msg)}",
+            markup=True,
             theme_text_color="Custom",
-            text_color=(0.25, 0.25, 0.25, 1),
+            text_color=c_text,
             font_size=dp(13),
             halign="left",
             valign="middle",
@@ -2036,7 +2510,7 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
             text=md_icons.get("chevron-down", ""),
             font_style="Icon",
             theme_text_color="Custom",
-            text_color=(0.15, 0.15, 0.15, 1),
+            text_color=c_title,
             font_size=dp(20),
             size_hint=(None, None),
             size=(dp(24), dp(24)),
@@ -2046,9 +2520,9 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         btn_icon.bind(size=lambda inst, val: setattr(inst, "text_size", val))
 
         btn_text = MDLabel(
-            text="Ver mais",
+            text=_tx("Ver mais"),
             theme_text_color="Custom",
-            text_color=(0.15, 0.15, 0.15, 1),
+            text_color=c_title,
             font_size=dp(12.5),
             bold=True,
             halign="left",
@@ -2091,7 +2565,7 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
             toggle_btn_widget.add_widget(badge_new)
 
         with toggle_btn_widget.canvas.before:
-            Color(0, 0, 0, 0.08)
+            Color(*c_btn_bg)
             toggle_btn_widget._bg_rect = RoundedRectangle(
                 pos=toggle_btn_widget.pos,
                 size=toggle_btn_widget.size,
@@ -2103,11 +2577,11 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         toggle_container = MDBoxLayout(
             orientation="horizontal",
             padding=[dp(16), dp(6), dp(16), dp(8)],
+            spacing=dp(8),
             size_hint_y=None,
             height=dp(48),
         )
         toggle_container.add_widget(toggle_btn_widget)
-        toggle_container.add_widget(Widget())
         toggle_btn_widget._icon = btn_icon
         toggle_btn_widget._text = btn_text
 
@@ -2129,66 +2603,56 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
         spec
         for spec in (banner_data.get("action_buttons") or [])
         if isinstance(spec, dict) and str(spec.get("text") or "").strip()
-    ]
-    if action_specs:
-        action_container = MDBoxLayout(
-            orientation="horizontal",
-            padding=[dp(16), dp(6), dp(16), dp(10)],
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(50),
+    ][:3]
+    action_buttons = []
+    for spec in action_specs:
+        label = str(spec.get("text") or "").strip().upper()
+        callback = spec.get("callback") or spec.get("on_release")
+        dismiss_after = bool(spec.get("dismiss_after", True))
+        export_pdf = bool(spec.get("export_pdf"))
+        button = MDFlatButton(
+            text=label,
+            theme_text_color="Custom",
+            text_color=c_title,
+            size_hint=(None, None),
+            size=(max(dp(84), dp(7.6 * len(label) + 40)), dp(34)),
+            font_size=dp(12),
         )
+        _decorate_pill(button, c_btn_bg, None, radius=dp(8))
 
-        def _run_banner_action(_button, callback=None, dismiss_after=True):
-            if dismiss_after:
-                animate_banner_out(card)
-            if callable(callback):
-                try:
-                    callback()
-                except TypeError:
-                    callback(_button)
-
-        action_buttons = []
-        for spec in action_specs[:3]:
-            text = str(spec.get("text") or "").strip().upper()
-            callback = spec.get("callback") or spec.get("on_release")
-            dismiss_after = bool(spec.get("dismiss_after", True))
-            preferred_width = max(dp(104), dp(7.6 * len(text) + 28))
-            button = MDFlatButton(
-                text=text,
-                theme_text_color="Custom",
-                text_color=(0.15, 0.15, 0.15, 1),
-                size_hint=(None, None),
-                size=(preferred_width, dp(34)),
-            )
-            button._preferred_banner_width = preferred_width
-            _decorate_pill(button, (1, 1, 1, 0.52), (0, 0, 0, 0.14), radius=dp(8))
-            button.bind(
-                on_release=lambda btn, cb=callback, close=dismiss_after: _run_banner_action(
-                    btn,
-                    callback=cb,
-                    dismiss_after=close,
-                )
-            )
-            action_container.add_widget(button)
-            action_buttons.append(button)
-        action_container.add_widget(Widget())
-
-        def _sync_action_widths(*_args):
-            if not action_buttons:
+        def _on_action(btn, cb=callback, close=dismiss_after, exp=export_pdf):
+            if exp:
+                _run_pdf_export(banner_data, insights, btn)
                 return
-            available = max(
-                float(card.width or 0)
-                - float(action_container.padding[0] + action_container.padding[2])
-                - float(action_container.spacing * len(action_buttons)),
-                float(dp(96) * len(action_buttons)),
-            )
-            max_button_width = max(dp(96), available / len(action_buttons))
-            for button in action_buttons:
-                button.width = min(float(getattr(button, "_preferred_banner_width", dp(104))), max_button_width)
+            if close:
+                animate_banner_out(card)
+            if callable(cb):
+                try:
+                    cb()
+                except TypeError:
+                    cb(btn)
 
-        card.bind(width=_sync_action_widths)
-        Clock.schedule_once(lambda _dt: _sync_action_widths(), 0)
+        button.bind(on_release=_on_action)
+        action_buttons.append(button)
+
+    if action_buttons:
+        if toggle_container is not None:
+            # mesma linha e mesma altura do botao "Ver mais"
+            for button in action_buttons:
+                toggle_container.add_widget(button)
+        else:
+            action_container = MDBoxLayout(
+                orientation="horizontal",
+                padding=[dp(16), dp(6), dp(16), dp(10)],
+                spacing=dp(8),
+                size_hint_y=None,
+                height=dp(50),
+            )
+            for button in action_buttons:
+                action_container.add_widget(button)
+            action_container.add_widget(Widget())
+    if toggle_container is not None:
+        toggle_container.add_widget(Widget())
 
     def _sync_card_height(*_args):
         if getattr(card, "_details_expanded", False):
@@ -2200,10 +2664,12 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
             total += toggle_container.height
         if progress:
             total += progress.height
+        previous = getattr(card, "_synced_height", None)
         card.height = total
         card._base_height = total
+        card._synced_height = total
         container = getattr(card, "_banner_container", None)
-        if container is not None:
+        if container is not None and (previous is None or abs(previous - total) > 0.5):
             Clock.schedule_once(
                 lambda _dt, current=container: position_banners_center(
                     current,
@@ -2252,7 +2718,10 @@ def _create_auto_banner_legacy(banner_data, show_timer=True, insights=None):
     card._details_expanded = False
 
     if toggle_btn_widget and details_sections:
-        _setup_details_toggle(card, toggle_btn_widget, details_sections)
+        _setup_details_toggle(
+            card, toggle_btn_widget, details_sections,
+            colors=(c_title, c_details_text),
+        )
 
     return card
 
@@ -2370,7 +2839,7 @@ def _collect_all_alert_report(insights):
     report["summary"]["fraud"] = len(fraud_lines)
     if fraud_lines:
         report["sections"].append({
-            "title": "Alertas de fraude",
+            "title": _tx("Alertas de fraude"),
             "count": len(fraud_lines),
             "items": fraud_lines,
             "action": "Reveja os registos e confirme com a equipa.",
@@ -2559,7 +3028,7 @@ def export_banner_alerts_pdf(banner_data=None, insights=None, filepath=None):
 
 
 def create_auto_banner(banner_data, show_timer=True, insights=None):
-    """Create the standard, structured banner used by every alert source."""
+    """Banner classico (cor propria do alerta) com icones desenhados e botoes em pilula."""
     return ModernBannerCard(
         banner_data,
         show_timer=show_timer,
@@ -2660,6 +3129,14 @@ def animate_banner_out(widget):
     slide = min(max(width * 0.55, float(dp(120))), float(dp(420)))
     end_x = float(widget.x) + slide
 
+    container_out = getattr(widget, "_banner_container", None)
+    if container_out is not None:
+        blocker = getattr(container_out, "_ai_banner_blocker", None)
+        others = [w for w in _visible_widgets(container_out) if w is not widget]
+        if blocker is not None and not others and getattr(container_out, "_ai_render_ev", None) is None:
+            Animation.cancel_all(blocker, "scrim")
+            Animation(scrim=0.0, d=0.4, t="out_quad").start(blocker)
+
     anim = Animation(
         x=end_x,
         opacity=0,
@@ -2698,7 +3175,7 @@ def _force_collapse_banner(widget):
             if hasattr(toggle_btn, "_icon"):
                 toggle_btn._icon.text = md_icons.get("chevron-down", "")
             if hasattr(toggle_btn, "_text"):
-                toggle_btn._text.text = "Ver mais"
+                toggle_btn._text.text = _tx("Ver mais")
         base_height = getattr(widget, "_base_height", None)
         if base_height is not None:
             widget.height = base_height
@@ -2735,7 +3212,7 @@ def _resume_auto_dismiss(widget):
     )
 
 
-def _build_details_box(sections):
+def _build_details_box(sections, title_color=(0.15, 0.15, 0.15, 1), text_color=(0.3, 0.3, 0.3, 1)):
     details_box = MDBoxLayout(
         orientation="vertical",
         padding=[dp(16), dp(8), dp(16), dp(12)],
@@ -2764,7 +3241,7 @@ def _build_details_box(sections):
             text=f"[b]{title}[/b]",
             markup=True,
             theme_text_color="Custom",
-            text_color=(0.15, 0.15, 0.15, 1),
+            text_color=title_color,
             font_size=dp(13),
             halign="left",
             valign="middle",
@@ -2774,9 +3251,10 @@ def _build_details_box(sections):
         details_content.add_widget(title_label)
         for item in items:
             item_label = MDLabel(
-                text=f"  • {item}",
+                text=f"  • {ModernBannerCard._emphasize_banner_text(item)}",
+                markup=True,
                 theme_text_color="Custom",
-                text_color=(0.3, 0.3, 0.3, 1),
+                text_color=text_color,
                 font_size=dp(12),
                 halign="left",
                 valign="middle",
@@ -2815,8 +3293,11 @@ def _calc_details_height(details_box):
     return max(total, dp(60))
 
 
-def _setup_details_toggle(card, toggle_btn, details_sections):
-    details_box = _build_details_box(details_sections)
+def _setup_details_toggle(card, toggle_btn, details_sections, colors=None):
+    if colors:
+        details_box = _build_details_box(details_sections, title_color=colors[0], text_color=colors[1])
+    else:
+        details_box = _build_details_box(details_sections)
 
     def _recenter():
         container = getattr(card, "_banner_container", None)
@@ -2855,7 +3336,7 @@ def _setup_details_toggle(card, toggle_btn, details_sections):
             Animation(height=card._base_height, d=0.2, t="in_out_cubic").start(card)
             if hasattr(toggle_btn, "_icon"):
                 toggle_btn._icon.text = md_icons.get("chevron-down", "")
-                toggle_btn._text.text = "Ver mais"
+                toggle_btn._text.text = _tx("Ver mais")
 
             def _finish(*_):
                 if details_box.parent:
@@ -2879,7 +3360,7 @@ def _setup_details_toggle(card, toggle_btn, details_sections):
             Animation(height=card_target, d=0.25, t="out_cubic").start(card)
             if hasattr(toggle_btn, "_icon"):
                 toggle_btn._icon.text = md_icons.get("chevron-up", "")
-                toggle_btn._text.text = "Ver menos"
+                toggle_btn._text.text = _tx("Ver menos")
 
             card._details_expanded = True
             _toggle_siblings(False)
@@ -2888,6 +3369,9 @@ def _setup_details_toggle(card, toggle_btn, details_sections):
     toggle_btn.bind(on_touch_down=_on_touch_down)
     card._details_box = details_box
     card._toggle_details = _toggle
+
+
+_USE_DECK_LAYOUT = True  # True = banners sobrepostos em baralho (o da frente fica 100% legivel)
 
 
 def position_banners_center(
@@ -2930,7 +3414,7 @@ def position_banners_center(
 
     # Multiple alerts form one centred deck. The front card stays fully
     # readable while small portions of the cards behind it remain visible.
-    if len(widgets) > 1:
+    if _USE_DECK_LAYOUT and len(widgets) > 1:
         visible_layers = min(len(widgets), 5)
         x_step = min(max(overlay_width * 0.012, float(dp(8))), float(dp(14)))
         y_step = min(max(overlay_height * 0.014, float(dp(8))), float(dp(12)))
@@ -2973,13 +3457,16 @@ def position_banners_center(
     total_height = sum(w.height for w in widgets) + spacing * (len(widgets) - 1)
     start_y = center_y - (total_height / 2.0)
     banner_width = min(overlay_width * 0.92, available_width, dp(760))
+    cursor = min(center_y + total_height / 2.0, overlay_height - dp(8))
     for idx, widget in enumerate(widgets):
         widget.width = banner_width
         widget.pos_hint = {}
         widget.disabled = False
         widget._stack_depth = 0
         widget._target_x = center_x - (banner_width / 2.0)
-        widget._target_y = start_y + (len(widgets) - 1 - idx) * (widget.height + spacing)
+        cursor -= float(widget.height)
+        widget._target_y = cursor
+        cursor -= spacing
         widget._target_opacity = 1
         widget._entry_y = widget._target_y + dp(8)
         widget._pass_x = widget._target_x + min(max(banner_width * 0.03, dp(12)), dp(20))
@@ -3042,6 +3529,7 @@ def render_auto_banners(
             widget._auto_paused = False
             widgets.append(widget)
 
+        _ensure_modal_blocker(container)
         # Add the priority card last so Kivy draws it above every card behind.
         draw_widgets = list(reversed(widgets))
         for widget in draw_widgets:

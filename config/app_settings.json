@@ -1,15 +1,20 @@
 {
-  "system_name": "NECTAR",
+  "system_name": "c o n e c t a r",
   "ai_enabled": true,
   "auto_banners_enabled": true,
   "smart_monitor_enabled": true,
-  "theme_style": "Dark",
+  "theme_style": "Light",
   "manager_theme_style": "Light",
   "language": "pt",
+  "language_mode": "manual",
   "physical_scanner_enabled": true,
   "physical_scanner_min_length": 6,
   "receipt_auto_print": true,
   "receipt_printer_name": "Microsoft Edge",
   "receipt_paper_width_mm": 80,
+  "receipt_nuit": "",
+  "receipt_address": "",
+  "receipt_phone": "",
+  "receipt_street": "",
   "manager_mobile_terminal_id": "MOBILE-D92EA557"
 }

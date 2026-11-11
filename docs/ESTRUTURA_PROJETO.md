@@ -6,8 +6,8 @@ Este documento explica onde cada tipo de codigo deve viver. A regra geral e simp
 
 Manter a raiz pequena. Ela deve conter apenas os pontos de entrada, requisitos, README, configuracoes legadas ainda suportadas e arquivos essenciais do repositorio.
 
-- `admin_app.py`: entrada da aplicacao do administrador.
-- `manager_app.py`: entrada da aplicacao do gerente/caixa.
+- `admin_app.py`: ponto de entrada da aplicacao desktop unica. O login encaminha cada perfil para o respetivo painel.
+- `manager_app.py` e `MERCEARIA.py`: atalhos legados para a mesma aplicacao desktop unica.
 - `api_server_app.py`: entrada da API local.
 - `admin/`: telas e componentes especificos do administrador.
 - `manager/`: telas e servicos especificos do gerente/caixa.
@@ -35,7 +35,7 @@ Manter a raiz pequena. Ela deve conter apenas os pontos de entrada, requisitos, 
 
 ## `docs/`
 
-- `docs/INSTALACAO_ADMIN.md` e `docs/INSTALACAO_MANAGER.md`: guias de instalacao.
+- `docs/INSTALACAO_ADMIN.md` e `docs/INSTALACAO_MANAGER.md`: guias legados a consolidar no instalador unico desktop.
 - `docs/ROADMAP_TECNICO.md`: proximas melhorias tecnicas.
 - `docs/ESTRUTURA_PROJETO.md`: este mapa da estrutura.
 - `docs/referencias/`: PDFs e materiais externos de referencia.
@@ -43,7 +43,7 @@ Manter a raiz pequena. Ela deve conter apenas os pontos de entrada, requisitos, 
 
 ## `tests/`
 
-- `tests/test_*.py`: testes automatizados executados por `python -m unittest discover`.
+- `tests/test_*.py`: testes automatizados executados por `python -m pytest -q`.
 - `tests/helpers.py`: auxiliares compartilhados pelos testes.
 - `tests/manual/`: suites ou scripts de teste manual, como `testes_geral.py`.
 

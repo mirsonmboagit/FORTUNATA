@@ -1,327 +1,170 @@
 #:kivy 2.0
 
-
-
 # ---------------------------------------------------------------------------
-
 # Login NECTAR — identidade botânica
-
 # Cores: floresta #0B0F0A / painel #111710 / marfim #E8E3D6
-
 # oliva #9DBF7A / raiz #6B4A2E / borda #2A3A2A
-
+# Tema claro (creme): bg 0.910, 0.890, 0.839  |  texto escuro 0.18, 0.16, 0.12
 # ---------------------------------------------------------------------------
 
-
-
-<LoginInfoPill\@MDCard>:
-
+<LoginInfoPill@MDCard>:
     radius: [dp(16)]
-
     elevation: 0
-
     padding: [dp(10), dp(5), dp(10), dp(5)]
-
     md_bg_color: 0.15, 0.22, 0.14, 0.9
 
-
-
 # Campo orgânico — borda em tom de raiz/madeira
-
-<LoginRoundedInput\@MDTextField>:
-
+<LoginRoundedInput@MDTextField>:
     mode: "fill"
-
     font_size: sp(15)
-
     padding: [dp(44), dp(12), dp(40), 0]
-
     line_color_normal: 0, 0, 0, 0
-
     line_color_focus: 0, 0, 0, 0
-
     foreground_color: 0.91, 0.89, 0.84, 1
-
     hint_text_color_normal: 0.66, 0.64, 0.56, 1
-
     hint_text_color_focus: 0.62, 0.75, 0.48, 1
-
     canvas.before:
-
         Color:
-
             rgba: 0.08, 0.10, 0.07, 0.92
-
         RoundedRectangle:
-
             pos: self.pos
-
             size: self.size
-
             radius: [self.height / 2]
-
         Color:
-
             rgba: (0.42, 0.29, 0.18, 1) if self.focus else (0.16, 0.23, 0.16, 1)
-
         Line:
-
             width: dp(1.6) if self.focus else dp(1.2)
-
             rounded_rectangle: (self.x, self.y, self.width, self.height, self.height / 2)
 
-
-
 <LoginScreen>:
-
     username: username_input
-
     password: password_input
-
-    md_bg_color: 0.043, 0.059, 0.039, 1
-
-
+    md_bg_color: root.screen_bg_color
 
     FloatLayout:
-
         id: stage
 
-
-
         canvas.before:
-
             Color:
-
-                rgba: 0.043, 0.059, 0.039, 1
-
+                rgba: root.screen_bg_color
             Rectangle:
-
                 pos: self.pos
-
                 size: self.size
-
             Color:
-
-                rgba: 0.12, 0.18, 0.10, 0.35
-
+                rgba: root.ellipse_color_1
             Ellipse:
-
                 size: dp(480), dp(480)
-
                 pos: self.right - dp(300), self.top - dp(220)
-
             Color:
-
-                rgba: 0.08, 0.12, 0.06, 0.4
-
+                rgba: root.ellipse_color_2
             Ellipse:
-
                 size: dp(320), dp(320)
-
                 pos: self.x - dp(120), self.y + dp(10)
 
-
-
         # ==============================================================
-
         # LANDING
-
         # ==============================================================
-
         MDBoxLayout:
-
             id: landing_layer
-
             orientation: "vertical"
-
             size_hint: 1, 1
-
             padding: [dp(20), dp(14), dp(20), dp(8)]
-
             spacing: dp(4)
-
             opacity: 1
 
-
-
             MDBoxLayout:
-
                 id: form_top_actions
-
                 size_hint_y: None
-
                 height: dp(38)
-
                 spacing: dp(8)
 
-
-
                 MDFlatButton:
-
                     text: root.back_button_text
-
                     size_hint_x: None
-
                     width: dp(90) if root.show_back_button else 0
-
                     opacity: 1 if root.show_back_button else 0
-
                     disabled: not root.show_back_button
-
                     theme_text_color: "Custom"
-
-                    text_color: 0.91, 0.89, 0.84, 0.85
-
+                    text_color: root.top_action_text_color
                     on_release: root.go_back()
-
-
 
                 Widget:
 
-
-
                 MDFillRoundFlatIconButton:
-
                     id: language_button
-
                     icon: "translate"
-
                     text: root.language_button_text
-
                     size_hint: None, None
-
                     size: dp(124), dp(34)
-
                     font_size: sp(11)
-
                     theme_text_color: "Custom"
-
-                    text_color: 0.62, 0.75, 0.48, 1
-
-                    icon_color: 0.62, 0.75, 0.48, 1
-
-                    md_bg_color: 0.15, 0.22, 0.14, 0.95
-
+                    text_color: root.accent_color
+                    icon_color: root.accent_color
+                    md_bg_color: root.chip_bg_color
                     on_release: root.open_language_menu(self)
 
-
-
                 MDFlatButton:
-
+                    id: theme_toggle_button
                     text: root.theme_toggle_text
-
                     size_hint_x: None
-
-                    width: dp(124) if root.show_theme_toggle else 0
-
-                    opacity: 1 if root.show_theme_toggle else 0
-
-                    disabled: not root.show_theme_toggle
-
+                    width: dp(124)
+                    opacity: 1
+                    disabled: False
                     theme_text_color: "Custom"
-
-                    text_color: 0.66, 0.64, 0.56, 1
-
+                    text_color: root.theme_toggle_color
                     on_release: root.toggle_theme()
 
-
-
             Widget:
-
                 size_hint_y: 0.16
 
-
-
             AnchorLayout:
-
                 id: hero_anchor
-
                 anchor_x: "center"
-
                 anchor_y: "center"
-
                 size_hint_y: None
-
                 height: dp(220)
 
-
-
                 FloatLayout:
-
                     id: brand_btn
-
                     size_hint: None, None
-
                     size: dp(480), dp(200)
 
-
-
                     Image:
-
                         id: brand_hero_mark
-
-                        source: "assets/image/main1.png"
-
+                        source: "assets/image/main3.png"
                         fit_mode: "contain"
-
                         size_hint: 1, 1
-
                         pos_hint: {"x": 0, "y": 0}
-
                         opacity: 1
 
-
-
                     Button:
-    
                         id: brand_click
-
                         size_hint: 1, 1
-
                         pos_hint: {"x": 0, "y": 0}
-
                         background_normal: ""
-
                         background_down: ""
-
                         background_color: 0, 0, 0, 0
-
                         on_release: root.open_login_form()
 
-
-
             MDLabel:
-
                 id: tap_hint
-
                 text: "Toque na marca para iniciar sessão"
-
                 halign: "center"
-
                 font_size: sp(13)
-
                 size_hint_y: None
-
                 height: dp(28)
-
                 theme_text_color: "Custom"
-
-                text_color: 0.66, 0.64, 0.56, 0.85
-
-
+                text_color: root.muted_text_color
 
             Widget:
-
                 size_hint_y: 0.20
-
-
 
             MDBoxLayout:
                 id: footer_bar
                 orientation: "vertical"
                 size_hint_y: None
-                height: dp(76)
-                spacing: 0
+                height: dp(122)
+                spacing: dp(5)
                 padding: [dp(2), dp(2), dp(2), dp(2)]
 
                 # Linha dourada fina, com acabamento premium
@@ -330,10 +173,53 @@
                     height: dp(1)
                     canvas:
                         Color:
-                            rgba: 0.42, 0.31, 0.15, 0.92
+                            rgba: root.gold_line_color
                         Rectangle:
                             pos: self.pos
                             size: self.width, dp(1)
+
+                # Ações de acesso sempre ao alcance, sem sobrecarregar o
+                # centro visual da marca.
+                MDBoxLayout:
+                    id: footer_actions
+                    size_hint_y: None
+                    height: dp(34)
+                    spacing: dp(10)
+                    padding: [dp(6), 0, dp(6), 0]
+
+                    Widget:
+
+                    MDFlatButton:
+                        text: root.register_text
+                        font_size: sp(11)
+                        size_hint: None, None
+                        size: dp(162), dp(32)
+                        theme_text_color: "Custom"
+                        text_color: root.accent_color
+                        disabled: root.operation_in_progress
+                        on_release: root.register()
+
+                    MDFlatButton:
+                        text: root.forgot_password_text
+                        font_size: sp(11)
+                        size_hint: None, None
+                        size: dp(146), dp(32)
+                        theme_text_color: "Custom"
+                        text_color: root.accent_color
+                        disabled: root.operation_in_progress
+                        on_release: root.forgot_password()
+
+                    MDFlatButton:
+                        text: "VERIFICAR LICENÇA"
+                        font_size: sp(11)
+                        size_hint: None, None
+                        size: dp(142), dp(32)
+                        theme_text_color: "Custom"
+                        text_color: root.accent_color
+                        disabled: root.operation_in_progress
+                        on_release: root.check_available_license()
+
+                    Widget:
 
                 MDBoxLayout:
                     id: footer_details
@@ -354,7 +240,7 @@
                             font_size: sp(11)
                             size_hint_x: 1
                             theme_text_color: "Custom"
-                            text_color: 0.62, 0.75, 0.48, 1
+                            text_color: root.accent_color
                             valign: "middle"
                             shorten: True
                         MDLabel:
@@ -363,7 +249,7 @@
                             size_hint_x: None
                             width: dp(42)
                             theme_text_color: "Custom"
-                            text_color: 0.66, 0.64, 0.56, 0.9
+                            text_color: root.muted_text_color
                             valign: "middle"
 
                     # Criador
@@ -377,7 +263,7 @@
                             size: dp(24), dp(24)
                             font_size: sp(21)
                             theme_text_color: "Custom"
-                            text_color: 0.72, 0.78, 0.43, 1
+                            text_color: root.icon_accent_color
                         MDBoxLayout:
                             orientation: "vertical"
                             spacing: 0
@@ -387,12 +273,12 @@
                                 size_hint_y: None
                                 height: dp(12)
                                 theme_text_color: "Custom"
-                                text_color: 0.62, 0.75, 0.48, 0.95
+                                text_color: root.accent_color
                             MDLabel:
                                 text: root.footer_creator
                                 font_size: sp(10)
                                 theme_text_color: "Custom"
-                                text_color: 0.91, 0.89, 0.84, 1
+                                text_color: root.primary_text_color
                                 shorten: True
 
                     # Data do sistema
@@ -406,7 +292,7 @@
                             size: dp(23), dp(23)
                             font_size: sp(20)
                             theme_text_color: "Custom"
-                            text_color: 0.72, 0.78, 0.43, 1
+                            text_color: root.icon_accent_color
                         MDBoxLayout:
                             orientation: "vertical"
                             spacing: 0
@@ -416,12 +302,12 @@
                                 size_hint_y: None
                                 height: dp(12)
                                 theme_text_color: "Custom"
-                                text_color: 0.62, 0.75, 0.48, 0.95
+                                text_color: root.accent_color
                             MDLabel:
                                 text: root.footer_date
                                 font_size: sp(10)
                                 theme_text_color: "Custom"
-                                text_color: 0.91, 0.89, 0.84, 1
+                                text_color: root.primary_text_color
                                 shorten: True
 
                     # Plataforma
@@ -435,7 +321,7 @@
                             size: dp(22), dp(22)
                             font_size: sp(19)
                             theme_text_color: "Custom"
-                            text_color: 0.72, 0.78, 0.43, 1
+                            text_color: root.icon_accent_color
                         MDBoxLayout:
                             orientation: "vertical"
                             spacing: 0
@@ -445,12 +331,12 @@
                                 size_hint_y: None
                                 height: dp(12)
                                 theme_text_color: "Custom"
-                                text_color: 0.62, 0.75, 0.48, 0.95
+                                text_color: root.accent_color
                             MDLabel:
                                 text: "Gestão inteligente"
                                 font_size: sp(10)
                                 theme_text_color: "Custom"
-                                text_color: 0.91, 0.89, 0.84, 1
+                                text_color: root.primary_text_color
                                 shorten: True
 
                     # Contactos
@@ -467,12 +353,12 @@
                                 size: dp(15), dp(15)
                                 font_size: sp(13)
                                 theme_text_color: "Custom"
-                                text_color: 0.72, 0.78, 0.43, 1
+                                text_color: root.icon_accent_color
                             MDLabel:
                                 text: root.footer_email
                                 font_size: sp(9)
                                 theme_text_color: "Custom"
-                                text_color: 0.91, 0.89, 0.84, 1
+                                text_color: root.primary_text_color
                                 shorten: True
                         MDBoxLayout:
                             orientation: "horizontal"
@@ -483,12 +369,12 @@
                                 size: dp(15), dp(15)
                                 font_size: sp(13)
                                 theme_text_color: "Custom"
-                                text_color: 0.72, 0.78, 0.43, 1
+                                text_color: root.icon_accent_color
                             MDLabel:
                                 text: root.footer_phone
                                 font_size: sp(9)
                                 theme_text_color: "Custom"
-                                text_color: 0.66, 0.64, 0.56, 1
+                                text_color: root.muted_text_color
                                 shorten: True
 
                     # Direitos de autor
@@ -501,631 +387,330 @@
                             font_size: sp(9)
                             halign: "right"
                             theme_text_color: "Custom"
-                            text_color: 0.91, 0.89, 0.84, 0.95
+                            text_color: root.primary_text_color
                             shorten: True
                         MDLabel:
                             text: "Todos os direitos reservados"
                             font_size: sp(8)
                             halign: "right"
                             theme_text_color: "Custom"
-                            text_color: 0.66, 0.64, 0.56, 0.85
+                            text_color: root.muted_text_color
                             shorten: True
 
 
         # ==============================================================
-
         # OVERLAY — formulário nativo com transição de formação
-
         # ==============================================================
-
         FloatLayout:
-
             id: form_overlay
-
             size_hint: None, None
-
             size: 0, 0
-
             opacity: 0
-
             disabled: True
 
-
-
             Button:
-
                 id: dimmer
-
                 size_hint: 1, 1
-
                 background_normal: ""
-
                 background_down: ""
-
                 background_color: 0.02, 0.03, 0.02, 0.76
-
                 # Clique fora do cartão não fecha o formulário.
 
-
-
             AnchorLayout:
-
                 anchor_x: "center"
-
                 anchor_y: "center"
-
                 size_hint: 1, 1
 
-
-
                 MDCard:
-
                     id: form_column
-
                     size_hint: None, None
-
                     width: dp(440)
-
                     height: dp(480)
-
                     radius: [dp(20)]
-
                     elevation: 12
-
                     padding: [dp(22), dp(18), dp(22), dp(14)]
-
                     spacing: dp(8)
-
                     orientation: "vertical"
-
-                    md_bg_color: 0.067, 0.090, 0.063, 0.97
-
+                    md_bg_color: root.form_bg_color
                     opacity: 0
-
                     disabled: True
-
                     canvas.before:
-
                         Color:
-
-                            rgba: 0.067, 0.090, 0.063, 0.97
-
+                            rgba: root.form_bg_color
                         RoundedRectangle:
-
                             pos: self.pos
-
                             size: self.size
-
                             radius: [dp(20)]
-
                         Color:
-
-                            rgba: 0.16, 0.23, 0.16, 0.85
-
+                            rgba: root.form_border_color
                         Line:
-
                             width: dp(1)
-
                             rounded_rectangle: self.x, self.y, self.width, self.height, dp(20)
-
-
 
                     # Marca rigorosamente centrada; o botão de fechar fica
                     # separado no canto superior direito e não desloca o logo.
                     FloatLayout:
-
                         id: form_brand_row
-
                         size_hint_y: None
-
                         height: dp(64)
-
                         opacity: 1
-
 
                         Image:
-
                             id: form_brand_image
-
-                            source: "assets/image/main1.png"
-
+                            source: "assets/icon/admin.ico"
                             fit_mode: "contain"
-
                             size_hint: None, None
-
                             size: dp(170), dp(60)
-
                             pos_hint: {"center_x": 0.5, "center_y": 0.5}
 
-
                         MDIconButton:
-
                             id: close_login_button
-
                             icon: "close"
-
                             size_hint: None, None
-
                             size: dp(36), dp(36)
-
                             pos_hint: {"right": 0.99, "center_y": 0.5}
-
                             theme_text_color: "Custom"
-
-                            text_color: 0.70, 0.78, 0.58, 1
-
+                            text_color: root.accent_color
                             md_bg_color: 0, 0, 0, 0
-
                             canvas.before:
-
                                 Color:
-
-                                    rgba: (0.14, 0.20, 0.12, 1)
-
+                                    rgba: root.close_btn_bg_color
                                 RoundedRectangle:
-
                                     pos: self.pos
-
                                     size: self.size
-
                                     radius: [dp(12)]
-
                             on_release: root.close_login_form()
 
-
-
                     MDLabel:
-    
                         id: form_tagline
-
                         text: "A natureza do seu negócio, em harmonia."
-
                         opacity: 1
-
                         halign: "center"
-
                         font_size: sp(12.5)
-
                         size_hint_y: None
-
                         height: dp(22)
-
                         theme_text_color: "Custom"
-
-                        text_color: 0.66, 0.64, 0.56, 1
-
-
+                        text_color: root.muted_text_color
 
                     MDLabel:
-    
                         id: form_license
-
                         text: root.license_status
-
                         opacity: 1
-
                         font_size: sp(11)
-
                         size_hint_y: None
-
                         height: self.texture_size[1] if root.license_status else 0
-
                         opacity: 1 if root.license_status else 0
-
                         halign: "center"
-
                         theme_text_color: "Custom"
-
-                        text_color: 0.62, 0.75, 0.48, 1
-
+                        text_color: root.accent_color
                         text_size: self.width, None
-
-
 
                     # Campos nativos: sem imagens de fundo, alinhados e estáveis.
                     MDBoxLayout:
-
                         id: nature_fields
-
                         orientation: "vertical"
-
                         size_hint_y: None
-
                         height: dp(178)
-
                         spacing: dp(12)
-
                         padding: [0, dp(8), 0, dp(4)]
 
-
                         MDBoxLayout:
-
                             id: username_field_shell
-
                             size_hint_y: None
-
                             height: dp(52)
-
                             padding: [dp(12), 0, dp(12), 0]
-
                             spacing: dp(10)
-
                             canvas.before:
-
                                 Color:
-
-                                    rgba: 0.09, 0.12, 0.08, 1
-
+                                    rgba: root.field_bg_color
                                 RoundedRectangle:
-
                                     pos: self.pos
-
                                     size: self.size
-
                                     radius: [dp(13)]
-
                                 Color:
-
-                                    rgba: 0.20, 0.27, 0.18, 1
-
+                                    rgba: root.field_border_color
                                 Line:
-
                                     width: dp(1)
-
                                     rounded_rectangle: (self.x, self.y, self.width, self.height, dp(13))
 
-
                             MDIcon:
-
                                 icon: "account-outline"
-
                                 size_hint: None, None
-
                                 size: dp(26), dp(26)
-
                                 font_size: sp(22)
-
                                 theme_text_color: "Custom"
-
-                                text_color: 0.62, 0.75, 0.40, 1
-
+                                text_color: root.accent_color
 
                             TextInput:
-            
                                 id: username_input
-
                                 hint_text: root.username_hint
-
                                 multiline: False
-
                                 write_tab: False
-
                                 background_normal: ""
-
                                 background_active: ""
-
                                 background_color: 0, 0, 0, 0
-
-                                foreground_color: 0.93, 0.92, 0.87, 1
-
-                                cursor_color: 0.70, 0.82, 0.49, 1
-
-                                hint_text_color: 0.57, 0.62, 0.52, 1
-
+                                foreground_color: root.input_text_color
+                                cursor_color: root.accent_color
+                                hint_text_color: root.hint_text_color
                                 font_size: sp(14)
-
                                 halign: "left"
-
                                 valign: "middle"
-
                                 padding: [0, dp(12), 0, dp(10)]
-
                                 size_hint_y: 1
-
                                 disabled: root.operation_in_progress or root.login_blocked
-
                                 on_text_validate: password_input.focus = True
 
-
                         MDBoxLayout:
-
                             id: password_field_shell
-
                             size_hint_y: None
-
                             height: dp(52)
-
                             padding: [dp(12), 0, dp(6), 0]
-
                             spacing: dp(10)
-
                             canvas.before:
-
                                 Color:
-
-                                    rgba: 0.09, 0.12, 0.08, 1
-
+                                    rgba: root.field_bg_color
                                 RoundedRectangle:
-
                                     pos: self.pos
-
                                     size: self.size
-
                                     radius: [dp(13)]
-
                                 Color:
-
-                                    rgba: 0.20, 0.27, 0.18, 1
-
+                                    rgba: root.field_border_color
                                 Line:
-
                                     width: dp(1)
-
                                     rounded_rectangle: (self.x, self.y, self.width, self.height, dp(13))
 
-
                             MDIcon:
-
                                 icon: "lock-outline"
-
                                 size_hint: None, None
-
                                 size: dp(26), dp(26)
-
                                 font_size: sp(22)
-
                                 theme_text_color: "Custom"
-
-                                text_color: 0.62, 0.75, 0.40, 1
-
+                                text_color: root.accent_color
 
                             TextInput:
-            
                                 id: password_input
-
                                 hint_text: root.password_hint
-
                                 multiline: False
-
                                 password: True
-
                                 write_tab: False
-
                                 background_normal: ""
-
                                 background_active: ""
-
                                 background_color: 0, 0, 0, 0
-
-                                foreground_color: 0.93, 0.92, 0.87, 1
-
-                                cursor_color: 0.70, 0.82, 0.49, 1
-
-                                hint_text_color: 0.57, 0.62, 0.52, 1
-
+                                foreground_color: root.input_text_color
+                                cursor_color: root.accent_color
+                                hint_text_color: root.hint_text_color
                                 font_size: sp(14)
-
                                 halign: "left"
-
                                 valign: "middle"
-
                                 padding: [0, dp(12), 0, dp(10)]
-
                                 disabled: root.operation_in_progress or root.login_blocked
-
                                 on_text_validate: root.login()
 
-
                             MDIconButton:
-
                                 id: password_toggle
-
                                 icon: "eye-outline" if password_input.password else "eye-off-outline"
-
                                 size_hint: None, None
-
                                 size: dp(34), dp(34)
-
                                 theme_text_color: "Custom"
-
-                                text_color: 0.62, 0.75, 0.40, 1
-
-                                md_bg_color: 0.09, 0.12, 0.08, 1
-
+                                text_color: root.accent_color
+                                md_bg_color: root.field_bg_color
                                 on_release: root.toggle_password_visibility()
 
-
                     Button:
-    
                         id: login_button
-
                         text: root.login_button_text
-
                         size_hint: 0.72, None
-
                         pos_hint: {"center_x": 0.5}
-
                         height: dp(42)
-
                         background_normal: ""
-
                         background_down: ""
-
                         background_color: 0, 0, 0, 0
-
                         opacity: 1
-
                         canvas.before:
-
                             Color:
-
                                 rgba: (0.34, 0.46, 0.23, 1) if not self.disabled else (0.22, 0.29, 0.18, 1)
-
                             RoundedRectangle:
-
                                 pos: self.pos
-
                                 size: self.size
-
                                 radius: [dp(13)]
-
                         color: 0.97, 0.95, 0.87, 1
-
                         bold: True
-
                         font_size: sp(14)
-
                         disabled: root.operation_in_progress or root.login_blocked
-
                         on_release: root.login()
-
                         canvas.after:
-
                             Color:
-
                                 rgba: 0.34, 0.45, 0.25, 0.9
-
                             Line:
-
                                 width: dp(1)
-
                                 rounded_rectangle: (self.x, self.y, self.width, self.height, dp(13))
 
-
                     # Erros
-
                     MDLabel:
-    
                         text: root.username_error if root.username_error else root.password_error
-
                         font_size: sp(11)
-
                         size_hint_y: None
-
                         height: dp(16) if (root.username_error or root.password_error) else 0
-
                         opacity: 1 if (root.username_error or root.password_error) else 0
-
                         halign: "center"
-
                         theme_text_color: "Custom"
-
                         text_color: 0.85, 0.35, 0.30, 1
-
                         text_size: self.width, None
-
-
 
                     MDLabel:
-    
                         text: root.operation_status
-
                         size_hint_y: None
-
                         height: self.texture_size[1] if root.operation_status else 0
-
                         opacity: 1 if root.operation_status else 0
-
                         halign: "center"
-
                         font_size: sp(12)
-
                         theme_text_color: "Custom"
-
-                        text_color: 0.66, 0.64, 0.56, 1
-
+                        text_color: root.muted_text_color
                         text_size: self.width, None
-
-
 
                     MDBoxLayout:
-
                         id: form_links_row
-
                         size_hint_y: None
-
                         height: dp(28)
-
                         spacing: dp(6)
 
-
-
                         MDFlatButton:
-        
                             id: forgot_button
-
                             text: root.forgot_password_text
-
                             font_size: sp(12)
-
                             size_hint_x: 1
-
                             theme_text_color: "Custom"
-
-                            text_color: 0.62, 0.75, 0.48, 1
-
+                            text_color: root.accent_color
                             disabled: root.operation_in_progress or not root.allow_account_self_service
-
                             opacity: 1 if root.allow_account_self_service else 0
-
                             on_release: root.forgot_password()
 
-
-
                         MDFlatButton:
-            
                             id: register_button
-
                             text: root.register_text
-
                             font_size: sp(12)
-
                             size_hint_x: 1
-
                             theme_text_color: "Custom"
-
-                            text_color: 0.66, 0.64, 0.56, 1
-
+                            text_color: root.muted_text_color
                             disabled: root.operation_in_progress or not root.allow_account_self_service
-
                             opacity: 1 if root.allow_account_self_service else 0
-
                             on_release: root.register()
 
-
-
                     MDLabel:
-    
                         text: root.form_footer_text
-
                         font_size: sp(11)
-
                         halign: "center"
-
                         size_hint_y: None
-
                         height: self.texture_size[1]
-
                         theme_text_color: "Custom"
-
-                        text_color: 0.55, 0.53, 0.45, 1
-
+                        text_color: root.footer_muted_color
                         text_size: self.width, None
 
-
-
                     MDLabel:
-    
                         text: "NECTAR  ·  1.1.0"
-
                         font_size: sp(10)
-
                         halign: "center"
-
                         size_hint_y: None
-
                         height: dp(16)
-
                         theme_text_color: "Custom"
-
-                        text_color: 0.42, 0.29, 0.18, 0.8
+                        text_color: root.gold_line_color

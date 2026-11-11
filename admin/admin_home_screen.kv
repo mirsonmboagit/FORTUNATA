@@ -1,5 +1,4 @@
 #:kivy 2.0
-
 <HomeButtonCard@HoverButtonCard>:
     ripple_behavior: True
     press_enabled: True
@@ -12,7 +11,6 @@
     hover_accent_color: app.theme_tokens["primary"]
     radius: [dp(12)]
     elevation: 0
-
 <HeroActionButton@HoverRaisedButton>:
     press_enabled: True
     hover_bg_mix: 0.12
@@ -28,7 +26,6 @@
     font_size: sp(13)
     bold: True
     padding: [dp(14), 0]
-
 <HeroChipButton@HoverRaisedButton>:
     press_enabled: True
     hover_bg_mix: 0.16
@@ -41,15 +38,16 @@
     font_size: sp(13)
     bold: True
     padding: [dp(14), 0]
-
+# Painel "sem moldura": sem cantos, sem sombra, sem borda e sem efeito de
+# hover. Os blocos deixam de parecer cards separados e formam uma so superficie.
 <PanelHoverCard@HoverCard>:
-    hover_bg_mix: 0.04
-    hover_line_mix: 0.20
-    hover_elevation_delta: 1.0
+    hover_bg_mix: 0
+    hover_line_mix: 0
+    hover_elevation_delta: 0
     hover_accent_color: app.theme_tokens["primary"]
-    radius: [dp(14)]
-    elevation: 1
-
+    radius: [0, 0, 0, 0]
+    elevation: 0
+    line_width: 0
 # Painel flutuante moderno (overlay)
 <HomeOverlayPanel@MDCard>:
     orientation: "vertical"
@@ -61,13 +59,12 @@
     padding: [dp(16), dp(14), dp(16), dp(14)]
     spacing: dp(10)
     md_bg_color: app.theme_tokens["card"]
-
 <AdminHomeScreen>:
     FloatLayout:
         MDBoxLayout:
             orientation: "vertical"
+            spacing: 0
             md_bg_color: app.theme_tokens["surface"]
-
             # ===== HEADER (saudação + estado + ações) =====
             MDBoxLayout:
                 id: top_bar
@@ -76,21 +73,12 @@
                 padding: [dp(16), dp(8), dp(12), dp(8)]
                 spacing: dp(12)
                 md_bg_color: app.theme_tokens["primary"]
-                elevation: 3
-
-                canvas.after:
-                    Color:
-                        rgba: 1, 1, 1, 0.10
-                    Rectangle:
-                        pos: self.x, self.y
-                        size: self.width, dp(1)
-
+                elevation: 0
                 MDBoxLayout:
                     orientation: "vertical"
                     size_hint_x: 1
                     spacing: dp(1)
                     padding: [0, dp(2), 0, dp(2)]
-
                     MDLabel:
                         id: header_title_label
                         text: root.home_title
@@ -102,7 +90,6 @@
                         shorten_from: "right"
                         theme_text_color: "Custom"
                         text_color: app.theme_tokens["on_primary"]
-
                     MDLabel:
                         id: header_status_label
                         text: root.status_text
@@ -113,7 +100,6 @@
                         shorten_from: "right"
                         theme_text_color: "Custom"
                         text_color: 1, 1, 1, 0.82
-
                 MDLabel:
                     id: header_datetime_label
                     text: root.datetime_text
@@ -125,13 +111,11 @@
                     theme_text_color: "Custom"
                     text_color: 1, 1, 1, 0.88
                     pos_hint: {"center_y": 0.5}
-
                 MDBoxLayout:
                     size_hint: None, None
                     size: dp(84), dp(40)
                     spacing: dp(4)
                     pos_hint: {"center_y": 0.5}
-
                     MDIconButton:
                         id: header_refresh_btn
                         icon: "refresh"
@@ -142,7 +126,6 @@
                         text_color: app.theme_tokens["on_primary"]
                         md_bg_color: 0, 0, 0, 0
                         on_release: root.refresh_home()
-
                     MDIconButton:
                         id: header_logout_btn
                         icon: "logout"
@@ -153,81 +136,75 @@
                         text_color: app.theme_tokens["on_primary"]
                         md_bg_color: 0, 0, 0, 0
                         on_release: root.logout()
-
             ScrollView:
                 id: dashboard_scroll
                 do_scroll_x: False
                 do_scroll_y: True
                 bar_width: dp(5)
                 bar_color: app.theme_tokens["primary"][0], app.theme_tokens["primary"][1], app.theme_tokens["primary"][2], 0.35
-
                 MDBoxLayout:
                     id: dashboard_content
                     orientation: "vertical"
-                    spacing: dp(12)
-                    padding: [dp(14), dp(12), dp(14), dp(14)]
+                    # Sem espaco nem margens: hero e grafico encostam um ao outro
+                    # e ao cabecalho, formando uma unica superficie.
+                    spacing: 0
+                    padding: [0, 0, 0, 0]
                     size_hint_y: None
                     height: self.minimum_height
-
                     # ================= HERO — só botões =================
+                    # Mesma cor do cabecalho: os dois blocos fundem-se numa faixa unica.
                     PanelHoverCard:
                         id: hero_card
                         size_hint_y: None
                         height: dp(72)
-                        padding: [dp(12), dp(10), dp(12), dp(10)]
-                        radius: [dp(16)]
-                        elevation: 2
+                        padding: [dp(16), dp(8), dp(16), dp(14)]
+                        radius: [0, 0, 0, 0]
+                        elevation: 0
                         md_bg_color: app.theme_tokens["primary"]
-
                         MDBoxLayout:
                             id: hero_content
                             orientation: "horizontal"
                             spacing: dp(10)
-
                             # Alertas prioritários (chips)
                             MDBoxLayout:
                                 id: hero_alerts_wrap
                                 orientation: "vertical"
                                 size_hint_x: 0.34
                                 spacing: dp(2)
-
                                 MDLabel:
-                                    text: "Alertas prioritários"
+                                    id: hero_alerts_caption
+                                    text: "Alertas prioritarios"
                                     font_size: dp(10)
                                     size_hint_y: None
                                     height: dp(14)
                                     theme_text_color: "Custom"
                                     text_color: 1, 1, 1, 0.70
-
                                 MDBoxLayout:
                                     id: hero_alerts_grid
                                     orientation: "horizontal"
                                     size_hint_y: None
                                     height: dp(36)
                                     spacing: dp(6)
-
                             # Destaques elegantes (não é botão/dropdown)
                             MDBoxLayout:
                                 id: hero_highlights_wrap
                                 orientation: "vertical"
                                 size_hint_x: 0.30
                                 spacing: dp(2)
-
                                 MDLabel:
+                                    id: hero_highlights_caption
                                     text: "Destaques"
                                     font_size: dp(10)
                                     size_hint_y: None
                                     height: dp(14)
                                     theme_text_color: "Custom"
                                     text_color: 1, 1, 1, 0.70
-
                                 MDBoxLayout:
                                     id: hero_highlights_strip
                                     orientation: "horizontal"
                                     size_hint_y: None
                                     height: dp(36)
                                     spacing: dp(6)
-
                             # Botões de secção
                             MDBoxLayout:
                                 id: hero_side
@@ -235,7 +212,6 @@
                                 size_hint_x: 0.36
                                 spacing: dp(8)
                                 padding: [dp(4), 0, 0, 0]
-
                                 HeroChipButton:
                                     id: hero_summary_btn
                                     text: "Resumo"
@@ -247,7 +223,6 @@
                                     radius: [dp(20)]
                                     font_size: sp(13)
                                     on_release: root.show_summary_menu(self)
-
                                 HeroChipButton:
                                     id: hero_access_btn
                                     text: "Acessos"
@@ -259,7 +234,6 @@
                                     radius: [dp(20)]
                                     font_size: sp(13)
                                     on_release: root.show_access_menu(self)
-
                                 HeroActionButton:
                                     id: hero_add_button
                                     text: "Adicionar"
@@ -271,7 +245,6 @@
                                     radius: [dp(20)]
                                     elevation: 1
                                     on_release: root.add_product()
-
                                 HeroActionButton:
                                     id: hero_more_button
                                     text: "..."
@@ -282,25 +255,26 @@
                                     opacity: 0
                                     disabled: True
                                     on_release: root.open_overflow_menu(self)
-
                     # ================= GRAFICO (área principal) =================
+                    # Mesma cor da pagina, sem cantos, sombra nem borda: o grafico
+                    # assenta diretamente no fundo, sem parecer um card.
                     PanelHoverCard:
                         id: chart_card
                         orientation: "vertical"
                         spacing: dp(8)
                         size_hint_y: None
                         height: dp(480)
-                        padding: [dp(16), dp(14), dp(16), dp(14)]
-                        md_bg_color: app.theme_tokens["card"]
+                        padding: [dp(16), dp(12), dp(16), dp(12)]
+                        radius: [0, 0, 0, 0]
+                        elevation: 0
+                        md_bg_color: app.theme_tokens["surface"]
                         opacity: 1
                         disabled: False
-
                         MDBoxLayout:
                             id: chart_controls
                             size_hint_y: None
                             height: dp(40)
                             spacing: dp(8)
-
                             MDIcon:
                                 icon: "chart-areaspline"
                                 font_size: dp(22)
@@ -309,8 +283,8 @@
                                 theme_text_color: "Custom"
                                 text_color: app.theme_tokens["primary"]
                                 pos_hint: {"center_y": 0.5}
-
                             MDLabel:
+                                id: chart_title_label
                                 text: "Desempenho"
                                 font_style: "Subtitle1"
                                 bold: True
@@ -319,10 +293,8 @@
                                 size_hint_x: None
                                 width: dp(110)
                                 valign: "middle"
-
                             Widget:
                                 size_hint_x: 1
-
                             HeroActionButton:
                                 id: chart_metric_btn
                                 text: root.chart_metric_text
@@ -332,7 +304,6 @@
                                 size_hint: None, None
                                 size: dp(130), dp(34)
                                 on_release: root.show_chart_metric_menu(self)
-
                             HeroActionButton:
                                 id: chart_period_btn
                                 text: root.chart_period_text
@@ -342,17 +313,14 @@
                                 size_hint: None, None
                                 size: dp(100), dp(34)
                                 on_release: root.show_chart_period_menu(self)
-
                         MDBoxLayout:
                             id: sales_chart_host
                             orientation: "vertical"
                             size_hint_y: 1
-
                             MDBoxLayout:
                                 id: chart_canvas_host
                                 orientation: "vertical"
                                 size_hint_y: 1
-
                     # Botao "Ver grafico" (modo muito compacto — raro)
                     HomeButtonCard:
                         id: chart_launch_card
@@ -366,7 +334,6 @@
                         md_bg_color: app.theme_tokens["card"]
                         ripple_behavior: True
                         on_release: root.open_chart_modal()
-
                         MDIcon:
                             id: chart_launch_icon
                             icon: "chart-line"
@@ -375,13 +342,12 @@
                             width: dp(28)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens["primary"]
-
                         MDBoxLayout:
                             orientation: "vertical"
                             spacing: dp(2)
                             size_hint_x: 1
-
                             MDLabel:
+                                id: chart_launch_title
                                 text: "Ver grafico de desempenho"
                                 font_style: "Subtitle2"
                                 bold: True
@@ -389,7 +355,6 @@
                                 text_color: app.theme_tokens["text_primary"]
                                 size_hint_y: None
                                 height: dp(20)
-
                             MDLabel:
                                 id: chart_launch_summary
                                 text: root.chart_metric_text + " · " + root.chart_period_text
@@ -398,7 +363,6 @@
                                 text_color: app.theme_tokens["text_secondary"]
                                 size_hint_y: None
                                 height: dp(16)
-
                         MDIcon:
                             icon: "chevron-right"
                             font_size: dp(22)
@@ -406,106 +370,86 @@
                             width: dp(24)
                             theme_text_color: "Custom"
                             text_color: app.theme_tokens["text_secondary"]
-
                     # Placeholders ocultos para ids legados (Python continua a preencher)
                     MDBoxLayout:
                         size_hint_y: None
                         height: 0
                         opacity: 0
                         disabled: True
-
                         PanelHoverCard:
                             id: summary_card
                             size_hint_y: None
                             height: 0
-
                             MDGridLayout:
                                 id: summary_grid
                                 cols: 4
                                 size_hint_y: None
                                 height: 0
-
                         PanelHoverCard:
                             id: alerts_card
                             size_hint_y: None
                             height: 0
-
                             MDLabel:
                                 id: alerts_meta_label
                                 text: ""
                                 size_hint_y: None
                                 height: 0
-
                             MDGridLayout:
                                 id: alerts_grid
                                 cols: 2
                                 size_hint_y: None
                                 height: 0
-
                         PanelHoverCard:
                             id: quick_actions_card
                             size_hint_y: None
                             height: 0
-
                             MDGridLayout:
                                 id: quick_actions_grid
                                 cols: 2
                                 size_hint_y: None
                                 height: 0
-
                         PanelHoverCard:
                             id: insights_card
                             size_hint_y: None
                             height: 0
-
                             MDLabel:
                                 id: insights_meta_label
                                 text: ""
                                 size_hint_y: None
                                 height: 0
-
                             MDGridLayout:
                                 id: insights_grid
                                 cols: 2
                                 size_hint_y: None
                                 height: 0
-
                         MDBoxLayout:
                             id: main_shell
                             size_hint_y: None
                             height: 0
-
                             MDBoxLayout:
                                 id: left_col
                                 size_hint_y: None
                                 height: 0
-
                             MDBoxLayout:
                                 id: right_col
                                 size_hint_y: None
                                 height: 0
-
         # ---------- Overlay dim + painéis flutuantes ----------
-        # Backdrop desativado — menus usam MDDropdownMenu (não bloqueia toques)
         Widget:
             id: panel_backdrop
             size_hint: None, None
             size: 0, 0
             opacity: 0
             pos: -10000, -10000
-
-        # Painel Resumo
         HomeOverlayPanel:
             id: summary_panel
             size: 0, 0
             pos: -10000, -10000
             opacity: 0
-
             MDBoxLayout:
                 size_hint_y: None
                 height: dp(32)
                 spacing: dp(8)
-
                 MDIcon:
                     icon: "view-dashboard-outline"
                     font_size: dp(22)
@@ -514,17 +458,15 @@
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["primary"]
                     pos_hint: {"center_y": 0.5}
-
                 MDLabel:
+                    id: summary_panel_title
                     text: "Resumo do dia"
                     font_style: "Subtitle1"
                     bold: True
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["text_primary"]
                     valign: "middle"
-
                 Widget:
-
                 MDIconButton:
                     icon: "close"
                     theme_text_color: "Custom"
@@ -532,25 +474,20 @@
                     size_hint: None, None
                     size: dp(36), dp(36)
                     on_release: root.close_all_panels()
-
             MDGridLayout:
                 id: summary_panel_grid
                 cols: 4
                 spacing: dp(10)
                 size_hint_y: 1
-
-        # Painel Acessos
         HomeOverlayPanel:
             id: access_panel
             size: 0, 0
             pos: -10000, -10000
             opacity: 0
-
             MDBoxLayout:
                 size_hint_y: None
                 height: dp(32)
                 spacing: dp(8)
-
                 MDIcon:
                     icon: "apps"
                     font_size: dp(22)
@@ -559,17 +496,15 @@
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["primary"]
                     pos_hint: {"center_y": 0.5}
-
                 MDLabel:
-                    text: "Acessos rápidos"
+                    id: access_panel_title
+                    text: "Acessos rapidos"
                     font_style: "Subtitle1"
                     bold: True
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["text_primary"]
                     valign: "middle"
-
                 Widget:
-
                 MDIconButton:
                     icon: "close"
                     theme_text_color: "Custom"
@@ -577,25 +512,20 @@
                     size_hint: None, None
                     size: dp(36), dp(36)
                     on_release: root.close_all_panels()
-
             MDGridLayout:
                 id: access_panel_grid
                 cols: 2
                 spacing: dp(10)
                 size_hint_y: 1
-
-        # Painel Destaques
         HomeOverlayPanel:
             id: insights_panel
             size: 0, 0
             pos: -10000, -10000
             opacity: 0
-
             MDBoxLayout:
                 size_hint_y: None
                 height: dp(32)
                 spacing: dp(8)
-
                 MDIcon:
                     icon: "star-outline"
                     font_size: dp(22)
@@ -604,15 +534,14 @@
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["warning"]
                     pos_hint: {"center_y": 0.5}
-
                 MDLabel:
+                    id: insights_panel_title
                     text: "Destaques"
                     font_style: "Subtitle1"
                     bold: True
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["text_primary"]
                     valign: "middle"
-
                 MDLabel:
                     id: insights_panel_meta
                     text: ""
@@ -620,7 +549,6 @@
                     halign: "right"
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["text_secondary"]
-
                 MDIconButton:
                     icon: "close"
                     theme_text_color: "Custom"
@@ -628,18 +556,15 @@
                     size_hint: None, None
                     size: dp(36), dp(36)
                     on_release: root.close_all_panels()
-
             MDGridLayout:
                 id: insights_panel_grid
                 cols: 2
                 spacing: dp(10)
                 size_hint_y: 1
-
         FloatLayout:
             id: ai_banner_container
             size_hint: 1, 1
             pos: 0, 0
-
         DraggableTooltipFloatingActionButton:
             id: ai_button
             icon: "assets/icon/alert.png"
@@ -649,7 +574,6 @@
             pos_hint: {"right": 0.97, "y": 0.04}
             hint_text: "Alertas com IA"
             on_release: root.open_ai_menu(self)
-
         DraggableTooltipFloatingActionButton:
             id: recommendations_button
             icon: "assets/icon/idea.ico"
@@ -659,7 +583,6 @@
             pos: ai_button.x, ai_button.top + dp(12)
             hint_text: "Recomendacoes com IA"
             on_release: root.show_ai_recommendations(self)
-
         MDCard:
             id: recommendations_badge
             size_hint: None, None
@@ -668,7 +591,6 @@
             radius: [dp(12)]
             elevation: 2
             pos: recommendations_button.right - (self.width * 0.5), recommendations_button.top - (self.height * 0.4)
-
             MDLabel:
                 id: recommendations_badge_label
                 text: "0"
@@ -678,7 +600,6 @@
                 text_color: app.theme_tokens["on_primary"]
                 font_size: dp(11)
                 bold: True
-
         MDCard:
             id: ai_badge
             size_hint: None, None
@@ -687,7 +608,6 @@
             radius: [dp(12)]
             elevation: 2
             pos: ai_button.right - (self.width * 0.5), ai_button.top - (self.height * 0.4)
-
             MDLabel:
                 id: ai_badge_label
                 text: "0"
@@ -697,7 +617,6 @@
                 text_color: app.theme_tokens["on_primary"]
                 font_size: dp(11)
                 bold: True
-
         HoverTooltipIconButton:
             id: ai_toggle_button
             icon: "chevron-left" if root.quick_actions_open else "chevron-right"
@@ -711,7 +630,6 @@
             theme_text_color: "Custom"
             text_color: app.theme_tokens["on_primary"]
             hint_text: "Mostrar/ocultar atalhos operacionais"
-
         ScrollView:
             id: ai_quick_actions_scroll
             size_hint: None, None
@@ -723,7 +641,6 @@
             do_scroll_x: True
             do_scroll_y: False
             bar_width: dp(3)
-
             MDBoxLayout:
                 orientation: "horizontal"
                 size_hint_x: None
@@ -731,7 +648,6 @@
                 height: self.minimum_height
                 padding: [dp(4), 0, dp(4), 0]
                 spacing: dp(8)
-
                 HoverTooltipIconButton:
                     icon: "alert-circle"
                     size_hint: None, None
@@ -743,7 +659,6 @@
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["on_primary"]
                     hint_text: "Alertas de perdas"
-
                 HoverTooltipIconButton:
                     icon: "chart-line"
                     size_hint: None, None
@@ -755,7 +670,6 @@
                     theme_text_color: "Custom"
                     text_color: app.theme_tokens["on_primary"]
                     hint_text: "Metricas de perdas"
-
                 HoverTooltipIconButton:
                     icon: "check-circle"
                     size_hint: None, None

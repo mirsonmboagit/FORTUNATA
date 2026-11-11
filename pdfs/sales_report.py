@@ -85,7 +85,7 @@ class SalesReport(BasePDFReport):
             ['Média vendida por produto', f"{media_vendas:.1f} unidades"],
         ]
         
-        summary_table = Table(summary_data, colWidths=[5.3*inch, 4.9*inch])
+        summary_table = Table(self._translate_table(summary_data), colWidths=[5.3*inch, 4.9*inch])
         
         summary_table.setStyle(TableStyle([
             # Cabeçalho
@@ -182,7 +182,7 @@ class SalesReport(BasePDFReport):
             ])
         
         detail_table = Table(
-            detail_data,
+            self._translate_table(detail_data),
             colWidths=[0.4*inch, 3.2*inch, 1.5*inch, 1.1*inch, 1.1*inch, 1.6*inch, 0.9*inch],
             repeatRows=1,
         )

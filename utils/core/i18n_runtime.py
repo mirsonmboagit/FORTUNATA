@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from kivy.app import App
@@ -26,6 +27,10 @@ TRANSLATABLE_PROPERTIES = (
     "label_text",
     "caption_text",
     "tooltip_text",
+    "button_text",
+    "empty_text",
+    "error_text",
+    "message",
 )
 
 _DIALOG_HOOKED = False
@@ -35,11 +40,14 @@ def _looks_translatable(value: Any, widget: Any = None, prop: str = "") -> bool:
     text = str(value or "").strip()
     if not text or not any(char.isalpha() for char in text):
         return False
+    # Todo texto visível é acompanhado pelo runtime. Isso inclui textos
+    # vindos de ficheiros KV, de widgets criados em Python e de diálogos; o
+    # catálogo decide se há uma tradução para o idioma selecionado.
     if has_text_translation(text):
         return True
     if prop == "text" and hasattr(widget, "hint_text"):
         return False
-    return has_portuguese_correction(text)
+    return has_portuguese_correction(text) or bool(re.search(r"[A-Za-zÀ-ÿ]", text))
 
 
 def _set_localized_property(widget: Any, prop: str, value: str) -> None:

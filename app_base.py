@@ -61,6 +61,7 @@ from utils.core.i18n import (
     language_label,
     language_options,
     language_short,
+    detect_system_language,
     normalize_language,
     translate,
 )
@@ -319,7 +320,13 @@ class BaseApp(App):
             self.smart_monitor_enabled = bool(data.get("smart_monitor_enabled", True))
             self.auto_banners_enabled = bool(data.get("auto_banners_enabled", True))
 
-            self.language = normalize_language(data.get("language", self.language))
+            language_mode = str(data.get("language_mode") or "system").strip().lower()
+            self.language = (
+                detect_system_language(self.language)
+                if language_mode == "system"
+                else normalize_language(data.get("language", self.language))
+            )
+            self.language_mode = "system" if language_mode == "system" else "manual"
             self.system_name = normalize_system_name(data.get("system_name", self.system_name))
 
             theme_key = getattr(self, "theme_settings_key", "theme_style") or "theme_style"
@@ -339,6 +346,7 @@ class BaseApp(App):
             self.auto_banners_enabled = True
             self.theme_style = detect_system_theme()   # ← também no fallback
             self.language = "pt"
+            self.language_mode = "system"
             self.system_name = get_system_name()
 
     def apply_theme(self, style, persist=True):
@@ -388,6 +396,7 @@ class BaseApp(App):
                 "smart_monitor_enabled": bool(self.smart_monitor_enabled),
                 "auto_banners_enabled": bool(self.auto_banners_enabled),
                 "language": normalize_language(getattr(self, "language", "pt")),
+                "language_mode": str(getattr(self, "language_mode", "manual")),
                 "system_name": normalize_system_name(
                     getattr(self, "system_name", DEFAULT_SYSTEM_NAME)
                 ),
@@ -402,6 +411,24 @@ class BaseApp(App):
 
     def set_language(self, language_code, persist=True):
         self.language = normalize_language(language_code)
+        self.language_mode = "manual"
+        if persist:
+            self.save_app_settings()
+        Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
+        return self.language
+
+    def on_language(self, _instance, _language):
+        """Mantém todas as telas abertas sincronizadas com a língua ativa.
+
+        Algumas telas antigas ainda atualizam ``app.language`` diretamente.
+        Este observador garante que elas também acionam a localização global.
+        """
+        Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
+
+    def use_system_language(self, persist=True):
+        """Volta a seguir o idioma configurado no sistema operativo."""
+        self.language = detect_system_language(self.language)
+        self.language_mode = "system"
         if persist:
             self.save_app_settings()
         Clock.schedule_once(lambda _dt: self.refresh_language(), 0)
@@ -424,6 +451,27 @@ class BaseApp(App):
     def refresh_language(self, root=None):
         target = root or getattr(self, "root", None)
         localize_widget_tree(target, self.language)
+        # Telas que calculam textos em Python (cartões, menus, indicadores)
+        # precisam reconstruir essas frases depois de o idioma global mudar.
+        # Ao percorrer todas as telas já criadas, o seletor tem exatamente o
+        # mesmo efeito no login, painel admin e módulos operacionais.
+        stack = [target]
+        seen = set()
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            refresher = getattr(current, "apply_translations", None)
+            if callable(refresher):
+                try:
+                    refresher()
+                except Exception:
+                    pass
+            try:
+                stack.extend(list(getattr(current, "children", []) or []))
+            except Exception:
+                pass
 
     # ========================================================
     # ARRANQUE E ENCERRAMENTO

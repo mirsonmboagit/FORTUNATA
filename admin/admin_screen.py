@@ -41,7 +41,7 @@ if PROJECT_ROOT not in sys.path:
 
 from database.provider import get_db
 from ui.components.hover_widgets import HoverCard, HoverRaisedButton
-from utils.core.i18n import correct_portuguese_text
+from utils.core.i18n import correct_portuguese_text, translate_text
 from utils.core.formatters import format_money
 from ui.components.tooltip_widgets import TooltipFloatingActionButton, TooltipIconButton, set_attention_shake
 from utils.business.expiry_alerts import evaluate_expiry_alert, get_expiry_level_counts
@@ -354,6 +354,8 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         self.add_widget(actions_cell)
 
     def refresh_view_attrs(self, rv, index, data):
+        if getattr(self, "_inline_field", None):
+            self.cancel_inline_edit(restore=True)
         result = super().refresh_view_attrs(rv, index, data)
         self.admin_screen = data.get("admin_screen")
         self.product_data = data.get("product_data")
@@ -465,6 +467,183 @@ class RecycleAdminProductRow(RecycleDataViewBehavior, MDBoxLayout):
         Animation.cancel_all(self, "md_bg_color")
         Animation(md_bg_color=target, d=0.10, t="out_quad").start(self)
 
+    def on_touch_down(self, touch):
+        """Clique nas colunas Produto / Stock / Preço / Validade → input na própria célula."""
+        if not self.collide_point(*touch.pos) or getattr(touch, "is_mouse_scrolling", False):
+            return super().on_touch_down(touch)
+        if not self.admin_screen or not self.product_data:
+            return super().on_touch_down(touch)
+        if getattr(self, "_inline_field", None):
+            # Já a editar — deixa o TextInput tratar o toque
+            return super().on_touch_down(touch)
+        try:
+            for btn in (self.detail_button, self.edit_button, self.delete_button, self.sequence_button):
+                if btn is not None and btn.opacity > 0 and btn.collide_point(*touch.pos):
+                    return super().on_touch_down(touch)
+        except Exception:
+            pass
+        width = float(self.width) or 1.0
+        rel = (touch.x - self.x) / width
+        fields = [None, "description", "stock", None, None, "price", None, "expiry", None]
+        acc = 0.0
+        for hint, field in zip(COL_HINTS, fields):
+            acc += float(hint)
+            if rel <= acc + 1e-6:
+                if field:
+                    self.start_inline_edit(field)
+                    return True
+                break
+        return super().on_touch_down(touch)
+
+    def start_inline_edit(self, field):
+        """Substitui o label da coluna por um TextInput real na célula."""
+        from kivy.uix.textinput import TextInput
+
+        field = str(field or "").strip().lower()
+        label_map = {
+            "description": self.name_label,
+            "stock": self.stock_label,
+            "price": self.price_label,
+            "expiry": self.expiry_label,
+        }
+        label = label_map.get(field)
+        if label is None or not self.product_data:
+            return
+        parent = label.parent
+        if parent is None:
+            return
+
+        # Multi-lote: exigir seleção
+        try:
+            lot_count = self.admin_screen._get_group_lot_count(self.product_data)
+            selected_id = self.admin_screen._get_group_selected_lot_id(self.product_data)
+            if lot_count > 1 and selected_id is None:
+                self.admin_screen._open_group_lot_selector(
+                    self.product_data, requested_action="edit"
+                )
+                self.admin_screen.show_snackbar("Selecione o lote antes de editar")
+                return
+        except Exception:
+            selected_id = None
+
+        # Valor atual
+        product = self.product_data
+        is_weight = bool(product[15]) if len(product) > 15 else False
+        if field == "description":
+            value = str(product[1] if len(product) > 1 else "")
+        elif field == "stock":
+            stock_v = float(product[2] if len(product) > 2 else 0)
+            value = f"{stock_v:.2f}" if is_weight else str(int(stock_v))
+        elif field == "price":
+            value = f"{float(product[4] if len(product) > 4 else 0):.2f}"
+        elif field == "expiry":
+            raw = product[13] if len(product) > 13 else None
+            if raw:
+                try:
+                    value = self.admin_screen.format_date(str(raw))
+                except Exception:
+                    value = str(raw)
+            else:
+                value = ""
+        else:
+            return
+
+        # Cancelar edição anterior nesta linha
+        self.cancel_inline_edit(restore=True)
+
+        app = App.get_running_app()
+        tokens = getattr(app, "theme_tokens", {}) if app else {}
+        fg = tokens.get("text_primary", [0.95, 0.96, 0.98, 1])
+        bg = tokens.get("surface_alt", [0.16, 0.18, 0.22, 1])
+        accent = tokens.get("primary", [0.15, 0.55, 0.85, 1])
+
+        ti = TextInput(
+            text=value,
+            multiline=False,
+            font_size=sp(14),
+            padding=[dp(6), dp(8)],
+            foreground_color=fg,
+            cursor_color=accent,
+            # background_normal/active são caminhos de imagem (str), não cores
+            background_normal="",
+            background_active="",
+            background_disabled_normal="",
+            background_color=bg,
+            write_tab=False,
+            size_hint=(1, 1),
+        )
+        # Destaque visual da célula em edição
+        try:
+            parent.md_bg_color = (*accent[:3], 0.22)
+        except Exception:
+            pass
+
+        # Esconder label, mostrar input
+        label.opacity = 0
+        label.disabled = True
+        parent.add_widget(ti)
+        self._inline_field = field
+        self._inline_input = ti
+        self._inline_label = label
+        self._inline_parent = parent
+        self._inline_product_id = selected_id or product[0]
+        self._inline_is_weight = is_weight
+
+        def _on_validate(*_a):
+            self.commit_inline_edit()
+
+        def _on_focus(instance, focused):
+            if not focused:
+                # Pequeno atraso para não conflitar com o clique noutro sítio
+                Clock.schedule_once(lambda dt: self.commit_inline_edit(), 0.05)
+
+        ti.bind(on_text_validate=_on_validate, focus=_on_focus)
+        Clock.schedule_once(lambda *_: setattr(ti, "focus", True), 0)
+        Clock.schedule_once(lambda *_: setattr(ti, "select_all", True) if hasattr(ti, "select_all") else None, 0.02)
+        try:
+            ti.select_text(0, len(ti.text or ""))
+        except Exception:
+            pass
+
+    def cancel_inline_edit(self, restore=True):
+        ti = getattr(self, "_inline_input", None)
+        label = getattr(self, "_inline_label", None)
+        parent = getattr(self, "_inline_parent", None)
+        if ti is not None and parent is not None:
+            try:
+                parent.remove_widget(ti)
+            except Exception:
+                pass
+        if label is not None:
+            label.opacity = 1
+            label.disabled = False
+        if parent is not None:
+            try:
+                # restaurar fundo neutro (será reaplicado no próximo refresh)
+                parent.md_bg_color = [0, 0, 0, 0]
+            except Exception:
+                pass
+        self._inline_field = None
+        self._inline_input = None
+        self._inline_label = None
+        self._inline_parent = None
+
+    def commit_inline_edit(self):
+        field = getattr(self, "_inline_field", None)
+        ti = getattr(self, "_inline_input", None)
+        if not field or ti is None or not self.admin_screen or not self.product_data:
+            self.cancel_inline_edit()
+            return
+        value = (ti.text or "").strip()
+        product_id = getattr(self, "_inline_product_id", None) or self.product_data[0]
+        is_weight = bool(getattr(self, "_inline_is_weight", False))
+        # Limpar UI primeiro para evitar loops de focus
+        self.cancel_inline_edit(restore=True)
+        self.admin_screen._apply_inline_product_edit(
+            self.product_data, product_id, field, value, is_weight
+        )
+
+
     def _select_lot(self, instance):
         if self.admin_screen and self.product_data:
             self.admin_screen._open_group_lot_selector(self.product_data, caller=instance, requested_action="select")
@@ -508,6 +687,7 @@ class AdminScreen(Screen):
         # exist before Kivy builds the product table.
         self._recycle_hover_bound = False
         self._active_recycle_product_row = None
+        self._selected_category = None
         super(AdminScreen, self).__init__(**kwargs)
         self.db = db or get_db()
         self.category_menu = None
@@ -532,6 +712,8 @@ class AdminScreen(Screen):
         self._queued_products_request = None
         self._search_ev = None
         self._catalog_categories = set()
+        # Never use the translated caption as a database filter.  ``None`` is
+        # the stable value for "all categories" in every UI language.
         self._categories_loading = False
         self._products_table_dirty = True
         self._resize_rebuild_ev = None
@@ -940,6 +1122,48 @@ class AdminScreen(Screen):
             return
         self._render_current_product_page()
 
+    def _tr(self, text):
+        app = App.get_running_app()
+        return translate_text(text, getattr(app, "language", "pt"))
+
+    def _all_categories_label(self):
+        return self._tr("Todas as Categorias")
+
+    def apply_translations(self):
+        """Refresh product-screen labels without changing product filters."""
+        if not self.ids:
+            return
+        self._compact_layout = None
+        self._update_responsive_layout()
+        text_values = {
+            "header_bar": ("title", "Gestao de produtos"),
+            "search_input": ("hint_text", "Pesquisar produto..."),
+            "refresh_btn": ("tooltip_text", "Atualizar lista de produtos (Ctrl+R)"),
+            "add_btn": ("tooltip_text", "Adicionar produto (Ctrl+N)"),
+            "archived_btn": ("tooltip_text", "Consultar e restaurar produtos arquivados"),
+            "shopping_list_btn": ("tooltip_text", "Ver sugestões de compras com IA"),
+            "inventory_btn": ("tooltip_text", "Iniciar ou continuar inventario fisico"),
+        }
+        for widget_id, (attribute, source) in text_values.items():
+            widget = self.ids.get(widget_id)
+            if widget is not None:
+                setattr(widget, attribute, self._tr(source))
+        if self.category_spinner is not None:
+            self.category_spinner.text = self._selected_category or self._all_categories_label()
+        # A request started by an earlier version could have used the visible
+        # caption (for example "All Categories") as its SQL category.  Reload
+        # from the stable internal selection after a language switch.
+        if self._is_current_screen() and self._products_loaded_once:
+            Clock.schedule_once(
+                lambda _dt: self._request_products_page(
+                    reset=False,
+                    search_text=self._current_search_text(),
+                    offset=self._products_page_offset,
+                    force=True,
+                ),
+                0,
+            )
+
     def _update_responsive_layout(self, width=None):
         """Adapta a barra de ferramentas e a tabela a diferentes larguras.
 
@@ -980,12 +1204,8 @@ class AdminScreen(Screen):
 
         label_map = {
             "wide": {
-                "category": "Todas as Categorias",
-                "refresh": "Atualizar",
-                "add": "Adicionar",
-                "archived": "Arquivados",
-                "shopping": "Sugestões de Compras",
-                "inventory": "Inventário",
+                "category": "Todas as Categorias", "refresh": "Atualizar", "add": "Adicionar",
+                "archived": "Arquivados", "shopping": "Sugestões de Compras", "inventory": "Inventário",
             },
             "medium": {
                 "category": "Categorias",
@@ -1014,12 +1234,12 @@ class AdminScreen(Screen):
             except Exception:
                 pass
 
-        _set_text(category_spinner, labels["category"])
-        _set_text(refresh_btn, labels["refresh"])
-        _set_text(add_btn, labels["add"])
-        _set_text(archived_btn, labels["archived"])
-        _set_text(shopping_list_btn, labels["shopping"])
-        _set_text(inventory_btn, labels["inventory"])
+        _set_text(category_spinner, self._selected_category or self._tr(labels["category"]))
+        _set_text(refresh_btn, self._tr(labels["refresh"]))
+        _set_text(add_btn, self._tr(labels["add"]))
+        _set_text(archived_btn, self._tr(labels["archived"]))
+        _set_text(shopping_list_btn, self._tr(labels["shopping"]))
+        _set_text(inventory_btn, self._tr(labels["inventory"]))
         if filter_btn is not None:
             try:
                 filter_btn.text = ""
@@ -1091,19 +1311,19 @@ class AdminScreen(Screen):
         if mode == "narrow":
             if prev_btn is not None:
                 prev_btn.width = dp(108)
-                _set_text(prev_btn, "Ant.")
+                _set_text(prev_btn, self._tr("Ant."))
             if next_btn is not None:
                 next_btn.width = dp(108)
-                _set_text(next_btn, "Seg.")
+                _set_text(next_btn, self._tr("Seg."))
             if page_label is not None:
                 page_label.width = dp(150)
         else:
             if prev_btn is not None:
                 prev_btn.width = dp(130)
-                _set_text(prev_btn, "Anterior")
+                _set_text(prev_btn, self._tr("Anterior"))
             if next_btn is not None:
                 next_btn.width = dp(130)
-                _set_text(next_btn, "Seguinte")
+                _set_text(next_btn, self._tr("Seguinte"))
             if page_label is not None:
                 page_label.width = dp(204)
 
@@ -1994,7 +2214,7 @@ class AdminScreen(Screen):
     def show_category_menu(self, button):
         menu_items = [
             {
-                "text": "Todas as Categorias",
+                "text": self._all_categories_label(),
                 "on_release": lambda x="Todas": self.set_category(x),
             }
         ]
@@ -2017,7 +2237,9 @@ class AdminScreen(Screen):
         self.category_menu.open()
 
     def set_category(self, category):
-        self.category_spinner.text = category if category != "Todas" else "Todas as Categorias"
+        value = str(category or "").strip()
+        self._selected_category = None if value in ("", "Todas", "Todas as Categorias", self._all_categories_label()) else value
+        self.category_spinner.text = self._selected_category or self._all_categories_label()
         if self.category_menu:
             self.category_menu.dismiss()
         self.filter_products(self.search_input.text if self.search_input else "")
@@ -2518,10 +2740,11 @@ class AdminScreen(Screen):
         self._pending_search = ""
         self._products_page_offset = 0
         self.filter_mode = 0
+        self._selected_category = None
         if self.category_menu:
             self.category_menu.dismiss()
         if self.category_spinner is not None:
-            self.category_spinner.text = "Todas as Categorias"
+            self.category_spinner.text = self._all_categories_label()
         if self.search_input is not None and self.search_input.text:
             # A regra KV agenda o filtro ao mudar o texto; cancelamo-lo logo
             # abaixo para que o refresh use apenas o estado padrão.
@@ -2539,8 +2762,10 @@ class AdminScreen(Screen):
         return str(self.search_input.text if self.search_input is not None else self._pending_search or "").strip()
 
     def _current_category(self):
-        text = self.category_spinner.text if self.category_spinner is not None else "Todas as Categorias"
-        return None if text in ("", "Todas", "Todas as Categorias") else text
+        # The caption is localised for the user; the selected value remains a
+        # database category only.  This avoids querying a literal category
+        # such as "All Categories" after a language change.
+        return self._selected_category
 
     def _current_weight_filter(self):
         mode = getattr(self, "filter_mode", 0)
@@ -3317,15 +3542,27 @@ class AdminScreen(Screen):
 
         label = self.ids.get("admin_page_label")
         if label is not None:
+            app = App.get_running_app()
+            language = getattr(app, "language", "pt") if app else "pt"
+            templates = {
+                "en": ("Page {page}/{pages} | {count} items", "Page {page}/{pages} | {start}-{end} of {total}"),
+                "fr": ("Page {page}/{pages} | {count} éléments", "Page {page}/{pages} | {start}-{end} sur {total}"),
+                "de": ("Seite {page}/{pages} | {count} Artikel", "Seite {page}/{pages} | {start}-{end} von {total}"),
+                "es": ("Página {page}/{pages} | {count} artículos", "Página {page}/{pages} | {start}-{end} de {total}"),
+                "zh": ("第 {page}/{pages} 页 | {count} 项", "第 {page}/{pages} 页 | {start}-{end}/{total}"),
+                "pt": ("Página {page}/{pages} | {count} itens", "Página {page}/{pages} | {start}-{end} de {total}"),
+            }
+            empty_template, range_template = templates.get(str(language).lower(), templates["pt"])
+            pages = total_pages or current_page
             if total_rows <= 0:
-                label.text = "Pagina 1/1 | 0 itens" if total_pages == 1 else f"Pagina {current_page} | 0 itens"
+                label.text = empty_template.format(page=current_page, pages=pages, count=0)
             else:
                 start = page_offset + 1
                 end = start + max(0, int(visible_rows)) - 1
                 if total_pages is not None:
-                    label.text = f"Pagina {current_page}/{total_pages} | {start}-{end} de {known_total}"
+                    label.text = range_template.format(page=current_page, pages=total_pages, start=start, end=end, total=known_total)
                 else:
-                    label.text = f"Pagina {current_page} | {start}-{end}"
+                    label.text = range_template.format(page=current_page, pages="?", start=start, end=end, total="?")
 
         prev_btn = self.ids.get("admin_prev_btn")
         if prev_btn is not None:
@@ -3571,6 +3808,108 @@ class AdminScreen(Screen):
             return False
         _get_product_form_class()(self, product).open()
         return True
+
+    def _apply_inline_product_edit(self, product, product_id, field, value, is_weight=False):
+        """Aplica a alteração de um campo e refresca a tabela."""
+        try:
+            description = str(product[1] if len(product) > 1 else "")
+            category = str(product[11] if len(product) > 11 else "") or "Geral"
+            existing_stock = float(product[2] if len(product) > 2 else 0)
+            sold_stock = float(product[3] if len(product) > 3 else 0)
+            sale_price = float(product[4] if len(product) > 4 else 0)
+            total_purchase = float(product[5] if len(product) > 5 else 0)
+            unit_purchase = float(product[6] if len(product) > 6 else 0)
+            barcode = product[12] if len(product) > 12 else None
+            expiry = product[13] if len(product) > 13 else None
+            package_quantity = product[21] if len(product) > 21 else None
+            units_per_package = product[23] if len(product) > 23 else None
+            allow_pack_sale = bool(product[24]) if len(product) > 24 else False
+            vat_rule = product[25] if len(product) > 25 else None
+
+            if field == "description":
+                if not value:
+                    self.show_snackbar("Nome obrigatório")
+                    return False
+                description = value
+            elif field == "stock":
+                try:
+                    existing_stock = float(value.replace(",", "."))
+                except ValueError:
+                    self.show_snackbar("Stock inválido")
+                    return False
+                if not is_weight and not float(existing_stock).is_integer():
+                    self.show_snackbar("Stock deve ser inteiro para unidades")
+                    return False
+                if existing_stock < 0:
+                    self.show_snackbar("Stock não pode ser negativo")
+                    return False
+            elif field == "price":
+                try:
+                    sale_price = float(value.replace(",", "."))
+                except ValueError:
+                    self.show_snackbar("Preço inválido")
+                    return False
+                if sale_price < 0:
+                    self.show_snackbar("Preço não pode ser negativo")
+                    return False
+            elif field == "expiry":
+                if not value:
+                    expiry = None
+                else:
+                    # Aceita DD/MM/AAAA e 00/MM/AAAA
+                    import re as _re
+                    import calendar as _cal
+                    parts = _re.findall(r"\d+", value)
+                    if len(parts) < 2:
+                        self.show_snackbar("Use DD/MM/AAAA ou 00/MM/AAAA")
+                        return False
+                    try:
+                        if len(parts) == 2:
+                            d, m, y = 0, int(parts[0]), int(parts[1])
+                        else:
+                            d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                        if y < 100:
+                            y += 2000
+                        if not (1 <= m <= 12) or y < 1990 or y > 2100:
+                            raise ValueError("mês/ano")
+                        if d == 0:
+                            d = _cal.monthrange(y, m)[1]
+                        elif not (1 <= d <= _cal.monthrange(y, m)[1]):
+                            raise ValueError("dia")
+                        expiry = f"{y:04d}-{m:02d}-{d:02d}"
+                    except Exception:
+                        self.show_snackbar("Data inválida")
+                        return False
+            else:
+                return False
+
+            ok = self.db.update_product(
+                product_id,
+                description,
+                category,
+                existing_stock,
+                sold_stock,
+                sale_price,
+                total_purchase,
+                unit_purchase,
+                barcode=barcode,
+                expiry_date=expiry,
+                is_sold_by_weight=is_weight,
+                package_quantity=package_quantity,
+                units_per_package=units_per_package,
+                allow_pack_sale=allow_pack_sale,
+                vat_rule_code=vat_rule,
+            )
+            if not ok:
+                self.show_snackbar("Não foi possível guardar (verifique permissões/dono)")
+                return False
+            self.show_snackbar("Produto atualizado")
+            self.load_products(force=True)
+            return True
+        except Exception as exc:
+            print(f"[InlineEdit] {exc}")
+            self.show_snackbar(f"Erro ao guardar: {exc}")
+            return False
 
     def _prompt_delete_product(self, product_id):
         normalized_id = self._normalize_product_id(product_id)
@@ -5349,9 +5688,29 @@ class AdminScreen(Screen):
                 alert_label = MDLabel(
                     text=alert_text,
                     size_hint_y=None,
-                    halign='left'
+                    halign='left',
+                    valign='top',
+                    text_size=(dp(1), None),
                 )
-                alert_label.bind(texture_size=alert_label.setter('size'))
+
+                # Nunca use ``texture_size -> size`` neste contentor: a
+                # largura do label volta a alterar o BoxLayout, que por sua
+                # vez recalcula a textura no mesmo frame. Mantemos a largura
+                # controlada pelo pai e adaptamos somente a altura do texto.
+                def sync_alert_width(instance, width):
+                    desired = (max(dp(1), width), None)
+                    if instance.text_size != desired:
+                        instance.text_size = desired
+
+                def sync_alert_height(instance, texture_size):
+                    desired = max(dp(24), texture_size[1])
+                    if abs(instance.height - desired) >= 0.5:
+                        instance.height = desired
+
+                alert_label.bind(
+                    width=sync_alert_width,
+                    texture_size=sync_alert_height,
+                )
                 content.add_widget(alert_label)
 
             scroll = ScrollView(size_hint=(1, 1))

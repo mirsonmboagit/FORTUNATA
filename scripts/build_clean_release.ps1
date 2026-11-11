@@ -130,15 +130,10 @@ Write-Host "== Preflight ==" -ForegroundColor Cyan
 & $pythonExecutable (Join-Path $root "scripts\preflight_release.py")
 if ($LASTEXITCODE -ne 0) { throw "Preflight da release falhou." }
 
-Write-Host "== Gestor ==" -ForegroundColor Cyan
-& (Join-Path $root "scripts\build_manager_release.ps1") -Clean -SkipChecks `
-    -WorkPath "$workRelative\manager" -DistPath "$releaseRelative\Manager"
-if ($LASTEXITCODE -ne 0) { throw "Build do Gestor falhou." }
-
-Write-Host "== Administrador ==" -ForegroundColor Cyan
+Write-Host "== Cliente desktop unico ==" -ForegroundColor Cyan
 & (Join-Path $root "scripts\build_admin_release.ps1") -Clean -SkipChecks `
-    -WorkPath "$workRelative\admin" -DistPath "$releaseRelative\Administrador"
-if ($LASTEXITCODE -ne 0) { throw "Build do Administrador falhou." }
+    -WorkPath "$workRelative\desktop" -DistPath "$releaseRelative\Desktop"
+if ($LASTEXITCODE -ne 0) { throw "Build do cliente desktop falhou." }
 
 Write-Host "== API ==" -ForegroundColor Cyan
 & (Join-Path $root "scripts\build_api_release.ps1") -Clean -SkipChecks `
@@ -151,25 +146,23 @@ if (Test-Path -LiteralPath $apiStaging) {
     Remove-Item -LiteralPath $apiStaging -Recurse -Force
 }
 
-$managerRoot = Join-Path $releaseRoot "Manager\SIGEMPEManager"
-$adminRoot = Join-Path $releaseRoot "Administrador\SIGEMPEAdmin"
+$desktopRoot = Join-Path $releaseRoot "Desktop\SIGEMPEAdmin"
 $apiRoot = Join-Path $releaseRoot "API\LojaAPI"
-Assert-ClientPackage -Root $managerRoot -ExeName "SIGEMPEManager.exe" -UpdateScript "install\update_manager_client.ps1"
-Assert-ClientPackage -Root $adminRoot -ExeName "SIGEMPEAdmin.exe" -UpdateScript "install\update_admin_client.ps1"
+Assert-ClientPackage -Root $desktopRoot -ExeName "SIGEMPEAdmin.exe" -UpdateScript "install\update_admin_client.ps1"
 Assert-ApiPackage -Root $apiRoot
 
 $readme = @"
 SIGE MPE $version - RELEASE LIMPA
 
 Pastas entregues:
-  Manager\SIGEMPEManager       Cliente de vendas
-  Administrador\SIGEMPEAdmin   Cliente administrativo
+  Desktop\SIGEMPEAdmin         Cliente desktop unico (Admin e Gerente)
   API\LojaAPI                  Servidor e base de dados
 
 Instalacao correcta:
 1. Instale e ative LojaAPI no servidor principal.
 2. Execute GERAR_LIGACAO_CLIENTE.bat na pasta LojaAPI.
 3. Importe SIGEMPELigacao.json em cada cliente com Configurar Ligacao.cmd.
+4. Entre na mesma app com uma conta de administrador ou gerente; o perfil abre o painel permitido.
 
 O manifesto SHA-256 permite conferir a integridade de todos os ficheiros.
 "@

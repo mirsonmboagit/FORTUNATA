@@ -217,15 +217,6 @@ foreach ($folder in @("assets", "config", "locales")) {
     }
 }
 
-$cacheSource = Join-Path $internal "data\cache"
-if (Test-Path $cacheSource) {
-    $cacheTarget = Join-Path $dist "data\cache"
-    if (-not (Test-Path $cacheTarget)) {
-        New-Item -ItemType Directory -Force $cacheTarget | Out-Null
-    }
-    Copy-Item -Path (Join-Path $cacheSource "*") -Destination $cacheTarget -Recurse -Force
-}
-
 foreach ($folder in @("admin", "user", "utils", "manager")) {
     $sourceFolder = Join-Path $internal $folder
     $targetFolder = Join-Path $dist $folder
@@ -246,12 +237,46 @@ if (Get-ChildItem -LiteralPath $dist -File -Filter "SIGEMPEAPI.exe" -Recurse -Er
 $distAppConfigPath = Join-Path $dist "config\app.json"
 if (Test-Path $distAppConfigPath) {
     $distAppConfig = Get-Content $distAppConfigPath -Raw | ConvertFrom-Json
-    $distAppConfig.app_env = "production"
-    $distAppConfig.db_mode = "remote_strict"
-    $distAppConfig.api_base_url = "http://127.0.0.1:8080"
-    $distAppConfig.api_key = ""
+    $productionConfig = [ordered]@{
+        app_env = "production"
+        db_mode = "remote_strict"
+        api_base_url = "http://127.0.0.1:8080"
+        api_key = ""
+    }
+    foreach ($entry in $productionConfig.GetEnumerator()) {
+        if ($null -eq $distAppConfig.PSObject.Properties[$entry.Key]) {
+            $distAppConfig | Add-Member -NotePropertyName $entry.Key -NotePropertyValue $entry.Value
+        } else {
+            $distAppConfig.($entry.Key) = $entry.Value
+        }
+    }
     $distAppConfig | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $distAppConfigPath
 }
+
+# A distribuicao nao leva preferencias, impressora, nome comercial ou
+# identificador de terminal desta maquina. Cada computador inicia limpo;
+# instalacoes existentes sao preservadas pelo actualizador.
+$distSettingsPath = Join-Path $dist "config\app_settings.json"
+$freshSettings = [ordered]@{
+    system_name = "SIGE MPE"
+    ai_enabled = $true
+    auto_banners_enabled = $true
+    smart_monitor_enabled = $true
+    theme_style = "Light"
+    manager_theme_style = "Light"
+    language = "pt"
+    language_mode = "system"
+    physical_scanner_enabled = $true
+    physical_scanner_min_length = 6
+    receipt_auto_print = $false
+    receipt_printer_name = ""
+    receipt_paper_width_mm = 80
+    receipt_nuit = ""
+    receipt_address = ""
+    receipt_phone = ""
+    receipt_street = ""
+}
+$freshSettings | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $distSettingsPath
 
 $installDir = Join-Path $dist "install"
 if (-not (Test-Path $installDir)) {

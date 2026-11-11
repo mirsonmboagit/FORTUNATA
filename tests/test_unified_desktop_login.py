@@ -16,7 +16,7 @@ def test_desktop_entrypoints_open_the_same_store_app():
     assert "OfflineLicenseClient.from_runtime()" in admin_source
     assert "from licensing.client import LicenseClient" not in admin_source
     assert "def _validate_active_license" not in admin_source
-    assert "'manager': self._build_manager_screen" in admin_source
+    assert '"manager": self._build_manager_screen' in admin_source
     assert "from admin_app import StoreApp" in manager_source
     assert "ManagerApp = StoreApp" in manager_source
     assert "MainApp = StoreApp" in legacy_source
@@ -30,8 +30,8 @@ def test_unified_login_routes_by_authenticated_role():
 
     assert "class UnifiedLoginScreen(LoginScreen)" in source
     assert 'kwargs.setdefault("allowed_roles", [])' in unified_source
-    assert 'kwargs.setdefault("allow_admin_setup", False)' in unified_source
-    assert 'kwargs.setdefault("registration_mode", "disabled")' in unified_source
+    assert 'kwargs.setdefault("allow_admin_setup", True)' in unified_source
+    assert 'kwargs.setdefault("registration_mode", "admin_bootstrap")' in unified_source
     assert "def _submit_admin_provisioning" in unified_source
     assert "validate_admin_provisioning_for_license(" in unified_source
     assert '"create_provisioned_admin"' in unified_source
@@ -39,7 +39,8 @@ def test_unified_login_routes_by_authenticated_role():
     assert "def _validate_desktop_license" in unified_source
     assert "def _submit_license_activation" in unified_source
     assert "def _calc_license_dialog_sizes" in unified_source
-    assert "max_height=dp(72)" in source
+    assert "dialog_height = min(max(dp(420), height * 0.62), dp(500))" in unified_source
+    assert "dialog_height = min(max(dp(460), height * 0.68), dp(540))" in unified_source
     assert "size_hint=(width_hint, None)" in source
     assert "def _send_license_request_email" in unified_source
     assert "def _retry_license_request_email" in unified_source
@@ -48,7 +49,7 @@ def test_unified_login_routes_by_authenticated_role():
     assert "send_system_email(" in unified_source
     assert "LICENSE_REQUEST_SUBJECT" in unified_source
     assert "mailto:" in unified_source
-    assert 'text="PEDIR RENOVACAO" if is_renewal else "PEDIR LICENCA"' in unified_source
+    assert 'text="PEDIR RENOVAÇÃO" if is_renewal else "PEDIR LICENÇA"' in unified_source
     assert 'text="COPIAR PEDIDO"' in unified_source
     assert "super(UnifiedLoginScreen, self).login()" in unified_source
     assert "_login_with_control_plane" not in unified_source
